@@ -224,6 +224,45 @@ function truncateText(value: unknown, maxLength: number) {
   return text.slice(0, Math.max(0, maxLength - 1)) + "…";
 }
 
+function wrapTextLines(value: unknown, maxCharsPerLine: number, maxLines: number) {
+  const normalized = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return ["-"];
+
+  let remaining = normalized;
+  const lines: string[] = [];
+
+  while (remaining && lines.length < maxLines) {
+    if (remaining.length <= maxCharsPerLine) {
+      lines.push(remaining);
+      remaining = "";
+      break;
+    }
+
+    let slice = remaining.slice(0, maxCharsPerLine);
+    const lastSpace = slice.lastIndexOf(" ");
+    if (lastSpace >= Math.floor(maxCharsPerLine * 0.55)) {
+      slice = slice.slice(0, lastSpace);
+    }
+
+    slice = slice.trim();
+    if (!slice) {
+      slice = remaining.slice(0, maxCharsPerLine);
+    }
+
+    lines.push(slice);
+    remaining = remaining.slice(slice.length).trimStart();
+  }
+
+  if (remaining && lines.length > 0) {
+    lines[lines.length - 1] = truncateText(`${lines[lines.length - 1]} ${remaining}`.trim(), maxCharsPerLine);
+  }
+
+  return lines.slice(0, maxLines);
+}
+
 function isPublicRequestPath(reqPath: string) {
   if (reqPath === "/api/health") return true;
   if (reqPath === "/api/webhook") return true;
@@ -294,73 +333,79 @@ function buildTicketImageUrl(registrationId: string) {
 }
 
 function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
-  const eventName = escapeXml(truncateText(settings.event_name || "Event Ticket", 42));
-  const location = escapeXml(truncateText(settings.event_location || "-", 44));
-  const eventDate = escapeXml(truncateText(formatTicketDate(settings.event_date || ""), 44));
-  const attendeeName = escapeXml(truncateText(`${reg.first_name} ${reg.last_name}`.trim(), 36));
-  const phone = escapeXml(truncateText(reg.phone || "-", 24));
-  const email = escapeXml(truncateText(reg.email || "-", 34));
+  const eventNameLines = wrapTextLines(settings.event_name || "Event Ticket", 18, 2).map(escapeXml);
+  const locationLines = wrapTextLines(settings.event_location || "-", 18, 2).map(escapeXml);
+  const eventDateLines = wrapTextLines(formatTicketDate(settings.event_date || ""), 18, 2).map(escapeXml);
+  const attendeeName = escapeXml(truncateText(`${reg.first_name} ${reg.last_name}`.trim(), 16));
   const registrationId = escapeXml(reg.id);
-  const issuedAt = escapeXml(formatTicketDate(reg.timestamp));
-  const mapUrl = escapeXml(truncateText(settings.event_map_url || "", 56));
+
+  const eventNameSvg = eventNameLines
+    .map(
+      (line, index) =>
+        `<text x="210" y="${index === 0 ? 72 : 110}" text-anchor="middle" font-family="Tahoma, Arial, sans-serif" font-size="${index === 0 ? 24 : 22}" font-weight="700" fill="#ffffff">${line}</text>`,
+    )
+    .join("\n  ");
+
+  const locationSvg = locationLines
+    .map(
+      (line, index) =>
+        `<text x="34" y="${index === 0 ? 517 : 543}" font-family="Tahoma, Arial, sans-serif" font-size="13" font-weight="500" fill="#334155">${line}</text>`,
+    )
+    .join("\n  ");
+
+  const eventDateSvg = eventDateLines
+    .map(
+      (line, index) =>
+        `<text x="214" y="${index === 0 ? 517 : 543}" font-family="Tahoma, Arial, sans-serif" font-size="13" font-weight="500" fill="#334155">${line}</text>`,
+    )
+    .join("\n  ");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="640" viewBox="0 0 1080 640" role="img" aria-label="Event ticket ${registrationId}">
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="660" viewBox="0 0 420 660" role="img" aria-label="Event ticket ${registrationId}">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0f172a"/>
-      <stop offset="55%" stop-color="#1e3a8a"/>
-      <stop offset="100%" stop-color="#2563eb"/>
-    </linearGradient>
-    <linearGradient id="panel" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#f8fafc"/>
+    <linearGradient id="header" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2a58f2"/>
+      <stop offset="100%" stop-color="#2f62f6"/>
     </linearGradient>
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#020617" flood-opacity="0.28"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.16"/>
     </filter>
   </defs>
 
-  <rect x="0" y="0" width="1080" height="640" fill="#e2e8f0"/>
+  <rect x="0" y="0" width="420" height="660" fill="#e7edf5"/>
   <g filter="url(#shadow)">
-    <rect x="48" y="48" width="984" height="544" rx="34" fill="url(#bg)"/>
-    <rect x="72" y="72" width="620" height="496" rx="26" fill="url(#panel)"/>
-    <rect x="720" y="72" width="288" height="496" rx="26" fill="#ffffff" opacity="0.96"/>
-
-    <circle cx="706" cy="164" r="14" fill="#e2e8f0"/>
-    <circle cx="706" cy="476" r="14" fill="#e2e8f0"/>
-    <line x1="706" y1="184" x2="706" y2="456" stroke="#bfdbfe" stroke-width="2" stroke-dasharray="8 9"/>
+    <rect x="5" y="7" width="410" height="646" rx="26" fill="#f8fafc"/>
+    <rect x="5" y="7" width="410" height="646" rx="26" fill="none" stroke="#d7e0eb" stroke-width="1.2" stroke-dasharray="4 5"/>
+    <path d="M31 7h358a26 26 0 0 1 26 26v129H5V33A26 26 0 0 1 31 7z" fill="url(#header)"/>
+    <circle cx="5" cy="93" r="10" fill="#dfe6ef"/>
+    <circle cx="415" cy="93" r="10" fill="#dfe6ef"/>
   </g>
 
-  <text x="112" y="142" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#2563eb" letter-spacing="2">OFFICIAL REGISTRATION PASS</text>
-  <text x="112" y="196" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="700" fill="#0f172a">${eventName}</text>
+  ${eventNameSvg}
+  <text x="210" y="140" text-anchor="middle" font-family="Tahoma, Arial, sans-serif" font-size="12" font-weight="700" fill="#dbeafe" letter-spacing="1">OFFICIAL REGISTRATION PASS</text>
 
-  <rect x="112" y="226" width="540" height="2" fill="#e2e8f0"/>
+  <rect x="109" y="206" width="202" height="202" rx="12" fill="#edf2f7" stroke="#dbe3ef"/>
+  <image href="${qrDataUrl}" x="126" y="223" width="168" height="168" preserveAspectRatio="xMidYMid meet"/>
 
-  <text x="112" y="272" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">ATTENDEE</text>
-  <text x="112" y="314" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#0f172a">${attendeeName}</text>
+  <text x="30" y="453" font-family="Tahoma, Arial, sans-serif" font-size="9" font-weight="700" fill="#94a3b8" letter-spacing="1.1">ATTENDEE</text>
+  <text x="30" y="479" font-family="Tahoma, Arial, sans-serif" font-size="17" font-weight="700" fill="#0f172a">${attendeeName}</text>
 
-  <text x="112" y="362" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">REGISTRATION ID</text>
-  <text x="112" y="404" font-family="Courier New, monospace" font-size="28" font-weight="700" fill="#1d4ed8">${registrationId}</text>
+  <text x="390" y="453" text-anchor="end" font-family="Tahoma, Arial, sans-serif" font-size="9" font-weight="700" fill="#94a3b8" letter-spacing="1.1">ID NUMBER</text>
+  <text x="390" y="479" text-anchor="end" font-family="Courier New, monospace" font-size="14" font-weight="700" fill="#2563eb">${registrationId}</text>
 
-  <text x="112" y="452" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">PHONE</text>
-  <text x="112" y="486" font-family="Arial, Helvetica, sans-serif" font-size="24" fill="#0f172a">${phone}</text>
+  <line x1="30" y1="494" x2="390" y2="494" stroke="#dbe3ef" stroke-width="1.2"/>
 
-  <text x="112" y="528" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">EMAIL</text>
-  <text x="112" y="560" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#0f172a">${email}</text>
+  <text x="34" y="534" font-family="Tahoma, Arial, sans-serif" font-size="9" font-weight="700" fill="#94a3b8" letter-spacing="1.1">LOCATION</text>
+  ${locationSvg}
 
-  <text x="736" y="120" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#64748b" letter-spacing="2">SCAN AT CHECK-IN</text>
-  <rect x="744" y="138" width="240" height="240" rx="18" fill="#f8fafc" stroke="#e2e8f0"/>
-  <image href="${qrDataUrl}" x="764" y="158" width="200" height="200" preserveAspectRatio="xMidYMid meet"/>
+  <text x="214" y="534" font-family="Tahoma, Arial, sans-serif" font-size="9" font-weight="700" fill="#94a3b8" letter-spacing="1.1">EVENT DATE</text>
+  ${eventDateSvg}
 
-  <text x="736" y="418" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#64748b" letter-spacing="1.5">EVENT DATE</text>
-  <text x="736" y="446" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#0f172a">${eventDate}</text>
+  <rect x="30" y="560" width="360" height="34" rx="12" fill="#e8eef6"/>
+  <text x="210" y="582" text-anchor="middle" font-family="Tahoma, Arial, sans-serif" font-size="11" font-weight="700" fill="#334155">Map link will be sent in chat</text>
 
-  <text x="736" y="486" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#64748b" letter-spacing="1.5">LOCATION</text>
-  <text x="736" y="514" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#0f172a">${location}</text>
-
-  <text x="736" y="550" font-family="Arial, Helvetica, sans-serif" font-size="14" fill="#64748b">Issued: ${issuedAt}</text>
-  <text x="736" y="575" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#94a3b8">${mapUrl}</text>
+  <rect x="5" y="608" width="410" height="45" fill="#f1f5f9"/>
+  <text x="210" y="636" text-anchor="middle" font-family="Tahoma, Arial, sans-serif" font-size="11" font-weight="700" fill="#16a34a" letter-spacing="1.2">VERIFIED REGISTRATION</text>
 </svg>`;
 }
 
@@ -737,6 +782,7 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
   }
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
+  let sentTicketArtifact = false;
   for (const registrationId of uniqueTicketIds) {
     const ticketUrl = buildTicketImageUrl(registrationId);
     if (!ticketUrl) {
@@ -747,13 +793,27 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
     try {
       await sendFacebookImageMessage(senderId, ticketUrl);
       saveMessage(senderId, `[ticket-image] ${registrationId}`, "outgoing");
+      sentTicketArtifact = true;
     } catch (error) {
       console.error("Failed to send ticket image:", error);
       try {
         await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${ticketUrl}`);
         saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing");
+        sentTicketArtifact = true;
       } catch (fallbackError) {
         console.error("Failed to send ticket link fallback:", fallbackError);
+      }
+    }
+  }
+
+  if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
+    const mapUrl = String(getSettingsMap().event_map_url || "").trim();
+    if (mapUrl) {
+      try {
+        await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`);
+        saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing");
+      } catch (error) {
+        console.error("Failed to send map link:", error);
       }
     }
   }
