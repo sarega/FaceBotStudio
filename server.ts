@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import { Parser } from "json2csv";
+import QRCode from "qrcode";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
@@ -82,6 +83,27 @@ type NormalizedChatResponse = {
   meta?: {
     model?: string;
   };
+};
+
+type RegistrationRow = {
+  id: string;
+  sender_id: string;
+  first_name: string;
+  last_name: string;
+  phone: string;
+  email: string;
+  timestamp: string;
+  status: string;
+};
+
+type ToolExecutionBundle = {
+  messages: ChatHistoryMessage[];
+  ticketRegistrationIds: string[];
+};
+
+type BotReplyResult = {
+  text: string;
+  ticketRegistrationIds: string[];
 };
 
 function buildEventInfo(settings: Record<string, any>) {
@@ -187,6 +209,60 @@ function extractAssistantText(content: unknown) {
   return "";
 }
 
+function escapeXml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function truncateText(value: unknown, maxLength: number) {
+  const text = String(value ?? "");
+  if (text.length <= maxLength) return text;
+  return text.slice(0, Math.max(0, maxLength - 1)) + "…";
+}
+
+function isPublicRequestPath(reqPath: string) {
+  if (reqPath === "/api/health") return true;
+  if (reqPath === "/api/webhook") return true;
+  if (/^\/api\/tickets\/[^/]+\.svg$/i.test(reqPath)) return true;
+  return false;
+}
+
+function adminBasicAuth(req: any, res: any, next: any) {
+  if (isPublicRequestPath(req.path || req.url || "")) {
+    return next();
+  }
+
+  const user = process.env.ADMIN_USER;
+  const pass = process.env.ADMIN_PASS;
+
+  // Fail closed if admin credentials are not configured
+  if (!user || !pass) {
+    return res.status(503).send("Admin auth is not configured.");
+  }
+
+  const auth = req.headers.authorization || "";
+  if (!auth.startsWith("Basic ")) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="FaceBotStudio Admin"');
+    return res.status(401).send("Authentication required.");
+  }
+
+  const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
+  const separatorIndex = decoded.indexOf(":");
+  const providedUser = separatorIndex >= 0 ? decoded.slice(0, separatorIndex) : decoded;
+  const providedPass = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : "";
+
+  if (providedUser === user && providedPass === pass) {
+    return next();
+  }
+
+  res.setHeader("WWW-Authenticate", 'Basic realm="FaceBotStudio Admin"');
+  return res.status(401).send("Invalid credentials.");
+}
+
 function getSettingsMap() {
   const rows = db.prepare("SELECT * FROM settings").all() as Array<{ key: string; value: string }>;
   return rows.reduce((acc, row) => {
@@ -195,8 +271,97 @@ function getSettingsMap() {
   }, {} as Record<string, string>);
 }
 
+function getRegistrationById(id: string) {
+  return db.prepare("SELECT * FROM registrations WHERE id = ?").get(id) as RegistrationRow | undefined;
+}
+
 function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing") {
   db.prepare("INSERT INTO messages (sender_id, text, type) VALUES (?, ?, ?)").run(senderId, text, type);
+}
+
+function formatTicketDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || "-";
+  return date.toLocaleString();
+}
+
+function buildTicketImageUrl(registrationId: string) {
+  if (!process.env.APP_URL) return null;
+  const url = new URL(process.env.APP_URL);
+  url.pathname = `/api/tickets/${encodeURIComponent(registrationId)}.svg`;
+  url.search = "";
+  return url.toString();
+}
+
+function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
+  const eventName = escapeXml(truncateText(settings.event_name || "Event Ticket", 42));
+  const location = escapeXml(truncateText(settings.event_location || "-", 44));
+  const eventDate = escapeXml(truncateText(formatTicketDate(settings.event_date || ""), 44));
+  const attendeeName = escapeXml(truncateText(`${reg.first_name} ${reg.last_name}`.trim(), 36));
+  const phone = escapeXml(truncateText(reg.phone || "-", 24));
+  const email = escapeXml(truncateText(reg.email || "-", 34));
+  const registrationId = escapeXml(reg.id);
+  const issuedAt = escapeXml(formatTicketDate(reg.timestamp));
+  const mapUrl = escapeXml(truncateText(settings.event_map_url || "", 56));
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="640" viewBox="0 0 1080 640" role="img" aria-label="Event ticket ${registrationId}">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="55%" stop-color="#1e3a8a"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f8fafc"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1080" height="640" fill="#e2e8f0"/>
+  <g filter="url(#shadow)">
+    <rect x="48" y="48" width="984" height="544" rx="34" fill="url(#bg)"/>
+    <rect x="72" y="72" width="620" height="496" rx="26" fill="url(#panel)"/>
+    <rect x="720" y="72" width="288" height="496" rx="26" fill="#ffffff" opacity="0.96"/>
+
+    <circle cx="706" cy="164" r="14" fill="#e2e8f0"/>
+    <circle cx="706" cy="476" r="14" fill="#e2e8f0"/>
+    <line x1="706" y1="184" x2="706" y2="456" stroke="#bfdbfe" stroke-width="2" stroke-dasharray="8 9"/>
+  </g>
+
+  <text x="112" y="142" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#2563eb" letter-spacing="2">OFFICIAL REGISTRATION PASS</text>
+  <text x="112" y="196" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="700" fill="#0f172a">${eventName}</text>
+
+  <rect x="112" y="226" width="540" height="2" fill="#e2e8f0"/>
+
+  <text x="112" y="272" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">ATTENDEE</text>
+  <text x="112" y="314" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#0f172a">${attendeeName}</text>
+
+  <text x="112" y="362" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">REGISTRATION ID</text>
+  <text x="112" y="404" font-family="Courier New, monospace" font-size="28" font-weight="700" fill="#1d4ed8">${registrationId}</text>
+
+  <text x="112" y="452" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">PHONE</text>
+  <text x="112" y="486" font-family="Arial, Helvetica, sans-serif" font-size="24" fill="#0f172a">${phone}</text>
+
+  <text x="112" y="528" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#64748b" letter-spacing="1.5">EMAIL</text>
+  <text x="112" y="560" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#0f172a">${email}</text>
+
+  <text x="736" y="120" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#64748b" letter-spacing="2">SCAN AT CHECK-IN</text>
+  <rect x="744" y="138" width="240" height="240" rx="18" fill="#f8fafc" stroke="#e2e8f0"/>
+  <image href="${qrDataUrl}" x="764" y="158" width="200" height="200" preserveAspectRatio="xMidYMid meet"/>
+
+  <text x="736" y="418" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#64748b" letter-spacing="1.5">EVENT DATE</text>
+  <text x="736" y="446" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#0f172a">${eventDate}</text>
+
+  <text x="736" y="486" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#64748b" letter-spacing="1.5">LOCATION</text>
+  <text x="736" y="514" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="#0f172a">${location}</text>
+
+  <text x="736" y="550" font-family="Arial, Helvetica, sans-serif" font-size="14" fill="#64748b">Issued: ${issuedAt}</text>
+  <text x="736" y="575" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#94a3b8">${mapUrl}</text>
+</svg>`;
 }
 
 function getMessageHistoryForSender(senderId: string, limit = 12): ChatHistoryMessage[] {
@@ -398,8 +563,9 @@ function getTextFromNormalizedResponse(response: NormalizedChatResponse) {
 function buildToolResponseMessages(
   senderId: string,
   calls: Array<{ name: string; args: Record<string, unknown> }>,
-): ChatHistoryMessage[] {
+): ToolExecutionBundle {
   const messages: ChatHistoryMessage[] = [];
+  const ticketRegistrationIds: string[] = [];
 
   for (const call of calls) {
     let content: Record<string, unknown>;
@@ -413,6 +579,9 @@ function buildToolResponseMessages(
         email: call.args.email,
       });
       content = result.content;
+      if (result.statusCode === 200 && typeof result.content.id === "string") {
+        ticketRegistrationIds.push(result.content.id);
+      }
     } else if (call.name === "cancelRegistration") {
       const result = cancelRegistration(call.args.registration_id);
       content = result.content;
@@ -433,22 +602,25 @@ function buildToolResponseMessages(
     });
   }
 
-  return messages;
+  return { messages, ticketRegistrationIds };
 }
 
 async function generateBotReplyForSender(
   senderId: string,
   incomingText: string,
   historyOverride?: ChatHistoryMessage[],
-) {
+): Promise<BotReplyResult> {
   const settings = getSettingsMap();
   const history = historyOverride || getMessageHistoryForSender(senderId, 12);
 
   const firstResponse = await requestOpenRouterChat(incomingText, history, settings);
   let finalResponse = firstResponse;
+  let ticketRegistrationIds: string[] = [];
 
   if (firstResponse.functionCalls && firstResponse.functionCalls.length > 0) {
-    const toolMessages = buildToolResponseMessages(senderId, firstResponse.functionCalls);
+    const toolResult = buildToolResponseMessages(senderId, firstResponse.functionCalls);
+    const toolMessages = toolResult.messages;
+    ticketRegistrationIds = toolResult.ticketRegistrationIds;
     const assistantMessage: ChatHistoryMessage = {
       role: "model",
       parts: firstResponse.candidates?.[0]?.content?.parts || [{ text: "" }],
@@ -466,7 +638,10 @@ async function generateBotReplyForSender(
     );
   }
 
-  return getTextFromNormalizedResponse(finalResponse);
+  return {
+    text: getTextFromNormalizedResponse(finalResponse),
+    ticketRegistrationIds,
+  };
 }
 
 async function sendFacebookTextMessage(recipientId: string, text: string) {
@@ -497,6 +672,42 @@ async function sendFacebookTextMessage(recipientId: string, text: string) {
   return payload;
 }
 
+async function sendFacebookImageMessage(recipientId: string, imageUrl: string) {
+  const pageAccessToken = process.env.PAGE_ACCESS_TOKEN;
+  if (!pageAccessToken) {
+    throw new Error("PAGE_ACCESS_TOKEN is not configured");
+  }
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
+  url.searchParams.set("access_token", pageAccessToken);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messaging_type: "RESPONSE",
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: "image",
+          payload: {
+            url: imageUrl,
+            is_reusable: false,
+          },
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "Failed to send image to Facebook");
+  }
+
+  return payload;
+}
+
 async function handleIncomingFacebookText(senderId: string, text: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
@@ -510,23 +721,49 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
   }
 
   let replyText = "";
+  let ticketRegistrationIds: string[] = [];
   try {
-    replyText = await generateBotReplyForSender(senderId, trimmed, priorHistory);
+    const result = await generateBotReplyForSender(senderId, trimmed, priorHistory);
+    replyText = result.text;
+    ticketRegistrationIds = result.ticketRegistrationIds;
   } catch (error) {
     console.error("Failed to generate bot reply:", error);
     replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
   }
 
-  if (!replyText) return;
+  if (replyText) {
+    await sendFacebookTextMessage(senderId, replyText);
+    saveMessage(senderId, replyText, "outgoing");
+  }
 
-  await sendFacebookTextMessage(senderId, replyText);
-  saveMessage(senderId, replyText, "outgoing");
+  const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
+  for (const registrationId of uniqueTicketIds) {
+    const ticketUrl = buildTicketImageUrl(registrationId);
+    if (!ticketUrl) {
+      console.warn("APP_URL is not set; skipping ticket image send");
+      continue;
+    }
+
+    try {
+      await sendFacebookImageMessage(senderId, ticketUrl);
+      saveMessage(senderId, `[ticket-image] ${registrationId}`, "outgoing");
+    } catch (error) {
+      console.error("Failed to send ticket image:", error);
+      try {
+        await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${ticketUrl}`);
+        saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing");
+      } catch (fallbackError) {
+        console.error("Failed to send ticket link fallback:", fallbackError);
+      }
+    }
+  }
 }
 
 async function startServer() {
   const app = express();
   app.use(express.json());
   app.use(express.static(path.join(__dirname, "public")));
+  app.use(adminBasicAuth);
 
   const PORT = Number(process.env.PORT || 3000);
 
@@ -605,6 +842,31 @@ async function startServer() {
       res.send(csvWithBOM);
     } catch (error) {
       res.status(500).json({ error: "Failed to export CSV" });
+    }
+  });
+
+  app.get("/api/tickets/:id.svg", async (req, res) => {
+    try {
+      const registrationId = String(req.params.id || "").trim().toUpperCase();
+      if (!registrationId) {
+        return res.status(400).send("Missing registration ID");
+      }
+
+      const reg = getRegistrationById(registrationId);
+      if (!reg) {
+        return res.status(404).send("Ticket not found");
+      }
+
+      const settings = getSettingsMap();
+      const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
+      const svg = renderTicketSvg(reg, settings, qrDataUrl);
+
+      res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
+      res.setHeader("Cache-Control", "private, max-age=60");
+      res.send(svg);
+    } catch (error) {
+      console.error("Failed to render ticket image:", error);
+      res.status(500).send("Failed to render ticket");
     }
   });
 
