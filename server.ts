@@ -2,15 +2,18 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import { Parser } from "json2csv";
+import { Resvg } from "@resvg/resvg-js";
 import QRCode from "qrcode";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview";
 const DB_PATH = process.env.DB_PATH || "bot.db";
 
@@ -266,7 +269,7 @@ function wrapTextLines(value: unknown, maxCharsPerLine: number, maxLines: number
 function isPublicRequestPath(reqPath: string) {
   if (reqPath === "/api/health") return true;
   if (reqPath === "/api/webhook") return true;
-  if (/^\/api\/tickets\/[^/]+\.svg$/i.test(reqPath)) return true;
+  if (/^\/api\/tickets\/[^/]+\.(svg|png)$/i.test(reqPath)) return true;
   return false;
 }
 
@@ -324,12 +327,71 @@ function formatTicketDate(value: string) {
   return date.toLocaleString();
 }
 
-function buildTicketImageUrl(registrationId: string) {
+function buildTicketImageUrl(registrationId: string, format: "svg" | "png" = "png") {
   if (!process.env.APP_URL) return null;
   const url = new URL(process.env.APP_URL);
-  url.pathname = `/api/tickets/${encodeURIComponent(registrationId)}.svg`;
+  url.pathname = `/api/tickets/${encodeURIComponent(registrationId)}.${format}`;
   url.search = "";
   return url.toString();
+}
+
+let cachedTicketFontPaths: string[] | null = null;
+
+function resolveTicketFontPaths() {
+  if (cachedTicketFontPaths) return cachedTicketFontPaths;
+
+  const explicit = String(process.env.TICKET_FONT_FILES || "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .map((v) => (path.isAbsolute(v) ? v : path.join(__dirname, v)));
+
+  const defaults = [
+    "@fontsource/noto-sans-thai/files/noto-sans-thai-thai-400-normal.woff",
+    "@fontsource/noto-sans-thai/files/noto-sans-thai-thai-700-normal.woff",
+    "@fontsource/noto-sans-thai/files/noto-sans-thai-latin-400-normal.woff",
+    "@fontsource/noto-sans-thai/files/noto-sans-thai-latin-700-normal.woff",
+  ]
+    .map((pkgPath) => {
+      try {
+        return require.resolve(pkgPath);
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean);
+
+  cachedTicketFontPaths = [...explicit, ...defaults];
+  return cachedTicketFontPaths;
+}
+
+function renderTicketPngBuffer(svg: string) {
+  const fontFiles = resolveTicketFontPaths();
+  const resvg = new Resvg(svg, {
+    background: "rgba(0,0,0,0)",
+    font: {
+      fontFiles,
+      loadSystemFonts: true,
+      defaultFontFamily: "Noto Sans Thai",
+    },
+  });
+
+  return resvg.render().asPng();
+}
+
+function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, string>) {
+  const fullName = `${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-";
+  const eventDate = formatTicketDate(settings.event_date || "");
+  const location = String(settings.event_location || "-").trim() || "-";
+
+  return [
+    "ลงทะเบียนสำเร็จแล้ว ✅",
+    `ชื่อ: ${fullName}`,
+    `รหัสตั๋ว: ${reg.id}`,
+    `วันเวลา: ${eventDate}`,
+    `สถานที่: ${location}`,
+    "กรุณาเก็บข้อความนี้และรูปตั๋วไว้สำหรับเช็กอิน",
+  ].join("\n");
 }
 
 function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
@@ -783,31 +845,55 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
   let sentTicketArtifact = false;
+  const settings = uniqueTicketIds.length > 0 ? getSettingsMap() : null;
   for (const registrationId of uniqueTicketIds) {
-    const ticketUrl = buildTicketImageUrl(registrationId);
-    if (!ticketUrl) {
+    const reg = getRegistrationById(registrationId);
+    if (reg && settings) {
+      const ticketSummaryText = buildTicketSummaryText(reg, settings);
+      try {
+        await sendFacebookTextMessage(senderId, ticketSummaryText);
+        saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing");
+      } catch (error) {
+        console.error("Failed to send ticket summary text:", error);
+      }
+    }
+
+    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    if (!ticketPngUrl && !ticketSvgUrl) {
       console.warn("APP_URL is not set; skipping ticket image send");
       continue;
     }
 
     try {
-      await sendFacebookImageMessage(senderId, ticketUrl);
-      saveMessage(senderId, `[ticket-image] ${registrationId}`, "outgoing");
+      if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
+      await sendFacebookImageMessage(senderId, ticketPngUrl);
+      saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing");
       sentTicketArtifact = true;
     } catch (error) {
-      console.error("Failed to send ticket image:", error);
+      console.error("Failed to send PNG ticket image:", error);
       try {
-        await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${ticketUrl}`);
-        saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing");
+        if (!ticketSvgUrl) throw new Error("SVG ticket URL is not available");
+        await sendFacebookImageMessage(senderId, ticketSvgUrl);
+        saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing");
         sentTicketArtifact = true;
-      } catch (fallbackError) {
-        console.error("Failed to send ticket link fallback:", fallbackError);
+      } catch (svgError) {
+        console.error("Failed to send SVG ticket image fallback:", svgError);
+        try {
+          const textUrl = ticketPngUrl || ticketSvgUrl;
+          if (!textUrl) throw new Error("No ticket URL available");
+          await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`);
+          saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing");
+          sentTicketArtifact = true;
+        } catch (fallbackError) {
+          console.error("Failed to send ticket link fallback:", fallbackError);
+        }
       }
     }
   }
 
   if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
-    const mapUrl = String(getSettingsMap().event_map_url || "").trim();
+    const mapUrl = String(settings?.event_map_url || "").trim();
     if (mapUrl) {
       try {
         await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`);
@@ -874,6 +960,28 @@ async function startServer() {
     }
   });
 
+  app.post("/api/registrations/status", (req, res) => {
+    try {
+      const id = String(req.body?.id || "").trim().toUpperCase();
+      const status = String(req.body?.status || "").trim();
+      const allowedStatuses = new Set(["registered", "cancelled", "checked-in"]);
+
+      if (!id || !allowedStatuses.has(status)) {
+        return res.status(400).json({ error: "Invalid registration ID or status" });
+      }
+
+      const result = db.prepare("UPDATE registrations SET status = ? WHERE id = ?").run(status, id);
+      if (result.changes > 0) {
+        return res.json({ status: "success", id, registration_status: status });
+      }
+
+      return res.status(404).json({ error: "Registration not found" });
+    } catch (error) {
+      console.error("Failed to update registration status:", error);
+      res.status(500).json({ error: "Failed to update registration status" });
+    }
+  });
+
   app.get("/api/registrations/export", (req, res) => {
     try {
       const rows = db.prepare("SELECT * FROM registrations").all();
@@ -902,6 +1010,32 @@ async function startServer() {
       res.send(csvWithBOM);
     } catch (error) {
       res.status(500).json({ error: "Failed to export CSV" });
+    }
+  });
+
+  app.get("/api/tickets/:id.png", async (req, res) => {
+    try {
+      const registrationId = String(req.params.id || "").trim().toUpperCase();
+      if (!registrationId) {
+        return res.status(400).send("Missing registration ID");
+      }
+
+      const reg = getRegistrationById(registrationId);
+      if (!reg) {
+        return res.status(404).send("Ticket not found");
+      }
+
+      const settings = getSettingsMap();
+      const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
+      const svg = renderTicketSvg(reg, settings, qrDataUrl);
+      const png = renderTicketPngBuffer(svg);
+
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "private, max-age=60");
+      res.send(Buffer.from(png));
+    } catch (error) {
+      console.error("Failed to render ticket PNG:", error);
+      res.status(500).send("Failed to render ticket PNG");
     }
   });
 

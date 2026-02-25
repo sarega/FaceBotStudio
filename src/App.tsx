@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   MessageSquare, 
@@ -16,7 +16,11 @@ import {
   Users,
   Download,
   QrCode,
-  Search
+  Search,
+  Camera,
+  Play,
+  Square,
+  ExternalLink
 } from "lucide-react";
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
@@ -40,6 +44,8 @@ interface LlmModelOption {
   context_length?: number;
 }
 
+type RegistrationStatus = "registered" | "cancelled" | "checked-in";
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<"design" | "test" | "logs" | "settings" | "registrations">("design");
   const [settings, setSettings] = useState<Settings>({ 
@@ -60,15 +66,41 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
+  const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [copied, setCopied] = useState(false);
   const [searchId, setSearchId] = useState("");
   const [checkinStatus, setCheckinStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [checkinErrorMessage, setCheckinErrorMessage] = useState("");
+  const [statusUpdateLoading, setStatusUpdateLoading] = useState(false);
+  const [statusUpdateMessage, setStatusUpdateMessage] = useState("");
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
   const [llmModelsError, setLlmModelsError] = useState("");
+  const [scannerActive, setScannerActive] = useState(false);
+  const [scannerStarting, setScannerStarting] = useState(false);
+  const [scannerError, setScannerError] = useState("");
+  const [lastScannedValue, setLastScannedValue] = useState("");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const scanIntervalRef = useRef<number | null>(null);
+  const scanBusyRef = useRef(false);
+  const scannerCooldownRef = useRef(false);
+
+  const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
+  const canUseQrScanner =
+    typeof window !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia) &&
+    Boolean((window as any).BarcodeDetector);
+  const selectedTicketPngUrl = selectedRegistration
+    ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.png`
+    : "";
+  const selectedTicketSvgUrl = selectedRegistration
+    ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
+    : "";
 
   useEffect(() => {
     fetchSettings();
@@ -81,6 +113,46 @@ export default function App() {
     }, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  const stopQrScanner = () => {
+    if (scanIntervalRef.current != null) {
+      window.clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+
+    scanBusyRef.current = false;
+    scannerCooldownRef.current = false;
+    setScannerActive(false);
+    setScannerStarting(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopQrScanner();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "registrations") {
+      stopQrScanner();
+    }
+  }, [activeTab]);
+
+  const extractRegistrationId = (rawValue: string) => {
+    const text = String(rawValue || "").trim().toUpperCase();
+    const match = text.match(/REG-[A-Z0-9]+/);
+    return match?.[0] || "";
+  };
 
   const fetchSettings = async () => {
     try {
@@ -146,33 +218,165 @@ export default function App() {
     try {
       const res = await fetch("/api/registrations");
       const data = await res.json();
-      setRegistrations(data);
+      setRegistrations(Array.isArray(data) ? data : []);
+      setSelectedRegistrationId((prev) => {
+        const rows = Array.isArray(data) ? (data as Registration[]) : [];
+        if (prev && rows.some((r) => r.id === prev)) return prev;
+        return rows[0]?.id || "";
+      });
     } catch (err) {
       console.error("Failed to fetch registrations", err);
     }
   };
 
-  const handleCheckin = async () => {
-    if (!searchId) return;
+  const handleCheckinById = async (rawId: string, options?: { clearInputOnSuccess?: boolean }) => {
+    const normalizedId = extractRegistrationId(rawId);
+    if (!normalizedId) {
+      setCheckinStatus("error");
+      setCheckinErrorMessage("Invalid registration ID / QR code");
+      return false;
+    }
+
     setCheckinStatus("loading");
+    setCheckinErrorMessage("");
     try {
       const res = await fetch("/api/registrations/checkin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: searchId }),
+        body: JSON.stringify({ id: normalizedId }),
       });
       if (res.ok) {
         setCheckinStatus("success");
+        setSearchId(normalizedId);
+        setSelectedRegistrationId(normalizedId);
         fetchRegistrations();
         setTimeout(() => {
           setCheckinStatus("idle");
-          setSearchId("");
+          setCheckinErrorMessage("");
+          if (options?.clearInputOnSuccess !== false) {
+            setSearchId("");
+          }
         }, 3000);
+        return true;
       } else {
+        const data = await res.json().catch(() => ({}));
         setCheckinStatus("error");
+        setCheckinErrorMessage(data?.error || "Failed to check in attendee");
+        return false;
       }
     } catch (err) {
       setCheckinStatus("error");
+      setCheckinErrorMessage("Network error during check-in");
+      return false;
+    }
+  };
+
+  const handleCheckin = async () => {
+    if (!searchId) return;
+    await handleCheckinById(searchId);
+  };
+
+  const updateRegistrationStatus = async (registrationId: string, status: RegistrationStatus) => {
+    setStatusUpdateLoading(true);
+    setStatusUpdateMessage("");
+    try {
+      const res = await fetch("/api/registrations/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: registrationId, status }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to update registration status");
+      }
+      setStatusUpdateMessage(`Updated ${registrationId} to ${status}`);
+      setSelectedRegistrationId(registrationId);
+      fetchRegistrations();
+      window.setTimeout(() => setStatusUpdateMessage(""), 2500);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update registration status";
+      setStatusUpdateMessage(message);
+    } finally {
+      setStatusUpdateLoading(false);
+    }
+  };
+
+  const startQrScanner = async () => {
+    if (scannerStarting || scannerActive) return;
+    setScannerError("");
+    setLastScannedValue("");
+
+    const BarcodeDetectorCtor = (window as any).BarcodeDetector;
+    if (!BarcodeDetectorCtor || !navigator.mediaDevices?.getUserMedia) {
+      setScannerError("QR scanner is not supported in this browser. Use manual check-in instead.");
+      return;
+    }
+
+    setScannerStarting(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+
+      cameraStreamRef.current = stream;
+      if (!videoRef.current) {
+        throw new Error("Video preview is not ready");
+      }
+
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+
+      let detector: any;
+      try {
+        detector = new BarcodeDetectorCtor({ formats: ["qr_code"] });
+      } catch {
+        detector = new BarcodeDetectorCtor();
+      }
+
+      scannerCooldownRef.current = false;
+      scanIntervalRef.current = window.setInterval(async () => {
+        if (!videoRef.current || scanBusyRef.current || scannerCooldownRef.current) return;
+        if (videoRef.current.readyState < 2) return;
+
+        scanBusyRef.current = true;
+        try {
+          const barcodes = await detector.detect(videoRef.current);
+          const rawValue = String(barcodes?.[0]?.rawValue || "").trim();
+          if (!rawValue) return;
+
+          const registrationId = extractRegistrationId(rawValue);
+          setLastScannedValue(rawValue);
+          if (!registrationId) return;
+
+          scannerCooldownRef.current = true;
+          setSearchId(registrationId);
+          const ok = await handleCheckinById(registrationId, { clearInputOnSuccess: false });
+          if (ok) {
+            stopQrScanner();
+          } else {
+            window.setTimeout(() => {
+              scannerCooldownRef.current = false;
+            }, 1500);
+          }
+        } catch (err) {
+          console.error("QR detection error", err);
+        } finally {
+          scanBusyRef.current = false;
+        }
+      }, 450);
+
+      setScannerActive(true);
+    } catch (err) {
+      console.error("Failed to start QR scanner", err);
+      setScannerError(err instanceof Error ? err.message : "Failed to start camera");
+      stopQrScanner();
+    } finally {
+      setScannerStarting(false);
     }
   };
 
@@ -479,7 +683,7 @@ export default function App() {
                             {settings.event_name || "Untitled Event"}
                           </span>
                         </div>
-                        <p className="text-sm text-slate-500">Manage and export your event registrations.</p>
+                        <p className="text-sm text-slate-500">Manage, preview tickets, and export event registrations. Click a row to open the ticket panel.</p>
                       </div>
                       <a 
                         href="/api/registrations/export" 
@@ -508,7 +712,13 @@ export default function App() {
                             </tr>
                           ) : (
                             registrations.map((reg) => (
-                              <tr key={reg.id} className="hover:bg-slate-50/50 transition-colors">
+                              <tr
+                                key={reg.id}
+                                onClick={() => setSelectedRegistrationId(reg.id)}
+                                className={`hover:bg-slate-50/70 transition-colors cursor-pointer ${
+                                  selectedRegistrationId === reg.id ? "bg-blue-50/70" : ""
+                                }`}
+                              >
                                 <td className="px-6 py-4 font-mono text-xs font-bold text-blue-600">
                                   {reg.id}
                                 </td>
@@ -528,6 +738,9 @@ export default function App() {
                                   }`}>
                                     {reg.status}
                                   </span>
+                                  {selectedRegistrationId === reg.id && (
+                                    <p className="mt-1 text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Selected</p>
+                                  )}
                                 </td>
                               </tr>
                             ))
@@ -539,12 +752,116 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-lg font-semibold">Selected Ticket</h3>
+                        <p className="text-xs text-slate-500">Click a registration row to preview, download, and edit status.</p>
+                      </div>
+                      {selectedRegistration && (
+                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                          selectedRegistration.status === "checked-in"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : selectedRegistration.status === "cancelled"
+                            ? "bg-slate-200 text-slate-600"
+                            : "bg-blue-100 text-blue-700"
+                        }`}>
+                          {selectedRegistration.status}
+                        </span>
+                      )}
+                    </div>
+
+                    {!selectedRegistration ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+                        No attendee selected yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="max-h-[30rem] overflow-auto rounded-2xl bg-slate-50 p-2">
+                          <Ticket
+                            registrationId={selectedRegistration.id}
+                            firstName={selectedRegistration.first_name}
+                            lastName={selectedRegistration.last_name}
+                            phone={selectedRegistration.phone}
+                            email={selectedRegistration.email}
+                            timestamp={selectedRegistration.timestamp}
+                            eventName={settings.event_name}
+                            eventLocation={settings.event_location}
+                            eventDate={settings.event_date}
+                            eventMapUrl={settings.event_map_url}
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <a
+                            href={selectedTicketPngUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm font-semibold transition-colors"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            Open PNG Ticket
+                          </a>
+                          <a
+                            href={selectedTicketPngUrl}
+                            download={`${selectedRegistration.id}.png`}
+                            className="flex items-center justify-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-semibold transition-colors"
+                          >
+                            <Download className="w-4 h-4" />
+                            Download PNG
+                          </a>
+                          <a
+                            href={selectedTicketSvgUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-semibold transition-colors sm:col-span-2"
+                          >
+                            <QrCode className="w-4 h-4" />
+                            Open SVG Preview (fallback)
+                          </a>
+                        </div>
+
+                        <div className="border-t border-slate-100 pt-4">
+                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Admin Status Override</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            {(["registered", "checked-in", "cancelled"] as RegistrationStatus[]).map((statusOption) => {
+                              const active = selectedRegistration.status === statusOption;
+                              return (
+                                <button
+                                  key={statusOption}
+                                  onClick={() => updateRegistrationStatus(selectedRegistration.id, statusOption)}
+                                  disabled={statusUpdateLoading}
+                                  className={`px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all ${
+                                    active
+                                      ? statusOption === "checked-in"
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                        : statusOption === "cancelled"
+                                        ? "bg-slate-100 text-slate-700 border-slate-300"
+                                        : "bg-blue-50 text-blue-700 border-blue-200"
+                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                                  } disabled:opacity-60`}
+                                >
+                                  {statusOption}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {statusUpdateMessage && (
+                            <p className={`mt-2 text-xs ${statusUpdateMessage.toLowerCase().includes("failed") || statusUpdateMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                              {statusUpdateMessage}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                     <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                       <QrCode className="w-5 h-5 text-blue-600" />
                       Admin Check-in
                     </h3>
-                    <p className="text-sm text-slate-500 mb-4">Enter Registration ID to check in attendees at the door.</p>
+                    <p className="text-sm text-slate-500 mb-4">Enter Registration ID manually or scan QR to check in attendees at the door.</p>
                     <div className="space-y-4">
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -552,6 +869,7 @@ export default function App() {
                           type="text"
                           value={searchId}
                           onChange={(e) => setSearchId(e.target.value.toUpperCase())}
+                          onKeyDown={(e) => e.key === "Enter" && handleCheckin()}
                           placeholder="REG-XXXXXX"
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
                         />
@@ -570,9 +888,75 @@ export default function App() {
                         {checkinStatus === "loading" && <RefreshCw className="w-4 h-4 animate-spin" />}
                         {checkinStatus === "success" && <CheckCircle2 className="w-4 h-4" />}
                         {checkinStatus === "error" && <AlertCircle className="w-4 h-4" />}
-                        {checkinStatus === "success" ? "Checked In!" : checkinStatus === "error" ? "Invalid ID" : "Check In Attendee"}
+                        {checkinStatus === "success" ? "Checked In!" : checkinStatus === "error" ? "Check-in Failed" : "Check In Attendee"}
                       </button>
+                      {checkinStatus === "error" && checkinErrorMessage && (
+                        <p className="text-xs text-rose-600">{checkinErrorMessage}</p>
+                      )}
                     </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                      <div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Camera className="w-5 h-5 text-blue-600" />
+                          QR Scanner Check-in
+                        </h3>
+                        <p className="text-sm text-slate-500">
+                          Use your camera to scan attendee QR codes directly from this page.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={startQrScanner}
+                          disabled={!canUseQrScanner || scannerActive || scannerStarting}
+                          className="inline-flex items-center gap-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                        >
+                          {scannerStarting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                          Start
+                        </button>
+                        <button
+                          onClick={stopQrScanner}
+                          disabled={!scannerActive && !scannerStarting}
+                          className="inline-flex items-center gap-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                        >
+                          <Square className="w-3.5 h-3.5" />
+                          Stop
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-950">
+                      <div className="aspect-video relative">
+                        <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" muted playsInline />
+                        {!scannerActive && !scannerStarting && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 gap-2 p-4 text-center">
+                            <Camera className="w-8 h-8 opacity-70" />
+                            <p className="text-xs">
+                              {canUseQrScanner
+                                ? "Tap Start to open camera and scan a QR code."
+                                : "This browser does not support camera QR scanning. Use manual check-in or Chrome/Edge on mobile."}
+                            </p>
+                          </div>
+                        )}
+                        {scannerStarting && (
+                          <div className="absolute inset-0 flex items-center justify-center text-white">
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                          </div>
+                        )}
+                        {scannerActive && (
+                          <div className="absolute inset-x-6 top-1/2 -translate-y-1/2 h-28 border-2 border-blue-300/90 rounded-2xl shadow-[0_0_0_9999px_rgba(15,23,42,0.28)] pointer-events-none" />
+                        )}
+                      </div>
+                    </div>
+
+                    {lastScannedValue && (
+                      <p className="mt-3 text-xs text-slate-500 break-all">
+                        Last scan: <span className="font-mono">{lastScannedValue}</span>
+                      </p>
+                    )}
+                    {scannerError && <p className="mt-2 text-xs text-rose-600">{scannerError}</p>}
                   </div>
 
                   <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-xl">
