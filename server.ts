@@ -69,6 +69,21 @@ type ChatHistoryMessage = {
   parts: ChatPart[];
 };
 
+type NormalizedChatResponse = {
+  candidates: Array<{
+    content: {
+      parts: ChatPart[];
+    };
+  }>;
+  functionCalls?: Array<{
+    name: string;
+    args: Record<string, unknown>;
+  }>;
+  meta?: {
+    model?: string;
+  };
+};
+
 function buildEventInfo(settings: Record<string, any>) {
   return `
 Current Event Details:
@@ -172,6 +187,342 @@ function extractAssistantText(content: unknown) {
   return "";
 }
 
+function getSettingsMap() {
+  const rows = db.prepare("SELECT * FROM settings").all() as Array<{ key: string; value: string }>;
+  return rows.reduce((acc, row) => {
+    acc[row.key] = row.value;
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing") {
+  db.prepare("INSERT INTO messages (sender_id, text, type) VALUES (?, ?, ?)").run(senderId, text, type);
+}
+
+function getMessageHistoryForSender(senderId: string, limit = 12): ChatHistoryMessage[] {
+  const rows = db.prepare(
+    "SELECT text, type FROM messages WHERE sender_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+  ).all(senderId, limit) as Array<{ text: string; type: string }>;
+
+  return rows
+    .reverse()
+    .map((row) => ({
+      role: row.type === "incoming" ? "user" : "model",
+      parts: [{ text: row.text || "" }],
+    }));
+}
+
+function createRegistration(input: {
+  sender_id: string;
+  first_name: unknown;
+  last_name: unknown;
+  phone: unknown;
+  email?: unknown;
+}) {
+  const senderId = String(input.sender_id || "").trim();
+  const firstName = String(input.first_name || "").trim();
+  const lastName = String(input.last_name || "").trim();
+  const phone = String(input.phone || "").trim();
+  const email = input.email == null ? "" : String(input.email).trim();
+
+  if (!senderId || !firstName || !lastName || !phone) {
+    return { statusCode: 400, content: { error: "Missing required registration fields" } };
+  }
+
+  const countRow = db.prepare("SELECT COUNT(*) as count FROM registrations WHERE status != 'cancelled'").get() as any;
+  const limitRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_limit'").get() as any;
+  const limit = parseInt(limitRow?.value || "200");
+
+  if (countRow.count >= limit) {
+    return { statusCode: 400, content: { error: "Registration limit reached" } };
+  }
+
+  const startRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_start'").get() as any;
+  const endRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_end'").get() as any;
+  const now = new Date();
+  const start = new Date(startRow?.value);
+  const end = new Date(endRow?.value);
+
+  if (!Number.isNaN(start.getTime()) && now < start) {
+    return { statusCode: 400, content: { error: "Registration has not started yet" } };
+  }
+  if (!Number.isNaN(end.getTime()) && now > end) {
+    return { statusCode: 400, content: { error: "Registration has closed" } };
+  }
+
+  const id = "REG-" + Math.random().toString(36).substring(2, 8).toUpperCase();
+  db.prepare(`
+    INSERT INTO registrations (id, sender_id, first_name, last_name, phone, email)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, senderId, firstName, lastName, phone, email);
+
+  return { statusCode: 200, content: { id, status: "success" } };
+}
+
+function cancelRegistration(id: unknown) {
+  const registrationId = String(id || "").trim();
+  if (!registrationId) {
+    return { statusCode: 400, content: { error: "Registration ID is required" } };
+  }
+
+  const result = db.prepare("UPDATE registrations SET status = 'cancelled' WHERE id = ?").run(registrationId);
+  if (result.changes > 0) {
+    return { statusCode: 200, content: { status: "success" } };
+  }
+  return { statusCode: 404, content: { error: "Registration not found" } };
+}
+
+async function requestOpenRouterChat(
+  message: string,
+  history: ChatHistoryMessage[],
+  settings: Record<string, any>,
+): Promise<NormalizedChatResponse> {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured in .env");
+  }
+
+  const model = (typeof settings.llm_model === "string" && settings.llm_model.trim())
+    ? settings.llm_model.trim()
+    : DEFAULT_OPENROUTER_MODEL;
+
+  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: openRouterHeaders(),
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: getSystemInstruction(settings),
+        },
+        ...normalizeHistoryForOpenRouter(history),
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "registerUser",
+            description: "Register a user for the event after collecting their details.",
+            parameters: {
+              type: "object",
+              properties: {
+                first_name: { type: "string", description: "User's first name" },
+                last_name: { type: "string", description: "User's last name" },
+                phone: { type: "string", description: "User's phone number" },
+                email: { type: "string", description: "User's email address (optional)" },
+              },
+              required: ["first_name", "last_name", "phone"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "cancelRegistration",
+            description: "Cancel an existing registration using the Registration ID.",
+            parameters: {
+              type: "object",
+              properties: {
+                registration_id: {
+                  type: "string",
+                  description: "The Registration ID (e.g. REG-XXXXXX)",
+                },
+              },
+              required: ["registration_id"],
+            },
+          },
+        },
+      ],
+      tool_choice: "auto",
+    }),
+  });
+
+  const payload = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) {
+    throw new Error(payload?.error?.message || "OpenRouter chat request failed");
+  }
+
+  const assistantMessage = payload?.choices?.[0]?.message || {};
+  const assistantText = extractAssistantText(assistantMessage.content);
+  const functionCalls = Array.isArray(assistantMessage.tool_calls)
+    ? assistantMessage.tool_calls
+        .map((call: any) => ({
+          name: call?.function?.name,
+          args: parseToolArgs(call?.function?.arguments),
+        }))
+        .filter((call: any) => typeof call.name === "string" && call.name.length > 0)
+    : [];
+
+  const parts: ChatPart[] = [];
+  if (assistantText) {
+    parts.push({ text: assistantText });
+  }
+  for (const call of functionCalls) {
+    parts.push({
+      functionCall: {
+        name: call.name,
+        args: call.args,
+      },
+    });
+  }
+  if (parts.length === 0) {
+    parts.push({ text: "" });
+  }
+
+  return {
+    candidates: [
+      {
+        content: { parts },
+      },
+    ],
+    functionCalls,
+    meta: {
+      model: payload?.model || model,
+    },
+  };
+}
+
+function getTextFromNormalizedResponse(response: NormalizedChatResponse) {
+  const parts = response.candidates?.[0]?.content?.parts || [];
+  return parts
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildToolResponseMessages(
+  senderId: string,
+  calls: Array<{ name: string; args: Record<string, unknown> }>,
+): ChatHistoryMessage[] {
+  const messages: ChatHistoryMessage[] = [];
+
+  for (const call of calls) {
+    let content: Record<string, unknown>;
+
+    if (call.name === "registerUser") {
+      const result = createRegistration({
+        sender_id: senderId,
+        first_name: call.args.first_name,
+        last_name: call.args.last_name,
+        phone: call.args.phone,
+        email: call.args.email,
+      });
+      content = result.content;
+    } else if (call.name === "cancelRegistration") {
+      const result = cancelRegistration(call.args.registration_id);
+      content = result.content;
+    } else {
+      content = { error: `Unknown tool: ${call.name}` };
+    }
+
+    messages.push({
+      role: "model",
+      parts: [
+        {
+          functionResponse: {
+            name: call.name,
+            response: { content },
+          },
+        },
+      ],
+    });
+  }
+
+  return messages;
+}
+
+async function generateBotReplyForSender(
+  senderId: string,
+  incomingText: string,
+  historyOverride?: ChatHistoryMessage[],
+) {
+  const settings = getSettingsMap();
+  const history = historyOverride || getMessageHistoryForSender(senderId, 12);
+
+  const firstResponse = await requestOpenRouterChat(incomingText, history, settings);
+  let finalResponse = firstResponse;
+
+  if (firstResponse.functionCalls && firstResponse.functionCalls.length > 0) {
+    const toolMessages = buildToolResponseMessages(senderId, firstResponse.functionCalls);
+    const assistantMessage: ChatHistoryMessage = {
+      role: "model",
+      parts: firstResponse.candidates?.[0]?.content?.parts || [{ text: "" }],
+    };
+
+    finalResponse = await requestOpenRouterChat(
+      "Continue based on the tool results. Reply to the user in plain text only.",
+      [
+        ...history,
+        { role: "user", parts: [{ text: incomingText }] },
+        assistantMessage,
+        ...toolMessages,
+      ],
+      settings,
+    );
+  }
+
+  return getTextFromNormalizedResponse(finalResponse);
+}
+
+async function sendFacebookTextMessage(recipientId: string, text: string) {
+  const pageAccessToken = process.env.PAGE_ACCESS_TOKEN;
+  if (!pageAccessToken) {
+    throw new Error("PAGE_ACCESS_TOKEN is not configured");
+  }
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
+  url.searchParams.set("access_token", pageAccessToken);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messaging_type: "RESPONSE",
+      recipient: { id: recipientId },
+      message: { text },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "Failed to send message to Facebook");
+  }
+
+  return payload;
+}
+
+async function handleIncomingFacebookText(senderId: string, text: string) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+
+  const priorHistory = getMessageHistoryForSender(senderId, 12);
+  saveMessage(senderId, trimmed, "incoming");
+
+  if (!process.env.PAGE_ACCESS_TOKEN) {
+    console.warn("PAGE_ACCESS_TOKEN is not set; skipping outbound Facebook reply");
+    return;
+  }
+
+  let replyText = "";
+  try {
+    replyText = await generateBotReplyForSender(senderId, trimmed, priorHistory);
+  } catch (error) {
+    console.error("Failed to generate bot reply:", error);
+    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+  }
+
+  if (!replyText) return;
+
+  await sendFacebookTextMessage(senderId, replyText);
+  saveMessage(senderId, replyText, "outgoing");
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json());
@@ -179,6 +530,10 @@ async function startServer() {
   const PORT = Number(process.env.PORT || 3000);
 
   // API Routes
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", time: new Date().toISOString() });
+  });
+
   app.get("/api/registrations", (req, res) => {
     try {
       const rows = db.prepare("SELECT * FROM registrations ORDER BY timestamp DESC").all();
@@ -190,39 +545,8 @@ async function startServer() {
 
   app.post("/api/registrations", (req, res) => {
     try {
-      const { sender_id, first_name, last_name, phone, email } = req.body;
-      
-      // Check limit - only count active registrations
-      const countRow = db.prepare("SELECT COUNT(*) as count FROM registrations WHERE status != 'cancelled'").get() as any;
-      const limitRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_limit'").get() as any;
-      const limit = parseInt(limitRow?.value || "200");
-      
-      if (countRow.count >= limit) {
-        return res.status(400).json({ error: "Registration limit reached" });
-      }
-
-      // Check dates
-      const startRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_start'").get() as any;
-      const endRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_end'").get() as any;
-      const now = new Date();
-      const start = new Date(startRow?.value);
-      const end = new Date(endRow?.value);
-
-      if (now < start) {
-        return res.status(400).json({ error: "Registration has not started yet" });
-      }
-      if (now > end) {
-        return res.status(400).json({ error: "Registration has closed" });
-      }
-
-      const id = "REG-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-      
-      db.prepare(`
-        INSERT INTO registrations (id, sender_id, first_name, last_name, phone, email)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(id, sender_id, first_name, last_name, phone, email);
-
-      res.json({ id, status: "success" });
+      const result = createRegistration(req.body || {});
+      res.status(result.statusCode).json(result.content);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to register user" });
@@ -245,13 +569,8 @@ async function startServer() {
 
   app.post("/api/registrations/cancel", (req, res) => {
     try {
-      const { id } = req.body;
-      const result = db.prepare("UPDATE registrations SET status = 'cancelled' WHERE id = ?").run(id);
-      if (result.changes > 0) {
-        res.json({ status: "success" });
-      } else {
-        res.status(404).json({ error: "Registration not found" });
-      }
+      const result = cancelRegistration(req.body?.id);
+      res.status(result.statusCode).json(result.content);
     } catch (error) {
       res.status(500).json({ error: "Failed to cancel registration" });
     }
@@ -290,12 +609,7 @@ async function startServer() {
 
   app.get("/api/settings", (req, res) => {
     try {
-      const rows = db.prepare("SELECT * FROM settings").all();
-      const settings = (rows as any[]).reduce((acc: any, row: any) => {
-        acc[row.key] = row.value;
-        return acc;
-      }, {});
-      res.json(settings);
+      res.json(getSettingsMap());
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
@@ -362,124 +676,18 @@ async function startServer() {
   });
 
   app.post("/api/llm/chat", async (req, res) => {
-    if (!process.env.OPENROUTER_API_KEY) {
-      return res.status(400).json({ error: "OPENROUTER_API_KEY is not configured in .env" });
-    }
-
     try {
       const body = req.body || {};
       const message = typeof body.message === "string" ? body.message : "";
       const history = Array.isArray(body.history) ? (body.history as ChatHistoryMessage[]) : [];
       const settings = (body.settings && typeof body.settings === "object") ? body.settings as Record<string, any> : {};
-      const model = (typeof settings.llm_model === "string" && settings.llm_model.trim())
-        ? settings.llm_model.trim()
-        : DEFAULT_OPENROUTER_MODEL;
-
-      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: openRouterHeaders(),
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "system",
-              content: getSystemInstruction(settings),
-            },
-            ...normalizeHistoryForOpenRouter(history),
-            {
-              role: "user",
-              content: message,
-            },
-          ],
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "registerUser",
-                description: "Register a user for the event after collecting their details.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    first_name: { type: "string", description: "User's first name" },
-                    last_name: { type: "string", description: "User's last name" },
-                    phone: { type: "string", description: "User's phone number" },
-                    email: { type: "string", description: "User's email address (optional)" },
-                  },
-                  required: ["first_name", "last_name", "phone"],
-                },
-              },
-            },
-            {
-              type: "function",
-              function: {
-                name: "cancelRegistration",
-                description: "Cancel an existing registration using the Registration ID.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    registration_id: {
-                      type: "string",
-                      description: "The Registration ID (e.g. REG-XXXXXX)",
-                    },
-                  },
-                  required: ["registration_id"],
-                },
-              },
-            },
-          ],
-          tool_choice: "auto",
-        }),
-      });
-
-      const payload = await upstream.json().catch(() => ({}));
-      if (!upstream.ok) {
-        return res.status(upstream.status).json({
-          error: payload?.error?.message || "OpenRouter chat request failed",
-        });
-      }
-
-      const assistantMessage = payload?.choices?.[0]?.message || {};
-      const assistantText = extractAssistantText(assistantMessage.content);
-      const functionCalls = Array.isArray(assistantMessage.tool_calls)
-        ? assistantMessage.tool_calls
-            .map((call: any) => ({
-              name: call?.function?.name,
-              args: parseToolArgs(call?.function?.arguments),
-            }))
-            .filter((call: any) => typeof call.name === "string" && call.name.length > 0)
-        : [];
-
-      const parts: ChatPart[] = [];
-      if (assistantText) {
-        parts.push({ text: assistantText });
-      }
-      for (const call of functionCalls) {
-        parts.push({
-          functionCall: {
-            name: call.name,
-            args: call.args,
-          },
-        });
-      }
-
-      if (parts.length === 0) {
-        parts.push({ text: "" });
-      }
-
-      res.json({
-        candidates: [
-          {
-            content: { parts },
-          },
-        ],
-        functionCalls,
-        meta: {
-          model: payload?.model || model,
-        },
-      });
+      const response = await requestOpenRouterChat(message, history, settings);
+      res.json(response);
     } catch (error) {
       console.error("OpenRouter chat error:", error);
-      res.status(500).json({ error: "Failed to get response from OpenRouter" });
+      const message = error instanceof Error ? error.message : "Failed to get response from OpenRouter";
+      const status = /OPENROUTER_API_KEY/.test(message) ? 400 : 500;
+      res.status(status).json({ error: message });
     }
   });
 
@@ -507,23 +715,28 @@ async function startServer() {
   app.post("/api/webhook", (req, res) => {
     const body = req.body;
 
-    if (body.object === "page") {
-      body.entry.forEach((entry: any) => {
-        if (entry.messaging) {
-          const webhook_event = entry.messaging[0];
-          console.log("Received webhook event:", webhook_event);
-
-          const sender_id = webhook_event.sender.id;
-          if (webhook_event.message && webhook_event.message.text) {
-            const text = webhook_event.message.text;
-            db.prepare("INSERT INTO messages (sender_id, text, type) VALUES (?, ?, ?)").run(sender_id, text, "incoming");
-          }
-        }
-      });
-
-      res.status(200).send("EVENT_RECEIVED");
-    } else {
+    if (!body || body.object !== "page") {
       res.sendStatus(404);
+      return;
+    }
+
+    res.status(200).send("EVENT_RECEIVED");
+
+    const entries = Array.isArray(body.entry) ? body.entry : [];
+    for (const entry of entries) {
+      const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
+      for (const webhookEvent of messagingEvents) {
+        console.log("Received webhook event:", webhookEvent);
+
+        const senderId = webhookEvent?.sender?.id;
+        const text = webhookEvent?.message?.text;
+        const isEcho = webhookEvent?.message?.is_echo;
+        if (!senderId || !text || isEcho) continue;
+
+        void handleIncomingFacebookText(senderId, text).catch((error) => {
+          console.error("Failed to handle incoming Facebook message:", error);
+        });
+      }
     }
   });
 
