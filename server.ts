@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
 import QRCode from "qrcode";
+import { readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -377,6 +378,270 @@ function renderTicketPngBuffer(svg: string) {
   });
 
   return resvg.render().asPng();
+}
+
+let cachedTicketFontCssForHtml: string | null = null;
+
+function buildEmbeddedTicketFontCss() {
+  if (cachedTicketFontCssForHtml) return cachedTicketFontCssForHtml;
+
+  const css = resolveTicketFontPaths()
+    .map((fontPath) => {
+      const ext = path.extname(fontPath).replace(".", "").toLowerCase();
+      const format = ext === "woff2" ? "woff2" : "woff";
+      const weight = /-700-/.test(fontPath) ? 700 : /-400-/.test(fontPath) ? 400 : 400;
+      const bytes = readFileSync(fontPath);
+      const base64 = bytes.toString("base64");
+      return `@font-face { font-family: "TicketNoto"; src: url(data:font/${format};base64,${base64}) format("${format}"); font-weight: ${weight}; font-style: normal; font-display: block; }`;
+    })
+    .join("\n");
+
+  cachedTicketFontCssForHtml = css;
+  return cachedTicketFontCssForHtml;
+}
+
+function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
+  const fontCss = buildEmbeddedTicketFontCss();
+  const eventName = escapeXml(String(settings.event_name || "Event Ticket").trim() || "Event Ticket");
+  const attendeeName = escapeXml(`${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-");
+  const registrationId = escapeXml(reg.id);
+  const location = escapeXml(String(settings.event_location || "-").trim() || "-");
+  const eventDate = escapeXml(
+    (() => {
+      const date = new Date(settings.event_date || "");
+      if (Number.isNaN(date.getTime())) return settings.event_date || "-";
+      return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    })(),
+  );
+  const qrSrc = escapeXml(qrDataUrl);
+
+  return `<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    ${fontCss}
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; }
+    body {
+      width: 420px;
+      padding: 8px;
+      background: #e7edf5;
+      font-family: "TicketNoto", system-ui, sans-serif;
+      color: #0f172a;
+    }
+    .ticket {
+      width: 404px;
+      border-radius: 26px;
+      overflow: hidden;
+      background: #ffffff;
+      border: 1px dashed #d7e0eb;
+      box-shadow: 0 10px 26px rgba(15,23,42,.14);
+      position: relative;
+    }
+    .header {
+      background: linear-gradient(135deg, #2a58f2 0%, #2f62f6 100%);
+      color: #fff;
+      padding: 18px 18px 16px;
+      text-align: center;
+      position: relative;
+      min-height: 150px;
+    }
+    .cut {
+      position: absolute;
+      top: 95px;
+      width: 20px;
+      height: 20px;
+      background: #e7edf5;
+      border-radius: 999px;
+    }
+    .cut.left { left: -10px; }
+    .cut.right { right: -10px; }
+    .event-name {
+      margin: 10px auto 6px;
+      line-height: 1.25;
+      font-size: 19px;
+      font-weight: 700;
+      max-width: 320px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-wrap: balance;
+    }
+    .subtitle {
+      margin: 0;
+      color: #dbeafe;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .body { padding: 18px 20px 16px; background: #ffffff; }
+    .qr-wrap {
+      width: 184px;
+      height: 184px;
+      margin: 0 auto 16px;
+      border-radius: 14px;
+      border: 1px solid #dbe3ef;
+      background: #edf2f7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px;
+    }
+    .qr-wrap img {
+      width: 156px;
+      height: 156px;
+      display: block;
+      background: #fff;
+      border-radius: 6px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #dbe3ef;
+      margin-bottom: 12px;
+    }
+    .label {
+      margin: 0 0 4px;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      color: #94a3b8;
+    }
+    .value {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 700;
+      color: #0f172a;
+      line-height: 1.2;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      color: #2563eb;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .grid .value-sm {
+      margin: 0;
+      font-size: 13px;
+      color: #334155;
+      line-height: 1.35;
+      min-height: 36px;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .map-note {
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 12px;
+      background: #e8eef6;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: #334155;
+    }
+    .footer {
+      background: #f1f5f9;
+      color: #16a34a;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      padding: 14px;
+      border-top: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <div id="ticket-capture" class="ticket">
+    <div class="header">
+      <div class="cut left"></div>
+      <div class="cut right"></div>
+      <div class="event-name">${eventName}</div>
+      <p class="subtitle">Official Registration Pass</p>
+    </div>
+    <div class="body">
+      <div class="qr-wrap"><img src="${qrSrc}" alt="QR Code" /></div>
+
+      <div class="row">
+        <div>
+          <p class="label">Attendee</p>
+          <p class="value">${attendeeName}</p>
+        </div>
+        <div style="text-align:right; max-width: 46%;">
+          <p class="label">ID Number</p>
+          <p class="value mono">${registrationId}</p>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <p class="label">Location</p>
+          <p class="value-sm">${location}</p>
+        </div>
+        <div>
+          <p class="label">Event Date</p>
+          <p class="value-sm">${eventDate}</p>
+        </div>
+      </div>
+
+      <div class="map-note">Map link will be sent in chat</div>
+    </div>
+    <div class="footer">Verified Registration</div>
+  </div>
+</body>
+</html>`;
+}
+
+async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
+  const html = renderTicketHtmlForScreenshot(reg, settings, qrDataUrl);
+  const puppeteerModule = await import("puppeteer");
+  const puppeteer = (puppeteerModule as any).default || puppeteerModule;
+  const browser = await puppeteer.launch({
+    headless: true,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_BIN || undefined,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    try {
+      await page.setViewport({ width: 420, height: 680, deviceScaleFactor: 1.5 });
+      await page.setContent(html, { waitUntil: "domcontentloaded" });
+      await page.evaluate(async () => {
+        const fonts = (document as any).fonts;
+        if (fonts?.ready) await fonts.ready;
+      });
+      const element = await page.$("#ticket-capture");
+      if (!element) {
+        throw new Error("Ticket capture element not found");
+      }
+      const screenshot = await element.screenshot({ type: "png" });
+      return Buffer.isBuffer(screenshot) ? screenshot : Buffer.from(screenshot);
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+  }
 }
 
 function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, string>) {
@@ -1027,12 +1292,19 @@ async function startServer() {
 
       const settings = getSettingsMap();
       const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
-      const svg = renderTicketSvg(reg, settings, qrDataUrl);
-      const png = renderTicketPngBuffer(svg);
+      let png: Buffer;
+
+      try {
+        png = await renderTicketPngScreenshotBuffer(reg, settings, qrDataUrl);
+      } catch (screenshotError) {
+        console.error("Failed to render ticket PNG via screenshot, falling back to resvg:", screenshotError);
+        const svg = renderTicketSvg(reg, settings, qrDataUrl);
+        png = Buffer.from(renderTicketPngBuffer(svg));
+      }
 
       res.setHeader("Content-Type", "image/png");
       res.setHeader("Cache-Control", "private, max-age=60");
-      res.send(Buffer.from(png));
+      res.send(png);
     } catch (error) {
       console.error("Failed to render ticket PNG:", error);
       res.status(500).send("Failed to render ticket PNG");
