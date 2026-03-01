@@ -211,6 +211,80 @@ function getEventStatusBadgeClass(status: EventStatus) {
   }
 }
 
+const INITIAL_SETTINGS: Settings = {
+  context: "",
+  llm_model: "",
+  global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
+  global_llm_model: "google/gemini-3-flash-preview",
+  verify_token: "",
+  event_name: "",
+  event_timezone: DEFAULT_TIMEZONE,
+  event_location: "",
+  event_map_url: "",
+  event_date: "",
+  event_description: "",
+  event_travel: "",
+  reg_limit: "200",
+  reg_start: "",
+  reg_end: "",
+};
+
+function getBlankEventScopedSettings() {
+  return {
+    context: "",
+    llm_model: "",
+    event_name: "",
+    event_timezone: DEFAULT_TIMEZONE,
+    event_location: "",
+    event_map_url: "",
+    event_date: "",
+    event_description: "",
+    event_travel: "",
+    reg_limit: "200",
+    reg_start: "",
+    reg_end: "",
+  } satisfies Pick<
+    Settings,
+    | "context"
+    | "llm_model"
+    | "event_name"
+    | "event_timezone"
+    | "event_location"
+    | "event_map_url"
+    | "event_date"
+    | "event_description"
+    | "event_travel"
+    | "reg_limit"
+    | "reg_start"
+    | "reg_end"
+  >;
+}
+
+function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> | Record<string, unknown>) {
+  return {
+    context: typeof data.context === "string" ? data.context : "",
+    llm_model: typeof data.llm_model === "string" ? data.llm_model : "",
+    global_system_prompt:
+      typeof data.global_system_prompt === "string" ? data.global_system_prompt : previous.global_system_prompt,
+    global_llm_model:
+      typeof data.global_llm_model === "string" ? data.global_llm_model : previous.global_llm_model,
+    verify_token: typeof data.verify_token === "string" ? data.verify_token : previous.verify_token,
+    event_name: typeof data.event_name === "string" ? data.event_name : "",
+    event_timezone: normalizeTimeZoneForUi(
+      typeof data.event_timezone === "string" ? data.event_timezone : DEFAULT_TIMEZONE,
+    ),
+    event_location: typeof data.event_location === "string" ? data.event_location : "",
+    event_map_url: typeof data.event_map_url === "string" ? data.event_map_url : "",
+    event_date: normalizeDateTimeLocalValue(typeof data.event_date === "string" ? data.event_date : ""),
+    event_description: typeof data.event_description === "string" ? data.event_description : "",
+    event_travel: typeof data.event_travel === "string" ? data.event_travel : "",
+    reg_limit:
+      typeof data.reg_limit === "string" && data.reg_limit.trim() ? data.reg_limit.trim() : INITIAL_SETTINGS.reg_limit,
+    reg_start: normalizeDateTimeLocalValue(typeof data.reg_start === "string" ? data.reg_start : ""),
+    reg_end: normalizeDateTimeLocalValue(typeof data.reg_end === "string" ? data.reg_end : ""),
+  } satisfies Settings;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<"event" | "design" | "test" | "logs" | "settings" | "registrations">("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -219,23 +293,7 @@ export default function App() {
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginSubmitting, setLoginSubmitting] = useState(false);
-  const [settings, setSettings] = useState<Settings>({ 
-    context: "", 
-    llm_model: "",
-    global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
-    global_llm_model: "google/gemini-3-flash-preview",
-    verify_token: "",
-    event_name: "",
-    event_timezone: "Asia/Bangkok",
-    event_location: "",
-    event_map_url: "",
-    event_date: "",
-    event_description: "",
-    event_travel: "",
-    reg_limit: "200",
-    reg_start: "",
-    reg_end: ""
-  });
+  const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
@@ -293,6 +351,8 @@ export default function App() {
   const scanBusyRef = useRef(false);
   const scannerCooldownRef = useRef(false);
   const documentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedEventIdRef = useRef("");
+  selectedEventIdRef.current = selectedEventId;
 
   const role = authUser?.role;
   const canEditSettings = role === "owner" || role === "admin";
@@ -499,6 +559,14 @@ export default function App() {
   }, [selectedEvent?.id, selectedEvent?.name]);
 
   useEffect(() => {
+    setSettings((prev) => ({
+      ...prev,
+      ...getBlankEventScopedSettings(),
+    }));
+    setMessages([]);
+    setRegistrations([]);
+    setSelectedRegistrationId("");
+    setDocuments([]);
     setDocumentsMessage("");
     setEditingDocumentId("");
     setDocumentTitle("");
@@ -570,23 +638,22 @@ export default function App() {
   };
 
   const fetchSettings = async (eventId = selectedEventId) => {
+    if (!eventId) {
+      setSettings((prev) => ({
+        ...prev,
+        ...getBlankEventScopedSettings(),
+      }));
+      return;
+    }
+
     try {
       const res = await apiFetch(`/api/settings?event_id=${encodeURIComponent(eventId)}`);
       if (!res.ok) {
         throw new Error("Failed to fetch settings");
       }
       const data = await res.json();
-      setSettings((prev) => ({
-        ...prev,
-        ...data,
-        llm_model: typeof data.llm_model === "string" ? data.llm_model : prev.llm_model,
-        global_llm_model: typeof data.global_llm_model === "string" ? data.global_llm_model : prev.global_llm_model,
-        global_system_prompt: typeof data.global_system_prompt === "string" ? data.global_system_prompt : prev.global_system_prompt,
-        event_timezone: typeof data.event_timezone === "string" ? data.event_timezone : prev.event_timezone,
-        event_date: normalizeDateTimeLocalValue(typeof data.event_date === "string" ? data.event_date : prev.event_date),
-        reg_start: normalizeDateTimeLocalValue(typeof data.reg_start === "string" ? data.reg_start : prev.reg_start),
-        reg_end: normalizeDateTimeLocalValue(typeof data.reg_end === "string" ? data.reg_end : prev.reg_end),
-      }));
+      if (selectedEventIdRef.current !== eventId) return;
+      setSettings((prev) => buildSettingsFromResponse(prev, data));
     } catch (err) {
       console.error("Failed to fetch settings", err);
     }
@@ -625,6 +692,7 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data?.error || "Failed to fetch documents");
       }
+      if (selectedEventIdRef.current !== eventId) return [];
       const rows = Array.isArray(data) ? data as EventDocumentRecord[] : [];
       setDocuments(rows);
       setSelectedDocumentForChunksId((prev) => prev && rows.some((document) => document.id === prev) ? prev : rows[0]?.id || "");
@@ -651,6 +719,7 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data?.error || "Failed to fetch document chunks");
       }
+      if (selectedEventIdRef.current !== eventId) return [];
       const rows = Array.isArray(data) ? data as EventDocumentChunkRecord[] : [];
       setDocumentChunks(rows);
       return rows;
@@ -671,6 +740,7 @@ export default function App() {
         throw new Error("Failed to fetch messages");
       }
       const data = await res.json();
+      if (selectedEventIdRef.current !== eventId) return;
       setMessages(data);
     } catch (err) {
       console.error("Failed to fetch messages", err);
@@ -885,6 +955,7 @@ export default function App() {
         throw new Error("Failed to fetch registrations");
       }
       const data = await res.json();
+      if (selectedEventIdRef.current !== eventId) return;
       setRegistrations(Array.isArray(data) ? data : []);
       setSelectedRegistrationId((prev) => {
         const rows = Array.isArray(data) ? (data as Registration[]) : [];
