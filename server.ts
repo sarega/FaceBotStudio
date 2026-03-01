@@ -529,6 +529,20 @@ async function getInstagramAccessToken(accountId?: string) {
   return channel?.access_token || "";
 }
 
+async function getWhatsAppChannel(phoneNumberId?: string) {
+  if (!phoneNumberId) return null;
+  const channel = await appDb.getChannelAccount("whatsapp", phoneNumberId);
+  if (!channel || channel.is_active === false) {
+    return null;
+  }
+  return channel;
+}
+
+async function getWhatsAppAccessToken(phoneNumberId?: string) {
+  const channel = await getWhatsAppChannel(phoneNumberId);
+  return channel?.access_token || "";
+}
+
 async function getWebChatChannel(widgetKey?: string) {
   if (!widgetKey) return null;
   const channel = await appDb.getChannelAccount("web_chat", widgetKey);
@@ -1617,6 +1631,82 @@ async function sendInstagramImageMessage(recipientId: string, imageUrl: string, 
   return payload;
 }
 
+async function sendWhatsAppTextMessage(recipientId: string, text: string, phoneNumberId?: string) {
+  const accessToken = await getWhatsAppAccessToken(phoneNumberId);
+  if (!accessToken) {
+    throw new Error("WhatsApp access token is not configured");
+  }
+
+  const targetPhoneNumberId = String(phoneNumberId || "").trim();
+  if (!targetPhoneNumberId) {
+    throw new Error("WhatsApp phone number ID is required");
+  }
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const url = new URL(`https://graph.facebook.com/${apiVersion}/${targetPhoneNumberId}/messages`);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: recipientId,
+      type: "text",
+      text: {
+        body: normalizeLineText(text),
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "Failed to send message to WhatsApp");
+  }
+
+  return payload;
+}
+
+async function sendWhatsAppImageMessage(recipientId: string, imageUrl: string, phoneNumberId?: string) {
+  const accessToken = await getWhatsAppAccessToken(phoneNumberId);
+  if (!accessToken) {
+    throw new Error("WhatsApp access token is not configured");
+  }
+
+  const targetPhoneNumberId = String(phoneNumberId || "").trim();
+  if (!targetPhoneNumberId) {
+    throw new Error("WhatsApp phone number ID is required");
+  }
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const url = new URL(`https://graph.facebook.com/${apiVersion}/${targetPhoneNumberId}/messages`);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: recipientId,
+      type: "image",
+      image: {
+        link: imageUrl,
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "Failed to send image to WhatsApp");
+  }
+
+  return payload;
+}
+
 async function handleIncomingFacebookText(senderId: string, text: string, pageId?: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
@@ -1911,6 +2001,94 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
   }
 }
 
+async function handleIncomingWhatsAppText(senderId: string, text: string, phoneNumberId?: string) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+
+  const resolvedEventId = phoneNumberId ? await appDb.resolveEventIdForChannel("whatsapp", phoneNumberId) : null;
+  if (!resolvedEventId) {
+    console.warn(`No active event mapping found for WhatsApp phone number ${phoneNumberId || "unknown"}; skipping automated reply`);
+    return;
+  }
+  const eventId = resolvedEventId;
+  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, phoneNumberId);
+
+  if (!(await getWhatsAppAccessToken(phoneNumberId))) {
+    console.warn(`WhatsApp access token is unavailable for phone number ${phoneNumberId || "unknown"}; skipping outbound reply`);
+    return;
+  }
+
+  let replyText = "";
+  let ticketRegistrationIds: string[] = [];
+  try {
+    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    replyText = result.text;
+    ticketRegistrationIds = result.ticketRegistrationIds;
+  } catch (error) {
+    console.error("Failed to generate WhatsApp bot reply:", error);
+    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+  }
+
+  if (replyText) {
+    await sendWhatsAppTextMessage(senderId, replyText, phoneNumberId);
+    await saveMessage(senderId, replyText, "outgoing", eventId, phoneNumberId);
+  }
+
+  const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
+  let sentTicketArtifact = false;
+  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap(eventId) : null;
+  for (const registrationId of uniqueTicketIds) {
+    const reg = await getRegistrationById(registrationId);
+    if (reg && settings) {
+      const ticketSummaryText = buildTicketSummaryText(reg, settings);
+      try {
+        await sendWhatsAppTextMessage(senderId, ticketSummaryText, phoneNumberId);
+        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, phoneNumberId);
+      } catch (error) {
+        console.error("Failed to send WhatsApp ticket summary:", error);
+      }
+    }
+
+    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    if (!ticketPngUrl && !ticketSvgUrl) {
+      console.warn("APP_URL is not set; skipping WhatsApp ticket image send");
+      continue;
+    }
+
+    try {
+      if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
+      await sendWhatsAppImageMessage(senderId, ticketPngUrl, phoneNumberId);
+      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, phoneNumberId);
+      sentTicketArtifact = true;
+    } catch (error) {
+      console.error("Failed to send WhatsApp PNG ticket image:", error);
+      try {
+        const textUrl = ticketPngUrl || ticketSvgUrl;
+        if (!textUrl) throw new Error("No ticket URL available");
+        await sendWhatsAppTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, phoneNumberId);
+        await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, phoneNumberId);
+        sentTicketArtifact = true;
+      } catch (fallbackError) {
+        console.error("Failed to send WhatsApp ticket link fallback:", fallbackError);
+      }
+    }
+  }
+
+  if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
+    const mapUrl = String(settings?.event_map_url || "").trim();
+    if (mapUrl) {
+      try {
+        await sendWhatsAppTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, phoneNumberId);
+        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, phoneNumberId);
+      } catch (error) {
+        console.error("Failed to send WhatsApp map link:", error);
+      }
+    }
+  }
+}
+
 function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | null {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
@@ -1971,6 +2149,23 @@ function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: stri
     messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
     eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
   } satisfies InstagramInboundJob;
+}
+
+function normalizeWhatsAppTextEvent(message: any, phoneNumberId?: string) {
+  const senderId = String(message?.from || "").trim();
+  const text = String(message?.text?.body || "").trim();
+  const messageType = String(message?.type || "").trim();
+  const resolvedPhoneNumberId = String(phoneNumberId || "").trim();
+
+  if (!senderId || !resolvedPhoneNumberId || !text || messageType !== "text") {
+    return null;
+  }
+
+  return {
+    senderId,
+    phoneNumberId: resolvedPhoneNumberId,
+    text,
+  };
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
@@ -3258,6 +3453,70 @@ async function startServer() {
             await processInstagramInboundJob(normalized);
           } catch (error) {
             console.error("Failed to handle incoming Instagram message:", error);
+          }
+        }
+      }
+    })();
+  });
+
+  app.get("/api/webhook/whatsapp", webhookRateLimit, (req, res) => {
+    void (async () => {
+      const mode = req.query["hub.mode"];
+      const token = req.query["hub.verify_token"];
+      const challenge = req.query["hub.challenge"];
+      const verifyToken = await appDb.getSettingValue("verify_token");
+
+      if (mode && token) {
+        if (mode === "subscribe" && token === verifyToken) {
+          console.log("WHATSAPP_WEBHOOK_VERIFIED");
+          res.status(200).send(challenge);
+        } else {
+          res.sendStatus(403);
+        }
+      } else {
+        res.sendStatus(400);
+      }
+    })().catch((error) => {
+      console.error("WhatsApp webhook verification lookup failed:", error);
+      res.sendStatus(500);
+    });
+  });
+
+  app.post("/api/webhook/whatsapp", webhookRateLimit, (req: RawBodyRequest, res) => {
+    if (!verifyFacebookWebhookSignature(req)) {
+      console.warn("Rejected WhatsApp webhook due to invalid signature");
+      res.sendStatus(401);
+      return;
+    }
+
+    const body = req.body;
+    if (!body || body.object !== "whatsapp_business_account") {
+      res.sendStatus(404);
+      return;
+    }
+
+    res.status(200).send("EVENT_RECEIVED");
+
+    const entries = Array.isArray(body.entry) ? body.entry : [];
+    void (async () => {
+      for (const entry of entries) {
+        const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+        for (const change of changes) {
+          const value = change?.value || {};
+          const phoneNumberId = String(value?.metadata?.phone_number_id || "").trim();
+          const messages = Array.isArray(value?.messages) ? value.messages : [];
+          for (const message of messages) {
+            try {
+              const normalized = normalizeWhatsAppTextEvent(message, phoneNumberId);
+              if (!normalized) continue;
+              await handleIncomingWhatsAppText(
+                normalized.senderId,
+                normalized.text,
+                normalized.phoneNumberId,
+              );
+            } catch (error) {
+              console.error("Failed to handle incoming WhatsApp message:", error);
+            }
           }
         }
       }

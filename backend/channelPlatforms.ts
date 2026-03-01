@@ -110,9 +110,9 @@ export const CHANNEL_PLATFORM_DEFINITIONS: Record<ChannelPlatform, ChannelPlatfo
         required: true,
       },
     ],
-    live_messaging_ready: false,
+    live_messaging_ready: true,
     notes: [
-      "Groundwork only in this phase. Webhook and outbound sender are not wired yet.",
+      "Webhook and outbound text/image path are wired in this phase for Cloud API style setups.",
       "Phone number ID and business account ID should stay tied to the same event mapping.",
     ],
   },

@@ -25,7 +25,10 @@ import {
   LogOut,
   UserPlus,
   CalendarRange,
-  Link2
+  Link2,
+  Sun,
+  Moon,
+  MonitorCog,
 } from "lucide-react";
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
@@ -52,10 +55,26 @@ interface LlmModelOption {
 
 type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
+type ThemeMode = "light" | "dark" | "system";
 
 type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
+const THEME_STORAGE_KEY = "facebotstudio-theme";
+
+function getStoredThemeMode(): ThemeMode {
+  if (typeof window === "undefined") return "system";
+  const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return raw === "light" || raw === "dark" || raw === "system" ? raw : "system";
+}
+
+function resolveThemeMode(mode: ThemeMode) {
+  if (mode === "light" || mode === "dark") return mode;
+  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
+    return "dark" as const;
+  }
+  return "light" as const;
+}
 
 function normalizeDateTimeLocalValue(value: string | undefined) {
   const raw = String(value || "").trim();
@@ -321,6 +340,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
@@ -567,6 +587,31 @@ export default function App() {
     } finally {
     }
   };
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = () => {
+      const resolved = resolveThemeMode(themeMode);
+      root.classList.toggle("theme-dark", resolved === "dark");
+      root.classList.toggle("theme-light", resolved === "light");
+      root.dataset.themeMode = themeMode;
+      root.dataset.themeResolved = resolved;
+      window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    };
+
+    apply();
+
+    if (themeMode !== "system" || !window.matchMedia) {
+      return undefined;
+    }
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => apply();
+    media.addEventListener?.("change", handleChange);
+    return () => {
+      media.removeEventListener?.("change", handleChange);
+    };
+  }, [themeMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1757,6 +1802,7 @@ export default function App() {
   const webhookUrl = `${appUrl}/api/webhook`;
   const lineWebhookUrl = `${appUrl}/api/webhook/line`;
   const instagramWebhookUrl = `${appUrl}/api/webhook/instagram`;
+  const whatsappWebhookUrl = `${appUrl}/api/webhook/whatsapp`;
   const webChatConfigUrl = `${appUrl}/api/webchat/config/{widgetKey}`;
   const webChatMessageUrl = `${appUrl}/api/webchat/messages`;
 
@@ -1819,6 +1865,26 @@ export default function App() {
             ))}
             </div>
             <div className="flex items-center gap-3">
+              <div className="hidden md:flex items-center gap-1 rounded-xl bg-slate-100 p-1">
+                {([
+                  { id: "light", label: "Light", icon: Sun },
+                  { id: "dark", label: "Dark", icon: Moon },
+                  { id: "system", label: "System", icon: MonitorCog },
+                ] as Array<{ id: ThemeMode; label: string; icon: typeof Sun }>).map((option) => (
+                  <button
+                    key={option.id}
+                    onClick={() => setThemeMode(option.id)}
+                    className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                      themeMode === option.id
+                        ? "bg-white text-blue-600 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    <option.icon className="w-3.5 h-3.5" />
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
               <div className="text-right hidden sm:block">
                 <p className="text-sm font-semibold leading-none">{authUser?.display_name || authUser?.username}</p>
                 <p className="text-[10px] text-slate-500 uppercase tracking-wider mt-1">{authUser?.role}</p>
@@ -3695,7 +3761,7 @@ export default function App() {
                         </p>
                       )}
                       <p className="text-xs text-slate-500">
-                        Facebook, LINE OA, Instagram, and Web Chat are wired into live message handling right now. WhatsApp and Telegram in this screen are config-ready but still waiting on their live adapters.
+                        Facebook, LINE OA, Instagram, WhatsApp, and Web Chat are wired into live message handling right now. Telegram in this screen is config-ready but still waiting on its live adapter.
                       </p>
                     </div>
                   </div>
@@ -3724,8 +3790,9 @@ export default function App() {
                         <p><span className="font-semibold text-slate-800">Current</span>: Facebook Page routing with optional page-level access token.</p>
                         <p><span className="font-semibold text-slate-800">Current</span>: LINE OA webhook + reply groundwork is now wired in, using channel access token and channel secret from the selected event mapping.</p>
                         <p><span className="font-semibold text-slate-800">Current</span>: Instagram messaging now has its own webhook + outbound text/image path, routed by Instagram business account ID.</p>
+                        <p><span className="font-semibold text-slate-800">Current</span>: WhatsApp Cloud API messaging now has webhook + outbound text/image handling, routed by phone number ID.</p>
                         <p><span className="font-semibold text-slate-800">Current</span>: Web Chat groundwork is wired in through a public widget config endpoint and message endpoint, scoped to the selected event.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: platform-specific channel setup fields now exist for Instagram, WhatsApp, and Telegram.</p>
+                        <p><span className="font-semibold text-slate-800">Current</span>: platform-specific channel setup fields remain available for Telegram and future channel extensions.</p>
                         <p><span className="font-semibold text-slate-800">Next</span>: wire live adapters one platform at a time without moving event context out of the event workspace.</p>
                         <p><span className="font-semibold text-slate-800">Current</span>: documents and knowledge stay attached to the event, not to individual pages, so one event can answer consistently across channels.</p>
                       </div>
@@ -3793,6 +3860,25 @@ export default function App() {
                         </div>
                         <p className="mt-1 text-xs text-slate-500">
                           For Instagram, use the Instagram business account ID as the channel external ID, save the page-linked Meta token as the access token, and point the webhook callback here.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">WhatsApp Callback URL</label>
+                        <div className="flex gap-2">
+                          <input
+                            readOnly
+                            value={whatsappWebhookUrl}
+                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
+                          />
+                          <button
+                            onClick={() => copyToClipboard(whatsappWebhookUrl)}
+                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
+                          >
+                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
+                          </button>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          For WhatsApp, use the `Phone Number ID` as the channel external ID, save the Cloud API token as the access token, and keep `Business Account ID` in the platform-specific config field.
                         </p>
                       </div>
                       <div>
