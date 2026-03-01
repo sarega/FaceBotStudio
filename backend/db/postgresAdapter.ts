@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { Pool } from "pg";
 import { hashPassword, normalizeUsername } from "../auth";
-import { chunkDocumentContent } from "../documents";
+import { chunkDocumentContent, getDefaultEmbeddingStatus, getEmbeddingModelName, hashDocumentContent } from "../documents";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS, NEW_EVENT_TEMPLATE_ENTRIES } from "./defaultSettings";
 import { runPostgresMigrations } from "./migrate";
@@ -111,6 +111,10 @@ function mapEventDocumentRow(row: Record<string, unknown>) {
     content: String(row.content || ""),
     is_active: Boolean(row.is_active),
     chunk_count: Number(row.chunk_count || 0),
+    content_hash: typeof row.content_hash === "string" ? row.content_hash : null,
+    embedding_status: String(row.embedding_status || "pending") as EventDocumentRow["embedding_status"],
+    embedding_model: typeof row.embedding_model === "string" ? row.embedding_model : null,
+    last_embedded_at: typeof row.last_embedded_at === "string" ? row.last_embedded_at : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentRow;
@@ -123,6 +127,12 @@ function mapEventDocumentChunkRow(row: Record<string, unknown>) {
     event_id: String(row.event_id),
     chunk_index: Number(row.chunk_index || 0),
     content: String(row.content || ""),
+    content_hash: typeof row.content_hash === "string" ? row.content_hash : null,
+    char_count: Number(row.char_count || 0),
+    token_estimate: Number(row.token_estimate || 0),
+    embedding_status: String(row.embedding_status || "pending") as EventDocumentChunkRow["embedding_status"],
+    embedding_model: typeof row.embedding_model === "string" ? row.embedding_model : null,
+    embedded_at: typeof row.embedded_at === "string" ? row.embedded_at : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentChunkRow;
@@ -477,17 +487,32 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
-  private async replaceEventDocumentChunks(documentId: string, eventId: string, content: string) {
+  private async replaceEventDocumentChunks(documentId: string, eventId: string, content: string, isActive = true) {
     const chunks = chunkDocumentContent(content);
+    const embeddingModel = getEmbeddingModelName();
+    const embeddingStatus = getDefaultEmbeddingStatus(isActive);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM event_document_chunks WHERE document_id = $1", [documentId]);
       for (const chunk of chunks) {
         await client.query(
-          `INSERT INTO event_document_chunks (id, document_id, event_id, chunk_index, content)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [generateEntityId("dch"), documentId, eventId, chunk.chunk_index, chunk.content],
+          `INSERT INTO event_document_chunks (
+             id, document_id, event_id, chunk_index, content, content_hash, char_count, token_estimate, embedding_status, embedding_model
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            generateEntityId("dch"),
+            documentId,
+            eventId,
+            chunk.chunk_index,
+            chunk.content,
+            chunk.content_hash,
+            chunk.char_count,
+            chunk.token_estimate,
+            embeddingStatus,
+            embeddingModel,
+          ],
         );
       }
       await client.query("COMMIT");
@@ -501,7 +526,7 @@ export class PostgresAppDatabase implements AppDatabase {
 
   private async ensureEventDocumentChunks() {
     const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT d.id, d.event_id, d.content
+      `SELECT d.id, d.event_id, d.content, d.is_active
        FROM event_documents d
        LEFT JOIN (
          SELECT document_id, COUNT(*)::int AS chunk_count
@@ -512,13 +537,50 @@ export class PostgresAppDatabase implements AppDatabase {
     );
 
     for (const row of result.rows) {
-      await this.replaceEventDocumentChunks(String(row.id), String(row.event_id), String(row.content || ""));
+      await this.replaceEventDocumentChunks(
+        String(row.id),
+        String(row.event_id),
+        String(row.content || ""),
+        Boolean(row.is_active),
+      );
     }
+
+    await this.pool.query(
+      `UPDATE event_documents
+       SET
+         content_hash = COALESCE(content_hash, encode(digest(COALESCE(content, ''), 'sha256'), 'hex')),
+         embedding_status = CASE WHEN is_active THEN 'pending' ELSE 'skipped' END,
+         embedding_model = COALESCE(embedding_model, $1)
+       WHERE content_hash IS NULL OR embedding_model IS NULL`,
+      [getEmbeddingModelName()],
+    );
+
+    await this.pool.query(
+      `UPDATE event_document_chunks c
+       SET
+         content_hash = COALESCE(c.content_hash, encode(digest(COALESCE(c.content, ''), 'sha256'), 'hex')),
+         char_count = CASE WHEN COALESCE(c.char_count, 0) > 0 THEN c.char_count ELSE LENGTH(COALESCE(c.content, '')) END,
+         token_estimate = CASE WHEN COALESCE(c.token_estimate, 0) > 0 THEN c.token_estimate ELSE GREATEST(1, CEIL(LENGTH(COALESCE(c.content, '')) / 4.0)::int) END,
+         embedding_status = CASE WHEN d.is_active THEN 'pending' ELSE 'skipped' END,
+         embedding_model = COALESCE(c.embedding_model, $1)
+       FROM event_documents d
+       WHERE d.id = c.document_id
+         AND (
+           c.content_hash IS NULL
+           OR COALESCE(c.char_count, 0) = 0
+           OR COALESCE(c.token_estimate, 0) = 0
+           OR c.embedding_model IS NULL
+           OR c.embedding_status IS NULL
+           OR c.embedding_status = ''
+         )`,
+      [getEmbeddingModelName()],
+    );
   }
 
   async listEventDocuments(eventId: string) {
     const result = await this.pool.query<Record<string, unknown>>(
       `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              d.content_hash, d.embedding_status, d.embedding_model, d.last_embedded_at::text AS last_embedded_at,
               COALESCE(counts.chunk_count, 0)::text AS chunk_count,
               d.created_at::text AS created_at, d.updated_at::text AS updated_at
        FROM event_documents d
@@ -536,7 +598,8 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async listEventDocumentChunks(eventId: string) {
     const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT id, document_id, event_id, chunk_index, content,
+      `SELECT id, document_id, event_id, chunk_index, content, content_hash, char_count, token_estimate,
+              embedding_status, embedding_model, embedded_at::text AS embedded_at,
               created_at::text AS created_at, updated_at::text AS updated_at
        FROM event_document_chunks
        WHERE event_id = $1
@@ -554,10 +617,15 @@ export class PostgresAppDatabase implements AppDatabase {
     const sourceUrl = String(input.source_url || "").trim();
     const content = String(input.content || "").trim();
     const isActive = input.is_active === false ? false : true;
+    const contentHash = hashDocumentContent(content);
+    const embeddingModel = getEmbeddingModelName();
+    const embeddingStatus = getDefaultEmbeddingStatus(isActive);
 
     await this.pool.query(
-      `INSERT INTO event_documents (id, event_id, title, source_type, source_url, content, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO event_documents (
+         id, event_id, title, source_type, source_url, content, is_active, content_hash, embedding_status, embedding_model, last_embedded_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL)
        ON CONFLICT (id) DO UPDATE
        SET event_id = EXCLUDED.event_id,
            title = EXCLUDED.title,
@@ -565,13 +633,18 @@ export class PostgresAppDatabase implements AppDatabase {
            source_url = EXCLUDED.source_url,
            content = EXCLUDED.content,
            is_active = EXCLUDED.is_active,
+           content_hash = EXCLUDED.content_hash,
+           embedding_status = EXCLUDED.embedding_status,
+           embedding_model = EXCLUDED.embedding_model,
+           last_embedded_at = NULL,
            updated_at = CURRENT_TIMESTAMP`,
-      [id, eventId, title, sourceType, sourceUrl || null, content, isActive],
+      [id, eventId, title, sourceType, sourceUrl || null, content, isActive, contentHash, embeddingStatus, embeddingModel],
     );
-    await this.replaceEventDocumentChunks(id, eventId, content);
+    await this.replaceEventDocumentChunks(id, eventId, content, isActive);
 
     const result = await this.pool.query<Record<string, unknown>>(
       `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              d.content_hash, d.embedding_status, d.embedding_model, d.last_embedded_at::text AS last_embedded_at,
               COALESCE(counts.chunk_count, 0)::text AS chunk_count,
               d.created_at::text AS created_at, d.updated_at::text AS updated_at
        FROM event_documents d
@@ -589,10 +662,28 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async setEventDocumentActive(documentId: string, isActive: boolean) {
-    const result = await this.pool.query(
-      "UPDATE event_documents SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-      [isActive, String(documentId || "").trim()],
-    );
+    const normalizedDocumentId = String(documentId || "").trim();
+    const status = getDefaultEmbeddingStatus(isActive);
+    const embeddingModel = getEmbeddingModelName();
+    const client = await this.pool.connect();
+    let result;
+    try {
+      await client.query("BEGIN");
+      result = await client.query(
+        "UPDATE event_documents SET is_active = $1, embedding_status = $2, embedding_model = COALESCE(embedding_model, $3), last_embedded_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $4",
+        [isActive, status, embeddingModel, normalizedDocumentId],
+      );
+      await client.query(
+        "UPDATE event_document_chunks SET embedding_status = $1, embedding_model = COALESCE(embedding_model, $2), embedded_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE document_id = $3",
+        [status, embeddingModel, normalizedDocumentId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     return result.rowCount > 0;
   }
 

@@ -12,6 +12,7 @@ import dotenv from "dotenv";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
 import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
+import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
 import {
   ALL_USER_ROLES,
   SESSION_COOKIE_NAME,
@@ -2097,6 +2098,35 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to fetch document chunks:", error);
       return res.status(500).json({ error: "Failed to fetch document chunks" });
+    }
+  });
+
+  app.get("/api/documents/:id/embedding-preview", requireAuth, async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const documentId = String(req.params.id || "").trim();
+      if (!documentId) {
+        return res.status(400).json({ error: "Document ID is required" });
+      }
+
+      const documents = await getEventDocuments(eventId);
+      const document = documents.find((row) => row.id === documentId);
+      if (!document) {
+        return res.status(404).json({ error: "Document not found for this event" });
+      }
+
+      const chunks = (await getEventDocumentChunks(eventId)).filter((chunk) => chunk.document_id === documentId);
+
+      return res.json({
+        event_id: eventId,
+        embedding_model: getEmbeddingModelName(),
+        document,
+        chunks,
+        payload: buildEmbeddingHookPayload(document, chunks),
+      });
+    } catch (error) {
+      console.error("Failed to fetch embedding preview:", error);
+      return res.status(500).json({ error: "Failed to fetch embedding preview" });
     }
   });
 

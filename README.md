@@ -49,6 +49,7 @@ Recommended for low-traffic demos with SQLite:
    - `FACEBOOK_APP_SECRET` (recommended)
    - `REDIS_URL`
    - `OPENROUTER_DEFAULT_MODEL=google/gemini-3-flash-preview`
+   - `OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small` (optional, for vector-ready document metadata)
    - `DB_PATH=/data/bot.db`
    - `APP_URL=https://YOUR_APP.up.railway.app`
 4. Build command: `npm run build`

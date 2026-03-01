@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS, NEW_EVENT_TEMPLATE_ENTRIES } from "./defaultSettings";
 import { hashPassword, normalizeUsername } from "../auth";
-import { chunkDocumentContent } from "../documents";
+import { chunkDocumentContent, getDefaultEmbeddingStatus, getEmbeddingModelName, hashDocumentContent } from "../documents";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import type {
   AppDatabase,
@@ -114,6 +114,10 @@ function mapEventDocumentRow(row: Record<string, unknown>) {
     content: String(row.content || ""),
     is_active: Boolean(row.is_active),
     chunk_count: Number(row.chunk_count || 0),
+    content_hash: typeof row.content_hash === "string" ? row.content_hash : null,
+    embedding_status: String(row.embedding_status || "pending") as EventDocumentRow["embedding_status"],
+    embedding_model: typeof row.embedding_model === "string" ? row.embedding_model : null,
+    last_embedded_at: typeof row.last_embedded_at === "string" ? row.last_embedded_at : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentRow;
@@ -126,6 +130,12 @@ function mapEventDocumentChunkRow(row: Record<string, unknown>) {
     event_id: String(row.event_id),
     chunk_index: Number(row.chunk_index || 0),
     content: String(row.content || ""),
+    content_hash: typeof row.content_hash === "string" ? row.content_hash : null,
+    char_count: Number(row.char_count || 0),
+    token_estimate: Number(row.token_estimate || 0),
+    embedding_status: String(row.embedding_status || "pending") as EventDocumentChunkRow["embedding_status"],
+    embedding_model: typeof row.embedding_model === "string" ? row.embedding_model : null,
+    embedded_at: typeof row.embedded_at === "string" ? row.embedded_at : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentChunkRow;
@@ -300,6 +310,16 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("facebook_pages", "page_access_token", "TEXT");
     this.ensureColumn("channel_accounts", "config_json", "TEXT NOT NULL DEFAULT '{}'");
     this.ensureColumn("event_documents", "source_url", "TEXT");
+    this.ensureColumn("event_documents", "content_hash", "TEXT");
+    this.ensureColumn("event_documents", "embedding_status", "TEXT DEFAULT 'pending'");
+    this.ensureColumn("event_documents", "embedding_model", "TEXT");
+    this.ensureColumn("event_documents", "last_embedded_at", "TEXT");
+    this.ensureColumn("event_document_chunks", "content_hash", "TEXT");
+    this.ensureColumn("event_document_chunks", "char_count", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("event_document_chunks", "token_estimate", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("event_document_chunks", "embedding_status", "TEXT DEFAULT 'pending'");
+    this.ensureColumn("event_document_chunks", "embedding_model", "TEXT");
+    this.ensureColumn("event_document_chunks", "embedded_at", "TEXT");
     this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
     this.db.exec(`
       UPDATE events
@@ -592,18 +612,33 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
-  private replaceEventDocumentChunks(documentId: string, eventId: string, content: string) {
+  private replaceEventDocumentChunks(documentId: string, eventId: string, content: string, isActive = true) {
     const chunks = chunkDocumentContent(content);
+    const embeddingModel = getEmbeddingModelName();
+    const embeddingStatus = getDefaultEmbeddingStatus(isActive);
     const deleteStatement = this.db.prepare("DELETE FROM event_document_chunks WHERE document_id = ?");
     const insertStatement = this.db.prepare(
-      `INSERT INTO event_document_chunks (id, document_id, event_id, chunk_index, content, updated_at)
-       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      `INSERT INTO event_document_chunks (
+         id, document_id, event_id, chunk_index, content, content_hash, char_count, token_estimate, embedding_status, embedding_model, embedded_at, updated_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)`,
     );
 
     const transaction = this.db.transaction(() => {
       deleteStatement.run(documentId);
       for (const chunk of chunks) {
-        insertStatement.run(generateEntityId("dch"), documentId, eventId, chunk.chunk_index, chunk.content);
+        insertStatement.run(
+          generateEntityId("dch"),
+          documentId,
+          eventId,
+          chunk.chunk_index,
+          chunk.content,
+          chunk.content_hash,
+          chunk.char_count,
+          chunk.token_estimate,
+          embeddingStatus,
+          embeddingModel,
+        );
       }
     });
 
@@ -612,7 +647,7 @@ export class SqliteAppDatabase implements AppDatabase {
 
   private async ensureEventDocumentChunks() {
     const rows = this.db.prepare(
-      `SELECT d.id, d.event_id, d.content
+      `SELECT d.id, d.event_id, d.content, d.is_active
        FROM event_documents d
        LEFT JOIN (
          SELECT document_id, COUNT(*) AS chunk_count
@@ -623,13 +658,71 @@ export class SqliteAppDatabase implements AppDatabase {
     ).all() as Array<Record<string, unknown>>;
 
     for (const row of rows) {
-      this.replaceEventDocumentChunks(String(row.id), String(row.event_id), String(row.content || ""));
+      this.replaceEventDocumentChunks(
+        String(row.id),
+        String(row.event_id),
+        String(row.content || ""),
+        Boolean(row.is_active),
+      );
+    }
+
+    const embeddingModel = getEmbeddingModelName();
+    const docsNeedingMetadata = this.db.prepare(
+      `SELECT id, content, is_active
+       FROM event_documents
+       WHERE content_hash IS NULL OR embedding_model IS NULL OR embedding_status IS NULL OR embedding_status = ''`,
+    ).all() as Array<Record<string, unknown>>;
+
+    const updateDocumentMetadata = this.db.prepare(
+      `UPDATE event_documents
+       SET content_hash = ?, embedding_status = ?, embedding_model = ?, last_embedded_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+
+    for (const row of docsNeedingMetadata) {
+      updateDocumentMetadata.run(
+        hashDocumentContent(row.content),
+        getDefaultEmbeddingStatus(Boolean(row.is_active)),
+        embeddingModel,
+        String(row.id),
+      );
+    }
+
+    const chunksNeedingMetadata = this.db.prepare(
+      `SELECT c.id, c.content, d.is_active
+       FROM event_document_chunks c
+       JOIN event_documents d ON d.id = c.document_id
+       WHERE c.content_hash IS NULL
+          OR c.char_count = 0
+          OR c.token_estimate = 0
+          OR c.embedding_model IS NULL
+          OR c.embedding_status IS NULL
+          OR c.embedding_status = ''`,
+    ).all() as Array<Record<string, unknown>>;
+
+    const updateChunkMetadata = this.db.prepare(
+      `UPDATE event_document_chunks
+       SET content_hash = ?, char_count = ?, token_estimate = ?, embedding_status = ?, embedding_model = ?, embedded_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+
+    for (const row of chunksNeedingMetadata) {
+      const content = String(row.content || "");
+      updateChunkMetadata.run(
+        hashDocumentContent(content),
+        content.length,
+        Math.max(1, Math.ceil(content.length / 4)),
+        getDefaultEmbeddingStatus(Boolean(row.is_active)),
+        embeddingModel,
+        String(row.id),
+      );
     }
   }
 
   async listEventDocuments(eventId: string) {
     const rows = this.db.prepare(
       `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              d.content_hash, d.embedding_status, d.embedding_model, d.last_embedded_at,
               COALESCE(counts.chunk_count, 0) AS chunk_count,
               d.created_at, d.updated_at
        FROM event_documents d
@@ -646,7 +739,8 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async listEventDocumentChunks(eventId: string) {
     const rows = this.db.prepare(
-      `SELECT id, document_id, event_id, chunk_index, content, created_at, updated_at
+      `SELECT id, document_id, event_id, chunk_index, content, content_hash, char_count, token_estimate,
+              embedding_status, embedding_model, embedded_at, created_at, updated_at
        FROM event_document_chunks
        WHERE event_id = ?
        ORDER BY document_id ASC, chunk_index ASC`,
@@ -662,10 +756,15 @@ export class SqliteAppDatabase implements AppDatabase {
     const sourceUrl = String(input.source_url || "").trim();
     const content = String(input.content || "").trim();
     const isActive = input.is_active === false ? 0 : 1;
+    const contentHash = hashDocumentContent(content);
+    const embeddingStatus = getDefaultEmbeddingStatus(Boolean(isActive));
+    const embeddingModel = getEmbeddingModelName();
 
     this.db.prepare(
-      `INSERT INTO event_documents (id, event_id, title, source_type, source_url, content, is_active, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `INSERT INTO event_documents (
+         id, event_id, title, source_type, source_url, content, is_active, content_hash, embedding_status, embedding_model, last_embedded_at, updated_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
        ON CONFLICT(id) DO UPDATE
        SET event_id = excluded.event_id,
            title = excluded.title,
@@ -673,12 +772,17 @@ export class SqliteAppDatabase implements AppDatabase {
            source_url = excluded.source_url,
            content = excluded.content,
            is_active = excluded.is_active,
+           content_hash = excluded.content_hash,
+           embedding_status = excluded.embedding_status,
+           embedding_model = excluded.embedding_model,
+           last_embedded_at = NULL,
            updated_at = CURRENT_TIMESTAMP`,
-    ).run(id, eventId, title, sourceType, sourceUrl || null, content, isActive);
-    this.replaceEventDocumentChunks(id, eventId, content);
+    ).run(id, eventId, title, sourceType, sourceUrl || null, content, isActive, contentHash, embeddingStatus, embeddingModel);
+    this.replaceEventDocumentChunks(id, eventId, content, Boolean(isActive));
 
     const row = this.db.prepare(
       `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              d.content_hash, d.embedding_status, d.embedding_model, d.last_embedded_at,
               COALESCE(counts.chunk_count, 0) AS chunk_count,
               d.created_at, d.updated_at
        FROM event_documents d
@@ -695,10 +799,20 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   async setEventDocumentActive(documentId: string, isActive: boolean) {
-    const result = this.db.prepare(
-      "UPDATE event_documents SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).run(isActive ? 1 : 0, String(documentId || "").trim());
-    return result.changes > 0;
+    const normalizedDocumentId = String(documentId || "").trim();
+    const status = getDefaultEmbeddingStatus(isActive);
+    const embeddingModel = getEmbeddingModelName();
+    let documentResult: Database.RunResult | null = null;
+    const transaction = this.db.transaction(() => {
+      documentResult = this.db.prepare(
+        "UPDATE event_documents SET is_active = ?, embedding_status = ?, embedding_model = COALESCE(embedding_model, ?), last_embedded_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      ).run(isActive ? 1 : 0, status, embeddingModel, normalizedDocumentId);
+      this.db.prepare(
+        "UPDATE event_document_chunks SET embedding_status = ?, embedding_model = COALESCE(embedding_model, ?), embedded_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE document_id = ?",
+      ).run(status, embeddingModel, normalizedDocumentId);
+    });
+    transaction();
+    return Boolean(documentResult?.changes);
   }
 
   async listChannelAccounts(platform?: ChannelPlatform) {

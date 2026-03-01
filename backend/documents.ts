@@ -1,6 +1,12 @@
+import { createHash } from "crypto";
+import type { EmbeddingStatus } from "./db/types";
+
 export interface PreparedDocumentChunk {
   chunk_index: number;
   content: string;
+  content_hash: string;
+  char_count: number;
+  token_estimate: number;
 }
 
 const DEFAULT_MAX_CHARS = 900;
@@ -14,6 +20,29 @@ export function normalizeDocumentContent(value: unknown) {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+export function hashDocumentContent(value: unknown) {
+  const normalized = normalizeDocumentContent(value);
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
+export function estimateTokenCount(value: unknown) {
+  const normalized = normalizeDocumentContent(value);
+  if (!normalized) return 0;
+  return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+export function getEmbeddingModelName() {
+  return String(
+    process.env.OPENROUTER_EMBEDDING_MODEL ||
+      process.env.EMBEDDING_MODEL ||
+      "text-embedding-3-small",
+  ).trim();
+}
+
+export function getDefaultEmbeddingStatus(isActive: boolean): EmbeddingStatus {
+  return isActive ? "pending" : "skipped";
 }
 
 function chooseChunkBoundary(text: string, start: number, desiredEnd: number) {
@@ -69,6 +98,9 @@ export function chunkDocumentContent(
       chunks.push({
         chunk_index: index,
         content: chunk,
+        content_hash: hashDocumentContent(chunk),
+        char_count: chunk.length,
+        token_estimate: estimateTokenCount(chunk),
       });
       index += 1;
     }
@@ -78,4 +110,52 @@ export function chunkDocumentContent(
   }
 
   return chunks;
+}
+
+export function buildEmbeddingHookPayload(
+  document: {
+    id: string;
+    event_id: string;
+    title: string;
+    source_type: string;
+    source_url?: string | null;
+    content_hash?: string | null;
+    embedding_status?: EmbeddingStatus;
+  },
+  chunks: Array<{
+    id: string;
+    chunk_index: number;
+    content: string;
+    content_hash?: string | null;
+    char_count?: number;
+    token_estimate?: number;
+    embedding_status?: EmbeddingStatus;
+  }>,
+) {
+  const embeddingModel = getEmbeddingModelName();
+  return {
+    event_id: document.event_id,
+    document_id: document.id,
+    document_title: document.title,
+    source_type: document.source_type,
+    source_url: document.source_url || null,
+    document_content_hash: document.content_hash || null,
+    embedding_model: embeddingModel,
+    items: chunks.map((chunk) => ({
+      chunk_id: chunk.id,
+      chunk_index: chunk.chunk_index,
+      text: chunk.content,
+      metadata: {
+        event_id: document.event_id,
+        document_id: document.id,
+        document_title: document.title,
+        source_type: document.source_type,
+        source_url: document.source_url || null,
+        content_hash: chunk.content_hash || null,
+        char_count: chunk.char_count ?? chunk.content.length,
+        token_estimate: chunk.token_estimate ?? estimateTokenCount(chunk.content),
+        embedding_status: chunk.embedding_status || "pending",
+      },
+    })),
+  };
 }

@@ -30,7 +30,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -331,6 +331,9 @@ export default function App() {
   const [retrievalDebug, setRetrievalDebug] = useState<RetrievalDebugResponse | null>(null);
   const [retrievalLoading, setRetrievalLoading] = useState(false);
   const [retrievalMessage, setRetrievalMessage] = useState("");
+  const [embeddingPreview, setEmbeddingPreview] = useState<EmbeddingPreviewResponse | null>(null);
+  const [embeddingPreviewLoading, setEmbeddingPreviewLoading] = useState(false);
+  const [embeddingPreviewMessage, setEmbeddingPreviewMessage] = useState("");
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
@@ -582,11 +585,14 @@ export default function App() {
     setRetrievalQuery("");
     setRetrievalDebug(null);
     setRetrievalMessage("");
+    setEmbeddingPreview(null);
+    setEmbeddingPreviewMessage("");
   }, [selectedEventId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !selectedEventId || !selectedDocumentForChunksId) return;
     void fetchDocumentChunks(selectedDocumentForChunksId, selectedEventId);
+    void fetchEmbeddingPreview(selectedDocumentForChunksId, selectedEventId);
   }, [authStatus, selectedEventId, selectedDocumentForChunksId]);
 
   const stopQrScanner = () => {
@@ -777,6 +783,37 @@ export default function App() {
       return null;
     } finally {
       setRetrievalLoading(false);
+    }
+  };
+
+  const fetchEmbeddingPreview = async (documentId = selectedDocumentForChunksId, eventId = selectedEventId) => {
+    if (!documentId || !eventId) {
+      setEmbeddingPreview(null);
+      setEmbeddingPreviewMessage("");
+      return null;
+    }
+
+    setEmbeddingPreviewLoading(true);
+    setEmbeddingPreviewMessage("");
+    try {
+      const res = await apiFetch(
+        `/api/documents/${encodeURIComponent(documentId)}/embedding-preview?event_id=${encodeURIComponent(eventId)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as any)?.error || "Failed to fetch embedding preview");
+      }
+      if (selectedEventIdRef.current !== eventId) return null;
+      setEmbeddingPreview(data as EmbeddingPreviewResponse);
+      return data as EmbeddingPreviewResponse;
+    } catch (err) {
+      console.error("Failed to fetch embedding preview", err);
+      const message = err instanceof Error ? err.message : "Failed to fetch embedding preview";
+      setEmbeddingPreviewMessage(message);
+      setEmbeddingPreview(null);
+      return null;
+    } finally {
+      setEmbeddingPreviewLoading(false);
     }
   };
 
@@ -2205,6 +2242,17 @@ export default function App() {
                                 <span className={`rounded-full px-2 py-1 ${document.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
                                   {document.is_active ? "active" : "inactive"}
                                 </span>
+                                <span className={`rounded-full px-2 py-1 ${
+                                  document.embedding_status === "ready"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : document.embedding_status === "failed"
+                                    ? "bg-rose-100 text-rose-700"
+                                    : document.embedding_status === "skipped"
+                                    ? "bg-slate-200 text-slate-600"
+                                    : "bg-amber-100 text-amber-700"
+                                }`}>
+                                  embedding {document.embedding_status || "pending"}
+                                </span>
                               </div>
                             </div>
                           </div>
@@ -2286,6 +2334,17 @@ export default function App() {
                             <span className={`rounded-full px-2 py-1 ${selectedDocumentForChunks.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
                               {selectedDocumentForChunks.is_active ? "active" : "inactive"}
                             </span>
+                            <span className={`rounded-full px-2 py-1 ${
+                              selectedDocumentForChunks.embedding_status === "ready"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : selectedDocumentForChunks.embedding_status === "failed"
+                                ? "bg-rose-100 text-rose-700"
+                                : selectedDocumentForChunks.embedding_status === "skipped"
+                                ? "bg-slate-200 text-slate-600"
+                                : "bg-amber-100 text-amber-700"
+                            }`}>
+                              embedding {selectedDocumentForChunks.embedding_status || "pending"}
+                            </span>
                           </div>
                         </div>
 
@@ -2312,6 +2371,126 @@ export default function App() {
                       </div>
                     )}
 
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <h3 className="font-semibold text-slate-900">Embedding Preview</h3>
+                        <p className="text-xs text-slate-500">
+                          Vector-ready metadata and hook payload for the selected document.
+                        </p>
+                      </div>
+                      {selectedDocumentForChunks && (
+                        <button
+                          onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
+                          disabled={embeddingPreviewLoading}
+                          className="p-2 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+                          title="Refresh embedding preview"
+                        >
+                          <RefreshCw className={`w-4 h-4 text-slate-500 ${embeddingPreviewLoading ? "animate-spin" : ""}`} />
+                        </button>
+                      )}
+                    </div>
+
+                    {!selectedDocumentForChunks ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                        Select a document to inspect its vector-ready metadata.
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Document Embedding State</p>
+                            <div className="space-y-2 text-sm">
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Embedding model</span>
+                                <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                                  {embeddingPreview?.embedding_model || "text-embedding-3-small"}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Document status</span>
+                                <span className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                                  embeddingPreview?.document.embedding_status === "ready"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : embeddingPreview?.document.embedding_status === "failed"
+                                    ? "bg-rose-100 text-rose-700"
+                                    : embeddingPreview?.document.embedding_status === "skipped"
+                                    ? "bg-slate-200 text-slate-600"
+                                    : "bg-amber-100 text-amber-700"
+                                }`}>
+                                  {embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status || "pending"}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Document content hash</span>
+                                <span className="text-xs font-mono text-slate-500 truncate max-w-[14rem] text-right">
+                                  {embeddingPreview?.document.content_hash || selectedDocumentForChunks.content_hash || "-"}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Chunk count</span>
+                                <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                                  {embeddingPreview?.chunks.length ?? selectedDocumentForChunks.chunk_count ?? 0}
+                                </span>
+                              </div>
+                            </div>
+                            {embeddingPreviewMessage && (
+                              <p className={`mt-3 text-xs ${embeddingPreviewMessage.toLowerCase().includes("failed") || embeddingPreviewMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-500"}`}>
+                                {embeddingPreviewMessage}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Chunk Metadata</p>
+                            <div className="space-y-2 max-h-[14rem] overflow-y-auto pr-1">
+                              {embeddingPreviewLoading && (
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                  Loading embedding preview...
+                                </div>
+                              )}
+                              {!embeddingPreviewLoading && !embeddingPreview?.chunks.length && (
+                                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                  No chunks available for embedding yet.
+                                </div>
+                              )}
+                              {!embeddingPreviewLoading && embeddingPreview?.chunks.map((chunk) => (
+                                <div key={chunk.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                  <div className="flex flex-wrap items-center gap-2 mb-2 text-[11px] uppercase tracking-wider">
+                                    <span className="rounded-full bg-slate-900 text-white px-2 py-1">chunk {chunk.chunk_index + 1}</span>
+                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">{chunk.char_count || chunk.content.length} chars</span>
+                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">~{chunk.token_estimate || 0} tokens</span>
+                                    <span className={`rounded-full px-2 py-1 ${
+                                      chunk.embedding_status === "ready"
+                                        ? "bg-emerald-100 text-emerald-700"
+                                        : chunk.embedding_status === "failed"
+                                        ? "bg-rose-100 text-rose-700"
+                                        : chunk.embedding_status === "skipped"
+                                        ? "bg-slate-200 text-slate-600"
+                                        : "bg-amber-100 text-amber-700"
+                                    }`}>
+                                      {chunk.embedding_status || "pending"}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs font-mono text-slate-500 break-all">{chunk.content_hash || "-"}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Embedding Hook Payload</p>
+                          <div className="max-h-[22rem] overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <pre className="whitespace-pre-wrap text-xs text-slate-700 font-mono">
+                              {embeddingPreview ? JSON.stringify(embeddingPreview.payload, null, 2) : "Select a document to preview the embedding payload."}
+                            </pre>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">

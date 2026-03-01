@@ -4,6 +4,7 @@ export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "cancelled";
 export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "whatsapp" | "telegram";
+export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
 
 export interface SettingRow {
   key: string;
@@ -137,6 +138,10 @@ export interface EventDocumentRow {
   content: string;
   is_active: boolean;
   chunk_count?: number;
+  content_hash?: string | null;
+  embedding_status?: EmbeddingStatus;
+  embedding_model?: string | null;
+  last_embedded_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +152,12 @@ export interface EventDocumentChunkRow {
   event_id: string;
   chunk_index: number;
   content: string;
+  content_hash?: string | null;
+  char_count?: number;
+  token_estimate?: number;
+  embedding_status?: EmbeddingStatus;
+  embedding_model?: string | null;
+  embedded_at?: string | null;
   created_at: string;
   updated_at: string;
 }

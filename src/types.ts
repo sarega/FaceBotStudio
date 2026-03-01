@@ -12,6 +12,7 @@ export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "cancelled";
 export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "whatsapp" | "telegram";
+export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
 
 export interface AuthUser {
   id: string;
@@ -69,6 +70,10 @@ export interface EventDocumentRecord {
   content: string;
   is_active: boolean;
   chunk_count?: number;
+  content_hash?: string | null;
+  embedding_status?: EmbeddingStatus;
+  embedding_model?: string | null;
+  last_embedded_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +84,12 @@ export interface EventDocumentChunkRecord {
   event_id: string;
   chunk_index: number;
   content: string;
+  content_hash?: string | null;
+  char_count?: number;
+  token_estimate?: number;
+  embedding_status?: EmbeddingStatus;
+  embedding_model?: string | null;
+  embedded_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -107,6 +118,49 @@ export interface RetrievalDebugResponse {
   };
   matches: RetrievalDebugMatch[];
   composed_knowledge_context: string;
+}
+
+export interface EmbeddingPreviewChunk {
+  id: string;
+  chunk_index: number;
+  content: string;
+  content_hash?: string | null;
+  char_count?: number;
+  token_estimate?: number;
+  embedding_status?: EmbeddingStatus;
+  embedding_model?: string | null;
+}
+
+export interface EmbeddingPreviewResponse {
+  event_id: string;
+  embedding_model: string;
+  document: EventDocumentRecord;
+  chunks: EmbeddingPreviewChunk[];
+  payload: {
+    event_id: string;
+    document_id: string;
+    document_title: string;
+    source_type: string;
+    source_url?: string | null;
+    document_content_hash?: string | null;
+    embedding_model: string;
+    items: Array<{
+      chunk_id: string;
+      chunk_index: number;
+      text: string;
+      metadata: {
+        event_id: string;
+        document_id: string;
+        document_title: string;
+        source_type: string;
+        source_url?: string | null;
+        content_hash?: string | null;
+        char_count: number;
+        token_estimate: number;
+        embedding_status: EmbeddingStatus;
+      };
+    }>;
+  };
 }
 
 export interface Settings {
