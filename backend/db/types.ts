@@ -224,7 +224,10 @@ export interface AppDatabase {
   listEventDocuments(eventId: string): Promise<EventDocumentRow[]>;
   listEventDocumentChunks(eventId: string): Promise<EventDocumentChunkRow[]>;
   upsertEventDocument(input: UpsertEventDocumentInput): Promise<EventDocumentRow>;
-  resetEventKnowledge(eventId: string): Promise<{ documentsDeleted: number; chunksDeleted: number; contextCleared: boolean }>;
+  resetEventKnowledge(
+    eventId: string,
+    options?: { clearContext?: boolean },
+  ): Promise<{ documentsDeleted: number; chunksDeleted: number; contextCleared: boolean }>;
   setEventDocumentActive(documentId: string, isActive: boolean): Promise<boolean>;
   setEventDocumentEmbeddingStatus(
     documentId: string,

@@ -3165,16 +3165,18 @@ async function startServer() {
   app.post("/api/event-knowledge/reset", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+      const clearContext = req.body?.clear_context !== false;
       const event = await appDb.getEventById(eventId);
       if (!event) {
         return res.status(404).json({ error: "Event not found" });
       }
 
-      const result = await appDb.resetEventKnowledge(eventId);
+      const result = await appDb.resetEventKnowledge(eventId, { clearContext });
       await recordAudit(req, "event_knowledge.reset", "event", eventId, {
         documents_deleted: result.documentsDeleted,
         chunks_deleted: result.chunksDeleted,
         context_cleared: result.contextCleared,
+        clear_context: clearContext,
       });
 
       return res.json({
@@ -3183,6 +3185,7 @@ async function startServer() {
         documents_deleted: result.documentsDeleted,
         chunks_deleted: result.chunksDeleted,
         context_cleared: result.contextCleared,
+        clear_context: clearContext,
       });
     } catch (error) {
       console.error("Failed to reset event knowledge:", error);

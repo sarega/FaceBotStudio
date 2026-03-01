@@ -197,6 +197,9 @@ export class PostgresAppDatabase implements AppDatabase {
       [eventId],
     );
     const settings = baseResult.rows.reduce((acc, row) => {
+      if (EVENT_SETTING_KEY_SET.has(row.key)) {
+        return acc;
+      }
       acc[row.key] = row.value;
       return acc;
     }, {} as Record<string, string>);
@@ -662,8 +665,9 @@ export class PostgresAppDatabase implements AppDatabase {
     return mapEventDocumentRow(result.rows[0]);
   }
 
-  async resetEventKnowledge(eventId: string) {
+  async resetEventKnowledge(eventId: string, options?: { clearContext?: boolean }) {
     const normalizedEventId = String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const clearContext = options?.clearContext !== false;
     const client = await this.pool.connect();
     let documentsDeleted = 0;
     let chunksDeleted = 0;
@@ -678,17 +682,22 @@ export class PostgresAppDatabase implements AppDatabase {
         "SELECT COUNT(*)::text AS count FROM event_documents WHERE event_id = $1",
         [normalizedEventId],
       );
-      const contextResult = await client.query(
-        "DELETE FROM event_settings WHERE event_id = $1 AND key = 'context'",
-        [normalizedEventId],
-      );
+      let contextResult = { rowCount: 0 };
+      if (clearContext) {
+        contextResult = await client.query(
+          `INSERT INTO event_settings (event_id, key, value)
+           VALUES ($1, 'context', '')
+           ON CONFLICT (event_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+          [normalizedEventId],
+        );
+      }
       await client.query("DELETE FROM event_document_chunks WHERE event_id = $1", [normalizedEventId]);
       await client.query("DELETE FROM event_documents WHERE event_id = $1", [normalizedEventId]);
       await client.query("COMMIT");
 
       chunksDeleted = Number.parseInt(chunkCountResult.rows[0]?.count || "0", 10) || 0;
       documentsDeleted = Number.parseInt(documentCountResult.rows[0]?.count || "0", 10) || 0;
-      contextCleared = (contextResult.rowCount || 0) > 0;
+      contextCleared = clearContext && (contextResult.rowCount || 0) > 0;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

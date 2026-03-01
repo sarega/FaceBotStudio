@@ -372,6 +372,9 @@ export class SqliteAppDatabase implements AppDatabase {
     ).all(eventId) as SettingRow[];
 
     const settings = baseRows.reduce((acc, row) => {
+      if (EVENT_SETTING_KEY_SET.has(row.key)) {
+        return acc;
+      }
       acc[row.key] = row.value;
       return acc;
     }, {} as Record<string, string>);
@@ -799,8 +802,9 @@ export class SqliteAppDatabase implements AppDatabase {
     return mapEventDocumentRow(row);
   }
 
-  async resetEventKnowledge(eventId: string) {
+  async resetEventKnowledge(eventId: string, options?: { clearContext?: boolean }) {
     const normalizedEventId = String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const clearContext = options?.clearContext !== false;
     let documentsDeleted = 0;
     let chunksDeleted = 0;
     let contextCleared = false;
@@ -812,15 +816,21 @@ export class SqliteAppDatabase implements AppDatabase {
       const documentCountRow = this.db.prepare(
         "SELECT COUNT(*) AS count FROM event_documents WHERE event_id = ?",
       ).get(normalizedEventId) as { count?: number } | undefined;
-      const contextResult = this.db.prepare(
-        "DELETE FROM event_settings WHERE event_id = ? AND key = 'context'",
-      ).run(normalizedEventId);
+      let contextChanges = 0;
+      if (clearContext) {
+        const contextResult = this.db.prepare(
+          `INSERT INTO event_settings (event_id, key, value, updated_at)
+           VALUES (?, 'context', '', CURRENT_TIMESTAMP)
+           ON CONFLICT(event_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+        ).run(normalizedEventId);
+        contextChanges = contextResult.changes;
+      }
       this.db.prepare("DELETE FROM event_document_chunks WHERE event_id = ?").run(normalizedEventId);
       this.db.prepare("DELETE FROM event_documents WHERE event_id = ?").run(normalizedEventId);
 
       chunksDeleted = Number(chunkCountRow?.count || 0);
       documentsDeleted = Number(documentCountRow?.count || 0);
-      contextCleared = Boolean(contextResult.changes);
+      contextCleared = clearContext && Boolean(contextChanges);
     });
 
     transaction();
