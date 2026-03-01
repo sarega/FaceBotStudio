@@ -25,11 +25,12 @@ export async function getChatResponse(
   message: string,
   settings: any,
   history: ChatHistoryMessage[],
+  eventId?: string,
 ): Promise<ChatResponse> {
   const res = await fetch("/api/llm/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, settings, history }),
+    body: JSON.stringify({ message, settings, history, event_id: eventId }),
   });
 
   const data = await res.json();

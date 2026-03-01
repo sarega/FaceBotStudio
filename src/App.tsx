@@ -23,16 +23,19 @@ import {
   ExternalLink,
   Shield,
   LogOut,
-  UserPlus
+  UserPlus,
+  CalendarRange,
+  Link2
 } from "lucide-react";
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, Message, Settings, UserRole } from "./types";
+import { AuthUser, EventRecord, FacebookPageRecord, Message, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
   sender_id: string;
+  event_id?: string | null;
   first_name: string;
   last_name: string;
   phone: string;
@@ -108,6 +111,16 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [events, setEvents] = useState<EventRecord[]>([]);
+  const [pages, setPages] = useState<FacebookPageRecord[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState("");
+  const [eventLoading, setEventLoading] = useState(false);
+  const [eventMessage, setEventMessage] = useState("");
+  const [newEventName, setNewEventName] = useState("");
+  const [editingEventName, setEditingEventName] = useState("");
+  const [newPageId, setNewPageId] = useState("");
+  const [newPageName, setNewPageName] = useState("");
+  const [newPageAccessToken, setNewPageAccessToken] = useState("");
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [teamLoading, setTeamLoading] = useState(false);
   const [teamMessage, setTeamMessage] = useState("");
@@ -171,6 +184,8 @@ export default function App() {
     ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
     : "";
   const registrationWindowInfo = describeRegistrationWindow(settings);
+  const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
+  const selectedEventPages = pages.filter((page) => page.event_id === selectedEventId);
 
   const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const res = await fetch(input, init);
@@ -190,6 +205,45 @@ export default function App() {
     }
     const data = await res.json();
     return data.user as AuthUser;
+  };
+
+  const fetchEvents = async () => {
+    setEventLoading(true);
+    try {
+      const res = await apiFetch("/api/events");
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch events");
+      }
+      const rows = Array.isArray(data) ? (data as EventRecord[]) : [];
+      setEvents(rows);
+      setSelectedEventId((prev) => prev && rows.some((event) => event.id === prev) ? prev : rows[0]?.id || "");
+      setEditingEventName((prev) => prev || rows[0]?.name || "");
+      return rows;
+    } catch (err) {
+      console.error("Failed to fetch events", err);
+      setEventMessage(err instanceof Error ? err.message : "Failed to fetch events");
+      return [];
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const fetchFacebookPages = async () => {
+    try {
+      const res = await apiFetch("/api/facebook-pages");
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch Facebook pages");
+      }
+      const rows = Array.isArray(data) ? data as FacebookPageRecord[] : [];
+      setPages(rows);
+      return rows;
+    } catch (err) {
+      console.error("Failed to fetch Facebook pages", err);
+      setEventMessage(err instanceof Error ? err.message : "Failed to fetch Facebook pages");
+      return [];
+    }
   };
 
   const fetchTeamUsers = async () => {
@@ -217,15 +271,15 @@ export default function App() {
   const loadAppData = async () => {
     setLoading(true);
     try {
-      await Promise.all([
-        fetchSettings(),
-        canViewLogs ? fetchMessages() : Promise.resolve(),
-        fetchRegistrations(),
-        canRunTest ? fetchLlmModels() : Promise.resolve(),
+      const [eventRows] = await Promise.all([
+        fetchEvents(),
+        fetchFacebookPages(),
         role === "owner" || role === "admin" ? fetchTeamUsers() : Promise.resolve(),
       ]);
+      if (!eventRows.length) {
+        setLoading(false);
+      }
     } finally {
-      setLoading(false);
     }
   };
 
@@ -253,15 +307,38 @@ export default function App() {
     if (authStatus !== "authenticated") return;
 
     void loadAppData();
+  }, [authStatus, role]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !selectedEventId) return;
+
+    void (async () => {
+      setLoading(true);
+      try {
+        await Promise.all([
+          fetchSettings(selectedEventId),
+          canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
+          fetchRegistrations(selectedEventId),
+          canRunTest ? fetchLlmModels() : Promise.resolve(),
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
     const interval = setInterval(() => {
       void Promise.all([
-        canViewLogs ? fetchMessages() : Promise.resolve(),
-        fetchRegistrations(),
+        canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
+        fetchRegistrations(selectedEventId),
       ]);
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [authStatus, canRunTest, canViewLogs, role]);
+  }, [authStatus, selectedEventId, canRunTest, canViewLogs]);
+
+  useEffect(() => {
+    setEditingEventName(selectedEvent?.name || "");
+  }, [selectedEvent?.id, selectedEvent?.name]);
 
   const stopQrScanner = () => {
     if (scanIntervalRef.current != null) {
@@ -317,9 +394,9 @@ export default function App() {
     return match?.[0] || "";
   };
 
-  const fetchSettings = async () => {
+  const fetchSettings = async (eventId = selectedEventId) => {
     try {
-      const res = await apiFetch("/api/settings");
+      const res = await apiFetch(`/api/settings?event_id=${encodeURIComponent(eventId)}`);
       if (!res.ok) {
         throw new Error("Failed to fetch settings");
       }
@@ -356,9 +433,9 @@ export default function App() {
     }
   };
 
-  const fetchMessages = async () => {
+  const fetchMessages = async (eventId = selectedEventId) => {
     try {
-      const res = await apiFetch("/api/messages");
+      const res = await apiFetch(`/api/messages?event_id=${encodeURIComponent(eventId)}`);
       if (!res.ok) {
         throw new Error("Failed to fetch messages");
       }
@@ -381,7 +458,7 @@ export default function App() {
       const res = await apiFetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, event_id: selectedEventId }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -396,9 +473,9 @@ export default function App() {
     }
   };
 
-  const fetchRegistrations = async () => {
+  const fetchRegistrations = async (eventId = selectedEventId) => {
     try {
-      const res = await apiFetch("/api/registrations");
+      const res = await apiFetch(`/api/registrations?event_id=${encodeURIComponent(eventId)}`);
       if (!res.ok) {
         throw new Error("Failed to fetch registrations");
       }
@@ -434,7 +511,7 @@ export default function App() {
         setCheckinStatus("success");
         setSearchId(normalizedId);
         setSelectedRegistrationId(normalizedId);
-        fetchRegistrations();
+        void fetchRegistrations(selectedEventId);
         setTimeout(() => {
           setCheckinStatus("idle");
           setCheckinErrorMessage("");
@@ -476,7 +553,7 @@ export default function App() {
       }
       setStatusUpdateMessage(`Updated ${registrationId} to ${status}`);
       setSelectedRegistrationId(registrationId);
-      fetchRegistrations();
+      void fetchRegistrations(selectedEventId);
       window.setTimeout(() => setStatusUpdateMessage(""), 2500);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update registration status";
@@ -579,7 +656,7 @@ export default function App() {
         parts: m.parts
       }));
       
-      const response = await getChatResponse(inputText, settings, history);
+      const response = await getChatResponse(inputText, settings, history, selectedEventId);
       
       const parts = response.candidates[0].content.parts;
       const newModelMsg = { role: "model" as const, parts, timestamp: new Date().toISOString() };
@@ -593,7 +670,7 @@ export default function App() {
             const res = await apiFetch("/api/registrations", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...regData, sender_id: "TEST_USER" }),
+              body: JSON.stringify({ ...regData, sender_id: "TEST_USER", event_id: selectedEventId }),
             });
             const result = await res.json();
             
@@ -612,9 +689,9 @@ export default function App() {
             setTestMessages(prev => [...prev, funcResponseMsg]);
             
             // Get follow-up response
-            const followUp = await getChatResponse("Registration successful. ID is " + result.id, settings, [...history, newModelMsg, funcResponseMsg]);
+            const followUp = await getChatResponse("Registration successful. ID is " + result.id, settings, [...history, newModelMsg, funcResponseMsg], selectedEventId);
             setTestMessages(prev => [...prev, { role: "model", parts: followUp.candidates[0].content.parts, timestamp: new Date().toISOString() }]);
-            fetchRegistrations();
+            void fetchRegistrations(selectedEventId);
           } else if (call.name === "cancelRegistration") {
             const { registration_id } = call.args as any;
             const res = await apiFetch("/api/registrations/cancel", {
@@ -637,9 +714,9 @@ export default function App() {
             
             setTestMessages(prev => [...prev, funcResponseMsg]);
             
-            const followUp = await getChatResponse("Registration " + registration_id + " has been cancelled.", settings, [...history, newModelMsg, funcResponseMsg]);
+            const followUp = await getChatResponse("Registration " + registration_id + " has been cancelled.", settings, [...history, newModelMsg, funcResponseMsg], selectedEventId);
             setTestMessages(prev => [...prev, { role: "model", parts: followUp.candidates[0].content.parts, timestamp: new Date().toISOString() }]);
-            fetchRegistrations();
+            void fetchRegistrations(selectedEventId);
           }
         }
       }
@@ -690,8 +767,118 @@ export default function App() {
       setMessages([]);
       setRegistrations([]);
       setTeamUsers([]);
+      setEvents([]);
+      setPages([]);
+      setSelectedEventId("");
+      setEventMessage("");
       setLoading(false);
       stopQrScanner();
+    }
+  };
+
+  const handleCreateEvent = async () => {
+    const name = newEventName.trim();
+    if (!name) return;
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch("/api/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to create event");
+      }
+      setNewEventName("");
+      await fetchEvents();
+      await fetchFacebookPages();
+      if (data?.id) {
+        setSelectedEventId(String(data.id));
+      }
+      setEventMessage(`Created event ${data?.name || name}`);
+      window.setTimeout(() => setEventMessage(""), 2500);
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to create event");
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const handleUpdateEvent = async (isActive?: boolean) => {
+    if (!selectedEventId || !selectedEvent) return;
+    const payload: Record<string, unknown> = {};
+    if (editingEventName.trim() && editingEventName.trim() !== selectedEvent.name) {
+      payload.name = editingEventName.trim();
+    }
+    if (typeof isActive === "boolean" && isActive !== selectedEvent.is_active) {
+      payload.is_active = isActive;
+    }
+    if (!Object.keys(payload).length) return;
+
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to update event");
+      }
+      await fetchEvents();
+      setEventMessage("Event updated");
+      window.setTimeout(() => setEventMessage(""), 2500);
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to update event");
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const handleSaveFacebookPage = async (page?: FacebookPageRecord) => {
+    if (!selectedEventId) return;
+    const pageId = (page ? page.page_id : newPageId).trim();
+    const pageName = (page ? page.page_name : newPageName).trim();
+    const pageAccessToken = page ? "" : newPageAccessToken.trim();
+    if (!pageId) {
+      setEventMessage("Facebook Page ID is required");
+      return;
+    }
+
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch("/api/facebook-pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          page_id: pageId,
+          page_name: pageName || pageId,
+          event_id: selectedEventId,
+          page_access_token: pageAccessToken,
+          is_active: page ? !page.is_active : true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to save Facebook page");
+      }
+      if (!page) {
+        setNewPageId("");
+        setNewPageName("");
+        setNewPageAccessToken("");
+      }
+      await fetchFacebookPages();
+      setEventMessage(page ? `Page ${page.is_active ? "disabled" : "enabled"}` : "Facebook page linked");
+      window.setTimeout(() => setEventMessage(""), 2500);
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to save Facebook page");
+    } finally {
+      setEventLoading(false);
     }
   };
 
@@ -856,11 +1043,33 @@ export default function App() {
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <Bot className="text-white w-5 h-5" />
             </div>
-            <h1 className="font-bold text-xl tracking-tight">FB Bot Studio</h1>
+            <div>
+              <h1 className="font-bold text-xl tracking-tight">FB Bot Studio</h1>
+              {selectedEvent && (
+                <p className="text-[11px] text-slate-500 hidden md:block">
+                  Active event: <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
+                </p>
+              )}
+            </div>
+            <div className="hidden lg:flex items-center gap-2 ml-3">
+              <CalendarRange className="w-4 h-4 text-slate-400" />
+              <select
+                value={selectedEventId}
+                onChange={(e) => setSelectedEventId(e.target.value)}
+                disabled={!events.length || eventLoading}
+                className="min-w-[15rem] bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+              >
+                {events.map((event) => (
+                  <option key={event.id} value={event.id}>
+                    {event.name}{event.is_active ? "" : " (inactive)"}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
@@ -1069,7 +1278,7 @@ export default function App() {
                         <p className="text-sm text-slate-500">Manage, preview tickets, and export event registrations. Click a row to open the ticket panel.</p>
                       </div>
                       <a 
-                        href="/api/registrations/export" 
+                        href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}
                         className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-all"
                       >
                         <Download className="w-4 h-4" />
@@ -1389,7 +1598,7 @@ export default function App() {
                     <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
                     <p className="text-sm text-slate-500">Real messages received from your Facebook Page.</p>
                   </div>
-                  <button onClick={fetchMessages} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+                  <button onClick={() => void fetchMessages(selectedEventId)} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
                     <RefreshCw className="w-4 h-4 text-slate-400" />
                   </button>
                 </div>
@@ -1590,6 +1799,189 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <CalendarRange className="w-5 h-5 text-blue-600" />
+                          Event Workspace
+                        </h3>
+                        <p className="text-sm text-slate-500">Create events, switch scope, and keep settings isolated per event.</p>
+                      </div>
+                      <button
+                        onClick={() => void Promise.all([fetchEvents(), fetchFacebookPages()])}
+                        disabled={eventLoading}
+                        className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
+                        title="Refresh events"
+                      >
+                        <RefreshCw className={`w-4 h-4 text-slate-500 ${eventLoading ? "animate-spin" : ""}`} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {events.map((event) => (
+                        <button
+                          key={event.id}
+                          onClick={() => setSelectedEventId(event.id)}
+                          className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                            selectedEventId === event.id
+                              ? "border-blue-200 bg-blue-50"
+                              : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold">{event.name}</p>
+                              <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {event.is_default && (
+                                <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-700">
+                                  default
+                                </span>
+                              )}
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                event.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+                              }`}>
+                                {event.is_active ? "active" : "inactive"}
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="border-t border-slate-100 pt-5 space-y-3">
+                      <p className="text-sm font-semibold">Selected Event Details</p>
+                      <input
+                        value={editingEventName}
+                        onChange={(e) => setEditingEventName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Event name"
+                        disabled={!selectedEvent}
+                      />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          onClick={() => void handleUpdateEvent()}
+                          disabled={!selectedEvent || !editingEventName.trim() || editingEventName.trim() === selectedEvent?.name || eventLoading}
+                          className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          Save Event Name
+                        </button>
+                        <button
+                          onClick={() => void handleUpdateEvent(!(selectedEvent?.is_active))}
+                          disabled={!selectedEvent || selectedEvent?.is_default || eventLoading}
+                          className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          {selectedEvent?.is_active ? "Deactivate Event" : "Activate Event"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-100 pt-5 space-y-3">
+                      <p className="text-sm font-semibold">Create New Event</p>
+                      <input
+                        value={newEventName}
+                        onChange={(e) => setNewEventName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="New event name"
+                      />
+                      <button
+                        onClick={() => void handleCreateEvent()}
+                        disabled={!newEventName.trim() || eventLoading}
+                        className="w-full rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                      >
+                        Create Event
+                      </button>
+                    </div>
+
+                    {eventMessage && (
+                      <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {eventMessage}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+                    <div>
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Link2 className="w-5 h-5 text-blue-600" />
+                        Facebook Page Routing
+                      </h3>
+                      <p className="text-sm text-slate-500">Map each Facebook Page to the selected event so incoming chat lands in the right workspace.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      {selectedEventPages.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                          No Facebook Pages linked to this event yet.
+                        </div>
+                      ) : (
+                        selectedEventPages.map((page) => (
+                          <div key={page.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold">{page.page_name}</p>
+                                <p className="text-xs font-mono text-slate-500">{page.page_id}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  page.has_page_access_token ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700"
+                                }`}>
+                                  {page.has_page_access_token ? "page token" : "env fallback"}
+                                </span>
+                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                  page.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+                                }`}>
+                                  {page.is_active ? "active" : "inactive"}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => void handleSaveFacebookPage(page)}
+                              disabled={eventLoading}
+                              className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                            >
+                              {page.is_active ? "Disable Page Mapping" : "Enable Page Mapping"}
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <div className="border-t border-slate-100 pt-5 space-y-3">
+                      <p className="text-sm font-semibold">Link Facebook Page to Selected Event</p>
+                      <input
+                        value={newPageName}
+                        onChange={(e) => setNewPageName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Facebook page name"
+                      />
+                      <input
+                        value={newPageId}
+                        onChange={(e) => setNewPageId(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Facebook page ID"
+                      />
+                      <input
+                        value={newPageAccessToken}
+                        onChange={(e) => setNewPageAccessToken(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Page access token (optional, leave blank to use PAGE_ACCESS_TOKEN)"
+                      />
+                      <button
+                        onClick={() => void handleSaveFacebookPage()}
+                        disabled={!selectedEventId || !newPageId.trim() || eventLoading}
+                        className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                      >
+                        Link Page to Event
+                      </button>
+                      <p className="text-xs text-slate-500">
+                        For true multi-page replies, save each page's own access token here. If blank, the app falls back to the global <code>PAGE_ACCESS_TOKEN</code>.
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold flex items-center gap-2">

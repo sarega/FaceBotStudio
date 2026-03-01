@@ -4,7 +4,7 @@ import { existsSync } from "fs";
 import { Pool } from "pg";
 import { hashPassword, normalizeUsername } from "../auth";
 import { getEventState } from "../datetime";
-import { DEFAULT_SETTINGS_ENTRIES } from "./defaultSettings";
+import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS } from "./defaultSettings";
 import { runPostgresMigrations } from "./migrate";
 import type {
   AppDatabase,
@@ -12,7 +12,10 @@ import type {
   AuditLogRow,
   AuthSessionRow,
   AuthUserRow,
+  CreateEventInput,
   CreateUserInput,
+  EventRow,
+  FacebookPageRow,
   MessageRow,
   MessageType,
   RegistrationInput,
@@ -20,12 +23,15 @@ import type {
   RegistrationRow,
   RegistrationStatus,
   SettingRow,
+  UpdateEventInput,
+  UpsertFacebookPageInput,
   UserRole,
 } from "./types";
 
 const DEFAULT_ORGANIZATION_ID = "org_default";
 const DEFAULT_ORGANIZATION_NAME = process.env.ORGANIZATION_NAME || "Default Organization";
 const DEFAULT_ORGANIZATION_SLUG = "default";
+const EVENT_SETTING_KEY_SET = new Set<string>(EVENT_SETTING_KEYS);
 
 function generateRegistrationId() {
   return `REG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -35,8 +41,40 @@ function generateEntityId(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, "")}`;
 }
 
+function slugifyText(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9ก-๙]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "event";
+}
+
 function parseAuditMetadata(value: unknown) {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function mapEventRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    slug: String(row.slug),
+    is_default: Boolean(row.is_default),
+    is_active: Boolean(row.is_active),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  } satisfies EventRow;
+}
+
+function mapPageRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    page_id: String(row.page_id),
+    page_name: String(row.page_name),
+    event_id: String(row.event_id),
+    page_access_token: typeof row.page_access_token === "string" ? row.page_access_token : null,
+    is_active: Boolean(row.is_active),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  } satisfies FacebookPageRow;
 }
 
 export class PostgresAppDatabase implements AppDatabase {
@@ -47,9 +85,7 @@ export class PostgresAppDatabase implements AppDatabase {
   private readonly sqliteBootstrapPath?: string;
 
   constructor(databaseUrl: string, sqliteBootstrapPath?: string) {
-    const shouldUseSsl =
-      process.env.PGSSLMODE !== "disable" &&
-      !/localhost|127\.0\.0\.1/i.test(databaseUrl);
+    const shouldUseSsl = process.env.PGSSLMODE !== "disable" && !/localhost|127\.0\.0\.1/i.test(databaseUrl);
 
     this.pool = new Pool({
       connectionString: databaseUrl,
@@ -65,6 +101,7 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.bootstrapFromLegacySqliteIfEmpty();
     await this.seedDefaultSettings();
     await this.ensureDefaultOrganization();
+    await this.ensureDefaultEvent();
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
     this.initialized = true;
@@ -78,32 +115,57 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.pool.end();
   }
 
-  async getSettingsMap() {
-    const result = await this.pool.query<SettingRow>("SELECT key, value FROM settings");
-    return result.rows.reduce((acc, row) => {
+  async getSettingsMap(eventId = DEFAULT_EVENT_ID) {
+    const baseResult = await this.pool.query<SettingRow>("SELECT key, value FROM settings");
+    const eventResult = await this.pool.query<SettingRow>(
+      "SELECT key, value FROM event_settings WHERE event_id = $1",
+      [eventId],
+    );
+    const settings = baseResult.rows.reduce((acc, row) => {
       acc[row.key] = row.value;
       return acc;
     }, {} as Record<string, string>);
+    for (const row of eventResult.rows) {
+      settings[row.key] = row.value;
+    }
+    return settings;
   }
 
-  async getSettingValue(key: string) {
-    const result = await this.pool.query<{ value: string }>("SELECT value FROM settings WHERE key = $1", [key]);
-    return result.rows[0]?.value;
+  async getSettingValue(key: string, eventId = DEFAULT_EVENT_ID) {
+    if (EVENT_SETTING_KEY_SET.has(key)) {
+      const row = await this.pool.query<{ value: string }>(
+        "SELECT value FROM event_settings WHERE event_id = $1 AND key = $2",
+        [eventId, key],
+      );
+      if (row.rows[0]?.value != null) return row.rows[0].value;
+    }
+
+    const globalRow = await this.pool.query<{ value: string }>("SELECT value FROM settings WHERE key = $1", [key]);
+    return globalRow.rows[0]?.value;
   }
 
-  async upsertSettings(entries: Record<string, string>) {
+  async upsertSettings(entries: Record<string, string>, eventId = DEFAULT_EVENT_ID) {
     const values = Object.entries(entries);
-    if (values.length === 0) return;
+    if (!values.length) return;
 
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       for (const [key, value] of values) {
-        await client.query(
-          `INSERT INTO settings (key, value) VALUES ($1, $2)
-           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-          [key, String(value)],
-        );
+        if (EVENT_SETTING_KEY_SET.has(key)) {
+          await client.query(
+            `INSERT INTO event_settings (event_id, key, value)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (event_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+            [eventId, key, String(value)],
+          );
+        } else {
+          await client.query(
+            `INSERT INTO settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+            [key, String(value)],
+          );
+        }
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -116,30 +178,43 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async getRegistrationById(id: string) {
     const result = await this.pool.query<RegistrationRow>(
-      "SELECT id, sender_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations WHERE id = $1",
+      "SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations WHERE id = $1",
       [id],
     );
     return result.rows[0];
   }
 
-  async listRegistrations(limit?: number) {
-    const result = typeof limit === "number"
-      ? await this.pool.query<RegistrationRow>(
-          "SELECT id, sender_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ORDER BY timestamp DESC LIMIT $1",
-          [limit],
-        )
-      : await this.pool.query<RegistrationRow>(
-          "SELECT id, sender_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ORDER BY timestamp DESC",
-        );
+  async listRegistrations(limit?: number, eventId?: string) {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+    if (eventId) {
+      values.push(eventId);
+      clauses.push(`event_id = $${values.length}`);
+    }
+    const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    if (typeof limit === "number") {
+      values.push(limit);
+      const result = await this.pool.query<RegistrationRow>(
+        `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC LIMIT $${values.length}`,
+        values,
+      );
+      return result.rows;
+    }
+
+    const result = await this.pool.query<RegistrationRow>(
+      `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC`,
+      values,
+    );
     return result.rows;
   }
 
-  async exportRegistrations() {
-    return this.listRegistrations();
+  async exportRegistrations(eventId?: string) {
+    return this.listRegistrations(undefined, eventId);
   }
 
   async createRegistration(input: RegistrationInput): Promise<RegistrationResult> {
     const senderId = String(input.sender_id || "").trim();
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
     const firstName = String(input.first_name || "").trim();
     const lastName = String(input.last_name || "").trim();
     const phone = String(input.phone || "").trim();
@@ -149,9 +224,10 @@ export class PostgresAppDatabase implements AppDatabase {
       return { statusCode: 400, content: { error: "Missing required registration fields" } };
     }
 
-    const settings = await this.getSettingsMap();
+    const settings = await this.getSettingsMap(eventId);
     const countResult = await this.pool.query<{ count: string }>(
-      "SELECT COUNT(*)::text AS count FROM registrations WHERE status != 'cancelled'",
+      "SELECT COUNT(*)::text AS count FROM registrations WHERE event_id = $1 AND status != 'cancelled'",
+      [eventId],
     );
     const activeCount = Number.parseInt(countResult.rows[0]?.count || "0", 10);
     const limit = Number.parseInt(settings.reg_limit || "200", 10);
@@ -171,9 +247,9 @@ export class PostgresAppDatabase implements AppDatabase {
       const id = generateRegistrationId();
       try {
         await this.pool.query(
-          `INSERT INTO registrations (id, sender_id, first_name, last_name, phone, email)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [id, senderId, firstName, lastName, phone, email],
+          `INSERT INTO registrations (id, sender_id, event_id, first_name, last_name, phone, email)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, senderId, eventId, firstName, lastName, phone, email],
         );
         return { statusCode: 200, content: { id, status: "success" } };
       } catch (error: any) {
@@ -192,9 +268,7 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const updated = await this.updateRegistrationStatus(registrationId, "cancelled");
-    if (updated) {
-      return { statusCode: 200, content: { status: "success" } };
-    }
+    if (updated) return { statusCode: 200, content: { status: "success" } };
     return { statusCode: 404, content: { error: "Registration not found" } };
   }
 
@@ -214,27 +288,161 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
-  async saveMessage(senderId: string, text: string, type: MessageType) {
+  async saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string) {
     await this.pool.query(
-      "INSERT INTO messages (sender_id, text, type) VALUES ($1, $2, $3)",
-      [senderId, text, type],
+      "INSERT INTO messages (sender_id, event_id, page_id, text, type) VALUES ($1, $2, $3, $4, $5)",
+      [senderId, eventId || DEFAULT_EVENT_ID, pageId || null, text, type],
     );
   }
 
-  async listMessages(limit: number) {
+  async listMessages(limit: number, eventId?: string) {
+    if (eventId) {
+      const result = await this.pool.query<MessageRow>(
+        "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE event_id = $1 ORDER BY timestamp DESC, id DESC LIMIT $2",
+        [eventId, limit],
+      );
+      return result.rows;
+    }
     const result = await this.pool.query<MessageRow>(
-      "SELECT id, sender_id, text, timestamp::text AS timestamp, type FROM messages ORDER BY timestamp DESC, id DESC LIMIT $1",
+      "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages ORDER BY timestamp DESC, id DESC LIMIT $1",
       [limit],
     );
     return result.rows;
   }
 
-  async getMessageHistoryRows(senderId: string, limit: number) {
+  async getMessageHistoryRows(senderId: string, limit: number, eventId?: string) {
+    if (eventId) {
+      const result = await this.pool.query<{ text: string; type: MessageType }>(
+        "SELECT text, type FROM messages WHERE sender_id = $1 AND event_id = $2 ORDER BY timestamp DESC, id DESC LIMIT $3",
+        [senderId, eventId, limit],
+      );
+      return result.rows;
+    }
     const result = await this.pool.query<{ text: string; type: MessageType }>(
       "SELECT text, type FROM messages WHERE sender_id = $1 ORDER BY timestamp DESC, id DESC LIMIT $2",
       [senderId, limit],
     );
     return result.rows;
+  }
+
+  async listEvents() {
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, name, slug, is_default, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM events ORDER BY is_default DESC, created_at ASC",
+    );
+    return result.rows.map(mapEventRow);
+  }
+
+  async getEventById(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, name, slug, is_default, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM events WHERE id = $1",
+      [String(eventId || "").trim()],
+    );
+    return result.rows[0] ? mapEventRow(result.rows[0]) : undefined;
+  }
+
+  async createEvent(input: CreateEventInput) {
+    const id = generateEntityId("evt");
+    const baseName = String(input.name || "").trim() || "New Event";
+    const slug = await this.uniqueEventSlug(baseName);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO events (id, name, slug, is_default, is_active)
+         VALUES ($1, $2, $3, FALSE, TRUE)`,
+        [id, baseName, slug],
+      );
+      const templateSettings = await this.getSettingsMap(DEFAULT_EVENT_ID);
+      for (const key of EVENT_SETTING_KEYS) {
+        await client.query(
+          `INSERT INTO event_settings (event_id, key, value)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (event_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+          [id, key, templateSettings[key] || DEFAULT_SETTINGS_ENTRIES[key]],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const event = await this.getEventById(id);
+    if (!event) throw new Error("Failed to create event");
+    return event;
+  }
+
+  async updateEvent(eventId: string, input: UpdateEventInput) {
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    if (typeof input.name === "string" && input.name.trim()) {
+      values.push(input.name.trim());
+      updates.push(`name = $${values.length}`);
+      values.push(await this.uniqueEventSlug(input.name.trim(), eventId));
+      updates.push(`slug = $${values.length}`);
+    }
+    if (typeof input.is_active === "boolean") {
+      values.push(input.is_active);
+      updates.push(`is_active = $${values.length}`);
+    }
+    if (!updates.length) return false;
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    values.push(String(eventId || "").trim());
+    const result = await this.pool.query(
+      `UPDATE events SET ${updates.join(", ")} WHERE id = $${values.length}`,
+      values,
+    );
+    return result.rowCount > 0;
+  }
+
+  async listFacebookPages() {
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, page_id, page_name, event_id, page_access_token, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM facebook_pages ORDER BY created_at ASC",
+    );
+    return result.rows.map(mapPageRow);
+  }
+
+  async getFacebookPageByPageId(pageId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, page_id, page_name, event_id, page_access_token, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM facebook_pages WHERE page_id = $1 LIMIT 1",
+      [String(pageId || "").trim()],
+    );
+    return result.rows[0] ? mapPageRow(result.rows[0]) : undefined;
+  }
+
+  async upsertFacebookPage(input: UpsertFacebookPageInput) {
+    const pageId = String(input.page_id || "").trim();
+    const pageName = String(input.page_name || "").trim() || pageId;
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const idResult = await this.pool.query<{ id: string }>(
+      "SELECT id FROM facebook_pages WHERE page_id = $1",
+      [pageId],
+    );
+    const id = idResult.rows[0]?.id || generateEntityId("fbp");
+
+    await this.pool.query(
+      `INSERT INTO facebook_pages (id, page_id, page_name, event_id, page_access_token, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (page_id) DO UPDATE SET page_name = EXCLUDED.page_name, event_id = EXCLUDED.event_id, page_access_token = COALESCE(NULLIF(EXCLUDED.page_access_token, ''), facebook_pages.page_access_token), is_active = EXCLUDED.is_active, updated_at = CURRENT_TIMESTAMP`,
+      [id, pageId, pageName, eventId, String(input.page_access_token || "").trim(), input.is_active === false ? false : true],
+    );
+
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, page_id, page_name, event_id, page_access_token, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM facebook_pages WHERE page_id = $1",
+      [pageId],
+    );
+    if (!result.rows[0]) throw new Error("Failed to upsert Facebook page");
+    return mapPageRow(result.rows[0]);
+  }
+
+  async resolveEventIdForPage(pageId: string) {
+    const result = await this.pool.query<{ event_id: string }>(
+      "SELECT event_id FROM facebook_pages WHERE page_id = $1 AND is_active = TRUE LIMIT 1",
+      [String(pageId || "").trim()],
+    );
+    return result.rows[0]?.event_id || DEFAULT_EVENT_ID;
   }
 
   async getUserByUsername(username: string) {
@@ -301,9 +509,7 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const user = await this.getUserById(userId);
-    if (!user) {
-      throw new Error("Failed to load newly created user");
-    }
+    if (!user) throw new Error("Failed to load newly created user");
     return user;
   }
 
@@ -358,7 +564,6 @@ export class PostgresAppDatabase implements AppDatabase {
 
     const row = result.rows[0];
     if (!row) return undefined;
-
     return {
       session_id: String(row.session_id),
       token_hash: String(row.token_hash),
@@ -435,10 +640,26 @@ export class PostgresAppDatabase implements AppDatabase {
     } satisfies AuditLogRow));
   }
 
+  private async uniqueEventSlug(baseName: string, excludeId?: string) {
+    const base = slugifyText(baseName);
+    let candidate = base;
+    let attempt = 1;
+    while (true) {
+      const values: unknown[] = [candidate];
+      let sql = "SELECT id FROM events WHERE slug = $1";
+      if (excludeId) {
+        values.push(excludeId);
+        sql += ` AND id != $${values.length}`;
+      }
+      const result = await this.pool.query<{ id: string }>(sql, values);
+      if (!result.rows[0]) return candidate;
+      attempt += 1;
+      candidate = `${base}-${attempt}`;
+    }
+  }
+
   private async seedDefaultSettings() {
     const entries = Object.entries(DEFAULT_SETTINGS_ENTRIES);
-    if (!entries.length) return;
-
     for (const [key, value] of entries) {
       await this.pool.query(
         "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING",
@@ -453,6 +674,39 @@ export class PostgresAppDatabase implements AppDatabase {
        VALUES ($1, $2, $3)
        ON CONFLICT (id) DO NOTHING`,
       [DEFAULT_ORGANIZATION_ID, DEFAULT_ORGANIZATION_NAME, DEFAULT_ORGANIZATION_SLUG],
+    );
+  }
+
+  private async ensureDefaultEvent() {
+    const defaultName = String((await this.getSettingValue("event_name", DEFAULT_EVENT_ID)) || DEFAULT_SETTINGS_ENTRIES.event_name);
+    await this.pool.query(
+      `INSERT INTO events (id, name, slug, is_default, is_active)
+       VALUES ($1, $2, $3, TRUE, TRUE)
+       ON CONFLICT (id) DO NOTHING`,
+      [DEFAULT_EVENT_ID, defaultName, "default-event"],
+    );
+    await this.pool.query(
+      "UPDATE events SET name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+      [defaultName, DEFAULT_EVENT_ID],
+    );
+
+    const templateSettings = await this.getSettingsMap(DEFAULT_EVENT_ID);
+    for (const key of EVENT_SETTING_KEYS) {
+      await this.pool.query(
+        `INSERT INTO event_settings (event_id, key, value)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (event_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+        [DEFAULT_EVENT_ID, key, templateSettings[key] || DEFAULT_SETTINGS_ENTRIES[key]],
+      );
+    }
+
+    await this.pool.query(
+      "UPDATE registrations SET event_id = $1 WHERE event_id IS NULL OR BTRIM(event_id) = ''",
+      [DEFAULT_EVENT_ID],
+    );
+    await this.pool.query(
+      "UPDATE messages SET event_id = $1 WHERE event_id IS NULL OR BTRIM(event_id) = ''",
+      [DEFAULT_EVENT_ID],
     );
   }
 
@@ -581,17 +835,18 @@ export class PostgresAppDatabase implements AppDatabase {
         }
         for (const row of legacyMessages) {
           await client.query(
-            "INSERT INTO messages (sender_id, text, timestamp, type) VALUES ($1, $2, $3, $4)",
-            [row.sender_id, row.text, row.timestamp, row.type],
+            "INSERT INTO messages (sender_id, event_id, text, timestamp, type) VALUES ($1, $2, $3, $4, $5)",
+            [row.sender_id, DEFAULT_EVENT_ID, row.text, row.timestamp, row.type],
           );
         }
         for (const row of legacyRegistrations) {
           await client.query(
-            `INSERT INTO registrations (id, sender_id, first_name, last_name, phone, email, timestamp, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            `INSERT INTO registrations (id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
             [
               row.id,
               row.sender_id,
+              DEFAULT_EVENT_ID,
               row.first_name,
               row.last_name,
               row.phone,
@@ -602,9 +857,7 @@ export class PostgresAppDatabase implements AppDatabase {
           );
         }
         await client.query("COMMIT");
-        console.log(
-          `[db] Bootstrapped Postgres from SQLite: ${legacySettings.length} settings, ${legacyMessages.length} messages, ${legacyRegistrations.length} registrations`,
-        );
+        console.log(`[db] Bootstrapped Postgres from SQLite: ${legacySettings.length} settings, ${legacyMessages.length} messages, ${legacyRegistrations.length} registrations`);
       } catch (error) {
         await client.query("ROLLBACK");
         throw error;

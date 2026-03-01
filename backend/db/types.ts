@@ -10,6 +10,8 @@ export interface SettingRow {
 export interface MessageRow {
   id: number;
   sender_id: string;
+  event_id?: string | null;
+  page_id?: string | null;
   text: string;
   timestamp: string;
   type: MessageType;
@@ -18,6 +20,7 @@ export interface MessageRow {
 export interface RegistrationRow {
   id: string;
   sender_id: string;
+  event_id?: string | null;
   first_name: string;
   last_name: string;
   phone: string;
@@ -28,6 +31,7 @@ export interface RegistrationRow {
 
 export interface RegistrationInput {
   sender_id: string;
+  event_id?: string;
   first_name: unknown;
   last_name: unknown;
   phone: unknown;
@@ -85,24 +89,70 @@ export interface AuditLogRow {
   created_at: string;
 }
 
+export interface EventRow {
+  id: string;
+  name: string;
+  slug: string;
+  is_default: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FacebookPageRow {
+  id: string;
+  page_id: string;
+  page_name: string;
+  event_id: string;
+  page_access_token?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateEventInput {
+  name: string;
+}
+
+export interface UpdateEventInput {
+  name?: string;
+  is_active?: boolean;
+}
+
+export interface UpsertFacebookPageInput {
+  page_id: string;
+  page_name: string;
+  event_id: string;
+  page_access_token?: string;
+  is_active?: boolean;
+}
+
 export interface AppDatabase {
   driver: "postgres" | "sqlite";
   initialize(): Promise<void>;
   ping(): Promise<void>;
   close(): Promise<void>;
-  getSettingsMap(): Promise<Record<string, string>>;
-  getSettingValue(key: string): Promise<string | undefined>;
-  upsertSettings(entries: Record<string, string>): Promise<void>;
+  getSettingsMap(eventId?: string): Promise<Record<string, string>>;
+  getSettingValue(key: string, eventId?: string): Promise<string | undefined>;
+  upsertSettings(entries: Record<string, string>, eventId?: string): Promise<void>;
   getRegistrationById(id: string): Promise<RegistrationRow | undefined>;
-  listRegistrations(limit?: number): Promise<RegistrationRow[]>;
-  exportRegistrations(): Promise<RegistrationRow[]>;
+  listRegistrations(limit?: number, eventId?: string): Promise<RegistrationRow[]>;
+  exportRegistrations(eventId?: string): Promise<RegistrationRow[]>;
   createRegistration(input: RegistrationInput): Promise<RegistrationResult>;
   cancelRegistration(id: unknown): Promise<RegistrationResult>;
   checkInRegistration(id: string): Promise<boolean>;
   updateRegistrationStatus(id: string, status: RegistrationStatus): Promise<boolean>;
-  saveMessage(senderId: string, text: string, type: MessageType): Promise<void>;
-  listMessages(limit: number): Promise<MessageRow[]>;
-  getMessageHistoryRows(senderId: string, limit: number): Promise<Array<{ text: string; type: MessageType }>>;
+  saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string): Promise<void>;
+  listMessages(limit: number, eventId?: string): Promise<MessageRow[]>;
+  getMessageHistoryRows(senderId: string, limit: number, eventId?: string): Promise<Array<{ text: string; type: MessageType }>>;
+  listEvents(): Promise<EventRow[]>;
+  getEventById(eventId: string): Promise<EventRow | undefined>;
+  createEvent(input: CreateEventInput): Promise<EventRow>;
+  updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
+  listFacebookPages(): Promise<FacebookPageRow[]>;
+  getFacebookPageByPageId(pageId: string): Promise<FacebookPageRow | undefined>;
+  upsertFacebookPage(input: UpsertFacebookPageInput): Promise<FacebookPageRow>;
+  resolveEventIdForPage(pageId: string): Promise<string | undefined>;
   getUserByUsername(username: string): Promise<AuthUserRow | undefined>;
   getUserById(userId: string): Promise<AuthUserRow | undefined>;
   getUserPasswordHash(username: string): Promise<string | undefined>;

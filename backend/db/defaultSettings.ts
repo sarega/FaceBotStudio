@@ -13,3 +13,22 @@ export const DEFAULT_SETTINGS_ENTRIES = {
   reg_start: "2026-02-01T00:00",
   reg_end: "2026-05-01T23:59",
 } as const;
+
+export const EVENT_SETTING_KEYS = [
+  "context",
+  "llm_model",
+  "event_name",
+  "event_timezone",
+  "event_location",
+  "event_map_url",
+  "event_date",
+  "event_description",
+  "event_travel",
+  "reg_limit",
+  "reg_start",
+  "reg_end",
+] as const;
+
+export const GLOBAL_SETTING_KEYS = ["verify_token"] as const;
+
+export const DEFAULT_EVENT_ID = "evt_default";

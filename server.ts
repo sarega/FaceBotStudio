@@ -30,6 +30,7 @@ import {
   type RegistrationRow,
   type RegistrationStatus,
 } from "./backend/db/index";
+import { DEFAULT_EVENT_ID } from "./backend/db/defaultSettings";
 
 dotenv.config();
 
@@ -373,16 +374,31 @@ function canManageTargetUser(actor: AuthUserRow, target: AuthUserRow, action: "s
   return false;
 }
 
-async function getSettingsMap() {
-  return appDb.getSettingsMap();
+function getRequestedEventId(req: Request) {
+  const raw = typeof req.query.event_id === "string" ? req.query.event_id : "";
+  return raw.trim() || DEFAULT_EVENT_ID;
+}
+
+async function getSettingsMap(eventId?: string) {
+  return appDb.getSettingsMap(eventId);
 }
 
 async function getRegistrationById(id: string) {
   return appDb.getRegistrationById(id);
 }
 
-async function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing") {
-  await appDb.saveMessage(senderId, text, type);
+async function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing", eventId?: string, pageId?: string) {
+  await appDb.saveMessage(senderId, text, type, eventId, pageId);
+}
+
+async function getFacebookAccessToken(pageId?: string) {
+  if (pageId) {
+    const page = await appDb.getFacebookPageByPageId(pageId);
+    if (page?.page_access_token) {
+      return page.page_access_token;
+    }
+  }
+  return process.env.PAGE_ACCESS_TOKEN || "";
 }
 
 async function recordAudit(
@@ -813,8 +829,8 @@ function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>,
 </svg>`;
 }
 
-async function getMessageHistoryForSender(senderId: string, limit = 12): Promise<ChatHistoryMessage[]> {
-  const rows = await appDb.getMessageHistoryRows(senderId, limit);
+async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?: string): Promise<ChatHistoryMessage[]> {
+  const rows = await appDb.getMessageHistoryRows(senderId, limit, eventId);
 
   return rows
     .reverse()
@@ -957,6 +973,7 @@ function getTextFromNormalizedResponse(response: NormalizedChatResponse) {
 
 async function buildToolResponseMessages(
   senderId: string,
+  eventId: string,
   calls: Array<{ name: string; args: Record<string, unknown> }>,
 ): Promise<ToolExecutionBundle> {
   const messages: ChatHistoryMessage[] = [];
@@ -968,6 +985,7 @@ async function buildToolResponseMessages(
     if (call.name === "registerUser") {
       const result = await createRegistration({
         sender_id: senderId,
+        event_id: eventId,
         first_name: call.args.first_name,
         last_name: call.args.last_name,
         phone: call.args.phone,
@@ -1002,18 +1020,19 @@ async function buildToolResponseMessages(
 
 async function generateBotReplyForSender(
   senderId: string,
+  eventId: string,
   incomingText: string,
   historyOverride?: ChatHistoryMessage[],
 ): Promise<BotReplyResult> {
-  const settings = await getSettingsMap();
-  const history = historyOverride || await getMessageHistoryForSender(senderId, 12);
+  const settings = await getSettingsMap(eventId);
+  const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId);
 
   const firstResponse = await requestOpenRouterChat(incomingText, history, settings);
   let finalResponse = firstResponse;
   let ticketRegistrationIds: string[] = [];
 
   if (firstResponse.functionCalls && firstResponse.functionCalls.length > 0) {
-    const toolResult = await buildToolResponseMessages(senderId, firstResponse.functionCalls);
+    const toolResult = await buildToolResponseMessages(senderId, eventId, firstResponse.functionCalls);
     const toolMessages = toolResult.messages;
     ticketRegistrationIds = toolResult.ticketRegistrationIds;
     const assistantMessage: ChatHistoryMessage = {
@@ -1039,8 +1058,8 @@ async function generateBotReplyForSender(
   };
 }
 
-async function sendFacebookTextMessage(recipientId: string, text: string) {
-  const pageAccessToken = process.env.PAGE_ACCESS_TOKEN;
+async function sendFacebookTextMessage(recipientId: string, text: string, pageId?: string) {
+  const pageAccessToken = await getFacebookAccessToken(pageId);
   if (!pageAccessToken) {
     throw new Error("PAGE_ACCESS_TOKEN is not configured");
   }
@@ -1067,8 +1086,8 @@ async function sendFacebookTextMessage(recipientId: string, text: string) {
   return payload;
 }
 
-async function sendFacebookImageMessage(recipientId: string, imageUrl: string) {
-  const pageAccessToken = process.env.PAGE_ACCESS_TOKEN;
+async function sendFacebookImageMessage(recipientId: string, imageUrl: string, pageId?: string) {
+  const pageAccessToken = await getFacebookAccessToken(pageId);
   if (!pageAccessToken) {
     throw new Error("PAGE_ACCESS_TOKEN is not configured");
   }
@@ -1103,14 +1122,15 @@ async function sendFacebookImageMessage(recipientId: string, imageUrl: string) {
   return payload;
 }
 
-async function handleIncomingFacebookText(senderId: string, text: string) {
+async function handleIncomingFacebookText(senderId: string, text: string, pageId?: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
 
-  const priorHistory = await getMessageHistoryForSender(senderId, 12);
-  await saveMessage(senderId, trimmed, "incoming");
+  const eventId = pageId ? await appDb.resolveEventIdForPage(pageId) : DEFAULT_EVENT_ID;
+  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, pageId);
 
-  if (!process.env.PAGE_ACCESS_TOKEN) {
+  if (!(await getFacebookAccessToken(pageId))) {
     console.warn("PAGE_ACCESS_TOKEN is not set; skipping outbound Facebook reply");
     return;
   }
@@ -1118,7 +1138,7 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateBotReplyForSender(senderId, trimmed, priorHistory);
+    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
   } catch (error) {
@@ -1127,20 +1147,20 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
   }
 
   if (replyText) {
-    await sendFacebookTextMessage(senderId, replyText);
-    await saveMessage(senderId, replyText, "outgoing");
+    await sendFacebookTextMessage(senderId, replyText, pageId);
+    await saveMessage(senderId, replyText, "outgoing", eventId, pageId);
   }
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
   let sentTicketArtifact = false;
-  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap() : null;
+  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap(eventId) : null;
   for (const registrationId of uniqueTicketIds) {
     const reg = await getRegistrationById(registrationId);
     if (reg && settings) {
       const ticketSummaryText = buildTicketSummaryText(reg, settings);
       try {
-        await sendFacebookTextMessage(senderId, ticketSummaryText);
-        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing");
+        await sendFacebookTextMessage(senderId, ticketSummaryText, pageId);
+        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, pageId);
       } catch (error) {
         console.error("Failed to send ticket summary text:", error);
       }
@@ -1155,23 +1175,23 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
 
     try {
       if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
-      await sendFacebookImageMessage(senderId, ticketPngUrl);
-      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing");
+      await sendFacebookImageMessage(senderId, ticketPngUrl, pageId);
+      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, pageId);
       sentTicketArtifact = true;
     } catch (error) {
       console.error("Failed to send PNG ticket image:", error);
       try {
         if (!ticketSvgUrl) throw new Error("SVG ticket URL is not available");
-        await sendFacebookImageMessage(senderId, ticketSvgUrl);
-        await saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing");
+        await sendFacebookImageMessage(senderId, ticketSvgUrl, pageId);
+        await saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing", eventId, pageId);
         sentTicketArtifact = true;
       } catch (svgError) {
         console.error("Failed to send SVG ticket image fallback:", svgError);
         try {
           const textUrl = ticketPngUrl || ticketSvgUrl;
           if (!textUrl) throw new Error("No ticket URL available");
-          await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`);
-          await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing");
+          await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, pageId);
+          await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, pageId);
           sentTicketArtifact = true;
         } catch (fallbackError) {
           console.error("Failed to send ticket link fallback:", fallbackError);
@@ -1184,8 +1204,8 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
     const mapUrl = String(settings?.event_map_url || "").trim();
     if (mapUrl) {
       try {
-        await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`);
-        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing");
+        await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId);
+        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, pageId);
       } catch (error) {
         console.error("Failed to send map link:", error);
       }
@@ -1411,9 +1431,116 @@ async function startServer() {
     }
   });
 
-  app.get("/api/registrations", requireAuth, async (_req, res) => {
+  app.get("/api/events", requireAuth, async (_req, res) => {
     try {
-      const rows = await appDb.listRegistrations();
+      const events = await appDb.listEvents();
+      return res.json(events);
+    } catch (error) {
+      console.error("Failed to fetch events:", error);
+      return res.status(500).json({ error: "Failed to fetch events" });
+    }
+  });
+
+  app.post("/api/events", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const name = String(req.body?.name || "").trim();
+      if (!name) {
+        return res.status(400).json({ error: "Event name is required" });
+      }
+      const event = await appDb.createEvent({ name });
+      await recordAudit(req, "event.created", "event", event.id, { name: event.name });
+      return res.status(201).json(event);
+    } catch (error) {
+      console.error("Failed to create event:", error);
+      return res.status(500).json({ error: "Failed to create event" });
+    }
+  });
+
+  app.post("/api/events/:id", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = String(req.params.id || "").trim();
+      const name = typeof req.body?.name === "string" ? req.body.name : undefined;
+      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : undefined;
+      if (!eventId) {
+        return res.status(400).json({ error: "Event ID is required" });
+      }
+      const updated = await appDb.updateEvent(eventId, { name, is_active: isActive });
+      if (!updated) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+      await recordAudit(req, "event.updated", "event", eventId, { name, is_active: isActive });
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Failed to update event:", error);
+      return res.status(500).json({ error: "Failed to update event" });
+    }
+  });
+
+  app.get("/api/facebook-pages", requireAuth, async (_req, res) => {
+    try {
+      const pages = await appDb.listFacebookPages();
+      return res.json(
+        pages.map((page) => ({
+          id: page.id,
+          page_id: page.page_id,
+          page_name: page.page_name,
+          event_id: page.event_id,
+          is_active: page.is_active,
+          has_page_access_token: Boolean(page.page_access_token),
+          created_at: page.created_at,
+          updated_at: page.updated_at,
+        })),
+      );
+    } catch (error) {
+      console.error("Failed to fetch Facebook pages:", error);
+      return res.status(500).json({ error: "Failed to fetch Facebook pages" });
+    }
+  });
+
+  app.post("/api/facebook-pages", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const pageId = String(req.body?.page_id || "").trim();
+      const pageName = String(req.body?.page_name || "").trim();
+      const eventId = String(req.body?.event_id || "").trim();
+      const pageAccessToken = String(req.body?.page_access_token || "").trim();
+      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
+
+      if (!pageId || !eventId) {
+        return res.status(400).json({ error: "page_id and event_id are required" });
+      }
+
+      const page = await appDb.upsertFacebookPage({
+        page_id: pageId,
+        page_name: pageName || pageId,
+        event_id: eventId,
+        page_access_token: pageAccessToken,
+        is_active: isActive,
+      });
+      await recordAudit(req, "facebook_page.upserted", "facebook_page", page.id, {
+        page_id: page.page_id,
+        event_id: page.event_id,
+        is_active: page.is_active,
+      });
+      return res.json({
+        id: page.id,
+        page_id: page.page_id,
+        page_name: page.page_name,
+        event_id: page.event_id,
+        is_active: page.is_active,
+        has_page_access_token: Boolean(page.page_access_token),
+        created_at: page.created_at,
+        updated_at: page.updated_at,
+      });
+    } catch (error) {
+      console.error("Failed to upsert Facebook page:", error);
+      return res.status(500).json({ error: "Failed to save Facebook page" });
+    }
+  });
+
+  app.get("/api/registrations", requireAuth, async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const rows = await appDb.listRegistrations(undefined, eventId);
       res.json(rows);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch registrations" });
@@ -1422,10 +1549,12 @@ async function startServer() {
 
   app.post("/api/registrations", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const result = await createRegistration(req.body || {});
+      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+      const result = await createRegistration({ ...(req.body || {}), event_id: eventId });
       if (result.statusCode === 200 && typeof result.content.id === "string") {
         await recordAudit(req, "registration.created", "registration", String(result.content.id), {
           sender_id: req.body?.sender_id || null,
+          event_id: eventId,
         });
       }
       res.status(result.statusCode).json(result.content);
@@ -1487,10 +1616,11 @@ async function startServer() {
     }
   });
 
-  app.get("/api/registrations/export", requireAuth, async (_req, res) => {
+  app.get("/api/registrations/export", requireAuth, async (req, res) => {
     try {
-      const rows = await appDb.exportRegistrations();
-      const eventName = (await appDb.getSettingValue("event_name")) || "event";
+      const eventId = getRequestedEventId(req);
+      const rows = await appDb.exportRegistrations(eventId);
+      const eventName = (await appDb.getSettingValue("event_name", eventId)) || "event";
       
       // Create a short slug for the filename
       const slug = eventName
@@ -1529,7 +1659,7 @@ async function startServer() {
         return res.status(404).send("Ticket not found");
       }
 
-      const settings = await getSettingsMap();
+      const settings = await getSettingsMap(reg.event_id || DEFAULT_EVENT_ID);
       const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
       let png: Buffer;
 
@@ -1562,7 +1692,7 @@ async function startServer() {
         return res.status(404).send("Ticket not found");
       }
 
-      const settings = await getSettingsMap();
+      const settings = await getSettingsMap(reg.event_id || DEFAULT_EVENT_ID);
       const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
       const svg = renderTicketSvg(reg, settings, qrDataUrl);
 
@@ -1575,9 +1705,10 @@ async function startServer() {
     }
   });
 
-  app.get("/api/settings", requireAuth, async (_req, res) => {
+  app.get("/api/settings", requireAuth, async (req, res) => {
     try {
-      res.json(await getSettingsMap());
+      const eventId = getRequestedEventId(req);
+      res.json(await getSettingsMap(eventId));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
@@ -1585,12 +1716,16 @@ async function startServer() {
 
   app.post("/api/settings", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
+      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
       const body = Object.fromEntries(
-        Object.entries(req.body || {}).map(([key, value]) => [key, String(value)]),
+        Object.entries(req.body || {})
+          .filter(([key]) => key !== "event_id")
+          .map(([key, value]) => [key, String(value)]),
       ) as Record<string, string>;
-      await appDb.upsertSettings(body);
-      await recordAudit(req, "settings.updated", "settings", "global", {
+      await appDb.upsertSettings(body, eventId);
+      await recordAudit(req, "settings.updated", "settings", eventId, {
         keys: Object.keys(body),
+        event_id: eventId,
       });
       res.json({ status: "ok" });
     } catch (error) {
@@ -1598,9 +1733,10 @@ async function startServer() {
     }
   });
 
-  app.get("/api/messages", requireRoles(["owner", "admin", "operator", "viewer"]), async (_req, res) => {
+  app.get("/api/messages", requireRoles(["owner", "admin", "operator", "viewer"]), async (req, res) => {
     try {
-      const messages = await appDb.listMessages(100);
+      const eventId = getRequestedEventId(req);
+      const messages = await appDb.listMessages(100, eventId);
       res.json(messages);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch messages" });
@@ -1648,7 +1784,10 @@ async function startServer() {
       const body = req.body || {};
       const message = typeof body.message === "string" ? body.message : "";
       const history = Array.isArray(body.history) ? (body.history as ChatHistoryMessage[]) : [];
-      const settings = (body.settings && typeof body.settings === "object") ? body.settings as Record<string, any> : {};
+      const eventId = typeof body.event_id === "string" && body.event_id.trim() ? body.event_id.trim() : DEFAULT_EVENT_ID;
+      const settings = (body.settings && typeof body.settings === "object")
+        ? body.settings as Record<string, any>
+        : await getSettingsMap(eventId);
       const response = await requestOpenRouterChat(message, history, settings);
       res.json(response);
     } catch (error) {
@@ -1701,11 +1840,12 @@ async function startServer() {
         console.log("Received webhook event:", webhookEvent);
 
         const senderId = webhookEvent?.sender?.id;
+        const pageId = webhookEvent?.recipient?.id;
         const text = webhookEvent?.message?.text;
         const isEcho = webhookEvent?.message?.is_echo;
         if (!senderId || !text || isEcho) continue;
 
-        void handleIncomingFacebookText(senderId, text).catch((error) => {
+        void handleIncomingFacebookText(senderId, text, pageId).catch((error) => {
           console.error("Failed to handle incoming Facebook message:", error);
         });
       }

@@ -1,6 +1,8 @@
 export interface Message {
   id?: number;
   sender_id: string;
+  event_id?: string | null;
+  page_id?: string | null;
   text: string;
   timestamp: string;
   type: "incoming" | "outgoing";
@@ -18,6 +20,27 @@ export interface AuthUser {
   is_active: boolean;
   created_at: string;
   last_login_at: string | null;
+}
+
+export interface EventRecord {
+  id: string;
+  name: string;
+  slug: string;
+  is_default: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FacebookPageRecord {
+  id: string;
+  page_id: string;
+  page_name: string;
+  event_id: string;
+  is_active: boolean;
+  has_page_access_token?: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Settings {
