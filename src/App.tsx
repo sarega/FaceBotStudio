@@ -92,6 +92,12 @@ function formatTraceStatusLabel(status: string) {
     .join(" ");
 }
 
+function buildWebChatEmbedSnippet(appUrl: string, widgetKey: string) {
+  const normalizedBase = String(appUrl || "").replace(/\/+$/, "");
+  const safeKey = String(widgetKey || "").trim();
+  return `<script src="${normalizedBase}/webchat-widget.js" data-widget-key="${safeKey}" data-api-base="${normalizedBase}"></script>`;
+}
+
 function normalizeTimeZoneForUi(value: string | undefined) {
   const timeZone = String(value || "").trim();
   if (!timeZone) return DEFAULT_TIMEZONE;
@@ -3497,9 +3503,19 @@ export default function App() {
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                  channel.has_access_token ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700"
+                                  channel.platform === "web_chat"
+                                    ? "bg-violet-100 text-violet-700"
+                                    : channel.has_access_token
+                                    ? "bg-blue-100 text-blue-700"
+                                    : "bg-amber-100 text-amber-700"
                                 }`}>
-                                  {channel.has_access_token ? "saved token" : channel.platform === "facebook" ? "env fallback" : "no token"}
+                                  {channel.platform === "web_chat"
+                                    ? "no token needed"
+                                    : channel.has_access_token
+                                    ? "saved token"
+                                    : channel.platform === "facebook"
+                                    ? "env fallback"
+                                    : "no token"}
                                 </span>
                                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                                   channel.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
@@ -3526,6 +3542,28 @@ export default function App() {
                               <p className="text-[11px] text-slate-500">
                                 Stored secret fields: {channel.secret_config_fields_present.join(", ")}
                               </p>
+                            )}
+                            {channel.platform === "web_chat" && (
+                              <div className="rounded-xl border border-violet-100 bg-violet-50 p-3 space-y-2">
+                                <p className="text-xs font-semibold text-violet-800">Embed Snippet</p>
+                                <pre className="overflow-x-auto rounded-lg bg-white border border-violet-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                  <code>{buildWebChatEmbedSnippet(appUrl, channel.external_id)}</code>
+                                </pre>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    onClick={() => copyToClipboard(buildWebChatEmbedSnippet(appUrl, channel.external_id))}
+                                    className="rounded-xl bg-violet-100 hover:bg-violet-200 text-violet-700 px-3 py-2 text-xs font-semibold"
+                                  >
+                                    Copy Embed Snippet
+                                  </button>
+                                  <button
+                                    onClick={() => copyToClipboard(`${appUrl}/api/webchat/config/${encodeURIComponent(channel.external_id)}`)}
+                                    className="rounded-xl bg-white hover:bg-violet-100 text-violet-700 border border-violet-200 px-3 py-2 text-xs font-semibold"
+                                  >
+                                    Copy Config URL
+                                  </button>
+                                </div>
+                              </div>
                             )}
                             <div className="flex flex-wrap items-center gap-2">
                               <button
