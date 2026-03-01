@@ -11,7 +11,7 @@ export interface Message {
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "cancelled";
 export type EventStatus = ManualEventStatus | "closed";
-export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram";
+export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram" | "web_chat";
 export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
 
 export interface AuthUser {

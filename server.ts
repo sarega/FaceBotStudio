@@ -514,12 +514,105 @@ async function getLineChannelSecret(destination?: string) {
   return String(config.channel_secret || "").trim();
 }
 
+async function getWebChatChannel(widgetKey?: string) {
+  if (!widgetKey) return null;
+  const channel = await appDb.getChannelAccount("web_chat", widgetKey);
+  if (!channel || channel.is_active === false) {
+    return null;
+  }
+  return channel;
+}
+
+function isWebChatOriginAllowed(origin: string | undefined, config: Record<string, string>) {
+  const allowList = String(config.allowed_origin || "")
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (allowList.length === 0) {
+    return true;
+  }
+
+  const requestOrigin = String(origin || "").trim();
+  if (!requestOrigin) {
+    return false;
+  }
+
+  return allowList.includes(requestOrigin);
+}
+
 function verifyLineWebhookSignature(rawBody: Buffer | undefined, providedSignature: string | undefined, channelSecret: string) {
   if (!rawBody || !providedSignature || !channelSecret) return false;
   const expected = createHmac("sha256", channelSecret).update(rawBody).digest("base64");
   const provided = String(providedSignature || "").trim();
   if (!expected || !provided || expected.length !== provided.length) return false;
   return timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+}
+
+function buildWebChatPublicConfig(widgetKey: string, settings: Record<string, string>, config: Record<string, string>) {
+  return {
+    widget_key: widgetKey,
+    event_name: String(settings.event_name || "Event Assistant").trim() || "Event Assistant",
+    welcome_text: String(config.welcome_text || "").trim() || "สวัสดีค่ะ มีอะไรให้ช่วยเกี่ยวกับงานนี้ได้บ้าง",
+    theme_color: String(config.theme_color || "").trim() || "#2563eb",
+  };
+}
+
+function applyWebChatCorsHeaders(res: Response, origin: string | undefined, config: Record<string, string>) {
+  const requestOrigin = String(origin || "").trim();
+  if (!requestOrigin) {
+    return isWebChatOriginAllowed("", config);
+  }
+
+  if (!isWebChatOriginAllowed(requestOrigin, config)) {
+    return false;
+  }
+
+  res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  return true;
+}
+
+async function buildWebChatArtifacts(eventId: string, registrationIds: string[]) {
+  const uniqueTicketIds = [...new Set(registrationIds)];
+  if (uniqueTicketIds.length === 0) {
+    return {
+      tickets: [] as Array<{
+        registration_id: string;
+        summary_text: string;
+        png_url: string | null;
+        svg_url: string | null;
+      }>,
+      map_url: null as string | null,
+    };
+  }
+
+  const settings = await getSettingsMap(eventId);
+  const tickets: Array<{
+    registration_id: string;
+    summary_text: string;
+    png_url: string | null;
+    svg_url: string | null;
+  }> = [];
+
+  for (const registrationId of uniqueTicketIds) {
+    const reg = await getRegistrationById(registrationId);
+    if (!reg) continue;
+    tickets.push({
+      registration_id: registrationId,
+      summary_text: buildTicketSummaryText(reg, settings),
+      png_url: buildTicketImageUrl(registrationId, "png"),
+      svg_url: buildTicketImageUrl(registrationId, "svg"),
+    });
+  }
+
+  const mapUrl = String(settings.event_map_url || "").trim();
+  return {
+    tickets,
+    map_url: mapUrl || null,
+  };
 }
 
 async function recordAudit(
@@ -1805,6 +1898,13 @@ async function startServer() {
     keyFn: (req) => getRequestIp(req) || "unknown",
     errorMessage: "Too many LINE webhook requests. Please retry later.",
   });
+  const webChatRateLimit = createRateLimitMiddleware({
+    name: "web-chat",
+    windowMs: 60 * 1000,
+    max: 120,
+    keyFn: (req) => getRequestIp(req) || "unknown",
+    errorMessage: "Too many web chat requests. Please retry later.",
+  });
 
   // API Routes
   app.get("/api/health", async (_req, res) => {
@@ -2899,6 +2999,129 @@ async function startServer() {
     } catch (error) {
       console.error("LINE webhook handler failed:", error);
       return res.sendStatus(500);
+    }
+  });
+
+  app.options("/api/webchat/messages", async (req, res) => {
+    try {
+      const widgetKey = String(req.query.widget_key || "").trim();
+      if (!widgetKey) {
+        return res.sendStatus(400);
+      }
+
+      const channel = await getWebChatChannel(widgetKey);
+      if (!channel) {
+        return res.sendStatus(404);
+      }
+
+      const config = safeParseChannelConfig(channel.config_json);
+      if (!applyWebChatCorsHeaders(res, typeof req.headers.origin === "string" ? req.headers.origin : "", config)) {
+        return res.sendStatus(403);
+      }
+
+      return res.sendStatus(204);
+    } catch (error) {
+      console.error("Failed to prepare web chat CORS preflight:", error);
+      return res.sendStatus(500);
+    }
+  });
+
+  app.get("/api/webchat/config/:widgetKey", async (req, res) => {
+    try {
+      const widgetKey = String(req.params.widgetKey || "").trim();
+      if (!widgetKey) {
+        return res.status(400).json({ error: "Widget key is required" });
+      }
+
+      const channel = await getWebChatChannel(widgetKey);
+      if (!channel) {
+        return res.status(404).json({ error: "Web chat widget not found" });
+      }
+
+      const config = safeParseChannelConfig(channel.config_json);
+      const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+      if (requestOrigin && !applyWebChatCorsHeaders(res, requestOrigin, config)) {
+        return res.status(403).json({ error: "Origin is not allowed for this widget" });
+      }
+
+      const eventId = await appDb.resolveEventIdForChannel("web_chat", widgetKey);
+      if (!eventId) {
+        return res.status(404).json({ error: "No active event mapping found for this widget" });
+      }
+
+      const settings = await getSettingsMap(eventId);
+      return res.json({
+        status: "ok",
+        event_id: eventId,
+        widget: buildWebChatPublicConfig(widgetKey, settings, config),
+      });
+    } catch (error) {
+      console.error("Failed to load web chat config:", error);
+      return res.status(500).json({ error: "Failed to load web chat config" });
+    }
+  });
+
+  app.post("/api/webchat/messages", webChatRateLimit, async (req, res) => {
+    try {
+      const widgetKey = String(req.body?.widget_key || req.query.widget_key || "").trim();
+      const senderId = String(req.body?.sender_id || "").trim();
+      const text = String(req.body?.text || "").trim();
+
+      if (!widgetKey || !senderId || !text) {
+        return res.status(400).json({ error: "widget_key, sender_id, and text are required" });
+      }
+
+      const channel = await getWebChatChannel(widgetKey);
+      if (!channel) {
+        return res.status(404).json({ error: "Web chat widget not found" });
+      }
+
+      const config = safeParseChannelConfig(channel.config_json);
+      if (!applyWebChatCorsHeaders(res, typeof req.headers.origin === "string" ? req.headers.origin : "", config)) {
+        return res.status(403).json({ error: "Origin is not allowed for this widget" });
+      }
+
+      const eventId = await appDb.resolveEventIdForChannel("web_chat", widgetKey);
+      if (!eventId) {
+        return res.status(404).json({ error: "No active event mapping found for this widget" });
+      }
+
+      const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
+      await saveMessage(senderId, text, "incoming", eventId, widgetKey);
+
+      let replyText = "";
+      let ticketRegistrationIds: string[] = [];
+      try {
+        const result = await generateBotReplyForSender(senderId, eventId, text, priorHistory);
+        replyText = result.text;
+        ticketRegistrationIds = result.ticketRegistrationIds;
+      } catch (error) {
+        console.error("Failed to generate web chat bot reply:", error);
+        replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+      }
+
+      if (replyText) {
+        await saveMessage(senderId, replyText, "outgoing", eventId, widgetKey);
+      }
+
+      const settings = await getSettingsMap(eventId);
+      const eventState = getEventState(settings);
+      const event = await appDb.getEventById(eventId);
+      const artifacts = await buildWebChatArtifacts(eventId, ticketRegistrationIds);
+      return res.json({
+        status: "ok",
+        event_id: eventId,
+        event_status: event?.effective_status || "active",
+        event_lifecycle: eventState.eventLifecycle,
+        registration_window_status: eventState.registrationStatus,
+        widget: buildWebChatPublicConfig(widgetKey, settings, config),
+        reply_text: replyText,
+        tickets: artifacts.tickets,
+        map_url: artifacts.map_url,
+      });
+    } catch (error) {
+      console.error("Web chat message handler failed:", error);
+      return res.status(500).json({ error: "Failed to process web chat message" });
     }
   });
 

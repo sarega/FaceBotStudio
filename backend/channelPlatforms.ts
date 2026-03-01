@@ -138,6 +138,40 @@ export const CHANNEL_PLATFORM_DEFINITIONS: Record<ChannelPlatform, ChannelPlatfo
       "Groundwork only in this phase. Telegram webhook/send adapters are not wired yet.",
     ],
   },
+  web_chat: {
+    id: "web_chat",
+    label: "Web Chat Widget",
+    description: "Embeddable website chat widget backed by the same event AI flow.",
+    external_id_label: "Widget Key",
+    external_id_placeholder: "public widget key, e.g. retreat-main-site",
+    access_token_label: "",
+    access_token_required: false,
+    config_fields: [
+      {
+        key: "allowed_origin",
+        label: "Allowed Origin",
+        placeholder: "https://example.com",
+        help: "Optional. If set, only this website origin can call the public web chat endpoint.",
+      },
+      {
+        key: "welcome_text",
+        label: "Welcome Text",
+        placeholder: "สวัสดีค่ะ มีอะไรให้ช่วยเกี่ยวกับงานนี้ได้บ้าง",
+        help: "Optional default greeting for the future embedded widget.",
+      },
+      {
+        key: "theme_color",
+        label: "Theme Color",
+        placeholder: "#2563eb",
+        help: "Optional accent color for the future widget UI.",
+      },
+    ],
+    live_messaging_ready: true,
+    notes: [
+      "Public message endpoint is wired in this phase for future embed use.",
+      "Use Allowed Origin to lock the widget to your own website.",
+    ],
+  },
 };
 
 export const ALLOWED_CHANNEL_PLATFORMS = Object.keys(
