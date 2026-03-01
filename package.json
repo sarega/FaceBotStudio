@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "NODE_ENV=production tsx server.ts",
+    "db:migrate": "node --import tsx scripts/db-migrate.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -16,6 +17,7 @@
     "@google/genai": "^1.29.0",
     "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.1.14",
+    "@types/pg": "^8.18.0",
     "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.4.1",
     "clsx": "^2.1.1",
@@ -24,6 +26,7 @@
     "json2csv": "^6.0.0-alpha.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pg": "^8.19.0",
     "puppeteer": "^24.37.5",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",

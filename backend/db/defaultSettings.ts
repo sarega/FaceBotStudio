@@ -1,0 +1,14 @@
+export const DEFAULT_SETTINGS_ENTRIES = {
+  context: "You are a helpful assistant for a Facebook Page. Be polite and professional.",
+  llm_model: process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview",
+  verify_token: "my_secret_verify_token",
+  event_name: "AI Innovation Summit 2026",
+  event_location: "Grand Ballroom, Tech Plaza",
+  event_map_url: "https://maps.app.goo.gl/example",
+  event_date: "2026-05-15T09:00",
+  event_description: "A gathering of AI enthusiasts and experts.",
+  event_travel: "Take the SkyTrain to Tech Station, Exit 3.",
+  reg_limit: "200",
+  reg_start: "2026-02-01T00:00",
+  reg_end: "2026-05-01T23:59",
+} as const;

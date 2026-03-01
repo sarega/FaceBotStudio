@@ -1,6 +1,5 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
 import QRCode from "qrcode";
@@ -9,6 +8,12 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
+import {
+  createAppDatabase,
+  type RegistrationInput,
+  type RegistrationRow,
+  type RegistrationStatus,
+} from "./backend/db/index";
 
 dotenv.config();
 
@@ -16,49 +21,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview";
-const DB_PATH = process.env.DB_PATH || "bot.db";
-
-const db = new Database(DB_PATH);
-
-// Initialize DB
-db.exec(`
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  );
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sender_id TEXT,
-    text TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    type TEXT
-  );
-  CREATE TABLE IF NOT EXISTS registrations (
-    id TEXT PRIMARY KEY,
-    sender_id TEXT,
-    first_name TEXT,
-    last_name TEXT,
-    phone TEXT,
-    email TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'registered'
-  );
-`);
-
-// Default settings
-const insertSetting = db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
-insertSetting.run("context", "You are a helpful assistant for a Facebook Page. Be polite and professional.");
-insertSetting.run("llm_model", DEFAULT_OPENROUTER_MODEL);
-insertSetting.run("verify_token", "my_secret_verify_token");
-insertSetting.run("event_name", "AI Innovation Summit 2026");
-insertSetting.run("event_location", "Grand Ballroom, Tech Plaza");
-insertSetting.run("event_map_url", "https://maps.app.goo.gl/example");
-insertSetting.run("event_date", "2026-05-15T09:00");
-insertSetting.run("event_description", "A gathering of AI enthusiasts and experts.");
-insertSetting.run("event_travel", "Take the SkyTrain to Tech Station, Exit 3.");
-insertSetting.run("reg_limit", "200");
-insertSetting.run("reg_start", "2026-02-01T00:00");
-insertSetting.run("reg_end", "2026-05-01T23:59");
+const appDb = createAppDatabase();
 
 type ChatPart = {
   text?: string;
@@ -87,17 +50,6 @@ type NormalizedChatResponse = {
   meta?: {
     model?: string;
   };
-};
-
-type RegistrationRow = {
-  id: string;
-  sender_id: string;
-  first_name: string;
-  last_name: string;
-  phone: string;
-  email: string;
-  timestamp: string;
-  status: string;
 };
 
 type ToolExecutionBundle = {
@@ -306,20 +258,16 @@ function adminBasicAuth(req: any, res: any, next: any) {
   return res.status(401).send("Invalid credentials.");
 }
 
-function getSettingsMap() {
-  const rows = db.prepare("SELECT * FROM settings").all() as Array<{ key: string; value: string }>;
-  return rows.reduce((acc, row) => {
-    acc[row.key] = row.value;
-    return acc;
-  }, {} as Record<string, string>);
+async function getSettingsMap() {
+  return appDb.getSettingsMap();
 }
 
-function getRegistrationById(id: string) {
-  return db.prepare("SELECT * FROM registrations WHERE id = ?").get(id) as RegistrationRow | undefined;
+async function getRegistrationById(id: string) {
+  return appDb.getRegistrationById(id);
 }
 
-function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing") {
-  db.prepare("INSERT INTO messages (sender_id, text, type) VALUES (?, ?, ?)").run(senderId, text, type);
+async function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing") {
+  await appDb.saveMessage(senderId, text, type);
 }
 
 function formatTicketDate(value: string) {
@@ -736,10 +684,8 @@ function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>,
 </svg>`;
 }
 
-function getMessageHistoryForSender(senderId: string, limit = 12): ChatHistoryMessage[] {
-  const rows = db.prepare(
-    "SELECT text, type FROM messages WHERE sender_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
-  ).all(senderId, limit) as Array<{ text: string; type: string }>;
+async function getMessageHistoryForSender(senderId: string, limit = 12): Promise<ChatHistoryMessage[]> {
+  const rows = await appDb.getMessageHistoryRows(senderId, limit);
 
   return rows
     .reverse()
@@ -749,64 +695,12 @@ function getMessageHistoryForSender(senderId: string, limit = 12): ChatHistoryMe
     }));
 }
 
-function createRegistration(input: {
-  sender_id: string;
-  first_name: unknown;
-  last_name: unknown;
-  phone: unknown;
-  email?: unknown;
-}) {
-  const senderId = String(input.sender_id || "").trim();
-  const firstName = String(input.first_name || "").trim();
-  const lastName = String(input.last_name || "").trim();
-  const phone = String(input.phone || "").trim();
-  const email = input.email == null ? "" : String(input.email).trim();
-
-  if (!senderId || !firstName || !lastName || !phone) {
-    return { statusCode: 400, content: { error: "Missing required registration fields" } };
-  }
-
-  const countRow = db.prepare("SELECT COUNT(*) as count FROM registrations WHERE status != 'cancelled'").get() as any;
-  const limitRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_limit'").get() as any;
-  const limit = parseInt(limitRow?.value || "200");
-
-  if (countRow.count >= limit) {
-    return { statusCode: 400, content: { error: "Registration limit reached" } };
-  }
-
-  const startRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_start'").get() as any;
-  const endRow = db.prepare("SELECT value FROM settings WHERE key = 'reg_end'").get() as any;
-  const now = new Date();
-  const start = new Date(startRow?.value);
-  const end = new Date(endRow?.value);
-
-  if (!Number.isNaN(start.getTime()) && now < start) {
-    return { statusCode: 400, content: { error: "Registration has not started yet" } };
-  }
-  if (!Number.isNaN(end.getTime()) && now > end) {
-    return { statusCode: 400, content: { error: "Registration has closed" } };
-  }
-
-  const id = "REG-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-  db.prepare(`
-    INSERT INTO registrations (id, sender_id, first_name, last_name, phone, email)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, senderId, firstName, lastName, phone, email);
-
-  return { statusCode: 200, content: { id, status: "success" } };
+async function createRegistration(input: RegistrationInput) {
+  return appDb.createRegistration(input);
 }
 
-function cancelRegistration(id: unknown) {
-  const registrationId = String(id || "").trim();
-  if (!registrationId) {
-    return { statusCode: 400, content: { error: "Registration ID is required" } };
-  }
-
-  const result = db.prepare("UPDATE registrations SET status = 'cancelled' WHERE id = ?").run(registrationId);
-  if (result.changes > 0) {
-    return { statusCode: 200, content: { status: "success" } };
-  }
-  return { statusCode: 404, content: { error: "Registration not found" } };
+async function cancelRegistration(id: unknown) {
+  return appDb.cancelRegistration(id);
 }
 
 async function requestOpenRouterChat(
@@ -932,10 +826,10 @@ function getTextFromNormalizedResponse(response: NormalizedChatResponse) {
     .trim();
 }
 
-function buildToolResponseMessages(
+async function buildToolResponseMessages(
   senderId: string,
   calls: Array<{ name: string; args: Record<string, unknown> }>,
-): ToolExecutionBundle {
+): Promise<ToolExecutionBundle> {
   const messages: ChatHistoryMessage[] = [];
   const ticketRegistrationIds: string[] = [];
 
@@ -943,7 +837,7 @@ function buildToolResponseMessages(
     let content: Record<string, unknown>;
 
     if (call.name === "registerUser") {
-      const result = createRegistration({
+      const result = await createRegistration({
         sender_id: senderId,
         first_name: call.args.first_name,
         last_name: call.args.last_name,
@@ -955,7 +849,7 @@ function buildToolResponseMessages(
         ticketRegistrationIds.push(result.content.id);
       }
     } else if (call.name === "cancelRegistration") {
-      const result = cancelRegistration(call.args.registration_id);
+      const result = await cancelRegistration(call.args.registration_id);
       content = result.content;
     } else {
       content = { error: `Unknown tool: ${call.name}` };
@@ -982,15 +876,15 @@ async function generateBotReplyForSender(
   incomingText: string,
   historyOverride?: ChatHistoryMessage[],
 ): Promise<BotReplyResult> {
-  const settings = getSettingsMap();
-  const history = historyOverride || getMessageHistoryForSender(senderId, 12);
+  const settings = await getSettingsMap();
+  const history = historyOverride || await getMessageHistoryForSender(senderId, 12);
 
   const firstResponse = await requestOpenRouterChat(incomingText, history, settings);
   let finalResponse = firstResponse;
   let ticketRegistrationIds: string[] = [];
 
   if (firstResponse.functionCalls && firstResponse.functionCalls.length > 0) {
-    const toolResult = buildToolResponseMessages(senderId, firstResponse.functionCalls);
+    const toolResult = await buildToolResponseMessages(senderId, firstResponse.functionCalls);
     const toolMessages = toolResult.messages;
     ticketRegistrationIds = toolResult.ticketRegistrationIds;
     const assistantMessage: ChatHistoryMessage = {
@@ -1084,8 +978,8 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
 
-  const priorHistory = getMessageHistoryForSender(senderId, 12);
-  saveMessage(senderId, trimmed, "incoming");
+  const priorHistory = await getMessageHistoryForSender(senderId, 12);
+  await saveMessage(senderId, trimmed, "incoming");
 
   if (!process.env.PAGE_ACCESS_TOKEN) {
     console.warn("PAGE_ACCESS_TOKEN is not set; skipping outbound Facebook reply");
@@ -1105,19 +999,19 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
 
   if (replyText) {
     await sendFacebookTextMessage(senderId, replyText);
-    saveMessage(senderId, replyText, "outgoing");
+    await saveMessage(senderId, replyText, "outgoing");
   }
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
   let sentTicketArtifact = false;
-  const settings = uniqueTicketIds.length > 0 ? getSettingsMap() : null;
+  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap() : null;
   for (const registrationId of uniqueTicketIds) {
-    const reg = getRegistrationById(registrationId);
+    const reg = await getRegistrationById(registrationId);
     if (reg && settings) {
       const ticketSummaryText = buildTicketSummaryText(reg, settings);
       try {
         await sendFacebookTextMessage(senderId, ticketSummaryText);
-        saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing");
+        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing");
       } catch (error) {
         console.error("Failed to send ticket summary text:", error);
       }
@@ -1133,14 +1027,14 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
     try {
       if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
       await sendFacebookImageMessage(senderId, ticketPngUrl);
-      saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing");
+      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing");
       sentTicketArtifact = true;
     } catch (error) {
       console.error("Failed to send PNG ticket image:", error);
       try {
         if (!ticketSvgUrl) throw new Error("SVG ticket URL is not available");
         await sendFacebookImageMessage(senderId, ticketSvgUrl);
-        saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing");
+        await saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing");
         sentTicketArtifact = true;
       } catch (svgError) {
         console.error("Failed to send SVG ticket image fallback:", svgError);
@@ -1148,7 +1042,7 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
           const textUrl = ticketPngUrl || ticketSvgUrl;
           if (!textUrl) throw new Error("No ticket URL available");
           await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`);
-          saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing");
+          await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing");
           sentTicketArtifact = true;
         } catch (fallbackError) {
           console.error("Failed to send ticket link fallback:", fallbackError);
@@ -1162,7 +1056,7 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
     if (mapUrl) {
       try {
         await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`);
-        saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing");
+        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing");
       } catch (error) {
         console.error("Failed to send map link:", error);
       }
@@ -1171,6 +1065,8 @@ async function handleIncomingFacebookText(senderId: string, text: string) {
 }
 
 async function startServer() {
+  await appDb.initialize();
+
   const app = express();
   app.use(express.json());
   app.use(express.static(path.join(__dirname, "public")));
@@ -1179,22 +1075,28 @@ async function startServer() {
   const PORT = Number(process.env.PORT || 3000);
 
   // API Routes
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", time: new Date().toISOString() });
+  app.get("/api/health", async (_req, res) => {
+    try {
+      await appDb.ping();
+      res.json({ status: "ok", time: new Date().toISOString(), database: appDb.driver });
+    } catch (error) {
+      console.error("Health check failed:", error);
+      res.status(500).json({ status: "error", time: new Date().toISOString(), database: appDb.driver });
+    }
   });
 
-  app.get("/api/registrations", (req, res) => {
+  app.get("/api/registrations", async (_req, res) => {
     try {
-      const rows = db.prepare("SELECT * FROM registrations ORDER BY timestamp DESC").all();
+      const rows = await appDb.listRegistrations();
       res.json(rows);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch registrations" });
     }
   });
 
-  app.post("/api/registrations", (req, res) => {
+  app.post("/api/registrations", async (req, res) => {
     try {
-      const result = createRegistration(req.body || {});
+      const result = await createRegistration(req.body || {});
       res.status(result.statusCode).json(result.content);
     } catch (error) {
       console.error(error);
@@ -1202,11 +1104,11 @@ async function startServer() {
     }
   });
 
-  app.post("/api/registrations/checkin", (req, res) => {
+  app.post("/api/registrations/checkin", async (req, res) => {
     try {
       const { id } = req.body;
-      const result = db.prepare("UPDATE registrations SET status = 'checked-in' WHERE id = ? AND status != 'cancelled'").run(id);
-      if (result.changes > 0) {
+      const updated = await appDb.checkInRegistration(id);
+      if (updated) {
         res.json({ status: "success" });
       } else {
         res.status(404).json({ error: "Registration not found or already cancelled" });
@@ -1216,16 +1118,16 @@ async function startServer() {
     }
   });
 
-  app.post("/api/registrations/cancel", (req, res) => {
+  app.post("/api/registrations/cancel", async (req, res) => {
     try {
-      const result = cancelRegistration(req.body?.id);
+      const result = await cancelRegistration(req.body?.id);
       res.status(result.statusCode).json(result.content);
     } catch (error) {
       res.status(500).json({ error: "Failed to cancel registration" });
     }
   });
 
-  app.post("/api/registrations/status", (req, res) => {
+  app.post("/api/registrations/status", async (req, res) => {
     try {
       const id = String(req.body?.id || "").trim().toUpperCase();
       const status = String(req.body?.status || "").trim();
@@ -1235,8 +1137,8 @@ async function startServer() {
         return res.status(400).json({ error: "Invalid registration ID or status" });
       }
 
-      const result = db.prepare("UPDATE registrations SET status = ? WHERE id = ?").run(status, id);
-      if (result.changes > 0) {
+      const updated = await appDb.updateRegistrationStatus(id, status as RegistrationStatus);
+      if (updated) {
         return res.json({ status: "success", id, registration_status: status });
       }
 
@@ -1247,11 +1149,10 @@ async function startServer() {
     }
   });
 
-  app.get("/api/registrations/export", (req, res) => {
+  app.get("/api/registrations/export", async (_req, res) => {
     try {
-      const rows = db.prepare("SELECT * FROM registrations").all();
-      const eventNameRow = db.prepare("SELECT value FROM settings WHERE key = 'event_name'").get() as any;
-      const eventName = eventNameRow?.value || "event";
+      const rows = await appDb.exportRegistrations();
+      const eventName = (await appDb.getSettingValue("event_name")) || "event";
       
       // Create a short slug for the filename
       const slug = eventName
@@ -1285,12 +1186,12 @@ async function startServer() {
         return res.status(400).send("Missing registration ID");
       }
 
-      const reg = getRegistrationById(registrationId);
+      const reg = await getRegistrationById(registrationId);
       if (!reg) {
         return res.status(404).send("Ticket not found");
       }
 
-      const settings = getSettingsMap();
+      const settings = await getSettingsMap();
       const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
       let png: Buffer;
 
@@ -1318,12 +1219,12 @@ async function startServer() {
         return res.status(400).send("Missing registration ID");
       }
 
-      const reg = getRegistrationById(registrationId);
+      const reg = await getRegistrationById(registrationId);
       if (!reg) {
         return res.status(404).send("Ticket not found");
       }
 
-      const settings = getSettingsMap();
+      const settings = await getSettingsMap();
       const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
       const svg = renderTicketSvg(reg, settings, qrDataUrl);
 
@@ -1336,32 +1237,29 @@ async function startServer() {
     }
   });
 
-  app.get("/api/settings", (req, res) => {
+  app.get("/api/settings", async (_req, res) => {
     try {
-      res.json(getSettingsMap());
+      res.json(await getSettingsMap());
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
   });
 
-  app.post("/api/settings", (req, res) => {
+  app.post("/api/settings", async (req, res) => {
     try {
-      const body = req.body;
-      const stmt = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
-      
-      Object.entries(body).forEach(([key, value]) => {
-        stmt.run(key, String(value));
-      });
-      
+      const body = Object.fromEntries(
+        Object.entries(req.body || {}).map(([key, value]) => [key, String(value)]),
+      ) as Record<string, string>;
+      await appDb.upsertSettings(body);
       res.json({ status: "ok" });
     } catch (error) {
       res.status(500).json({ error: "Failed to update settings" });
     }
   });
 
-  app.get("/api/messages", (req, res) => {
+  app.get("/api/messages", async (_req, res) => {
     try {
-      const messages = db.prepare("SELECT * FROM messages ORDER BY timestamp DESC LIMIT 100").all();
+      const messages = await appDb.listMessages(100);
       res.json(messages);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch messages" });
@@ -1422,22 +1320,26 @@ async function startServer() {
 
   // Facebook Webhook Verification
   app.get("/api/webhook", (req, res) => {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
+    void (async () => {
+      const mode = req.query["hub.mode"];
+      const token = req.query["hub.verify_token"];
+      const challenge = req.query["hub.challenge"];
+      const verifyToken = await appDb.getSettingValue("verify_token");
 
-    const verifyTokenRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("verify_token") as any;
-
-    if (mode && token) {
-      if (mode === "subscribe" && token === verifyTokenRow?.value) {
-        console.log("WEBHOOK_VERIFIED");
-        res.status(200).send(challenge);
+      if (mode && token) {
+        if (mode === "subscribe" && token === verifyToken) {
+          console.log("WEBHOOK_VERIFIED");
+          res.status(200).send(challenge);
+        } else {
+          res.sendStatus(403);
+        }
       } else {
-        res.sendStatus(403);
+        res.sendStatus(400);
       }
-    } else {
-      res.sendStatus(400);
-    }
+    })().catch((error) => {
+      console.error("Webhook verification lookup failed:", error);
+      res.sendStatus(500);
+    });
   });
 
   // Facebook Webhook Event Handling
