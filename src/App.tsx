@@ -432,6 +432,9 @@ export default function App() {
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const selectedDocumentForChunks = documents.find((document) => document.id === selectedDocumentForChunksId) || null;
+  const registeredCount = registrations.filter((reg) => reg.status === "registered").length;
+  const cancelledCount = registrations.filter((reg) => reg.status === "cancelled").length;
+  const checkedInCount = registrations.filter((reg) => reg.status === "checked-in").length;
   const canUseQrScanner =
     typeof window !== "undefined" &&
     typeof navigator !== "undefined" &&
@@ -3207,6 +3210,35 @@ export default function App() {
 
                 <div className="space-y-6">
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                      <div>
+                        <h3 className="text-base font-semibold flex items-center gap-2">
+                          <Activity className="w-4 h-4 text-blue-600" />
+                          Event Stats
+                        </h3>
+                        <p className="text-xs text-slate-500">Live totals for the selected event.</p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 text-slate-600 px-2 py-1 text-[10px] font-bold uppercase tracking-wider">
+                        {registrations.length} total
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
+                        <p className="text-lg font-bold text-blue-700">{registeredCount}</p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Registered</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-lg font-bold text-slate-700">{cancelledCount}</p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Cancelled</p>
+                      </div>
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
+                        <p className="text-lg font-bold text-emerald-700">{checkedInCount}</p>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Checked In</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-3">
                       <div>
                         <h3 className="text-lg font-semibold">Selected Ticket</h3>
@@ -3436,29 +3468,6 @@ export default function App() {
                   </div>
                   )}
 
-                  <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-xl">
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center">
-                        <Activity className="w-6 h-6" />
-                      </div>
-                      <div>
-                        <h4 className="font-bold">Event Stats</h4>
-                        <p className="text-[10px] text-slate-400 uppercase tracking-widest">Live Updates</p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-white/5 rounded-xl p-4 border border-white/10">
-                        <p className="text-2xl font-bold">{registrations.filter(r => r.status !== 'cancelled').length}</p>
-                        <p className="text-[10px] text-slate-400 uppercase font-bold">Active</p>
-                      </div>
-                      <div className="bg-white/5 rounded-xl p-4 border border-white/10">
-                        <p className="text-2xl font-bold text-emerald-400">
-                          {registrations.filter(r => r.status === "checked-in").length}
-                        </p>
-                        <p className="text-[10px] text-slate-400 uppercase font-bold">Checked In</p>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </motion.div>
