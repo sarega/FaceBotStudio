@@ -25,6 +25,7 @@ export interface Settings {
   llm_model: string;
   verify_token: string;
   event_name: string;
+  event_timezone: string;
   event_location: string;
   event_map_url: string;
   event_date: string;

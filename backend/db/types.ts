@@ -109,10 +109,12 @@ export interface AppDatabase {
   listUsers(): Promise<AuthUserRow[]>;
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;
+  setUserActive(userId: string, isActive: boolean): Promise<boolean>;
   createSession(userId: string, tokenHash: string, expiresAt: Date): Promise<void>;
   getSessionWithUser(tokenHash: string): Promise<AuthSessionRow | undefined>;
   touchSession(sessionId: string): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;
+  deleteSessionsForUser(userId: string): Promise<void>;
   deleteExpiredSessions(): Promise<void>;
   updateUserLastLogin(userId: string): Promise<void>;
   recordAuditLog(entry: AuditLogEntryInput): Promise<void>;

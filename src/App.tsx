@@ -53,6 +53,35 @@ type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 
+function normalizeDateTimeLocalValue(value: string | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
+  if (match) {
+    return `${match[1]}T${match[2]}`;
+  }
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const pad = (input: number) => String(input).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function describeRegistrationWindow(settings: Settings) {
+  const now = new Date();
+  const start = settings.reg_start ? new Date(settings.reg_start) : null;
+  const end = settings.reg_end ? new Date(settings.reg_end) : null;
+
+  if (start && !Number.isNaN(start.getTime()) && now < start) {
+    return { status: "not_started", label: "Not Open Yet" };
+  }
+  if (end && !Number.isNaN(end.getTime()) && now > end) {
+    return { status: "closed", label: "Closed" };
+  }
+  return { status: "open", label: "Open" };
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<"design" | "test" | "logs" | "settings" | "registrations">("design");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -66,6 +95,7 @@ export default function App() {
     llm_model: "google/gemini-3-flash-preview",
     verify_token: "",
     event_name: "",
+    event_timezone: "Asia/Bangkok",
     event_location: "",
     event_map_url: "",
     event_date: "",
@@ -115,7 +145,18 @@ export default function App() {
   const canViewLogs = role === "owner" || role === "admin" || role === "operator" || role === "viewer";
   const canManageRegistrations = role === "owner" || role === "admin" || role === "operator" || role === "checker";
   const canChangeRegistrationStatus = role === "owner" || role === "admin" || role === "operator";
-  const canManageUsers = role === "owner";
+  const canManageUsers = role === "owner" || role === "admin";
+  const canChangeRoles = role === "owner" || role === "admin";
+  const canManageTargetRole = (user: AuthUser) => {
+    if (!authUser || user.id === authUser.id || !canChangeRoles) return false;
+    if (authUser.role === "owner") return user.role !== "owner";
+    return user.role === "operator" || user.role === "checker" || user.role === "viewer";
+  };
+  const canManageTargetAccess = (user: AuthUser) => {
+    if (!authUser || user.id === authUser.id || !canManageUsers) return false;
+    if (authUser.role === "owner") return true;
+    return user.role === "operator" || user.role === "checker" || user.role === "viewer";
+  };
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const canUseQrScanner =
@@ -129,6 +170,7 @@ export default function App() {
   const selectedTicketSvgUrl = selectedRegistration
     ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
     : "";
+  const registrationWindowInfo = describeRegistrationWindow(settings);
 
   const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const res = await fetch(input, init);
@@ -286,6 +328,10 @@ export default function App() {
         ...prev,
         ...data,
         llm_model: data.llm_model || prev.llm_model,
+        event_timezone: data.event_timezone || prev.event_timezone,
+        event_date: normalizeDateTimeLocalValue(data.event_date || prev.event_date),
+        reg_start: normalizeDateTimeLocalValue(data.reg_start || prev.reg_start),
+        reg_end: normalizeDateTimeLocalValue(data.reg_end || prev.reg_end),
       }));
     } catch (err) {
       console.error("Failed to fetch settings", err);
@@ -326,15 +372,22 @@ export default function App() {
   const saveSettings = async () => {
     setSaving(true);
     try {
+      const payload: Settings = {
+        ...settings,
+        event_date: normalizeDateTimeLocalValue(settings.event_date),
+        reg_start: normalizeDateTimeLocalValue(settings.reg_start),
+        reg_end: normalizeDateTimeLocalValue(settings.reg_end),
+      };
       const res = await apiFetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.error || "Failed to save settings");
       }
+      setSettings(payload);
       // Show success toast or something
     } catch (err) {
       console.error("Failed to save settings", err);
@@ -692,6 +745,29 @@ export default function App() {
       window.setTimeout(() => setTeamMessage(""), 2500);
     } catch (err) {
       setTeamMessage(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const handleUserAccessToggle = async (userId: string, isActive: boolean) => {
+    setTeamLoading(true);
+    setTeamMessage("");
+    try {
+      const res = await apiFetch(`/api/auth/users/${encodeURIComponent(userId)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: isActive }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to update access");
+      }
+      setTeamMessage(isActive ? "User access restored" : "User access removed");
+      await fetchTeamUsers();
+      window.setTimeout(() => setTeamMessage(""), 2500);
+    } catch (err) {
+      setTeamMessage(err instanceof Error ? err.message : "Failed to update access");
     } finally {
       setTeamLoading(false);
     }
@@ -1411,6 +1487,16 @@ export default function App() {
                       </div>
 
                       <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Time Zone</label>
+                        <input
+                          value={settings.event_timezone}
+                          onChange={(e) => setSettings({ ...settings, event_timezone: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. Asia/Bangkok"
+                        />
+                      </div>
+
+                      <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
                         <input
                           value={settings.event_map_url}
@@ -1453,10 +1539,21 @@ export default function App() {
                   </div>
 
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <h3 className="text-lg font-semibold mb-6 flex items-center gap-2">
-                      <Activity className="w-5 h-5 text-blue-600" />
-                      Registration Rules
-                    </h3>
+                    <div className="flex items-center justify-between gap-3 mb-6">
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Activity className="w-5 h-5 text-blue-600" />
+                        Registration Rules
+                      </h3>
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        registrationWindowInfo.status === "open"
+                          ? "bg-emerald-100 text-emerald-700"
+                          : registrationWindowInfo.status === "not_started"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-rose-100 text-rose-700"
+                      }`}>
+                        {registrationWindowInfo.label}
+                      </span>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max Capacity</label>
@@ -1486,6 +1583,9 @@ export default function App() {
                         />
                       </div>
                     </div>
+                    <p className="mt-4 text-xs text-slate-500">
+                      Saved as local event time in <code>{settings.event_timezone || "Asia/Bangkok"}</code>. This status badge helps verify whether registration should be open right now.
+                    </p>
                   </div>
                 </div>
 
@@ -1618,26 +1718,49 @@ export default function App() {
                                   <p className="text-sm font-semibold">{user.display_name}</p>
                                   <p className="text-xs text-slate-500">{user.username}</p>
                                 </div>
-                                <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700">
-                                  {user.role}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                    user.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+                                  }`}>
+                                    {user.is_active ? "active" : "disabled"}
+                                  </span>
+                                  <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700">
+                                    {user.role}
+                                  </span>
+                                </div>
                               </div>
 
-                              {canManageUsers ? (
+                              {canManageTargetRole(user) ? (
                                 <select
                                   value={user.role}
                                   onChange={(e) => handleUserRoleChange(user.id, e.target.value as UserRole)}
                                   className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  disabled={teamLoading || user.id === authUser?.id}
+                                  disabled={teamLoading}
                                 >
-                                  {MANAGEABLE_ROLES.map((roleOption) => (
+                                  {MANAGEABLE_ROLES.filter((roleOption) => authUser?.role === "owner" || (roleOption !== "owner" && roleOption !== "admin")).map((roleOption) => (
                                     <option key={roleOption} value={roleOption}>
                                       {roleOption}
                                     </option>
                                   ))}
                                 </select>
                               ) : (
-                                <p className="text-xs text-slate-400">Only owners can change roles.</p>
+                                <p className="text-xs text-slate-400">Role change is restricted for this account.</p>
+                              )}
+
+                              {canManageTargetAccess(user) && (
+                                <div className="flex justify-end">
+                                  <button
+                                    onClick={() => handleUserAccessToggle(user.id, !user.is_active)}
+                                    disabled={teamLoading}
+                                    className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
+                                      user.is_active
+                                        ? "bg-rose-50 text-rose-700 hover:bg-rose-100"
+                                        : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                    } disabled:opacity-50`}
+                                  >
+                                    {user.is_active ? "Remove Access" : "Restore Access"}
+                                  </button>
+                                </div>
                               )}
                             </div>
                           ))
@@ -1674,7 +1797,7 @@ export default function App() {
                             onChange={(e) => setNewUserRole(e.target.value as UserRole)}
                             className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                           >
-                            {MANAGEABLE_ROLES.filter((roleOption) => roleOption !== "owner").map((roleOption) => (
+                            {MANAGEABLE_ROLES.filter((roleOption) => roleOption !== "owner" && (role !== "admin" || roleOption !== "admin")).map((roleOption) => (
                               <option key={roleOption} value={roleOption}>
                                 {roleOption}
                               </option>

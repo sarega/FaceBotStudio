@@ -3,6 +3,7 @@ export const DEFAULT_SETTINGS_ENTRIES = {
   llm_model: process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview",
   verify_token: "my_secret_verify_token",
   event_name: "AI Innovation Summit 2026",
+  event_timezone: process.env.EVENT_TIMEZONE || "Asia/Bangkok",
   event_location: "Grand Ballroom, Tech Plaza",
   event_map_url: "https://maps.app.goo.gl/example",
   event_date: "2026-05-15T09:00",

@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { DEFAULT_SETTINGS_ENTRIES } from "./defaultSettings";
 import { hashPassword, normalizeUsername } from "../auth";
+import { getEventState } from "../datetime";
 import type {
   AppDatabase,
   AuditLogEntryInput,
@@ -199,16 +200,12 @@ export class SqliteAppDatabase implements AppDatabase {
       return { statusCode: 400, content: { error: "Registration limit reached" } };
     }
 
-    const startRow = this.db.prepare("SELECT value FROM settings WHERE key = 'reg_start'").get() as { value?: string } | undefined;
-    const endRow = this.db.prepare("SELECT value FROM settings WHERE key = 'reg_end'").get() as { value?: string } | undefined;
-    const now = new Date();
-    const start = new Date(startRow?.value || "");
-    const end = new Date(endRow?.value || "");
-
-    if (!Number.isNaN(start.getTime()) && now < start) {
+    const settings = await this.getSettingsMap();
+    const eventState = getEventState(settings);
+    if (eventState.registrationStatus === "not_started") {
       return { statusCode: 400, content: { error: "Registration has not started yet" } };
     }
-    if (!Number.isNaN(end.getTime()) && now > end) {
+    if (eventState.registrationStatus === "closed") {
       return { statusCode: 400, content: { error: "Registration has closed" } };
     }
 
@@ -338,6 +335,13 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
+  async setUserActive(userId: string, isActive: boolean) {
+    const result = this.db.prepare(
+      "UPDATE users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(isActive ? 1 : 0, String(userId || "").trim());
+    return result.changes > 0;
+  }
+
   async createSession(userId: string, tokenHash: string, expiresAt: Date) {
     this.db.prepare(
       `INSERT INTO sessions (id, user_id, token_hash, expires_at)
@@ -386,6 +390,10 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async deleteSession(tokenHash: string) {
     this.db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(String(tokenHash || "").trim());
+  }
+
+  async deleteSessionsForUser(userId: string) {
+    this.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(String(userId || "").trim());
   }
 
   async deleteExpiredSessions() {

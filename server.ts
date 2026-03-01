@@ -22,6 +22,7 @@ import {
   verifyPassword,
   type UserRole,
 } from "./backend/auth";
+import { formatStoredDateForDisplay, getEventState, normalizeTimeZone } from "./backend/datetime";
 import {
   createAppDatabase,
   type AuthUserRow,
@@ -88,16 +89,21 @@ type AuthenticatedRequest = Request & {
 };
 
 function buildEventInfo(settings: Record<string, any>) {
+  const eventState = getEventState(settings);
   return `
 Current Event Details:
 - Name: ${settings.event_name || ""}
 - Location: ${settings.event_location || ""}
 - Map: ${settings.event_map_url || ""}
-- Date: ${settings.event_date ? new Date(settings.event_date).toLocaleString() : ""}
+- Time Zone: ${eventState.timeZone}
+- Current System Time: ${eventState.nowLabel}
+- Date: ${formatStoredDateForDisplay(settings.event_date || "", eventState.timeZone)}
 - Description: ${settings.event_description || ""}
 - Travel: ${settings.event_travel || ""}
 - Registration Limit: ${settings.reg_limit || ""}
-- Registration Period: ${settings.reg_start ? new Date(settings.reg_start).toLocaleString() : ""} to ${settings.reg_end ? new Date(settings.reg_end).toLocaleString() : ""}
+- Registration Period: ${eventState.startLabel} to ${eventState.endLabel}
+- Registration Status Right Now: ${eventState.registrationStatus}
+- Event Lifecycle Right Now: ${eventState.eventLifecycle}
 `;
 }
 
@@ -105,6 +111,9 @@ function getSystemInstruction(settings: Record<string, any>) {
   return [
     settings.context || "",
     buildEventInfo(settings),
+    "Never guess the current date or time. Use the Current System Time above as the source of truth.",
+    "Respect the Registration Status Right Now field. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
+    "If the event lifecycle is past, explain that the event date has already passed.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
     "Politely ask for any missing information one by one.",
     "If registration fails (e.g. limit reached or period closed), explain why to the user.",
@@ -348,6 +357,22 @@ function requireRoles(allowedRoles: UserRole[]) {
   };
 }
 
+function canManageTargetUser(actor: AuthUserRow, target: AuthUserRow, action: "status" | "role") {
+  if (actor.id === target.id) {
+    return false;
+  }
+
+  if (actor.role === "owner") {
+    return target.role !== "owner";
+  }
+
+  if (actor.role === "admin") {
+    return target.role === "operator" || target.role === "checker" || target.role === "viewer";
+  }
+
+  return false;
+}
+
 async function getSettingsMap() {
   return appDb.getSettingsMap();
 }
@@ -379,10 +404,8 @@ async function recordAudit(
   });
 }
 
-function formatTicketDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value || "-";
-  return date.toLocaleString();
+function formatTicketDate(value: string, timeZone?: string) {
+  return formatStoredDateForDisplay(value, normalizeTimeZone(timeZone));
 }
 
 function buildTicketImageUrl(registrationId: string, format: "svg" | "png" = "png") {
@@ -459,17 +482,12 @@ function buildEmbeddedTicketFontCss() {
 
 function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
   const fontCss = buildEmbeddedTicketFontCss();
+  const timeZone = normalizeTimeZone(settings.event_timezone);
   const eventName = escapeXml(String(settings.event_name || "Event Ticket").trim() || "Event Ticket");
   const attendeeName = escapeXml(`${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-");
   const registrationId = escapeXml(reg.id);
   const location = escapeXml(String(settings.event_location || "-").trim() || "-");
-  const eventDate = escapeXml(
-    (() => {
-      const date = new Date(settings.event_date || "");
-      if (Number.isNaN(date.getTime())) return settings.event_date || "-";
-      return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-    })(),
-  );
+  const eventDate = escapeXml(formatTicketDate(settings.event_date || "", timeZone));
   const qrSrc = escapeXml(qrDataUrl);
 
   return `<!doctype html>
@@ -702,8 +720,9 @@ async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: R
 }
 
 function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, string>) {
+  const timeZone = normalizeTimeZone(settings.event_timezone);
   const fullName = `${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-";
-  const eventDate = formatTicketDate(settings.event_date || "");
+  const eventDate = formatTicketDate(settings.event_date || "", timeZone);
   const location = String(settings.event_location || "-").trim() || "-";
 
   return [
@@ -717,9 +736,10 @@ function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, s
 }
 
 function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
+  const timeZone = normalizeTimeZone(settings.event_timezone);
   const eventNameLines = wrapTextLines(settings.event_name || "Event Ticket", 18, 2).map(escapeXml);
   const locationLines = wrapTextLines(settings.event_location || "-", 18, 2).map(escapeXml);
-  const eventDateLines = wrapTextLines(formatTicketDate(settings.event_date || ""), 18, 2).map(escapeXml);
+  const eventDateLines = wrapTextLines(formatTicketDate(settings.event_date || "", timeZone), 18, 2).map(escapeXml);
   const attendeeName = escapeXml(truncateText(`${reg.first_name} ${reg.last_name}`.trim(), 16));
   const registrationId = escapeXml(reg.id);
 
@@ -1279,7 +1299,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/users", requireRoles(["owner"]), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/auth/users", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const username = normalizeUsername(req.body?.username);
       const password = String(req.body?.password || "");
@@ -1294,6 +1314,12 @@ async function startServer() {
       }
       if (!ALL_USER_ROLES.includes(role)) {
         return res.status(400).json({ error: "Invalid role" });
+      }
+      if (role === "owner") {
+        return res.status(400).json({ error: "Create owners manually in the database only" });
+      }
+      if (req.auth?.user.role === "admin" && role === "admin") {
+        return res.status(403).json({ error: "Admins can only create operator, checker, or viewer accounts" });
       }
 
       const user = await appDb.createUser({
@@ -1314,7 +1340,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/users/:id/role", requireRoles(["owner"]), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/auth/users/:id/role", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const userId = String(req.params.id || "").trim();
       const role = String(req.body?.role || "").trim() as UserRole;
@@ -1322,16 +1348,56 @@ async function startServer() {
         return res.status(400).json({ error: "Invalid user or role" });
       }
 
-      const updated = await appDb.updateUserRole(userId, role);
-      if (!updated) {
+      const targetUser = await appDb.getUserById(userId);
+      if (!targetUser) {
         return res.status(404).json({ error: "User not found" });
       }
+      if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "role")) {
+        return res.status(403).json({ error: "You cannot change this user's role" });
+      }
+      if (req.auth.user.role === "admin" && (role === "owner" || role === "admin")) {
+        return res.status(403).json({ error: "Admins can only assign operator, checker, or viewer roles" });
+      }
+
+      const updated = await appDb.updateUserRole(userId, role);
+      if (!updated) return res.status(404).json({ error: "User not found" });
 
       await recordAudit(req, "auth.role_updated", "user", userId, { role });
       return res.json({ status: "ok" });
     } catch (error) {
       console.error("Failed to update user role:", error);
       return res.status(500).json({ error: "Failed to update user role" });
+    }
+  });
+
+  app.post("/api/auth/users/:id/status", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = String(req.params.id || "").trim();
+      const isActive = Boolean(req.body?.is_active);
+      const targetUser = await appDb.getUserById(userId);
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "status")) {
+        return res.status(403).json({ error: "You cannot change this user's access" });
+      }
+
+      const updated = await appDb.setUserActive(userId, isActive);
+      if (!updated) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (!isActive) {
+        await appDb.deleteSessionsForUser(userId);
+      }
+
+      await recordAudit(req, isActive ? "auth.user_enabled" : "auth.user_disabled", "user", userId, {
+        is_active: isActive,
+        username: targetUser.username,
+      });
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Failed to update user status:", error);
+      return res.status(500).json({ error: "Failed to update user status" });
     }
   });
 

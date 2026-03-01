@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { Pool } from "pg";
 import { hashPassword, normalizeUsername } from "../auth";
+import { getEventState } from "../datetime";
 import { DEFAULT_SETTINGS_ENTRIES } from "./defaultSettings";
 import { runPostgresMigrations } from "./migrate";
 import type {
@@ -158,14 +159,11 @@ export class PostgresAppDatabase implements AppDatabase {
       return { statusCode: 400, content: { error: "Registration limit reached" } };
     }
 
-    const now = new Date();
-    const start = new Date(settings.reg_start || "");
-    const end = new Date(settings.reg_end || "");
-
-    if (!Number.isNaN(start.getTime()) && now < start) {
+    const eventState = getEventState(settings);
+    if (eventState.registrationStatus === "not_started") {
       return { statusCode: 400, content: { error: "Registration has not started yet" } };
     }
-    if (!Number.isNaN(end.getTime()) && now > end) {
+    if (eventState.registrationStatus === "closed") {
       return { statusCode: 400, content: { error: "Registration has closed" } };
     }
 
@@ -317,6 +315,14 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
+  async setUserActive(userId: string, isActive: boolean) {
+    const result = await this.pool.query(
+      "UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+      [isActive, String(userId || "").trim()],
+    );
+    return result.rowCount > 0;
+  }
+
   async createSession(userId: string, tokenHash: string, expiresAt: Date) {
     await this.pool.query(
       `INSERT INTO sessions (id, user_id, token_hash, expires_at)
@@ -368,6 +374,10 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async deleteSession(tokenHash: string) {
     await this.pool.query("DELETE FROM sessions WHERE token_hash = $1", [String(tokenHash || "").trim()]);
+  }
+
+  async deleteSessionsForUser(userId: string) {
+    await this.pool.query("DELETE FROM sessions WHERE user_id = $1", [String(userId || "").trim()]);
   }
 
   async deleteExpiredSessions() {
