@@ -476,6 +476,34 @@ async function getFacebookAccessToken(pageId?: string) {
   return process.env.PAGE_ACCESS_TOKEN || "";
 }
 
+async function getLineChannel(destination?: string) {
+  if (!destination) return null;
+  const channel = await appDb.getChannelAccount("line_oa", destination);
+  if (!channel || channel.is_active === false) {
+    return null;
+  }
+  return channel;
+}
+
+async function getLineAccessToken(destination?: string) {
+  const channel = await getLineChannel(destination);
+  return channel?.access_token || "";
+}
+
+async function getLineChannelSecret(destination?: string) {
+  const channel = await getLineChannel(destination);
+  const config = safeParseChannelConfig(channel?.config_json);
+  return String(config.channel_secret || "").trim();
+}
+
+function verifyLineWebhookSignature(rawBody: Buffer | undefined, providedSignature: string | undefined, channelSecret: string) {
+  if (!rawBody || !providedSignature || !channelSecret) return false;
+  const expected = createHmac("sha256", channelSecret).update(rawBody).digest("base64");
+  const provided = String(providedSignature || "").trim();
+  if (!expected || !provided || expected.length !== provided.length) return false;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+}
+
 async function recordAudit(
   req: AuthenticatedRequest,
   action: string,
@@ -1302,6 +1330,103 @@ async function sendFacebookImageMessage(recipientId: string, imageUrl: string, p
   return payload;
 }
 
+function normalizeLineText(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  return trimmed.length > 4000 ? `${trimmed.slice(0, 3997)}...` : trimmed;
+}
+
+async function sendLineReplyTextMessage(replyToken: string, text: string, destination?: string) {
+  const accessToken = await getLineAccessToken(destination);
+  if (!accessToken) {
+    throw new Error("LINE channel access token is not configured");
+  }
+
+  const response = await fetch("https://api.line.me/v2/bot/message/reply", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      replyToken,
+      messages: [
+        {
+          type: "text",
+          text: normalizeLineText(text),
+        },
+      ],
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.message || "Failed to send LINE reply");
+  }
+  return payload;
+}
+
+async function sendLinePushTextMessage(recipientId: string, text: string, destination?: string) {
+  const accessToken = await getLineAccessToken(destination);
+  if (!accessToken) {
+    throw new Error("LINE channel access token is not configured");
+  }
+
+  const response = await fetch("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      to: recipientId,
+      messages: [
+        {
+          type: "text",
+          text: normalizeLineText(text),
+        },
+      ],
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.message || "Failed to send LINE push");
+  }
+  return payload;
+}
+
+async function sendLinePushImageMessage(recipientId: string, imageUrl: string, destination?: string) {
+  const accessToken = await getLineAccessToken(destination);
+  if (!accessToken) {
+    throw new Error("LINE channel access token is not configured");
+  }
+
+  const response = await fetch("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      to: recipientId,
+      messages: [
+        {
+          type: "image",
+          originalContentUrl: imageUrl,
+          previewImageUrl: imageUrl,
+        },
+      ],
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.message || "Failed to send LINE image");
+  }
+  return payload;
+}
+
 async function handleIncomingFacebookText(senderId: string, text: string, pageId?: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
@@ -1398,6 +1523,102 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
   }
 }
 
+async function handleIncomingLineText(senderId: string, text: string, destination: string, replyToken?: string) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+
+  const resolvedEventId = await appDb.resolveEventIdForChannel("line_oa", destination);
+  if (!resolvedEventId) {
+    console.warn(`No active event mapping found for LINE destination ${destination}; skipping automated reply`);
+    return;
+  }
+  const eventId = resolvedEventId;
+  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, destination);
+
+  if (!(await getLineAccessToken(destination))) {
+    console.warn(`LINE access token is unavailable for destination ${destination}; skipping outbound reply`);
+    return;
+  }
+
+  let replyText = "";
+  let ticketRegistrationIds: string[] = [];
+  try {
+    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    replyText = result.text;
+    ticketRegistrationIds = result.ticketRegistrationIds;
+  } catch (error) {
+    console.error("Failed to generate LINE bot reply:", error);
+    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+  }
+
+  if (replyText) {
+    try {
+      if (replyToken) {
+        await sendLineReplyTextMessage(replyToken, replyText, destination);
+      } else {
+        await sendLinePushTextMessage(senderId, replyText, destination);
+      }
+      await saveMessage(senderId, replyText, "outgoing", eventId, destination);
+    } catch (error) {
+      console.error("Failed to send LINE reply text:", error);
+    }
+  }
+
+  const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
+  let sentTicketArtifact = false;
+  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap(eventId) : null;
+  for (const registrationId of uniqueTicketIds) {
+    const reg = await getRegistrationById(registrationId);
+    if (reg && settings) {
+      const ticketSummaryText = buildTicketSummaryText(reg, settings);
+      try {
+        await sendLinePushTextMessage(senderId, ticketSummaryText, destination);
+        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, destination);
+      } catch (error) {
+        console.error("Failed to send LINE ticket summary:", error);
+      }
+    }
+
+    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    if (!ticketPngUrl && !ticketSvgUrl) {
+      console.warn("APP_URL is not set; skipping LINE ticket image send");
+      continue;
+    }
+
+    try {
+      if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
+      await sendLinePushImageMessage(senderId, ticketPngUrl, destination);
+      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, destination);
+      sentTicketArtifact = true;
+    } catch (error) {
+      console.error("Failed to send LINE PNG ticket image:", error);
+      try {
+        const textUrl = ticketPngUrl || ticketSvgUrl;
+        if (!textUrl) throw new Error("No ticket URL available");
+        await sendLinePushTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, destination);
+        await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, destination);
+        sentTicketArtifact = true;
+      } catch (fallbackError) {
+        console.error("Failed to send LINE ticket link fallback:", fallbackError);
+      }
+    }
+  }
+
+  if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
+    const mapUrl = String(settings?.event_map_url || "").trim();
+    if (mapUrl) {
+      try {
+        await sendLinePushTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, destination);
+        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, destination);
+      } catch (error) {
+        console.error("Failed to send LINE map link:", error);
+      }
+    }
+  }
+}
+
 function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | null {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
@@ -1415,6 +1636,27 @@ function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | nu
     text,
     messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
     eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
+  };
+}
+
+function normalizeLineTextEvent(event: any, destination: string) {
+  const senderId = String(event?.source?.userId || "").trim();
+  const text = String(event?.message?.text || "").trim();
+  const replyToken = String(event?.replyToken || "").trim();
+  const messageType = String(event?.message?.type || "").trim();
+  const eventType = String(event?.type || "").trim();
+
+  if (!senderId || !destination || !text || eventType !== "message" || messageType !== "text") {
+    return null;
+  }
+
+  return {
+    senderId,
+    destination,
+    replyToken: replyToken || undefined,
+    text,
+    eventTimestamp: Number(event?.timestamp || Date.now()),
+    webhookEventId: String(event?.webhookEventId || event?.message?.id || "").trim(),
   };
 }
 
@@ -1517,6 +1759,13 @@ async function startServer() {
     max: 240,
     keyFn: (req) => getRequestIp(req) || "unknown",
     errorMessage: "Too many webhook requests. Please retry later.",
+  });
+  const lineWebhookRateLimit = createRateLimitMiddleware({
+    name: "line-webhook",
+    windowMs: 60 * 1000,
+    max: 240,
+    keyFn: (req) => getRequestIp(req) || "unknown",
+    errorMessage: "Too many LINE webhook requests. Please retry later.",
   });
 
   // API Routes
@@ -2560,6 +2809,50 @@ async function startServer() {
         }
       }
     })();
+  });
+
+  app.post("/api/webhook/line", lineWebhookRateLimit, async (req: RawBodyRequest, res) => {
+    try {
+      const destination = String(req.body?.destination || "").trim();
+      if (!destination) {
+        return res.sendStatus(404);
+      }
+
+      const channel = await getLineChannel(destination);
+      if (!channel) {
+        return res.sendStatus(404);
+      }
+
+      const signature = typeof req.headers["x-line-signature"] === "string" ? req.headers["x-line-signature"] : "";
+      const channelSecret = await getLineChannelSecret(destination);
+      if (!verifyLineWebhookSignature(req.rawBody, signature, channelSecret)) {
+        console.warn("Rejected LINE webhook due to invalid signature");
+        return res.sendStatus(401);
+      }
+
+      res.status(200).json({ status: "ok" });
+
+      const events = Array.isArray(req.body?.events) ? req.body.events : [];
+      void (async () => {
+        for (const webhookEvent of events) {
+          try {
+            const normalized = normalizeLineTextEvent(webhookEvent, destination);
+            if (!normalized) continue;
+            await handleIncomingLineText(
+              normalized.senderId,
+              normalized.text,
+              normalized.destination,
+              normalized.replyToken,
+            );
+          } catch (error) {
+            console.error("Failed to handle incoming LINE message:", error);
+          }
+        }
+      })();
+    } catch (error) {
+      console.error("LINE webhook handler failed:", error);
+      return res.sendStatus(500);
+    }
   });
 
   // Vite middleware for development

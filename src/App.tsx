@@ -1731,6 +1731,7 @@ export default function App() {
 
   const appUrl = process.env.APP_URL || window.location.origin;
   const webhookUrl = `${appUrl}/api/webhook`;
+  const lineWebhookUrl = `${appUrl}/api/webhook/line`;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
@@ -3604,7 +3605,7 @@ export default function App() {
                         </p>
                       )}
                       <p className="text-xs text-slate-500">
-                        Facebook is still the only platform wired into live messaging right now. LINE OA, Instagram, WhatsApp, and Telegram in this screen are now structured with platform-specific setup fields so their adapters can be added without moving event content out of the event workspace.
+                        Facebook and LINE OA are the only platforms wired into webhook/reply flow right now. Instagram, WhatsApp, and Telegram in this screen are config-ready but still waiting on their live adapters.
                       </p>
                     </div>
                   </div>
@@ -3631,7 +3632,8 @@ export default function App() {
                       </p>
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
                         <p><span className="font-semibold text-slate-800">Current</span>: Facebook Page routing with optional page-level access token.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: platform-specific channel setup fields now exist for LINE OA, Instagram, WhatsApp, and Telegram.</p>
+                        <p><span className="font-semibold text-slate-800">Current</span>: LINE OA webhook + reply groundwork is now wired in, using channel access token and channel secret from the selected event mapping.</p>
+                        <p><span className="font-semibold text-slate-800">Current</span>: platform-specific channel setup fields now exist for Instagram, WhatsApp, and Telegram.</p>
                         <p><span className="font-semibold text-slate-800">Next</span>: wire live adapters one platform at a time without moving event context out of the event workspace.</p>
                         <p><span className="font-semibold text-slate-800">Current</span>: documents and knowledge stay attached to the event, not to individual pages, so one event can answer consistently across channels.</p>
                       </div>
@@ -3648,7 +3650,7 @@ export default function App() {
                     </h3>
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Callback URL</label>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Facebook Callback URL</label>
                         <div className="flex gap-2">
                           <input
                             readOnly
@@ -3662,6 +3664,25 @@ export default function App() {
                             {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
                           </button>
                         </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">LINE Callback URL</label>
+                        <div className="flex gap-2">
+                          <input
+                            readOnly
+                            value={lineWebhookUrl}
+                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
+                          />
+                          <button
+                            onClick={() => copyToClipboard(lineWebhookUrl)}
+                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
+                          >
+                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
+                          </button>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          For LINE OA, save `Channel Access Token` as the channel access token, and put `Channel Secret` in the platform-specific config fields under Channels.
+                        </p>
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Verify Token</label>

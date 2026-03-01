@@ -64,9 +64,9 @@ export const CHANNEL_PLATFORM_DEFINITIONS: Record<ChannelPlatform, ChannelPlatfo
         secret: true,
       },
     ],
-    live_messaging_ready: false,
+    live_messaging_ready: true,
     notes: [
-      "Groundwork only in this phase. Not yet wired into live webhook/send flow.",
+      "Webhook verification and outbound reply groundwork are wired in this phase.",
       "Keep both access token and channel secret server-side.",
     ],
   },
