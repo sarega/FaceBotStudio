@@ -11,6 +11,7 @@ import { createRequire } from "module";
 import dotenv from "dotenv";
 import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
+import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup, buildLineWebhookDedupKey, canUseLineWebhookQueue, type LineInboundJob } from "./backend/runtime/lineQueue";
 import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
 import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
@@ -1562,6 +1563,14 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
       await saveMessage(senderId, replyText, "outgoing", eventId, destination);
     } catch (error) {
       console.error("Failed to send LINE reply text:", error);
+      if (replyToken) {
+        try {
+          await sendLinePushTextMessage(senderId, replyText, destination);
+          await saveMessage(senderId, replyText, "outgoing", eventId, destination);
+        } catch (pushError) {
+          console.error("Failed to send LINE push fallback text:", pushError);
+        }
+      }
     }
   }
 
@@ -1651,17 +1660,22 @@ function normalizeLineTextEvent(event: any, destination: string) {
   }
 
   return {
+    dedupKey: buildLineWebhookDedupKey(event, destination),
     senderId,
     destination,
-    replyToken: replyToken || undefined,
+    replyToken: replyToken || null,
     text,
     eventTimestamp: Number(event?.timestamp || Date.now()),
-    webhookEventId: String(event?.webhookEventId || event?.message?.id || "").trim(),
-  };
+    webhookEventId: String(event?.webhookEventId || event?.message?.id || "").trim() || null,
+  } satisfies LineInboundJob;
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
   await handleIncomingFacebookText(job.senderId, job.text, job.pageId || undefined);
+}
+
+async function processLineInboundJob(job: LineInboundJob) {
+  await handleIncomingLineText(job.senderId, job.text, job.destination, job.replyToken || undefined);
 }
 
 async function processEmbeddingJob(job: EmbeddingJob) {
@@ -1727,6 +1741,7 @@ async function startServer() {
 
   if (RUN_EMBEDDED_WORKER) {
     await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true });
+    await startEmbeddedLineWorker(processLineInboundJob, { enabled: true });
     await startEmbeddedEmbeddingWorker(processEmbeddingJob, { enabled: true });
   }
 
@@ -1779,6 +1794,7 @@ async function startServer() {
         database: appDb.driver,
         runtime: APP_RUNTIME || "all",
         queue: canUseFacebookWebhookQueue() ? "redis" : "inline",
+        line_queue: canUseLineWebhookQueue() ? "redis" : "inline",
         embedding_queue: canUseEmbeddingQueue() ? "redis" : "inline",
         redis: redis.configured ? (redis.healthy ? "ok" : "error") : "disabled",
       });
@@ -2838,12 +2854,20 @@ async function startServer() {
           try {
             const normalized = normalizeLineTextEvent(webhookEvent, destination);
             if (!normalized) continue;
-            await handleIncomingLineText(
-              normalized.senderId,
-              normalized.text,
-              normalized.destination,
-              normalized.replyToken,
-            );
+            const acquired = await acquireLineWebhookDedup(normalized.dedupKey);
+            if (!acquired) {
+              console.log("Skipped duplicate LINE webhook event:", normalized.dedupKey);
+              continue;
+            }
+
+            if (canUseLineWebhookQueue()) {
+              const queued = await enqueueLineInboundJob(normalized);
+              if (queued) {
+                continue;
+              }
+            }
+
+            await processLineInboundJob(normalized);
           } catch (error) {
             console.error("Failed to handle incoming LINE message:", error);
           }
