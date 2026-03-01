@@ -30,7 +30,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, EventRecord, EventStatus, FacebookPageRecord, Message, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventRecord, EventStatus, Message, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -145,7 +145,7 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
-  const [pages, setPages] = useState<FacebookPageRecord[]>([]);
+  const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [eventLoading, setEventLoading] = useState(false);
   const [eventMessage, setEventMessage] = useState("");
@@ -154,6 +154,7 @@ export default function App() {
   const [newPageId, setNewPageId] = useState("");
   const [newPageName, setNewPageName] = useState("");
   const [newPageAccessToken, setNewPageAccessToken] = useState("");
+  const [newChannelPlatform, setNewChannelPlatform] = useState<ChannelPlatform>("facebook");
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [teamLoading, setTeamLoading] = useState(false);
   const [teamMessage, setTeamMessage] = useState("");
@@ -218,7 +219,7 @@ export default function App() {
     : "";
   const registrationWindowInfo = describeRegistrationWindow(settings);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
-  const selectedEventPages = pages.filter((page) => page.event_id === selectedEventId);
+  const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
   const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
   const closedEvents = events.filter((event) => event.effective_status === "closed");
   const cancelledEvents = events.filter((event) => event.effective_status === "cancelled");
@@ -273,19 +274,19 @@ export default function App() {
     }
   };
 
-  const fetchFacebookPages = async () => {
+  const fetchChannels = async () => {
     try {
-      const res = await apiFetch("/api/facebook-pages");
+      const res = await apiFetch("/api/channels");
       const data = await res.json().catch(() => ([]));
       if (!res.ok) {
-        throw new Error(data?.error || "Failed to fetch Facebook pages");
+        throw new Error(data?.error || "Failed to fetch channels");
       }
-      const rows = Array.isArray(data) ? data as FacebookPageRecord[] : [];
-      setPages(rows);
+      const rows = Array.isArray(data) ? data as ChannelAccountRecord[] : [];
+      setChannels(rows);
       return rows;
     } catch (err) {
-      console.error("Failed to fetch Facebook pages", err);
-      setEventMessage(err instanceof Error ? err.message : "Failed to fetch Facebook pages");
+      console.error("Failed to fetch channels", err);
+      setEventMessage(err instanceof Error ? err.message : "Failed to fetch channels");
       return [];
     }
   };
@@ -317,7 +318,7 @@ export default function App() {
     try {
       const [eventRows] = await Promise.all([
         fetchEvents(),
-        fetchFacebookPages(),
+        fetchChannels(),
         role === "owner" || role === "admin" ? fetchTeamUsers() : Promise.resolve(),
       ]);
       if (!eventRows.length) {
@@ -844,7 +845,7 @@ export default function App() {
       setRegistrations([]);
       setTeamUsers([]);
       setEvents([]);
-      setPages([]);
+      setChannels([]);
       setSelectedEventId("");
       setEventMessage("");
       setLoading(false);
@@ -869,7 +870,7 @@ export default function App() {
       }
       setNewEventName("");
       await fetchEvents();
-      await fetchFacebookPages();
+      await fetchChannels();
       if (data?.id) {
         setSelectedEventId(String(data.id));
       }
@@ -915,44 +916,47 @@ export default function App() {
     }
   };
 
-  const handleSaveFacebookPage = async (page?: FacebookPageRecord) => {
+  const handleSaveChannel = async (channel?: ChannelAccountRecord) => {
     if (!selectedEventId) return;
-    const pageId = (page ? page.page_id : newPageId).trim();
-    const pageName = (page ? page.page_name : newPageName).trim();
-    const pageAccessToken = page ? "" : newPageAccessToken.trim();
-    if (!pageId) {
-      setEventMessage("Facebook Page ID is required");
+    const platform = channel ? channel.platform : newChannelPlatform;
+    const externalId = (channel ? channel.external_id : newPageId).trim();
+    const displayName = (channel ? channel.display_name : newPageName).trim();
+    const accessToken = channel ? "" : newPageAccessToken.trim();
+    if (!externalId) {
+      setEventMessage("Channel external ID is required");
       return;
     }
 
     setEventLoading(true);
     setEventMessage("");
     try {
-      const res = await apiFetch("/api/facebook-pages", {
+      const res = await apiFetch("/api/channels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          page_id: pageId,
-          page_name: pageName || pageId,
+          platform,
+          external_id: externalId,
+          display_name: displayName || externalId,
           event_id: selectedEventId,
-          page_access_token: pageAccessToken,
-          is_active: page ? !page.is_active : true,
+          access_token: accessToken,
+          is_active: channel ? !channel.is_active : true,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data?.error || "Failed to save Facebook page");
+        throw new Error(data?.error || "Failed to save channel");
       }
-      if (!page) {
+      if (!channel) {
         setNewPageId("");
         setNewPageName("");
         setNewPageAccessToken("");
+        setNewChannelPlatform("facebook");
       }
-      await fetchFacebookPages();
-      setEventMessage(page ? `Page ${page.is_active ? "disabled" : "enabled"}` : "Facebook page linked");
+      await fetchChannels();
+      setEventMessage(channel ? `Channel ${channel.is_active ? "disabled" : "enabled"}` : "Channel linked");
       window.setTimeout(() => setEventMessage(""), 2500);
     } catch (err) {
-      setEventMessage(err instanceof Error ? err.message : "Failed to save Facebook page");
+      setEventMessage(err instanceof Error ? err.message : "Failed to save channel");
     } finally {
       setEventLoading(false);
     }
@@ -1367,7 +1371,7 @@ export default function App() {
                         <p className="text-sm text-slate-500">Create, switch, and manage the lifecycle of event workspaces.</p>
                       </div>
                       <button
-                        onClick={() => void Promise.all([fetchEvents(), fetchFacebookPages()])}
+                        onClick={() => void Promise.all([fetchEvents(), fetchChannels()])}
                         disabled={eventLoading}
                         className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
                         title="Refresh events"
@@ -2230,43 +2234,48 @@ export default function App() {
                     <div>
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <Link2 className="w-5 h-5 text-blue-600" />
-                        Facebook Page Routing
+                        Channels
                       </h3>
-                      <p className="text-sm text-slate-500">Map each Facebook Page to the selected event so incoming chat lands in the right workspace.</p>
+                      <p className="text-sm text-slate-500">Map channel accounts to the selected event so inbound chat lands in the right workspace.</p>
                     </div>
 
                     <div className="space-y-2">
-                      {selectedEventPages.length === 0 ? (
+                      {selectedEventChannels.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                          No Facebook Pages linked to this event yet.
+                          No channels linked to this event yet.
                         </div>
                       ) : (
-                        selectedEventPages.map((page) => (
-                          <div key={page.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+                        selectedEventChannels.map((channel) => (
+                          <div key={channel.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-2">
                             <div className="flex items-center justify-between gap-3">
                               <div>
-                                <p className="text-sm font-semibold">{page.page_name}</p>
-                                <p className="text-xs font-mono text-slate-500">{page.page_id}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="text-sm font-semibold">{channel.display_name}</p>
+                                  <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-700">
+                                    {channel.platform}
+                                  </span>
+                                </div>
+                                <p className="text-xs font-mono text-slate-500">{channel.external_id}</p>
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                  page.has_page_access_token ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700"
+                                  channel.has_access_token ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700"
                                 }`}>
-                                  {page.has_page_access_token ? "page token" : "env fallback"}
+                                  {channel.has_access_token ? "saved token" : channel.platform === "facebook" ? "env fallback" : "no token"}
                                 </span>
                                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                  page.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+                                  channel.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
                                 }`}>
-                                  {page.is_active ? "active" : "inactive"}
+                                  {channel.is_active ? "active" : "inactive"}
                                 </span>
                               </div>
                             </div>
                             <button
-                              onClick={() => void handleSaveFacebookPage(page)}
+                              onClick={() => void handleSaveChannel(channel)}
                               disabled={eventLoading}
                               className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-50"
                             >
-                              {page.is_active ? "Disable Page Mapping" : "Enable Page Mapping"}
+                              {channel.is_active ? "Disable Channel" : "Enable Channel"}
                             </button>
                           </div>
                         ))
@@ -2274,39 +2283,49 @@ export default function App() {
                     </div>
 
                     <div className="border-t border-slate-100 pt-5 space-y-3">
-                      <p className="text-sm font-semibold">Link Facebook Page to Selected Event</p>
+                      <p className="text-sm font-semibold">Link Channel to Selected Event</p>
+                      <select
+                        value={newChannelPlatform}
+                        onChange={(e) => setNewChannelPlatform(e.target.value as ChannelPlatform)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="facebook">Facebook</option>
+                        <option value="line_oa">LINE OA</option>
+                        <option value="whatsapp">WhatsApp</option>
+                        <option value="telegram">Telegram</option>
+                      </select>
                       <input
                         value={newPageName}
                         onChange={(e) => setNewPageName(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Facebook page name"
+                        placeholder="Channel display name"
                       />
                       <input
                         value={newPageId}
                         onChange={(e) => setNewPageId(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Facebook page ID"
+                        placeholder="Channel external ID"
                       />
                       <input
                         value={newPageAccessToken}
                         onChange={(e) => setNewPageAccessToken(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Page access token (optional, leave blank to use PAGE_ACCESS_TOKEN)"
+                        placeholder="Channel access token (optional for Facebook; future platforms should save their own token)"
                       />
                       <button
-                        onClick={() => void handleSaveFacebookPage()}
+                        onClick={() => void handleSaveChannel()}
                         disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled"}
                         className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
                       >
-                        Link Page to Event
+                        Link Channel to Event
                       </button>
                       {selectedEvent && (selectedEvent.effective_status === "closed" || selectedEvent.effective_status === "cancelled") && (
                         <p className="text-xs text-amber-700">
-                          Closed or cancelled events are read-only for page routing.
+                          Closed or cancelled events are read-only for channel routing.
                         </p>
                       )}
                       <p className="text-xs text-slate-500">
-                        For true multi-page replies, save each page's own access token here. If blank, the app falls back to the global <code>PAGE_ACCESS_TOKEN</code>.
+                        Facebook can still fall back to the global <code>PAGE_ACCESS_TOKEN</code>. Other platforms in this screen are groundwork for future integrations and are not wired into live messaging yet.
                       </p>
                     </div>
                   </div>

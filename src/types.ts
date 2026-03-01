@@ -11,6 +11,7 @@ export interface Message {
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "cancelled";
 export type EventStatus = ManualEventStatus | "closed";
+export type ChannelPlatform = "facebook" | "line_oa" | "whatsapp" | "telegram";
 
 export interface AuthUser {
   id: string;
@@ -43,6 +44,18 @@ export interface FacebookPageRecord {
   event_id: string;
   is_active: boolean;
   has_page_access_token?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelAccountRecord {
+  id: string;
+  platform: ChannelPlatform;
+  external_id: string;
+  display_name: string;
+  event_id: string;
+  is_active: boolean;
+  has_access_token?: boolean;
   created_at: string;
   updated_at: string;
 }

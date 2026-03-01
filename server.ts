@@ -30,6 +30,7 @@ import { formatStoredDateForDisplay, getEventState, normalizeTimeZone } from "./
 import {
   createAppDatabase,
   type AuthUserRow,
+  type ChannelPlatform,
   type RegistrationInput,
   type RegistrationRow,
   type RegistrationStatus,
@@ -442,9 +443,9 @@ async function saveMessage(senderId: string, text: string, type: "incoming" | "o
 
 async function getFacebookAccessToken(pageId?: string) {
   if (pageId) {
-    const page = await appDb.getFacebookPageByPageId(pageId);
-    if (page?.page_access_token) {
-      return page.page_access_token;
+    const channel = await appDb.getChannelAccount("facebook", pageId);
+    if (channel?.access_token) {
+      return channel.access_token;
     }
   }
   return process.env.PAGE_ACCESS_TOKEN || "";
@@ -1615,6 +1616,29 @@ async function startServer() {
     }
   });
 
+  app.get("/api/channels", requireAuth, async (req, res) => {
+    try {
+      const platform = typeof req.query.platform === "string" ? req.query.platform.trim() as ChannelPlatform : undefined;
+      const channels = await appDb.listChannelAccounts(platform);
+      return res.json(
+        channels.map((channel) => ({
+          id: channel.id,
+          platform: channel.platform,
+          external_id: channel.external_id,
+          display_name: channel.display_name,
+          event_id: channel.event_id,
+          is_active: channel.is_active,
+          has_access_token: Boolean(channel.access_token),
+          created_at: channel.created_at,
+          updated_at: channel.updated_at,
+        })),
+      );
+    } catch (error) {
+      console.error("Failed to fetch channels:", error);
+      return res.status(500).json({ error: "Failed to fetch channels" });
+    }
+  });
+
   app.post("/api/facebook-pages", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const pageId = String(req.body?.page_id || "").trim();
@@ -1652,6 +1676,56 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to upsert Facebook page:", error);
       return res.status(500).json({ error: "Failed to save Facebook page" });
+    }
+  });
+
+  app.post("/api/channels", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const platform = String(req.body?.platform || "facebook").trim() as ChannelPlatform;
+      const externalId = String(req.body?.external_id || "").trim();
+      const displayName = String(req.body?.display_name || "").trim();
+      const eventId = String(req.body?.event_id || "").trim();
+      const accessToken = String(req.body?.access_token || "").trim();
+      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
+      const allowedPlatforms = new Set<ChannelPlatform>(["facebook", "line_oa", "whatsapp", "telegram"]);
+
+      if (!allowedPlatforms.has(platform)) {
+        return res.status(400).json({ error: "Invalid channel platform" });
+      }
+      if (!externalId || !eventId) {
+        return res.status(400).json({ error: "external_id and event_id are required" });
+      }
+
+      const channel = await appDb.upsertChannelAccount({
+        platform,
+        external_id: externalId,
+        display_name: displayName || externalId,
+        event_id: eventId,
+        access_token: accessToken,
+        is_active: isActive,
+      });
+
+      await recordAudit(req, "channel.upserted", "channel", channel.id, {
+        platform: channel.platform,
+        external_id: channel.external_id,
+        event_id: channel.event_id,
+        is_active: channel.is_active,
+      });
+
+      return res.json({
+        id: channel.id,
+        platform: channel.platform,
+        external_id: channel.external_id,
+        display_name: channel.display_name,
+        event_id: channel.event_id,
+        is_active: channel.is_active,
+        has_access_token: Boolean(channel.access_token),
+        created_at: channel.created_at,
+        updated_at: channel.updated_at,
+      });
+    } catch (error) {
+      console.error("Failed to upsert channel:", error);
+      return res.status(500).json({ error: "Failed to save channel" });
     }
   });
 

@@ -9,6 +9,8 @@ import type {
   AuditLogRow,
   AuthSessionRow,
   AuthUserRow,
+  ChannelAccountRow,
+  ChannelPlatform,
   CreateEventInput,
   CreateUserInput,
   EventStatus,
@@ -23,6 +25,7 @@ import type {
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
+  UpsertChannelAccountInput,
   UpsertFacebookPageInput,
   UserRole,
 } from "./types";
@@ -80,6 +83,21 @@ function mapPageRow(row: Record<string, unknown>) {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies FacebookPageRow;
+}
+
+function mapChannelRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    platform: String(row.platform) as ChannelPlatform,
+    external_id: String(row.external_id),
+    display_name: String(row.display_name),
+    event_id: String(row.event_id),
+    access_token: typeof row.access_token === "string" ? row.access_token : null,
+    config_json: typeof row.config_json === "string" ? row.config_json : "{}",
+    is_active: Boolean(row.is_active),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  } satisfies ChannelAccountRow;
 }
 
 export class SqliteAppDatabase implements AppDatabase {
@@ -192,18 +210,36 @@ export class SqliteAppDatabase implements AppDatabase {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS channel_accounts (
+        id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        access_token TEXT,
+        config_json TEXT NOT NULL DEFAULT '{}',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (platform, external_id),
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions (token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
       CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_event_settings_event_id ON event_settings (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_event_id ON facebook_pages (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_page_id ON facebook_pages (page_id);
+      CREATE INDEX IF NOT EXISTS idx_channel_accounts_event_id ON channel_accounts (event_id);
+      CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts (platform);
+      CREATE INDEX IF NOT EXISTS idx_channel_accounts_external_id ON channel_accounts (external_id);
     `);
 
     this.ensureColumn("registrations", "event_id", "TEXT");
     this.ensureColumn("messages", "event_id", "TEXT");
     this.ensureColumn("messages", "page_id", "TEXT");
     this.ensureColumn("facebook_pages", "page_access_token", "TEXT");
+    this.ensureColumn("channel_accounts", "config_json", "TEXT NOT NULL DEFAULT '{}'");
     this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
     this.db.exec(`
       UPDATE events
@@ -221,6 +257,7 @@ export class SqliteAppDatabase implements AppDatabase {
 
     await this.ensureDefaultOrganization();
     await this.ensureDefaultEvent();
+    await this.bootstrapChannelAccounts();
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
 
@@ -492,48 +529,115 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
+  async listChannelAccounts(platform?: ChannelPlatform) {
+    const rows = platform
+      ? this.db.prepare(
+          "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE platform = ? ORDER BY created_at ASC",
+        ).all(platform)
+      : this.db.prepare(
+          "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts ORDER BY created_at ASC",
+        ).all();
+    return (rows as Array<Record<string, unknown>>).map(mapChannelRow);
+  }
+
+  async getChannelAccount(platform: ChannelPlatform, externalId: string) {
+    const row = this.db.prepare(
+      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE platform = ? AND external_id = ? LIMIT 1",
+    ).get(platform, String(externalId || "").trim()) as Record<string, unknown> | undefined;
+    return row ? mapChannelRow(row) : undefined;
+  }
+
+  async upsertChannelAccount(input: UpsertChannelAccountInput) {
+    const platform = (String(input.platform || "facebook").trim() || "facebook") as ChannelPlatform;
+    const externalId = String(input.external_id || "").trim();
+    const displayName = String(input.display_name || "").trim() || externalId;
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const accessToken = String(input.access_token || "").trim();
+    const configJson = String(input.config_json || "{}").trim() || "{}";
+    const existing = this.db.prepare(
+      "SELECT id FROM channel_accounts WHERE platform = ? AND external_id = ?",
+    ).get(platform, externalId) as { id?: string } | undefined;
+    const id = existing?.id || generateEntityId("chn");
+
+    this.db.prepare(
+      `INSERT INTO channel_accounts (id, platform, external_id, display_name, event_id, access_token, config_json, is_active, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(platform, external_id) DO UPDATE
+       SET display_name = excluded.display_name,
+           event_id = excluded.event_id,
+           access_token = COALESCE(NULLIF(excluded.access_token, ''), channel_accounts.access_token),
+           config_json = excluded.config_json,
+           is_active = excluded.is_active,
+           updated_at = CURRENT_TIMESTAMP`,
+    ).run(id, platform, externalId, displayName, eventId, accessToken, configJson, input.is_active === false ? 0 : 1);
+
+    const row = this.db.prepare(
+      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE platform = ? AND external_id = ? LIMIT 1",
+    ).get(platform, externalId) as Record<string, unknown> | undefined;
+    if (!row) throw new Error("Failed to upsert channel account");
+    return mapChannelRow(row);
+  }
+
+  async resolveEventIdForChannel(platform: ChannelPlatform, externalId: string) {
+    const row = this.db.prepare(
+      "SELECT event_id FROM channel_accounts WHERE platform = ? AND external_id = ? AND is_active = 1 LIMIT 1",
+    ).get(platform, String(externalId || "").trim()) as { event_id?: string } | undefined;
+    return row?.event_id || DEFAULT_EVENT_ID;
+  }
+
   async listFacebookPages() {
-    const rows = this.db.prepare(
-      "SELECT id, page_id, page_name, event_id, page_access_token, is_active, created_at, updated_at FROM facebook_pages ORDER BY created_at ASC",
-    ).all() as Array<Record<string, unknown>>;
-    return rows.map(mapPageRow);
+    const channels = await this.listChannelAccounts("facebook");
+    return channels.map((channel) => ({
+      id: channel.id,
+      page_id: channel.external_id,
+      page_name: channel.display_name,
+      event_id: channel.event_id,
+      page_access_token: channel.access_token ?? null,
+      is_active: channel.is_active,
+      created_at: channel.created_at,
+      updated_at: channel.updated_at,
+    } satisfies FacebookPageRow));
   }
 
   async getFacebookPageByPageId(pageId: string) {
-    const row = this.db.prepare(
-      "SELECT id, page_id, page_name, event_id, page_access_token, is_active, created_at, updated_at FROM facebook_pages WHERE page_id = ? LIMIT 1",
-    ).get(String(pageId || "").trim()) as Record<string, unknown> | undefined;
-    return row ? mapPageRow(row) : undefined;
+    const channel = await this.getChannelAccount("facebook", pageId);
+    return channel
+      ? {
+          id: channel.id,
+          page_id: channel.external_id,
+          page_name: channel.display_name,
+          event_id: channel.event_id,
+          page_access_token: channel.access_token ?? null,
+          is_active: channel.is_active,
+          created_at: channel.created_at,
+          updated_at: channel.updated_at,
+        }
+      : undefined;
   }
 
   async upsertFacebookPage(input: UpsertFacebookPageInput) {
-    const pageId = String(input.page_id || "").trim();
-    const pageName = String(input.page_name || "").trim() || pageId;
-    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-    const pageAccessToken = String(input.page_access_token || "").trim();
-    const existing = this.db.prepare(
-      "SELECT id FROM facebook_pages WHERE page_id = ?",
-    ).get(pageId) as { id?: string } | undefined;
-    const id = existing?.id || generateEntityId("fbp");
-
-    this.db.prepare(
-      `INSERT INTO facebook_pages (id, page_id, page_name, event_id, page_access_token, is_active, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(page_id) DO UPDATE SET page_name = excluded.page_name, event_id = excluded.event_id, page_access_token = COALESCE(NULLIF(excluded.page_access_token, ''), facebook_pages.page_access_token), is_active = excluded.is_active, updated_at = CURRENT_TIMESTAMP`,
-    ).run(id, pageId, pageName, eventId, pageAccessToken, input.is_active === false ? 0 : 1);
-
-    const row = this.db.prepare(
-      "SELECT id, page_id, page_name, event_id, page_access_token, is_active, created_at, updated_at FROM facebook_pages WHERE page_id = ?",
-    ).get(pageId) as Record<string, unknown> | undefined;
-    if (!row) throw new Error("Failed to upsert Facebook page");
-    return mapPageRow(row);
+    const channel = await this.upsertChannelAccount({
+      platform: "facebook",
+      external_id: input.page_id,
+      display_name: input.page_name,
+      event_id: input.event_id,
+      access_token: input.page_access_token,
+      is_active: input.is_active,
+    });
+    return {
+      id: channel.id,
+      page_id: channel.external_id,
+      page_name: channel.display_name,
+      event_id: channel.event_id,
+      page_access_token: channel.access_token ?? null,
+      is_active: channel.is_active,
+      created_at: channel.created_at,
+      updated_at: channel.updated_at,
+    } satisfies FacebookPageRow;
   }
 
   async resolveEventIdForPage(pageId: string) {
-    const row = this.db.prepare(
-      "SELECT event_id FROM facebook_pages WHERE page_id = ? AND is_active = 1 LIMIT 1",
-    ).get(String(pageId || "").trim()) as { event_id?: string } | undefined;
-    return row?.event_id || DEFAULT_EVENT_ID;
+    return this.resolveEventIdForChannel("facebook", pageId);
   }
 
   async getUserByUsername(username: string) {
@@ -762,6 +866,36 @@ export class SqliteAppDatabase implements AppDatabase {
 
     this.db.prepare("UPDATE registrations SET event_id = ? WHERE event_id IS NULL OR TRIM(event_id) = ''").run(DEFAULT_EVENT_ID);
     this.db.prepare("UPDATE messages SET event_id = ? WHERE event_id IS NULL OR TRIM(event_id) = ''").run(DEFAULT_EVENT_ID);
+  }
+
+  private async bootstrapChannelAccounts() {
+    const rows = this.db.prepare(
+      "SELECT id, page_id, page_name, event_id, page_access_token, is_active, created_at, updated_at FROM facebook_pages",
+    ).all() as Array<Record<string, unknown>>;
+
+    const upsert = this.db.prepare(
+      `INSERT INTO channel_accounts (id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at)
+       VALUES (?, 'facebook', ?, ?, ?, ?, '{}', ?, ?, ?)
+       ON CONFLICT(platform, external_id) DO UPDATE
+       SET display_name = excluded.display_name,
+           event_id = excluded.event_id,
+           access_token = COALESCE(NULLIF(excluded.access_token, ''), channel_accounts.access_token),
+           is_active = excluded.is_active,
+           updated_at = CURRENT_TIMESTAMP`,
+    );
+
+    for (const row of rows) {
+      upsert.run(
+        String(row.id),
+        String(row.page_id),
+        String(row.page_name),
+        String(row.event_id),
+        typeof row.page_access_token === "string" ? row.page_access_token : "",
+        Boolean(row.is_active) ? 1 : 0,
+        String(row.created_at),
+        String(row.updated_at),
+      );
+    }
   }
 
   private async ensureBootstrapOwner() {

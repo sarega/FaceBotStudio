@@ -3,6 +3,7 @@ export type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "cancelled";
 export type EventStatus = ManualEventStatus | "closed";
+export type ChannelPlatform = "facebook" | "line_oa" | "whatsapp" | "telegram";
 
 export interface SettingRow {
   key: string;
@@ -114,6 +115,19 @@ export interface FacebookPageRow {
   updated_at: string;
 }
 
+export interface ChannelAccountRow {
+  id: string;
+  platform: ChannelPlatform;
+  external_id: string;
+  display_name: string;
+  event_id: string;
+  access_token?: string | null;
+  is_active: boolean;
+  config_json?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CreateEventInput {
   name: string;
 }
@@ -129,6 +143,16 @@ export interface UpsertFacebookPageInput {
   event_id: string;
   page_access_token?: string;
   is_active?: boolean;
+}
+
+export interface UpsertChannelAccountInput {
+  platform: ChannelPlatform;
+  external_id: string;
+  display_name: string;
+  event_id: string;
+  access_token?: string;
+  is_active?: boolean;
+  config_json?: string;
 }
 
 export interface AppDatabase {
@@ -153,6 +177,10 @@ export interface AppDatabase {
   getEventById(eventId: string): Promise<EventRow | undefined>;
   createEvent(input: CreateEventInput): Promise<EventRow>;
   updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
+  listChannelAccounts(platform?: ChannelPlatform): Promise<ChannelAccountRow[]>;
+  getChannelAccount(platform: ChannelPlatform, externalId: string): Promise<ChannelAccountRow | undefined>;
+  upsertChannelAccount(input: UpsertChannelAccountInput): Promise<ChannelAccountRow>;
+  resolveEventIdForChannel(platform: ChannelPlatform, externalId: string): Promise<string | undefined>;
   listFacebookPages(): Promise<FacebookPageRow[]>;
   getFacebookPageByPageId(pageId: string): Promise<FacebookPageRow | undefined>;
   upsertFacebookPage(input: UpsertFacebookPageInput): Promise<FacebookPageRow>;
