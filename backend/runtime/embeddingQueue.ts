@@ -1,4 +1,5 @@
 import { Queue, Worker } from "bullmq";
+import { createHash } from "crypto";
 import { getBullConnectionOptions, isRedisConfigured } from "./redis";
 
 export type EmbeddingJob = {
@@ -11,6 +12,10 @@ const EMBEDDING_QUEUE = "event-document-embeddings";
 
 let embeddingQueue: Queue | null | undefined;
 let embeddedEmbeddingWorker: Worker | null | undefined;
+
+function buildSafeQueueJobId(value: string) {
+  return createHash("sha256").update(String(value || "").trim()).digest("hex");
+}
 
 export function canUseEmbeddingQueue() {
   return isRedisConfigured();
@@ -39,7 +44,7 @@ export async function enqueueEmbeddingJob(job: EmbeddingJob) {
   }
 
   await embeddingQueue.add("embed-document", job satisfies EmbeddingJob, {
-    jobId: `${job.documentId}:${job.contentHash}`,
+    jobId: buildSafeQueueJobId(`${job.documentId}:${job.contentHash}`),
   });
   return true;
 }

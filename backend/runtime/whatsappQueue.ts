@@ -18,6 +18,10 @@ const memoryDedup = new Map<string, number>();
 let inboundQueue: Queue | null | undefined;
 let embeddedWorker: Worker | null | undefined;
 
+function buildSafeQueueJobId(value: string) {
+  return createHash("sha256").update(String(value || "").trim()).digest("hex");
+}
+
 function cleanupMemoryDedup(now = Date.now()) {
   for (const [key, expiresAt] of memoryDedup.entries()) {
     if (expiresAt <= now) {
@@ -87,7 +91,7 @@ export async function enqueueWhatsAppInboundJob(job: WhatsAppInboundJob) {
   }
 
   await inboundQueue.add("whatsapp-message", job satisfies WhatsAppInboundJob, {
-    jobId: job.dedupKey,
+    jobId: buildSafeQueueJobId(job.dedupKey),
   });
   return true;
 }
