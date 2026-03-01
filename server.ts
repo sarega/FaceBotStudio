@@ -11,6 +11,7 @@ import { createRequire } from "module";
 import dotenv from "dotenv";
 import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
+import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
 import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup, buildLineWebhookDedupKey, canUseLineWebhookQueue, type LineInboundJob } from "./backend/runtime/lineQueue";
 import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
@@ -1963,14 +1964,21 @@ function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: stri
   }
 
   return {
+    dedupKey: buildInstagramWebhookDedupKey(webhookEvent, fallbackAccountId),
     senderId,
     accountId,
     text,
-  };
+    messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
+    eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
+  } satisfies InstagramInboundJob;
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
   await handleIncomingFacebookText(job.senderId, job.text, job.pageId || undefined);
+}
+
+async function processInstagramInboundJob(job: InstagramInboundJob) {
+  await handleIncomingInstagramText(job.senderId, job.text, job.accountId);
 }
 
 async function processLineInboundJob(job: LineInboundJob) {
@@ -2040,6 +2048,7 @@ async function startServer() {
 
   if (RUN_EMBEDDED_WORKER) {
     await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true });
+    await startEmbeddedInstagramWorker(processInstagramInboundJob, { enabled: true });
     await startEmbeddedLineWorker(processLineInboundJob, { enabled: true });
     await startEmbeddedEmbeddingWorker(processEmbeddingJob, { enabled: true });
   }
@@ -2100,6 +2109,7 @@ async function startServer() {
         database: appDb.driver,
         runtime: APP_RUNTIME || "all",
         queue: canUseFacebookWebhookQueue() ? "redis" : "inline",
+        instagram_queue: canUseInstagramWebhookQueue() ? "redis" : "inline",
         line_queue: canUseLineWebhookQueue() ? "redis" : "inline",
         embedding_queue: canUseEmbeddingQueue() ? "redis" : "inline",
         redis: redis.configured ? (redis.healthy ? "ok" : "error") : "disabled",
@@ -3232,11 +3242,20 @@ async function startServer() {
           try {
             const normalized = normalizeInstagramTextEvent(webhookEvent, entryAccountId);
             if (!normalized) continue;
-            await handleIncomingInstagramText(
-              normalized.senderId,
-              normalized.text,
-              normalized.accountId,
-            );
+            const acquired = await acquireInstagramWebhookDedup(normalized.dedupKey);
+            if (!acquired) {
+              console.log("Skipped duplicate Instagram webhook event:", normalized.dedupKey);
+              continue;
+            }
+
+            if (canUseInstagramWebhookQueue()) {
+              const queued = await enqueueInstagramInboundJob(normalized);
+              if (queued) {
+                continue;
+              }
+            }
+
+            await processInstagramInboundJob(normalized);
           } catch (error) {
             console.error("Failed to handle incoming Instagram message:", error);
           }
