@@ -543,6 +543,26 @@ async function getWhatsAppAccessToken(phoneNumberId?: string) {
   return channel?.access_token || "";
 }
 
+async function getTelegramChannel(botKey?: string) {
+  if (!botKey) return null;
+  const channel = await appDb.getChannelAccount("telegram", botKey);
+  if (!channel || channel.is_active === false) {
+    return null;
+  }
+  return channel;
+}
+
+async function getTelegramAccessToken(botKey?: string) {
+  const channel = await getTelegramChannel(botKey);
+  return channel?.access_token || "";
+}
+
+async function getTelegramWebhookSecret(botKey?: string) {
+  const channel = await getTelegramChannel(botKey);
+  const config = safeParseChannelConfig(channel?.config_json);
+  return String(config.webhook_secret || "").trim();
+}
+
 async function getWebChatChannel(widgetKey?: string) {
   if (!widgetKey) return null;
   const channel = await appDb.getChannelAccount("web_chat", widgetKey);
@@ -1707,6 +1727,56 @@ async function sendWhatsAppImageMessage(recipientId: string, imageUrl: string, p
   return payload;
 }
 
+async function sendTelegramTextMessage(chatId: string, text: string, botKey?: string) {
+  const accessToken = await getTelegramAccessToken(botKey);
+  if (!accessToken) {
+    throw new Error("Telegram bot token is not configured");
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${accessToken}/sendMessage`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.description || "Failed to send message to Telegram");
+  }
+
+  return payload;
+}
+
+async function sendTelegramImageMessage(chatId: string, imageUrl: string, botKey?: string) {
+  const accessToken = await getTelegramAccessToken(botKey);
+  if (!accessToken) {
+    throw new Error("Telegram bot token is not configured");
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${accessToken}/sendPhoto`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      photo: imageUrl,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.description || "Failed to send image to Telegram");
+  }
+
+  return payload;
+}
+
 async function handleIncomingFacebookText(senderId: string, text: string, pageId?: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
@@ -2089,6 +2159,94 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
   }
 }
 
+async function handleIncomingTelegramText(senderId: string, text: string, botKey?: string) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+
+  const resolvedEventId = botKey ? await appDb.resolveEventIdForChannel("telegram", botKey) : null;
+  if (!resolvedEventId) {
+    console.warn(`No active event mapping found for Telegram bot ${botKey || "unknown"}; skipping automated reply`);
+    return;
+  }
+  const eventId = resolvedEventId;
+  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, botKey);
+
+  if (!(await getTelegramAccessToken(botKey))) {
+    console.warn(`Telegram bot token is unavailable for bot ${botKey || "unknown"}; skipping outbound reply`);
+    return;
+  }
+
+  let replyText = "";
+  let ticketRegistrationIds: string[] = [];
+  try {
+    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    replyText = result.text;
+    ticketRegistrationIds = result.ticketRegistrationIds;
+  } catch (error) {
+    console.error("Failed to generate Telegram bot reply:", error);
+    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+  }
+
+  if (replyText) {
+    await sendTelegramTextMessage(senderId, replyText, botKey);
+    await saveMessage(senderId, replyText, "outgoing", eventId, botKey);
+  }
+
+  const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
+  let sentTicketArtifact = false;
+  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap(eventId) : null;
+  for (const registrationId of uniqueTicketIds) {
+    const reg = await getRegistrationById(registrationId);
+    if (reg && settings) {
+      const ticketSummaryText = buildTicketSummaryText(reg, settings);
+      try {
+        await sendTelegramTextMessage(senderId, ticketSummaryText, botKey);
+        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, botKey);
+      } catch (error) {
+        console.error("Failed to send Telegram ticket summary:", error);
+      }
+    }
+
+    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    if (!ticketPngUrl && !ticketSvgUrl) {
+      console.warn("APP_URL is not set; skipping Telegram ticket image send");
+      continue;
+    }
+
+    try {
+      if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
+      await sendTelegramImageMessage(senderId, ticketPngUrl, botKey);
+      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, botKey);
+      sentTicketArtifact = true;
+    } catch (error) {
+      console.error("Failed to send Telegram PNG ticket image:", error);
+      try {
+        const textUrl = ticketPngUrl || ticketSvgUrl;
+        if (!textUrl) throw new Error("No ticket URL available");
+        await sendTelegramTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, botKey);
+        await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, botKey);
+        sentTicketArtifact = true;
+      } catch (fallbackError) {
+        console.error("Failed to send Telegram ticket link fallback:", fallbackError);
+      }
+    }
+  }
+
+  if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
+    const mapUrl = String(settings?.event_map_url || "").trim();
+    if (mapUrl) {
+      try {
+        await sendTelegramTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, botKey);
+        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, botKey);
+      } catch (error) {
+        console.error("Failed to send Telegram map link:", error);
+      }
+    }
+  }
+}
+
 function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | null {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
@@ -2164,6 +2322,20 @@ function normalizeWhatsAppTextEvent(message: any, phoneNumberId?: string) {
   return {
     senderId,
     phoneNumberId: resolvedPhoneNumberId,
+    text,
+  };
+}
+
+function normalizeTelegramTextUpdate(update: any) {
+  const message = update?.message;
+  const senderId = String(message?.chat?.id || message?.from?.id || "").trim();
+  const text = String(message?.text || "").trim();
+  if (!senderId || !text) {
+    return null;
+  }
+
+  return {
+    senderId,
     text,
   };
 }
@@ -3521,6 +3693,47 @@ async function startServer() {
         }
       }
     })();
+  });
+
+  app.post("/api/webhook/telegram/:botKey", webhookRateLimit, async (req: RawBodyRequest, res) => {
+    try {
+      const botKey = String(req.params.botKey || "").trim();
+      if (!botKey) {
+        return res.sendStatus(404);
+      }
+
+      const channel = await getTelegramChannel(botKey);
+      if (!channel) {
+        return res.sendStatus(404);
+      }
+
+      const configuredSecret = await getTelegramWebhookSecret(botKey);
+      const providedSecret = typeof req.headers["x-telegram-bot-api-secret-token"] === "string"
+        ? req.headers["x-telegram-bot-api-secret-token"]
+        : "";
+      if (configuredSecret && configuredSecret !== providedSecret) {
+        console.warn("Rejected Telegram webhook due to invalid secret token");
+        return res.sendStatus(401);
+      }
+
+      res.status(200).json({ status: "ok" });
+
+      const normalized = normalizeTelegramTextUpdate(req.body);
+      if (!normalized) {
+        return;
+      }
+
+      void handleIncomingTelegramText(
+        normalized.senderId,
+        normalized.text,
+        botKey,
+      ).catch((error) => {
+        console.error("Failed to handle incoming Telegram message:", error);
+      });
+    } catch (error) {
+      console.error("Telegram webhook handler failed:", error);
+      return res.sendStatus(500);
+    }
   });
 
   app.options("/api/webchat/messages", async (req, res) => {

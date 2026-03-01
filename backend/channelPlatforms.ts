@@ -133,9 +133,10 @@ export const CHANNEL_PLATFORM_DEFINITIONS: Record<ChannelPlatform, ChannelPlatfo
         secret: true,
       },
     ],
-    live_messaging_ready: false,
+    live_messaging_ready: true,
     notes: [
-      "Groundwork only in this phase. Telegram webhook/send adapters are not wired yet.",
+      "Webhook + outbound text/image path are wired in this phase.",
+      "Use the bot username or another stable bot key as the external ID and match the webhook path to it.",
     ],
   },
   web_chat: {
