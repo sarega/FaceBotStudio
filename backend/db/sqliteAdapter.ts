@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
-import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS } from "./defaultSettings";
+import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS, NEW_EVENT_TEMPLATE_ENTRIES } from "./defaultSettings";
 import { hashPassword, normalizeUsername } from "../auth";
+import { chunkDocumentContent } from "../documents";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import type {
   AppDatabase,
@@ -12,6 +13,7 @@ import type {
   ChannelAccountRow,
   ChannelPlatform,
   CreateEventInput,
+  EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
   EventStatus,
@@ -111,9 +113,22 @@ function mapEventDocumentRow(row: Record<string, unknown>) {
     source_url: typeof row.source_url === "string" ? row.source_url : null,
     content: String(row.content || ""),
     is_active: Boolean(row.is_active),
+    chunk_count: Number(row.chunk_count || 0),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentRow;
+}
+
+function mapEventDocumentChunkRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    document_id: String(row.document_id),
+    event_id: String(row.event_id),
+    chunk_index: Number(row.chunk_index || 0),
+    content: String(row.content || ""),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  } satisfies EventDocumentChunkRow;
 }
 
 export class SqliteAppDatabase implements AppDatabase {
@@ -252,6 +267,17 @@ export class SqliteAppDatabase implements AppDatabase {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS event_document_chunks (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (document_id) REFERENCES event_documents(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions (token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
       CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
@@ -263,6 +289,9 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_external_id ON channel_accounts (external_id);
       CREATE INDEX IF NOT EXISTS idx_event_documents_event_id ON event_documents (event_id);
       CREATE INDEX IF NOT EXISTS idx_event_documents_active ON event_documents (event_id, is_active);
+      CREATE INDEX IF NOT EXISTS idx_event_document_chunks_event_id ON event_document_chunks (event_id);
+      CREATE INDEX IF NOT EXISTS idx_event_document_chunks_document_id ON event_document_chunks (document_id);
+      CREATE INDEX IF NOT EXISTS idx_event_document_chunks_order ON event_document_chunks (document_id, chunk_index);
     `);
 
     this.ensureColumn("registrations", "event_id", "TEXT");
@@ -289,6 +318,7 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.ensureDefaultOrganization();
     await this.ensureDefaultEvent();
     await this.bootstrapChannelAccounts();
+    await this.ensureEventDocumentChunks();
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
 
@@ -529,9 +559,8 @@ export class SqliteAppDatabase implements AppDatabase {
        VALUES (?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP)`,
     ).run(id, baseName, slug);
 
-    const templateSettings = await this.getSettingsMap(DEFAULT_EVENT_ID);
     await this.upsertSettings(
-      Object.fromEntries(EVENT_SETTING_KEYS.map((key) => [key, templateSettings[key] || DEFAULT_SETTINGS_ENTRIES[key]])),
+      Object.fromEntries(EVENT_SETTING_KEYS.map((key) => [key, NEW_EVENT_TEMPLATE_ENTRIES[key] ?? DEFAULT_SETTINGS_ENTRIES[key]])),
       id,
     );
 
@@ -560,11 +589,66 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
+  private replaceEventDocumentChunks(documentId: string, eventId: string, content: string) {
+    const chunks = chunkDocumentContent(content);
+    const deleteStatement = this.db.prepare("DELETE FROM event_document_chunks WHERE document_id = ?");
+    const insertStatement = this.db.prepare(
+      `INSERT INTO event_document_chunks (id, document_id, event_id, chunk_index, content, updated_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    );
+
+    const transaction = this.db.transaction(() => {
+      deleteStatement.run(documentId);
+      for (const chunk of chunks) {
+        insertStatement.run(generateEntityId("dch"), documentId, eventId, chunk.chunk_index, chunk.content);
+      }
+    });
+
+    transaction();
+  }
+
+  private async ensureEventDocumentChunks() {
+    const rows = this.db.prepare(
+      `SELECT d.id, d.event_id, d.content
+       FROM event_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*) AS chunk_count
+         FROM event_document_chunks
+         GROUP BY document_id
+       ) counts ON counts.document_id = d.id
+       WHERE COALESCE(counts.chunk_count, 0) = 0`,
+    ).all() as Array<Record<string, unknown>>;
+
+    for (const row of rows) {
+      this.replaceEventDocumentChunks(String(row.id), String(row.event_id), String(row.content || ""));
+    }
+  }
+
   async listEventDocuments(eventId: string) {
     const rows = this.db.prepare(
-      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at, updated_at FROM event_documents WHERE event_id = ? ORDER BY updated_at DESC, created_at DESC",
+      `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              COALESCE(counts.chunk_count, 0) AS chunk_count,
+              d.created_at, d.updated_at
+       FROM event_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*) AS chunk_count
+         FROM event_document_chunks
+         GROUP BY document_id
+       ) counts ON counts.document_id = d.id
+       WHERE d.event_id = ?
+       ORDER BY d.updated_at DESC, d.created_at DESC`,
     ).all(String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID) as Array<Record<string, unknown>>;
     return rows.map(mapEventDocumentRow);
+  }
+
+  async listEventDocumentChunks(eventId: string) {
+    const rows = this.db.prepare(
+      `SELECT id, document_id, event_id, chunk_index, content, created_at, updated_at
+       FROM event_document_chunks
+       WHERE event_id = ?
+       ORDER BY document_id ASC, chunk_index ASC`,
+    ).all(String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID) as Array<Record<string, unknown>>;
+    return rows.map(mapEventDocumentChunkRow);
   }
 
   async upsertEventDocument(input: UpsertEventDocumentInput) {
@@ -588,9 +672,20 @@ export class SqliteAppDatabase implements AppDatabase {
            is_active = excluded.is_active,
            updated_at = CURRENT_TIMESTAMP`,
     ).run(id, eventId, title, sourceType, sourceUrl || null, content, isActive);
+    this.replaceEventDocumentChunks(id, eventId, content);
 
     const row = this.db.prepare(
-      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at, updated_at FROM event_documents WHERE id = ? LIMIT 1",
+      `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              COALESCE(counts.chunk_count, 0) AS chunk_count,
+              d.created_at, d.updated_at
+       FROM event_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*) AS chunk_count
+         FROM event_document_chunks
+         GROUP BY document_id
+       ) counts ON counts.document_id = d.id
+       WHERE d.id = ?
+       LIMIT 1`,
     ).get(id) as Record<string, unknown> | undefined;
     if (!row) throw new Error("Failed to upsert event document");
     return mapEventDocumentRow(row);

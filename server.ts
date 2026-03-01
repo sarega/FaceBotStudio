@@ -438,6 +438,10 @@ async function getEventDocuments(eventId: string) {
   return appDb.listEventDocuments(eventId);
 }
 
+async function getEventDocumentChunks(eventId: string) {
+  return appDb.listEventDocumentChunks(eventId);
+}
+
 async function getRegistrationById(id: string) {
   return appDb.getRegistrationById(id);
 }
@@ -492,17 +496,21 @@ function tokenizeForDocumentMatch(value: string) {
 }
 
 function buildKnowledgeContext(
-  documents: Array<{ title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
+  documents: Array<{ id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
+  chunks: Array<{ document_id: string; chunk_index: number; content: string }>,
   message: string,
 ) {
   const activeDocuments = documents.filter((document) => document.is_active);
   if (!activeDocuments.length) return "";
 
+  const documentMap = new Map(activeDocuments.map((document) => [document.id, document]));
   const normalizedMessage = String(message || "").trim().toLowerCase();
   const tokens = tokenizeForDocumentMatch(message);
-  const ranked = activeDocuments
-    .map((document, index) => {
-      const haystack = `${document.title}\n${document.content}\n${document.source_url || ""}`.toLowerCase();
+  const rankedChunks = chunks
+    .filter((chunk) => documentMap.has(chunk.document_id))
+    .map((chunk, index) => {
+      const document = documentMap.get(chunk.document_id)!;
+      const haystack = `${document.title}\n${chunk.content}\n${document.source_url || ""}`.toLowerCase();
       let score = 0;
 
       if (normalizedMessage && normalizedMessage.length >= 4 && haystack.includes(normalizedMessage)) {
@@ -515,25 +523,34 @@ function buildKnowledgeContext(
         }
       }
 
-      return { document, index, score };
+      return { document, chunk, index, score };
     })
     .sort((a, b) => (b.score - a.score) || (a.index - b.index));
 
-  const selected = ranked
+  const selected = rankedChunks
     .filter((entry, index) => entry.score > 0 || index < 2)
-    .slice(0, 3)
-    .map((entry) => entry.document);
+    .slice(0, 5);
+
+  if (!selected.length) {
+    return "";
+  }
 
   const maxTotalLength = 6000;
   let used = 0;
   const sections: string[] = [];
+  const chunksPerDocument = new Map<string, number>();
 
-  for (const document of selected) {
+  for (const entry of selected) {
+    const { document, chunk } = entry;
+    const currentCount = chunksPerDocument.get(document.id) || 0;
+    if (currentCount >= 2) continue;
+
     const block = [
       `Title: ${document.title}`,
       `Source Type: ${document.source_type}`,
       document.source_url ? `Source URL: ${document.source_url}` : "",
-      `Content:\n${document.content}`,
+      `Chunk: ${chunk.chunk_index + 1}`,
+      `Content:\n${chunk.content}`,
     ].filter(Boolean).join("\n");
 
     if (used >= maxTotalLength) break;
@@ -542,6 +559,7 @@ function buildKnowledgeContext(
       : block;
     used += trimmed.length;
     sections.push(trimmed);
+    chunksPerDocument.set(document.id, currentCount + 1);
   }
 
   return sections.length
@@ -1155,7 +1173,8 @@ async function generateBotReplyForSender(
 ): Promise<BotReplyResult> {
   const settings = await getSettingsMap(eventId);
   const documents = await getEventDocuments(eventId);
-  const knowledgeContext = buildKnowledgeContext(documents, incomingText);
+  const chunks = await getEventDocumentChunks(eventId);
+  const knowledgeContext = buildKnowledgeContext(documents, chunks, incomingText);
   const event = await appDb.getEventById(eventId);
   const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId);
 
@@ -2154,7 +2173,8 @@ async function startServer() {
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
       const documents = await getEventDocuments(eventId);
-      const knowledgeContext = buildKnowledgeContext(documents, message);
+      const chunks = await getEventDocumentChunks(eventId);
+      const knowledgeContext = buildKnowledgeContext(documents, chunks, message);
       const event = await appDb.getEventById(eventId);
       const response = await requestOpenRouterChat(message, history, settings, event?.effective_status || "active", knowledgeContext);
       res.json(response);

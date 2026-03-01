@@ -193,6 +193,7 @@ export default function App() {
   const scanIntervalRef = useRef<number | null>(null);
   const scanBusyRef = useRef(false);
   const scannerCooldownRef = useRef(false);
+  const documentFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const role = authUser?.role;
   const canEditSettings = role === "owner" || role === "admin";
@@ -474,10 +475,10 @@ export default function App() {
         llm_model: typeof data.llm_model === "string" ? data.llm_model : prev.llm_model,
         global_llm_model: typeof data.global_llm_model === "string" ? data.global_llm_model : prev.global_llm_model,
         global_system_prompt: typeof data.global_system_prompt === "string" ? data.global_system_prompt : prev.global_system_prompt,
-        event_timezone: data.event_timezone || prev.event_timezone,
-        event_date: normalizeDateTimeLocalValue(data.event_date || prev.event_date),
-        reg_start: normalizeDateTimeLocalValue(data.reg_start || prev.reg_start),
-        reg_end: normalizeDateTimeLocalValue(data.reg_end || prev.reg_end),
+        event_timezone: typeof data.event_timezone === "string" ? data.event_timezone : prev.event_timezone,
+        event_date: normalizeDateTimeLocalValue(typeof data.event_date === "string" ? data.event_date : prev.event_date),
+        reg_start: normalizeDateTimeLocalValue(typeof data.reg_start === "string" ? data.reg_start : prev.reg_start),
+        reg_end: normalizeDateTimeLocalValue(typeof data.reg_end === "string" ? data.reg_end : prev.reg_end),
       }));
     } catch (err) {
       console.error("Failed to fetch settings", err);
@@ -565,26 +566,34 @@ export default function App() {
       setSettings(normalized);
       setSettingsMessage(successLabel);
       window.setTimeout(() => setSettingsMessage(""), 2500);
+      return true;
     } catch (err) {
       console.error("Failed to save settings", err);
       setSettingsMessage(err instanceof Error ? err.message : "Failed to save settings");
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
-  const saveEventDetails = async () => saveSettingsSubset([
-    "event_name",
-    "event_timezone",
-    "event_location",
-    "event_map_url",
-    "event_date",
-    "event_description",
-    "event_travel",
-    "reg_limit",
-    "reg_start",
-    "reg_end",
-  ], "Event setup saved");
+  const saveEventDetails = async () => {
+    const saved = await saveSettingsSubset([
+      "event_name",
+      "event_timezone",
+      "event_location",
+      "event_map_url",
+      "event_date",
+      "event_description",
+      "event_travel",
+      "reg_limit",
+      "reg_start",
+      "reg_end",
+    ], "Event setup saved");
+
+    if (saved) {
+      await fetchEvents();
+    }
+  };
 
   const saveEventContext = async () => saveSettingsSubset(["context"], "Event context saved");
 
@@ -602,6 +611,50 @@ export default function App() {
     setDocumentSourceType("note");
     setDocumentSourceUrl("");
     setDocumentContent("");
+  };
+
+  const handleImportDocumentFile = async (file: File | null) => {
+    if (!file) return;
+
+    const supportedExtensions = new Set(["txt", "md", "markdown", "csv", "json", "html", "htm", "xml"]);
+    const extension = file.name.split(".").pop()?.toLowerCase() || "";
+    const isSupportedType =
+      supportedExtensions.has(extension) ||
+      file.type.startsWith("text/") ||
+      file.type === "application/json" ||
+      file.type === "application/xml";
+
+    if (!isSupportedType) {
+      setDocumentsMessage("Only text-based files are supported right now (.txt, .md, .csv, .json, .html, .xml).");
+      if (documentFileInputRef.current) {
+        documentFileInputRef.current.value = "";
+      }
+      return;
+    }
+
+    setDocumentsLoading(true);
+    setDocumentsMessage("");
+    try {
+      const importedText = (await file.text()).replace(/\u0000/g, "").trim();
+      if (!importedText) {
+        throw new Error("This file is empty");
+      }
+
+      const baseName = file.name.replace(/\.[^/.]+$/, "").trim() || "Imported Document";
+      setEditingDocumentId("");
+      setDocumentTitle(baseName);
+      setDocumentSourceType("document");
+      setDocumentSourceUrl("");
+      setDocumentContent(importedText);
+      setDocumentsMessage(`Imported ${file.name}. Review the content and save it to this event.`);
+    } catch (err) {
+      setDocumentsMessage(err instanceof Error ? err.message : "Failed to import file");
+    } finally {
+      setDocumentsLoading(false);
+      if (documentFileInputRef.current) {
+        documentFileInputRef.current.value = "";
+      }
+    }
   };
 
   const loadDocumentIntoForm = (document: EventDocumentRecord) => {
@@ -1744,16 +1797,32 @@ export default function App() {
                     <div className="flex items-center justify-between mb-4">
                       <div>
                         <h3 className="text-lg font-semibold">Knowledge Documents</h3>
-                        <p className="text-sm text-slate-500">Attach reusable notes, FAQ fragments, policy text, or URLs to the selected event.</p>
+                        <p className="text-sm text-slate-500">Attach reusable notes, FAQ fragments, policy text, URLs, or import text-based files into the selected event.</p>
                       </div>
-                      {editingDocumentId && (
+                      <div className="flex items-center gap-2">
+                        <input
+                          ref={documentFileInputRef}
+                          type="file"
+                          accept=".txt,.md,.markdown,.csv,.json,.html,.htm,.xml,text/plain,text/markdown,text/csv,application/json,application/xml,text/html"
+                          className="hidden"
+                          onChange={(e) => void handleImportDocumentFile(e.target.files?.[0] || null)}
+                        />
                         <button
-                          onClick={resetDocumentForm}
-                          className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-medium"
+                          onClick={() => documentFileInputRef.current?.click()}
+                          disabled={documentsLoading}
+                          className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-medium disabled:opacity-50"
                         >
-                          Cancel Edit
+                          Import File
                         </button>
-                      )}
+                        {editingDocumentId && (
+                          <button
+                            onClick={resetDocumentForm}
+                            className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-medium"
+                          >
+                            Cancel Edit
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1808,7 +1877,7 @@ export default function App() {
                         {editingDocumentId ? "Update Document" : "Save Document"}
                       </button>
                       <p className="text-xs text-slate-500">
-                        Documents are event-scoped. They can later become RAG sources without changing where the team manages them.
+                        Text-based imports are chunked on the server after save, so this same document store can grow into full RAG later.
                       </p>
                     </div>
 
@@ -1850,6 +1919,9 @@ export default function App() {
                               <p className="font-semibold text-slate-900 truncate">{document.title}</p>
                               <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
                                 <span className="rounded-full bg-slate-100 text-slate-600 px-2 py-1">{document.source_type}</span>
+                                <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1">
+                                  {document.chunk_count || 0} chunks
+                                </span>
                                 <span className={`rounded-full px-2 py-1 ${document.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
                                   {document.is_active ? "active" : "inactive"}
                                 </span>
@@ -1893,9 +1965,9 @@ export default function App() {
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
                     <h3 className="font-semibold text-slate-900 mb-2">Retrieval behavior right now</h3>
                     <div className="space-y-2">
-                      <p><span className="font-semibold">Current</span>: the bot ranks active event documents against the incoming message and injects the best matches into the prompt.</p>
-                      <p><span className="font-semibold">Next</span>: add file upload and chunking on top of the same event document store.</p>
-                      <p><span className="font-semibold">Later</span>: replace simple matching with embeddings/vector search without changing the event workspace model.</p>
+                      <p><span className="font-semibold">Current</span>: the bot ranks active document chunks against the incoming message and injects the best matches into the prompt.</p>
+                      <p><span className="font-semibold">Current</span>: text-based file import already feeds the same chunk store after save.</p>
+                      <p><span className="font-semibold">Later</span>: replace simple chunk matching with embeddings/vector search without changing the event workspace model.</p>
                     </div>
                   </div>
                 </div>

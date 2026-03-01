@@ -136,6 +136,17 @@ export interface EventDocumentRow {
   source_url?: string | null;
   content: string;
   is_active: boolean;
+  chunk_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EventDocumentChunkRow {
+  id: string;
+  document_id: string;
+  event_id: string;
+  chunk_index: number;
+  content: string;
   created_at: string;
   updated_at: string;
 }
@@ -200,6 +211,7 @@ export interface AppDatabase {
   createEvent(input: CreateEventInput): Promise<EventRow>;
   updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
   listEventDocuments(eventId: string): Promise<EventDocumentRow[]>;
+  listEventDocumentChunks(eventId: string): Promise<EventDocumentChunkRow[]>;
   upsertEventDocument(input: UpsertEventDocumentInput): Promise<EventDocumentRow>;
   setEventDocumentActive(documentId: string, isActive: boolean): Promise<boolean>;
   listChannelAccounts(platform?: ChannelPlatform): Promise<ChannelAccountRow[]>;

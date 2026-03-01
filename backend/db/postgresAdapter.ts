@@ -3,8 +3,9 @@ import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { Pool } from "pg";
 import { hashPassword, normalizeUsername } from "../auth";
+import { chunkDocumentContent } from "../documents";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
-import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS } from "./defaultSettings";
+import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS, NEW_EVENT_TEMPLATE_ENTRIES } from "./defaultSettings";
 import { runPostgresMigrations } from "./migrate";
 import type {
   AppDatabase,
@@ -15,6 +16,7 @@ import type {
   ChannelAccountRow,
   ChannelPlatform,
   CreateEventInput,
+  EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
   EventStatus,
@@ -108,9 +110,22 @@ function mapEventDocumentRow(row: Record<string, unknown>) {
     source_url: typeof row.source_url === "string" ? row.source_url : null,
     content: String(row.content || ""),
     is_active: Boolean(row.is_active),
+    chunk_count: Number(row.chunk_count || 0),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentRow;
+}
+
+function mapEventDocumentChunkRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    document_id: String(row.document_id),
+    event_id: String(row.event_id),
+    chunk_index: Number(row.chunk_index || 0),
+    content: String(row.content || ""),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  } satisfies EventDocumentChunkRow;
 }
 
 export class PostgresAppDatabase implements AppDatabase {
@@ -139,6 +154,7 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.ensureDefaultOrganization();
     await this.ensureDefaultEvent();
     await this.ensureChannelAccountsBootstrap();
+    await this.ensureEventDocumentChunks();
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
     this.initialized = true;
@@ -414,13 +430,12 @@ export class PostgresAppDatabase implements AppDatabase {
          VALUES ($1, $2, $3, 'pending', FALSE)`,
         [id, baseName, slug],
       );
-      const templateSettings = await this.getSettingsMap(DEFAULT_EVENT_ID);
       for (const key of EVENT_SETTING_KEYS) {
         await client.query(
           `INSERT INTO event_settings (event_id, key, value)
            VALUES ($1, $2, $3)
            ON CONFLICT (event_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-          [id, key, templateSettings[key] || DEFAULT_SETTINGS_ENTRIES[key]],
+          [id, key, NEW_EVENT_TEMPLATE_ENTRIES[key] ?? DEFAULT_SETTINGS_ENTRIES[key]],
         );
       }
       await client.query("COMMIT");
@@ -459,12 +474,73 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
+  private async replaceEventDocumentChunks(documentId: string, eventId: string, content: string) {
+    const chunks = chunkDocumentContent(content);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM event_document_chunks WHERE document_id = $1", [documentId]);
+      for (const chunk of chunks) {
+        await client.query(
+          `INSERT INTO event_document_chunks (id, document_id, event_id, chunk_index, content)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [generateEntityId("dch"), documentId, eventId, chunk.chunk_index, chunk.content],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async ensureEventDocumentChunks() {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT d.id, d.event_id, d.content
+       FROM event_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*)::int AS chunk_count
+         FROM event_document_chunks
+         GROUP BY document_id
+       ) counts ON counts.document_id = d.id
+       WHERE COALESCE(counts.chunk_count, 0) = 0`,
+    );
+
+    for (const row of result.rows) {
+      await this.replaceEventDocumentChunks(String(row.id), String(row.event_id), String(row.content || ""));
+    }
+  }
+
   async listEventDocuments(eventId: string) {
     const result = await this.pool.query<Record<string, unknown>>(
-      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM event_documents WHERE event_id = $1 ORDER BY updated_at DESC, created_at DESC",
+      `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              COALESCE(counts.chunk_count, 0)::text AS chunk_count,
+              d.created_at::text AS created_at, d.updated_at::text AS updated_at
+       FROM event_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*)::int AS chunk_count
+         FROM event_document_chunks
+         GROUP BY document_id
+       ) counts ON counts.document_id = d.id
+       WHERE d.event_id = $1
+       ORDER BY d.updated_at DESC, d.created_at DESC`,
       [String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID],
     );
     return result.rows.map(mapEventDocumentRow);
+  }
+
+  async listEventDocumentChunks(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT id, document_id, event_id, chunk_index, content,
+              created_at::text AS created_at, updated_at::text AS updated_at
+       FROM event_document_chunks
+       WHERE event_id = $1
+       ORDER BY document_id ASC, chunk_index ASC`,
+      [String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID],
+    );
+    return result.rows.map(mapEventDocumentChunkRow);
   }
 
   async upsertEventDocument(input: UpsertEventDocumentInput) {
@@ -489,9 +565,20 @@ export class PostgresAppDatabase implements AppDatabase {
            updated_at = CURRENT_TIMESTAMP`,
       [id, eventId, title, sourceType, sourceUrl || null, content, isActive],
     );
+    await this.replaceEventDocumentChunks(id, eventId, content);
 
     const result = await this.pool.query<Record<string, unknown>>(
-      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM event_documents WHERE id = $1 LIMIT 1",
+      `SELECT d.id, d.event_id, d.title, d.source_type, d.source_url, d.content, d.is_active,
+              COALESCE(counts.chunk_count, 0)::text AS chunk_count,
+              d.created_at::text AS created_at, d.updated_at::text AS updated_at
+       FROM event_documents d
+       LEFT JOIN (
+         SELECT document_id, COUNT(*)::int AS chunk_count
+         FROM event_document_chunks
+         GROUP BY document_id
+       ) counts ON counts.document_id = d.id
+       WHERE d.id = $1
+       LIMIT 1`,
       [id],
     );
     if (!result.rows[0]) throw new Error("Failed to upsert event document");

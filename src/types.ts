@@ -68,6 +68,7 @@ export interface EventDocumentRecord {
   source_url?: string | null;
   content: string;
   is_active: boolean;
+  chunk_count?: number;
   created_at: string;
   updated_at: string;
 }

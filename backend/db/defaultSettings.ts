@@ -16,6 +16,21 @@ export const DEFAULT_SETTINGS_ENTRIES = {
   reg_end: "2026-05-01T23:59",
 } as const;
 
+export const NEW_EVENT_TEMPLATE_ENTRIES = {
+  context: "",
+  llm_model: "",
+  event_name: "",
+  event_timezone: process.env.EVENT_TIMEZONE || "Asia/Bangkok",
+  event_location: "",
+  event_map_url: "",
+  event_date: "",
+  event_description: "",
+  event_travel: "",
+  reg_limit: DEFAULT_SETTINGS_ENTRIES.reg_limit,
+  reg_start: "",
+  reg_end: "",
+} as const;
+
 export const EVENT_SETTING_KEYS = [
   "context",
   "llm_model",
