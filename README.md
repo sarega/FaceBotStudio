@@ -19,6 +19,11 @@ This contains everything you need to run your app locally.
 3. Run the app:
    `npm run dev`
 
+Production runtime modes:
+- `npm run start` = web + embedded worker (`APP_RUNTIME=all`)
+- `npm run start:web` = web-only runtime
+- `npm run start:worker` = worker-only runtime
+
 ## Facebook Auto-Reply (Webhook)
 
 To auto-reply in Messenger (not just log messages), set these in `.env`:
@@ -42,9 +47,27 @@ Recommended for low-traffic demos with SQLite:
    - `OPENROUTER_API_KEY`
    - `PAGE_ACCESS_TOKEN` (for real Messenger auto-replies)
    - `FACEBOOK_APP_SECRET` (recommended)
+   - `REDIS_URL`
    - `OPENROUTER_DEFAULT_MODEL=google/gemini-3-flash-preview`
    - `DB_PATH=/data/bot.db`
    - `APP_URL=https://YOUR_APP.up.railway.app`
 4. Build command: `npm run build`
 5. Start command: `npm run start`
 6. Verify health endpoint: `/api/health`
+
+## Railway (Queue / Worker Foundation)
+
+Current safe default:
+- Keep one service on `npm run start`
+- This runs `APP_RUNTIME=all`, so the web app also runs the embedded webhook worker
+
+When ready to split services:
+1. Web service start command: `npm run start:web`
+2. Worker service start command: `npm run start:worker`
+3. Both services must share:
+   - `DATABASE_URL`
+   - `REDIS_URL`
+   - `OPENROUTER_API_KEY`
+   - `PAGE_ACCESS_TOKEN`
+   - `FACEBOOK_APP_SECRET`
+   - `APP_URL`

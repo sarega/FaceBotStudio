@@ -9,6 +9,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
+import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
+import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
+import { pingRedis } from "./backend/runtime/redis";
 import {
   ALL_USER_ROLES,
   SESSION_COOKIE_NAME,
@@ -40,6 +43,9 @@ const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview";
 const appDb = createAppDatabase();
+const APP_RUNTIME = String(process.env.APP_RUNTIME || "all").trim().toLowerCase();
+const RUN_WEB_SERVER = APP_RUNTIME !== "worker";
+const RUN_EMBEDDED_WORKER = APP_RUNTIME === "all";
 
 type ChatPart = {
   text?: string;
@@ -1261,10 +1267,44 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
   }
 }
 
+function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | null {
+  const senderId = String(webhookEvent?.sender?.id || "").trim();
+  const pageId = String(webhookEvent?.recipient?.id || "").trim();
+  const text = String(webhookEvent?.message?.text || "").trim();
+  const isEcho = Boolean(webhookEvent?.message?.is_echo);
+
+  if (!senderId || !text || isEcho) {
+    return null;
+  }
+
+  return {
+    dedupKey: buildFacebookWebhookDedupKey(webhookEvent),
+    senderId,
+    pageId: pageId || null,
+    text,
+    messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
+    eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
+  };
+}
+
+async function processFacebookInboundJob(job: FacebookInboundJob) {
+  await handleIncomingFacebookText(job.senderId, job.text, job.pageId || undefined);
+}
+
 async function startServer() {
   await appDb.initialize();
 
+  if (RUN_EMBEDDED_WORKER) {
+    await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true });
+  }
+
+  if (!RUN_WEB_SERVER) {
+    console.log(`Worker runtime started (APP_RUNTIME=${APP_RUNTIME || "all"})`);
+    return;
+  }
+
   const app = express();
+  app.set("trust proxy", true);
   app.use(express.json({
     verify: (req, _res, buf) => {
       (req as RawBodyRequest).rawBody = Buffer.from(buf);
@@ -1274,19 +1314,41 @@ async function startServer() {
   app.use(attachSession);
 
   const PORT = Number(process.env.PORT || 3000);
+  const loginRateLimit = createRateLimitMiddleware({
+    name: "auth-login",
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    keyFn: (req) => `${getRequestIp(req)}:${normalizeUsername(req.body?.username) || "unknown"}`,
+    errorMessage: "Too many login attempts. Please wait and try again.",
+  });
+  const webhookRateLimit = createRateLimitMiddleware({
+    name: "facebook-webhook",
+    windowMs: 60 * 1000,
+    max: 240,
+    keyFn: (req) => getRequestIp(req) || "unknown",
+    errorMessage: "Too many webhook requests. Please retry later.",
+  });
 
   // API Routes
   app.get("/api/health", async (_req, res) => {
     try {
       await appDb.ping();
-      res.json({ status: "ok", time: new Date().toISOString(), database: appDb.driver });
+      const redis = await pingRedis();
+      res.json({
+        status: "ok",
+        time: new Date().toISOString(),
+        database: appDb.driver,
+        runtime: APP_RUNTIME || "all",
+        queue: canUseFacebookWebhookQueue() ? "redis" : "inline",
+        redis: redis.configured ? (redis.healthy ? "ok" : "error") : "disabled",
+      });
     } catch (error) {
       console.error("Health check failed:", error);
-      res.status(500).json({ status: "error", time: new Date().toISOString(), database: appDb.driver });
+      res.status(500).json({ status: "error", time: new Date().toISOString(), database: appDb.driver, runtime: APP_RUNTIME || "all" });
     }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginRateLimit, async (req, res) => {
     try {
       const username = normalizeUsername(req.body?.username);
       const password = String(req.body?.password || "");
@@ -1856,7 +1918,7 @@ async function startServer() {
   });
 
   // Facebook Webhook Verification
-  app.get("/api/webhook", (req, res) => {
+  app.get("/api/webhook", webhookRateLimit, (req, res) => {
     void (async () => {
       const mode = req.query["hub.mode"];
       const token = req.query["hub.verify_token"];
@@ -1880,7 +1942,7 @@ async function startServer() {
   });
 
   // Facebook Webhook Event Handling
-  app.post("/api/webhook", (req: RawBodyRequest, res) => {
+  app.post("/api/webhook", webhookRateLimit, (req: RawBodyRequest, res) => {
     if (!verifyFacebookWebhookSignature(req)) {
       console.warn("Rejected Facebook webhook due to invalid signature");
       res.sendStatus(401);
@@ -1897,22 +1959,36 @@ async function startServer() {
     res.status(200).send("EVENT_RECEIVED");
 
     const entries = Array.isArray(body.entry) ? body.entry : [];
-    for (const entry of entries) {
-      const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
-      for (const webhookEvent of messagingEvents) {
-        console.log("Received webhook event:", webhookEvent);
+    void (async () => {
+      for (const entry of entries) {
+        const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
+        for (const webhookEvent of messagingEvents) {
+          console.log("Received webhook event:", webhookEvent);
 
-        const senderId = webhookEvent?.sender?.id;
-        const pageId = webhookEvent?.recipient?.id;
-        const text = webhookEvent?.message?.text;
-        const isEcho = webhookEvent?.message?.is_echo;
-        if (!senderId || !text || isEcho) continue;
+          const normalized = normalizeFacebookInboundJob(webhookEvent);
+          if (!normalized) continue;
 
-        void handleIncomingFacebookText(senderId, text, pageId).catch((error) => {
-          console.error("Failed to handle incoming Facebook message:", error);
-        });
+          try {
+            const accepted = await acquireFacebookWebhookDedup(normalized.dedupKey);
+            if (!accepted) {
+              console.log("Skipped duplicate Facebook webhook event:", normalized.dedupKey);
+              continue;
+            }
+
+            if (canUseFacebookWebhookQueue()) {
+              const queued = await enqueueFacebookInboundJob(normalized);
+              if (queued) {
+                continue;
+              }
+            }
+
+            await processFacebookInboundJob(normalized);
+          } catch (error) {
+            console.error("Failed to handle incoming Facebook message:", error);
+          }
+        }
       }
-    }
+    })();
   });
 
   // Vite middleware for development
