@@ -121,12 +121,13 @@ Current Event Details:
 `;
 }
 
-function getSystemInstruction(settings: Record<string, any>, eventStatus = "active") {
+function getSystemInstruction(settings: Record<string, any>, eventStatus = "active", knowledgeContext = "") {
   const globalPrompt = String(settings.global_system_prompt || "").trim();
   const eventContext = String(settings.context || "").trim();
   return [
     globalPrompt,
     eventContext ? `Event Context:\n${eventContext}` : "",
+    knowledgeContext,
     buildEventInfo(settings, eventStatus),
     "Never guess the current date or time. Use the Current System Time above as the source of truth.",
     "Respect the Event Status Right Now field.",
@@ -433,6 +434,10 @@ async function getSettingsMap(eventId?: string) {
   return appDb.getSettingsMap(eventId);
 }
 
+async function getEventDocuments(eventId: string) {
+  return appDb.listEventDocuments(eventId);
+}
+
 async function getRegistrationById(id: string) {
   return appDb.getRegistrationById(id);
 }
@@ -472,6 +477,73 @@ async function recordAudit(
 
 function formatTicketDate(value: string, timeZone?: string) {
   return formatStoredDateForDisplay(value, normalizeTimeZone(timeZone));
+}
+
+function tokenizeForDocumentMatch(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+}
+
+function buildKnowledgeContext(
+  documents: Array<{ title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
+  message: string,
+) {
+  const activeDocuments = documents.filter((document) => document.is_active);
+  if (!activeDocuments.length) return "";
+
+  const normalizedMessage = String(message || "").trim().toLowerCase();
+  const tokens = tokenizeForDocumentMatch(message);
+  const ranked = activeDocuments
+    .map((document, index) => {
+      const haystack = `${document.title}\n${document.content}\n${document.source_url || ""}`.toLowerCase();
+      let score = 0;
+
+      if (normalizedMessage && normalizedMessage.length >= 4 && haystack.includes(normalizedMessage)) {
+        score += 6;
+      }
+
+      for (const token of tokens) {
+        if (haystack.includes(token)) {
+          score += 1;
+        }
+      }
+
+      return { document, index, score };
+    })
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+
+  const selected = ranked
+    .filter((entry, index) => entry.score > 0 || index < 2)
+    .slice(0, 3)
+    .map((entry) => entry.document);
+
+  const maxTotalLength = 6000;
+  let used = 0;
+  const sections: string[] = [];
+
+  for (const document of selected) {
+    const block = [
+      `Title: ${document.title}`,
+      `Source Type: ${document.source_type}`,
+      document.source_url ? `Source URL: ${document.source_url}` : "",
+      `Content:\n${document.content}`,
+    ].filter(Boolean).join("\n");
+
+    if (used >= maxTotalLength) break;
+    const trimmed = block.length + used > maxTotalLength
+      ? block.slice(0, Math.max(0, maxTotalLength - used - 1)) + "…"
+      : block;
+    used += trimmed.length;
+    sections.push(trimmed);
+  }
+
+  return sections.length
+    ? `Event Knowledge Documents:\n${sections.map((section, index) => `Document ${index + 1}\n${section}`).join("\n\n")}`
+    : "";
 }
 
 function buildTicketImageUrl(registrationId: string, format: "svg" | "png" = "png") {
@@ -903,6 +975,7 @@ async function requestOpenRouterChat(
   history: ChatHistoryMessage[],
   settings: Record<string, any>,
   eventStatus = "active",
+  knowledgeContext = "",
 ): Promise<NormalizedChatResponse> {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is not configured in .env");
@@ -922,7 +995,7 @@ async function requestOpenRouterChat(
       messages: [
         {
           role: "system",
-          content: getSystemInstruction(settings, eventStatus),
+          content: getSystemInstruction(settings, eventStatus, knowledgeContext),
         },
         ...normalizeHistoryForOpenRouter(history),
         {
@@ -1078,10 +1151,12 @@ async function generateBotReplyForSender(
   historyOverride?: ChatHistoryMessage[],
 ): Promise<BotReplyResult> {
   const settings = await getSettingsMap(eventId);
+  const documents = await getEventDocuments(eventId);
+  const knowledgeContext = buildKnowledgeContext(documents, incomingText);
   const event = await appDb.getEventById(eventId);
   const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId);
 
-  const firstResponse = await requestOpenRouterChat(incomingText, history, settings, event?.effective_status || "active");
+  const firstResponse = await requestOpenRouterChat(incomingText, history, settings, event?.effective_status || "active", knowledgeContext);
   let finalResponse = firstResponse;
   let ticketRegistrationIds: string[] = [];
 
@@ -1104,6 +1179,7 @@ async function generateBotReplyForSender(
       ],
       settings,
       event?.effective_status || "active",
+      knowledgeContext,
     );
   }
 
@@ -1925,6 +2001,78 @@ async function startServer() {
     }
   });
 
+  app.get("/api/documents", requireAuth, async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const rows = await getEventDocuments(eventId);
+      res.json(rows);
+    } catch (error) {
+      console.error("Failed to fetch documents:", error);
+      res.status(500).json({ error: "Failed to fetch documents" });
+    }
+  });
+
+  app.post("/api/documents", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+      const title = String(req.body?.title || "").trim();
+      const content = String(req.body?.content || "").trim();
+      const sourceType = String(req.body?.source_type || "note").trim() || "note";
+      const sourceUrl = String(req.body?.source_url || "").trim();
+      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
+      const allowedSourceTypes = new Set(["note", "document", "url"]);
+
+      if (!title || !content) {
+        return res.status(400).json({ error: "title and content are required" });
+      }
+      if (!allowedSourceTypes.has(sourceType)) {
+        return res.status(400).json({ error: "Invalid source_type" });
+      }
+
+      const document = await appDb.upsertEventDocument({
+        id: typeof req.body?.id === "string" ? req.body.id : undefined,
+        event_id: eventId,
+        title,
+        source_type: sourceType as "note" | "document" | "url",
+        source_url: sourceUrl,
+        content,
+        is_active: isActive,
+      });
+      await recordAudit(req, "document.upserted", "event_document", document.id, {
+        event_id: eventId,
+        source_type: sourceType,
+        is_active: document.is_active,
+      });
+      res.json(document);
+    } catch (error) {
+      console.error("Failed to save document:", error);
+      res.status(500).json({ error: "Failed to save document" });
+    }
+  });
+
+  app.post("/api/documents/:id/status", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const documentId = String(req.params.id || "").trim();
+      const isActive = Boolean(req.body?.is_active);
+      if (!documentId) {
+        return res.status(400).json({ error: "Document ID is required" });
+      }
+
+      const updated = await appDb.setEventDocumentActive(documentId, isActive);
+      if (!updated) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      await recordAudit(req, "document.status_updated", "event_document", documentId, {
+        is_active: isActive,
+      });
+      res.json({ status: "ok", id: documentId, is_active: isActive });
+    } catch (error) {
+      console.error("Failed to update document status:", error);
+      res.status(500).json({ error: "Failed to update document status" });
+    }
+  });
+
   app.get("/api/messages", requireRoles(["owner", "admin", "operator", "viewer"]), async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
@@ -1980,8 +2128,10 @@ async function startServer() {
       const settings = (body.settings && typeof body.settings === "object")
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
+      const documents = await getEventDocuments(eventId);
+      const knowledgeContext = buildKnowledgeContext(documents, message);
       const event = await appDb.getEventById(eventId);
-      const response = await requestOpenRouterChat(message, history, settings, event?.effective_status || "active");
+      const response = await requestOpenRouterChat(message, history, settings, event?.effective_status || "active", knowledgeContext);
       res.json(response);
     } catch (error) {
       console.error("OpenRouter chat error:", error);

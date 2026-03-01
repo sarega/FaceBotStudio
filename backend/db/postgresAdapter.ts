@@ -15,6 +15,7 @@ import type {
   ChannelAccountRow,
   ChannelPlatform,
   CreateEventInput,
+  EventDocumentRow,
   CreateUserInput,
   EventStatus,
   EventRow,
@@ -29,6 +30,7 @@ import type {
   SettingRow,
   UpdateEventInput,
   UpsertChannelAccountInput,
+  UpsertEventDocumentInput,
   UpsertFacebookPageInput,
   UserRole,
 } from "./types";
@@ -95,6 +97,20 @@ function mapChannelRow(row: Record<string, unknown>) {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies ChannelAccountRow;
+}
+
+function mapEventDocumentRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    event_id: String(row.event_id),
+    title: String(row.title),
+    source_type: String(row.source_type || "note") as EventDocumentRow["source_type"],
+    source_url: typeof row.source_url === "string" ? row.source_url : null,
+    content: String(row.content || ""),
+    is_active: Boolean(row.is_active),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  } satisfies EventDocumentRow;
 }
 
 export class PostgresAppDatabase implements AppDatabase {
@@ -439,6 +455,53 @@ export class PostgresAppDatabase implements AppDatabase {
     const result = await this.pool.query(
       `UPDATE events SET ${updates.join(", ")} WHERE id = $${values.length}`,
       values,
+    );
+    return result.rowCount > 0;
+  }
+
+  async listEventDocuments(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM event_documents WHERE event_id = $1 ORDER BY updated_at DESC, created_at DESC",
+      [String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID],
+    );
+    return result.rows.map(mapEventDocumentRow);
+  }
+
+  async upsertEventDocument(input: UpsertEventDocumentInput) {
+    const id = String(input.id || "").trim() || generateEntityId("doc");
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const title = String(input.title || "").trim() || "Untitled Document";
+    const sourceType = String(input.source_type || "note").trim() || "note";
+    const sourceUrl = String(input.source_url || "").trim();
+    const content = String(input.content || "").trim();
+    const isActive = input.is_active === false ? false : true;
+
+    await this.pool.query(
+      `INSERT INTO event_documents (id, event_id, title, source_type, source_url, content, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO UPDATE
+       SET event_id = EXCLUDED.event_id,
+           title = EXCLUDED.title,
+           source_type = EXCLUDED.source_type,
+           source_url = EXCLUDED.source_url,
+           content = EXCLUDED.content,
+           is_active = EXCLUDED.is_active,
+           updated_at = CURRENT_TIMESTAMP`,
+      [id, eventId, title, sourceType, sourceUrl || null, content, isActive],
+    );
+
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM event_documents WHERE id = $1 LIMIT 1",
+      [id],
+    );
+    if (!result.rows[0]) throw new Error("Failed to upsert event document");
+    return mapEventDocumentRow(result.rows[0]);
+  }
+
+  async setEventDocumentActive(documentId: string, isActive: boolean) {
+    const result = await this.pool.query(
+      "UPDATE event_documents SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+      [isActive, String(documentId || "").trim()],
     );
     return result.rowCount > 0;
   }

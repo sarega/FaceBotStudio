@@ -12,6 +12,7 @@ import type {
   ChannelAccountRow,
   ChannelPlatform,
   CreateEventInput,
+  EventDocumentRow,
   CreateUserInput,
   EventStatus,
   EventRow,
@@ -26,6 +27,7 @@ import type {
   SettingRow,
   UpdateEventInput,
   UpsertChannelAccountInput,
+  UpsertEventDocumentInput,
   UpsertFacebookPageInput,
   UserRole,
 } from "./types";
@@ -98,6 +100,20 @@ function mapChannelRow(row: Record<string, unknown>) {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies ChannelAccountRow;
+}
+
+function mapEventDocumentRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    event_id: String(row.event_id),
+    title: String(row.title),
+    source_type: String(row.source_type || "note") as EventDocumentRow["source_type"],
+    source_url: typeof row.source_url === "string" ? row.source_url : null,
+    content: String(row.content || ""),
+    is_active: Boolean(row.is_active),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  } satisfies EventDocumentRow;
 }
 
 export class SqliteAppDatabase implements AppDatabase {
@@ -224,6 +240,18 @@ export class SqliteAppDatabase implements AppDatabase {
         UNIQUE (platform, external_id),
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS event_documents (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        source_type TEXT NOT NULL DEFAULT 'note',
+        source_url TEXT,
+        content TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions (token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
       CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
@@ -233,6 +261,8 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_event_id ON channel_accounts (event_id);
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts (platform);
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_external_id ON channel_accounts (external_id);
+      CREATE INDEX IF NOT EXISTS idx_event_documents_event_id ON event_documents (event_id);
+      CREATE INDEX IF NOT EXISTS idx_event_documents_active ON event_documents (event_id, is_active);
     `);
 
     this.ensureColumn("registrations", "event_id", "TEXT");
@@ -240,6 +270,7 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("messages", "page_id", "TEXT");
     this.ensureColumn("facebook_pages", "page_access_token", "TEXT");
     this.ensureColumn("channel_accounts", "config_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn("event_documents", "source_url", "TEXT");
     this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
     this.db.exec(`
       UPDATE events
@@ -526,6 +557,49 @@ export class SqliteAppDatabase implements AppDatabase {
     updates.push("updated_at = CURRENT_TIMESTAMP");
     values.push(String(eventId || "").trim());
     const result = this.db.prepare(`UPDATE events SET ${updates.join(", ")} WHERE id = ?`).run(...values);
+    return result.changes > 0;
+  }
+
+  async listEventDocuments(eventId: string) {
+    const rows = this.db.prepare(
+      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at, updated_at FROM event_documents WHERE event_id = ? ORDER BY updated_at DESC, created_at DESC",
+    ).all(String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID) as Array<Record<string, unknown>>;
+    return rows.map(mapEventDocumentRow);
+  }
+
+  async upsertEventDocument(input: UpsertEventDocumentInput) {
+    const id = String(input.id || "").trim() || generateEntityId("doc");
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const title = String(input.title || "").trim() || "Untitled Document";
+    const sourceType = String(input.source_type || "note").trim() || "note";
+    const sourceUrl = String(input.source_url || "").trim();
+    const content = String(input.content || "").trim();
+    const isActive = input.is_active === false ? 0 : 1;
+
+    this.db.prepare(
+      `INSERT INTO event_documents (id, event_id, title, source_type, source_url, content, is_active, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(id) DO UPDATE
+       SET event_id = excluded.event_id,
+           title = excluded.title,
+           source_type = excluded.source_type,
+           source_url = excluded.source_url,
+           content = excluded.content,
+           is_active = excluded.is_active,
+           updated_at = CURRENT_TIMESTAMP`,
+    ).run(id, eventId, title, sourceType, sourceUrl || null, content, isActive);
+
+    const row = this.db.prepare(
+      "SELECT id, event_id, title, source_type, source_url, content, is_active, created_at, updated_at FROM event_documents WHERE id = ? LIMIT 1",
+    ).get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new Error("Failed to upsert event document");
+    return mapEventDocumentRow(row);
+  }
+
+  async setEventDocumentActive(documentId: string, isActive: boolean) {
+    const result = this.db.prepare(
+      "UPDATE event_documents SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(isActive ? 1 : 0, String(documentId || "").trim());
     return result.changes > 0;
   }
 

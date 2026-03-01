@@ -60,6 +60,18 @@ export interface ChannelAccountRecord {
   updated_at: string;
 }
 
+export interface EventDocumentRecord {
+  id: string;
+  event_id: string;
+  title: string;
+  source_type: "note" | "document" | "url";
+  source_url?: string | null;
+  content: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Settings {
   context: string;
   llm_model: string;

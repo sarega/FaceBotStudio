@@ -30,7 +30,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventRecord, EventStatus, Message, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventDocumentRecord, EventRecord, EventStatus, Message, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -162,6 +162,14 @@ export default function App() {
   const [newUserDisplayName, setNewUserDisplayName] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState<UserRole>("operator");
+  const [documents, setDocuments] = useState<EventDocumentRecord[]>([]);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [documentsMessage, setDocumentsMessage] = useState("");
+  const [editingDocumentId, setEditingDocumentId] = useState("");
+  const [documentTitle, setDocumentTitle] = useState("");
+  const [documentSourceType, setDocumentSourceType] = useState<"note" | "document" | "url">("note");
+  const [documentSourceUrl, setDocumentSourceUrl] = useState("");
+  const [documentContent, setDocumentContent] = useState("");
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
@@ -364,6 +372,7 @@ export default function App() {
           fetchSettings(selectedEventId),
           canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
           fetchRegistrations(selectedEventId),
+          fetchDocuments(selectedEventId),
           canRunTest ? fetchLlmModels() : Promise.resolve(),
         ]);
       } finally {
@@ -375,6 +384,7 @@ export default function App() {
       void Promise.all([
         canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
         fetchRegistrations(selectedEventId),
+        fetchDocuments(selectedEventId),
       ]);
     }, 10000);
 
@@ -384,6 +394,15 @@ export default function App() {
   useEffect(() => {
     setEditingEventName(selectedEvent?.name || "");
   }, [selectedEvent?.id, selectedEvent?.name]);
+
+  useEffect(() => {
+    setDocumentsMessage("");
+    setEditingDocumentId("");
+    setDocumentTitle("");
+    setDocumentSourceType("note");
+    setDocumentSourceUrl("");
+    setDocumentContent("");
+  }, [selectedEventId]);
 
   const stopQrScanner = () => {
     if (scanIntervalRef.current != null) {
@@ -481,6 +500,31 @@ export default function App() {
     }
   };
 
+  const fetchDocuments = async (eventId = selectedEventId) => {
+    if (!eventId) {
+      setDocuments([]);
+      return [];
+    }
+
+    setDocumentsLoading(true);
+    try {
+      const res = await apiFetch(`/api/documents?event_id=${encodeURIComponent(eventId)}`);
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch documents");
+      }
+      const rows = Array.isArray(data) ? data as EventDocumentRecord[] : [];
+      setDocuments(rows);
+      return rows;
+    } catch (err) {
+      console.error("Failed to fetch documents", err);
+      setDocumentsMessage(err instanceof Error ? err.message : "Failed to fetch documents");
+      return [];
+    } finally {
+      setDocumentsLoading(false);
+    }
+  };
+
   const fetchMessages = async (eventId = selectedEventId) => {
     try {
       const res = await apiFetch(`/api/messages?event_id=${encodeURIComponent(eventId)}`);
@@ -549,6 +593,86 @@ export default function App() {
   ], "AI settings saved");
 
   const saveWebhookSettings = async () => saveSettingsSubset(["verify_token"], "Webhook settings saved");
+
+  const resetDocumentForm = () => {
+    setEditingDocumentId("");
+    setDocumentTitle("");
+    setDocumentSourceType("note");
+    setDocumentSourceUrl("");
+    setDocumentContent("");
+  };
+
+  const loadDocumentIntoForm = (document: EventDocumentRecord) => {
+    setEditingDocumentId(document.id);
+    setDocumentTitle(document.title);
+    setDocumentSourceType(document.source_type);
+    setDocumentSourceUrl(document.source_url || "");
+    setDocumentContent(document.content);
+    setDocumentsMessage(`Editing document ${document.title}`);
+  };
+
+  const handleSaveDocument = async () => {
+    if (!selectedEventId) return;
+    if (!documentTitle.trim() || !documentContent.trim()) {
+      setDocumentsMessage("Document title and content are required");
+      return;
+    }
+
+    setDocumentsLoading(true);
+    setDocumentsMessage("");
+    try {
+      const res = await apiFetch("/api/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editingDocumentId || undefined,
+          event_id: selectedEventId,
+          title: documentTitle.trim(),
+          source_type: documentSourceType,
+          source_url: documentSourceUrl.trim(),
+          content: documentContent.trim(),
+          is_active: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to save document");
+      }
+
+      await fetchDocuments(selectedEventId);
+      setDocumentsMessage(editingDocumentId ? "Document updated" : "Document saved");
+      resetDocumentForm();
+      window.setTimeout(() => setDocumentsMessage(""), 2500);
+    } catch (err) {
+      setDocumentsMessage(err instanceof Error ? err.message : "Failed to save document");
+    } finally {
+      setDocumentsLoading(false);
+    }
+  };
+
+  const handleDocumentStatusToggle = async (documentId: string, isActive: boolean) => {
+    setDocumentsLoading(true);
+    setDocumentsMessage("");
+    try {
+      const res = await apiFetch(`/api/documents/${encodeURIComponent(documentId)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !isActive }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to update document status");
+      }
+
+      await fetchDocuments(selectedEventId);
+      setDocumentsMessage(!isActive ? "Document enabled" : "Document disabled");
+      window.setTimeout(() => setDocumentsMessage(""), 2500);
+    } catch (err) {
+      setDocumentsMessage(err instanceof Error ? err.message : "Failed to update document status");
+    } finally {
+      setDocumentsLoading(false);
+    }
+  };
 
   const fetchRegistrations = async (eventId = selectedEventId) => {
     try {
@@ -843,11 +967,14 @@ export default function App() {
       setAuthUser(null);
       setMessages([]);
       setRegistrations([]);
+      setDocuments([]);
       setTeamUsers([]);
       setEvents([]);
       setChannels([]);
       setSelectedEventId("");
       setEventMessage("");
+      setDocumentsMessage("");
+      resetDocumentForm();
       setLoading(false);
       stopQrScanner();
     }
@@ -1559,7 +1686,7 @@ export default function App() {
                       Event Context Lives Separately
                     </h3>
                     <p className="text-sm text-blue-700 leading-relaxed">
-                      Event information and registration rules live in this tab. Event-specific knowledge, FAQ, and future RAG documents belong in the <span className="font-semibold">Context</span> tab.
+                      Event information and registration rules live in this tab. Event-specific knowledge, FAQ, and attached documents belong in the <span className="font-semibold">Context</span> tab.
                     </p>
                   </div>
                 </div>
@@ -1575,36 +1702,201 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h2 className="text-lg font-semibold">Event Context</h2>
-                    <p className="text-sm text-slate-500">Per-event context, FAQ, and source text that guide responses for the selected event.</p>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div className="xl:col-span-2 space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h2 className="text-lg font-semibold">Event Context</h2>
+                        <p className="text-sm text-slate-500">Per-event context, FAQ, and source text that guide responses for the selected event.</p>
+                      </div>
+                      <button
+                        onClick={() => void saveEventContext()}
+                        disabled={saving}
+                        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                      >
+                        {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        Save Event Context
+                      </button>
+                    </div>
+                    <textarea
+                      value={settings.context}
+                      onChange={(e) => setSettings({ ...settings, context: e.target.value })}
+                      className="w-full h-80 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono text-sm resize-none"
+                      placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
+                    />
+                    <div className="mt-4 rounded-2xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-800">
+                      <p className="font-semibold mb-1">How the bot uses this tab</p>
+                      <p>
+                        The selected event now has two knowledge layers: this free-form event context, plus structured documents below. Active documents are already used by the bot through simple retrieval. Vector search and embeddings can be added later without moving this content model again.
+                      </p>
+                    </div>
+                    {settingsMessage && (
+                      <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {settingsMessage}
+                      </p>
+                    )}
                   </div>
-                  <button
-                    onClick={() => void saveEventContext()}
-                    disabled={saving}
-                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                  >
-                    {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    Save Event Context
-                  </button>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-lg font-semibold">Knowledge Documents</h3>
+                        <p className="text-sm text-slate-500">Attach reusable notes, FAQ fragments, policy text, or URLs to the selected event.</p>
+                      </div>
+                      {editingDocumentId && (
+                        <button
+                          onClick={resetDocumentForm}
+                          className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-medium"
+                        >
+                          Cancel Edit
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Title</label>
+                        <input
+                          value={documentTitle}
+                          onChange={(e) => setDocumentTitle(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. Venue parking rules"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source Type</label>
+                        <select
+                          value={documentSourceType}
+                          onChange={(e) => setDocumentSourceType(e.target.value as "note" | "document" | "url")}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="note">Note</option>
+                          <option value="document">Document</option>
+                          <option value="url">URL</option>
+                        </select>
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source URL (Optional)</label>
+                        <input
+                          value={documentSourceUrl}
+                          onChange={(e) => setDocumentSourceUrl(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="https://example.com/reference"
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Document Content</label>
+                        <textarea
+                          value={documentContent}
+                          onChange={(e) => setDocumentContent(e.target.value)}
+                          className="w-full h-56 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-none"
+                          placeholder="Paste FAQ answers, rules, agenda details, speaker notes, or any event-specific reference content here."
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex items-center gap-3">
+                      <button
+                        onClick={() => void handleSaveDocument()}
+                        disabled={!selectedEventId || documentsLoading || !documentTitle.trim() || !documentContent.trim()}
+                        className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                      >
+                        {documentsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        {editingDocumentId ? "Update Document" : "Save Document"}
+                      </button>
+                      <p className="text-xs text-slate-500">
+                        Documents are event-scoped. They can later become RAG sources without changing where the team manages them.
+                      </p>
+                    </div>
+
+                    {documentsMessage && (
+                      <p className={`mt-3 text-xs ${documentsMessage.toLowerCase().includes("failed") || documentsMessage.toLowerCase().includes("error") || documentsMessage.toLowerCase().includes("required") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {documentsMessage}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <textarea
-                  value={settings.context}
-                  onChange={(e) => setSettings({ ...settings, context: e.target.value })}
-                  className="w-full h-96 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono text-sm resize-none"
-                  placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
-                />
-                <div className="mt-4 rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">
-                  <p className="font-semibold text-slate-800 mb-1">Future RAG slot</p>
-                  <p>Document upload and retrieval for this event should live here later. The current context box is the temporary source of truth for event-specific knowledge.</p>
+
+                <div className="space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-lg font-semibold">Attached Documents</h3>
+                        <p className="text-sm text-slate-500">Only active documents are used during retrieval.</p>
+                      </div>
+                      <button
+                        onClick={() => void fetchDocuments(selectedEventId)}
+                        disabled={documentsLoading || !selectedEventId}
+                        className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
+                        title="Refresh documents"
+                      >
+                        <RefreshCw className={`w-4 h-4 text-slate-500 ${documentsLoading ? "animate-spin" : ""}`} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {documents.length === 0 && (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                          No documents attached to this event yet.
+                        </div>
+                      )}
+                      {documents.map((document) => (
+                        <div key={document.id} className="rounded-2xl border border-slate-200 p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-semibold text-slate-900 truncate">{document.title}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
+                                <span className="rounded-full bg-slate-100 text-slate-600 px-2 py-1">{document.source_type}</span>
+                                <span className={`rounded-full px-2 py-1 ${document.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                                  {document.is_active ? "active" : "inactive"}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          {document.source_url && (
+                            <a
+                              href={document.source_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              Open source URL
+                            </a>
+                          )}
+                          <p className="text-sm text-slate-600 whitespace-pre-wrap">
+                            {document.content.length > 280 ? `${document.content.slice(0, 280)}...` : document.content}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => loadDocumentIntoForm(document)}
+                              className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
+                              disabled={documentsLoading}
+                              className={`rounded-xl px-3 py-2 text-xs font-semibold ${document.is_active ? "bg-amber-50 hover:bg-amber-100 text-amber-700" : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700"} disabled:opacity-50`}
+                            >
+                              {document.is_active ? "Disable" : "Enable"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
+                    <h3 className="font-semibold text-slate-900 mb-2">Retrieval behavior right now</h3>
+                    <div className="space-y-2">
+                      <p><span className="font-semibold">Current</span>: the bot ranks active event documents against the incoming message and injects the best matches into the prompt.</p>
+                      <p><span className="font-semibold">Next</span>: add file upload and chunking on top of the same event document store.</p>
+                      <p><span className="font-semibold">Later</span>: replace simple matching with embeddings/vector search without changing the event workspace model.</p>
+                    </div>
+                  </div>
                 </div>
-                {settingsMessage && (
-                  <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                    {settingsMessage}
-                  </p>
-                )}
               </div>
             </motion.div>
           )}
@@ -2223,7 +2515,7 @@ export default function App() {
                     </h3>
                     <div className="space-y-2 text-sm text-blue-700">
                       <p><span className="font-semibold">Event tab</span>: event information, registration rules, lifecycle.</p>
-                      <p><span className="font-semibold">Context tab</span>: event-specific FAQ, source text, future RAG documents.</p>
+                      <p><span className="font-semibold">Context tab</span>: event-specific FAQ, source text, and attached event documents.</p>
                       <p><span className="font-semibold">Setup tab</span>: system prompt, model policy, channels, team, webhook, and workspace administration.</p>
                     </div>
                   </div>
@@ -2353,7 +2645,7 @@ export default function App() {
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
                         <p><span className="font-semibold text-slate-800">Current</span>: Facebook Page routing with optional page-level access token.</p>
                         <p><span className="font-semibold text-slate-800">Next</span>: add channel account records for LINE OA, WhatsApp, and Telegram without moving event context out of the event workspace.</p>
-                        <p><span className="font-semibold text-slate-800">Later</span>: attach documents and RAG knowledge to the event, not to individual pages, so a single event can answer consistently across channels.</p>
+                        <p><span className="font-semibold text-slate-800">Current</span>: documents and knowledge stay attached to the event, not to individual pages, so one event can answer consistently across channels.</p>
                       </div>
                       <p className="text-xs text-slate-500">
                         OpenRouter credentials stay server-side in <code>OPENROUTER_API_KEY</code>. Per-channel secrets should also remain server-side and never be embedded in the client.

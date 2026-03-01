@@ -128,6 +128,18 @@ export interface ChannelAccountRow {
   updated_at: string;
 }
 
+export interface EventDocumentRow {
+  id: string;
+  event_id: string;
+  title: string;
+  source_type: "note" | "document" | "url";
+  source_url?: string | null;
+  content: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CreateEventInput {
   name: string;
 }
@@ -155,6 +167,16 @@ export interface UpsertChannelAccountInput {
   config_json?: string;
 }
 
+export interface UpsertEventDocumentInput {
+  id?: string;
+  event_id: string;
+  title: string;
+  source_type: "note" | "document" | "url";
+  source_url?: string;
+  content: string;
+  is_active?: boolean;
+}
+
 export interface AppDatabase {
   driver: "postgres" | "sqlite";
   initialize(): Promise<void>;
@@ -177,6 +199,9 @@ export interface AppDatabase {
   getEventById(eventId: string): Promise<EventRow | undefined>;
   createEvent(input: CreateEventInput): Promise<EventRow>;
   updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
+  listEventDocuments(eventId: string): Promise<EventDocumentRow[]>;
+  upsertEventDocument(input: UpsertEventDocumentInput): Promise<EventDocumentRow>;
+  setEventDocumentActive(documentId: string, isActive: boolean): Promise<boolean>;
   listChannelAccounts(platform?: ChannelPlatform): Promise<ChannelAccountRow[]>;
   getChannelAccount(platform: ChannelPlatform, externalId: string): Promise<ChannelAccountRow | undefined>;
   upsertChannelAccount(input: UpsertChannelAccountInput): Promise<ChannelAccountRow>;
