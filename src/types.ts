@@ -11,7 +11,7 @@ export interface Message {
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "cancelled";
 export type EventStatus = ManualEventStatus | "closed";
-export type ChannelPlatform = "facebook" | "line_oa" | "whatsapp" | "telegram";
+export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram";
 export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
 
 export interface AuthUser {
@@ -57,8 +57,39 @@ export interface ChannelAccountRecord {
   event_id: string;
   is_active: boolean;
   has_access_token?: boolean;
+  platform_label?: string;
+  platform_description?: string;
+  live_messaging_ready?: boolean;
+  connection_status?: "ready" | "partial" | "incomplete";
+  missing_requirements?: string[];
+  config?: Record<string, string>;
+  config_summary?: Array<{ key: string; label: string; value: string }>;
+  secret_config_fields_present?: string[];
   created_at: string;
   updated_at: string;
+}
+
+export interface ChannelPlatformFieldDefinition {
+  key: string;
+  label: string;
+  placeholder?: string;
+  help?: string;
+  required?: boolean;
+  secret?: boolean;
+}
+
+export interface ChannelPlatformDefinition {
+  id: ChannelPlatform;
+  label: string;
+  description: string;
+  external_id_label: string;
+  external_id_placeholder: string;
+  access_token_label: string;
+  access_token_required: boolean;
+  access_token_help?: string;
+  config_fields: ChannelPlatformFieldDefinition[];
+  live_messaging_ready: boolean;
+  notes: string[];
 }
 
 export interface EventDocumentRecord {

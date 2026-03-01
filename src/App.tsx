@@ -30,7 +30,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -309,6 +309,9 @@ export default function App() {
   const [newPageName, setNewPageName] = useState("");
   const [newPageAccessToken, setNewPageAccessToken] = useState("");
   const [newChannelPlatform, setNewChannelPlatform] = useState<ChannelPlatform>("facebook");
+  const [newChannelConfig, setNewChannelConfig] = useState<Record<string, string>>({});
+  const [editingChannelKey, setEditingChannelKey] = useState("");
+  const [channelPlatformDefinitions, setChannelPlatformDefinitions] = useState<ChannelPlatformDefinition[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [teamLoading, setTeamLoading] = useState(false);
   const [teamMessage, setTeamMessage] = useState("");
@@ -397,6 +400,22 @@ export default function App() {
   const timingInfo = describeEventTiming(settings);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
+  const selectedChannelPlatformDefinition = channelPlatformDefinitions.find((definition) => definition.id === newChannelPlatform) || null;
+  const editingChannel = channels.find((channel) => `${channel.platform}:${channel.external_id}` === editingChannelKey) || null;
+  const channelFormMissingRequirements = (() => {
+    if (!selectedChannelPlatformDefinition) return [];
+    const missing: string[] = [];
+    const hasAccessToken = Boolean(newPageAccessToken.trim() || editingChannel?.has_access_token || (newChannelPlatform === "facebook"));
+    if (selectedChannelPlatformDefinition.access_token_required && !hasAccessToken) {
+      missing.push(selectedChannelPlatformDefinition.access_token_label);
+    }
+    for (const field of selectedChannelPlatformDefinition.config_fields) {
+      if (field.required && !String(newChannelConfig[field.key] || "").trim()) {
+        missing.push(field.label);
+      }
+    }
+    return missing;
+  })();
   const selectedEventChannelWritesLocked =
     selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled";
   const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
@@ -470,6 +489,23 @@ export default function App() {
     }
   };
 
+  const fetchChannelPlatforms = async () => {
+    try {
+      const res = await apiFetch("/api/channel-platforms");
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch channel platform definitions");
+      }
+      const rows = Array.isArray(data) ? (data as ChannelPlatformDefinition[]) : [];
+      setChannelPlatformDefinitions(rows);
+      return rows;
+    } catch (err) {
+      console.error("Failed to fetch channel platform definitions", err);
+      setEventMessage(err instanceof Error ? err.message : "Failed to fetch channel platform definitions");
+      return [];
+    }
+  };
+
   const fetchTeamUsers = async () => {
     if (!(role === "owner" || role === "admin")) {
       setTeamUsers([]);
@@ -498,6 +534,7 @@ export default function App() {
       const [eventRows] = await Promise.all([
         fetchEvents(),
         fetchChannels(),
+        fetchChannelPlatforms(),
         role === "owner" || role === "admin" ? fetchTeamUsers() : Promise.resolve(),
       ]);
       if (!eventRows.length) {
@@ -588,6 +625,7 @@ export default function App() {
     setRetrievalMessage("");
     setEmbeddingPreview(null);
     setEmbeddingPreviewMessage("");
+    resetChannelForm();
   }, [selectedEventId]);
 
   useEffect(() => {
@@ -1364,10 +1402,12 @@ export default function App() {
       setTeamUsers([]);
       setEvents([]);
       setChannels([]);
+      setChannelPlatformDefinitions([]);
       setSelectedEventId("");
       setEventMessage("");
       setDocumentsMessage("");
       resetDocumentForm();
+      resetChannelForm();
       setLoading(false);
       stopQrScanner();
     }
@@ -1436,12 +1476,30 @@ export default function App() {
     }
   };
 
-  const handleSaveChannel = async (channel?: ChannelAccountRecord) => {
+  const resetChannelForm = () => {
+    setEditingChannelKey("");
+    setNewPageId("");
+    setNewPageName("");
+    setNewPageAccessToken("");
+    setNewChannelPlatform("facebook");
+    setNewChannelConfig({});
+  };
+
+  const loadChannelIntoForm = (channel: ChannelAccountRecord) => {
+    setEditingChannelKey(`${channel.platform}:${channel.external_id}`);
+    setNewChannelPlatform(channel.platform);
+    setNewPageId(channel.external_id);
+    setNewPageName(channel.display_name);
+    setNewPageAccessToken("");
+    setNewChannelConfig(channel.config || {});
+  };
+
+  const handleToggleChannel = async (channel: ChannelAccountRecord) => {
     if (!selectedEventId) return;
-    const platform = channel ? channel.platform : newChannelPlatform;
-    const externalId = (channel ? channel.external_id : newPageId).trim();
-    const displayName = (channel ? channel.display_name : newPageName).trim();
-    const accessToken = channel ? "" : newPageAccessToken.trim();
+    const platform = channel.platform;
+    const externalId = channel.external_id.trim();
+    const displayName = channel.display_name.trim();
+    const accessToken = "";
     if (!externalId) {
       setEventMessage("Channel external ID is required");
       return;
@@ -1459,21 +1517,57 @@ export default function App() {
           display_name: displayName || externalId,
           event_id: selectedEventId,
           access_token: accessToken,
-          is_active: channel ? !channel.is_active : true,
+          config: channel.config || {},
+          is_active: !channel.is_active,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data?.error || "Failed to save channel");
       }
-      if (!channel) {
-        setNewPageId("");
-        setNewPageName("");
-        setNewPageAccessToken("");
-        setNewChannelPlatform("facebook");
+      await fetchChannels();
+      setEventMessage(`Channel ${channel.is_active ? "disabled" : "enabled"}`);
+      window.setTimeout(() => setEventMessage(""), 2500);
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to save channel");
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const handleSaveChannel = async () => {
+    if (!selectedEventId) return;
+    const externalId = newPageId.trim();
+    const displayName = newPageName.trim();
+    const accessToken = newPageAccessToken.trim();
+    if (!externalId) {
+      setEventMessage(selectedChannelPlatformDefinition?.external_id_label || "Channel external ID is required");
+      return;
+    }
+
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch("/api/channels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: newChannelPlatform,
+          external_id: externalId,
+          display_name: displayName || externalId,
+          event_id: selectedEventId,
+          access_token: accessToken,
+          config: newChannelConfig,
+          is_active: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to save channel");
       }
       await fetchChannels();
-      setEventMessage(channel ? `Channel ${channel.is_active ? "disabled" : "enabled"}` : "Channel linked");
+      setEventMessage(editingChannelKey ? "Channel updated" : "Channel linked");
+      resetChannelForm();
       window.setTimeout(() => setEventMessage(""), 2500);
     } catch (err) {
       setEventMessage(err instanceof Error ? err.message : "Failed to save channel");
@@ -3337,10 +3431,22 @@ export default function App() {
                                 <div className="flex items-center gap-2">
                                   <p className="text-sm font-semibold">{channel.display_name}</p>
                                   <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-700">
-                                    {channel.platform}
+                                    {channel.platform_label || channel.platform}
+                                  </span>
+                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                    channel.connection_status === "ready"
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : channel.connection_status === "partial"
+                                      ? "bg-amber-100 text-amber-700"
+                                      : "bg-rose-100 text-rose-700"
+                                  }`}>
+                                    {channel.connection_status || "incomplete"}
                                   </span>
                                 </div>
                                 <p className="text-xs font-mono text-slate-500">{channel.external_id}</p>
+                                {channel.platform_description && (
+                                  <p className="mt-1 text-xs text-slate-500">{channel.platform_description}</p>
+                                )}
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
@@ -3355,34 +3461,88 @@ export default function App() {
                                 </span>
                               </div>
                             </div>
-                            <button
-                              onClick={() => void handleSaveChannel(channel)}
-                              disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
-                              className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-50"
-                            >
-                              {selectedEventChannelWritesLocked && !channel.is_active
-                                ? "Locked by Event Status"
-                                : channel.is_active
-                                ? "Disable Channel"
-                                : "Enable Channel"}
-                            </button>
+                            {channel.missing_requirements && channel.missing_requirements.length > 0 && (
+                              <p className="text-xs text-amber-700">
+                                Missing: {channel.missing_requirements.join(", ")}
+                              </p>
+                            )}
+                            {channel.config_summary && channel.config_summary.length > 0 && (
+                              <div className="flex flex-wrap gap-2 text-[11px]">
+                                {channel.config_summary.map((item) => (
+                                  <span key={`${channel.id}:${item.key}`} className="rounded-full bg-white border border-slate-200 px-2 py-1 text-slate-600">
+                                    {item.label}: {item.value}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {channel.secret_config_fields_present && channel.secret_config_fields_present.length > 0 && (
+                              <p className="text-[11px] text-slate-500">
+                                Stored secret fields: {channel.secret_config_fields_present.join(", ")}
+                              </p>
+                            )}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                onClick={() => loadChannelIntoForm(channel)}
+                                className="rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-2 text-xs font-semibold"
+                              >
+                                Edit Channel
+                              </button>
+                              <button
+                                onClick={() => void handleToggleChannel(channel)}
+                                disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
+                                className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                              >
+                                {selectedEventChannelWritesLocked && !channel.is_active
+                                  ? "Locked by Event Status"
+                                  : channel.is_active
+                                  ? "Disable Channel"
+                                  : "Enable Channel"}
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}
                     </div>
 
                     <div className="border-t border-slate-100 pt-5 space-y-3">
-                      <p className="text-sm font-semibold">Link Channel to Selected Event</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold">{editingChannelKey ? "Edit Channel" : "Link Channel to Selected Event"}</p>
+                        {editingChannelKey && (
+                          <button
+                            onClick={resetChannelForm}
+                            className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold"
+                          >
+                            Cancel Edit
+                          </button>
+                        )}
+                      </div>
                       <select
                         value={newChannelPlatform}
-                        onChange={(e) => setNewChannelPlatform(e.target.value as ChannelPlatform)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        onChange={(e) => {
+                          const platform = e.target.value as ChannelPlatform;
+                          setNewChannelPlatform(platform);
+                          setNewChannelConfig({});
+                        }}
+                        disabled={Boolean(editingChannelKey)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
                       >
                         <option value="facebook">Facebook</option>
                         <option value="line_oa">LINE OA</option>
+                        <option value="instagram">Instagram</option>
                         <option value="whatsapp">WhatsApp</option>
                         <option value="telegram">Telegram</option>
                       </select>
+                      {selectedChannelPlatformDefinition && (
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
+                          <p className="font-semibold text-slate-800">{selectedChannelPlatformDefinition.label}</p>
+                          <p>{selectedChannelPlatformDefinition.description}</p>
+                          <div className="space-y-1 text-xs text-slate-500">
+                            {selectedChannelPlatformDefinition.notes.map((note) => (
+                              <p key={`${selectedChannelPlatformDefinition.id}:${note}`}>{note}</p>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <input
                         value={newPageName}
                         onChange={(e) => setNewPageName(e.target.value)}
@@ -3392,29 +3552,59 @@ export default function App() {
                       <input
                         value={newPageId}
                         onChange={(e) => setNewPageId(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Channel external ID"
+                        disabled={Boolean(editingChannelKey)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+                        placeholder={selectedChannelPlatformDefinition?.external_id_placeholder || "Channel external ID"}
                       />
+                      {selectedChannelPlatformDefinition && (
+                        <p className="text-xs text-slate-500">
+                          {selectedChannelPlatformDefinition.external_id_label}
+                        </p>
+                      )}
                       <input
                         value={newPageAccessToken}
                         onChange={(e) => setNewPageAccessToken(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Channel access token (optional for Facebook; future platforms should save their own token)"
+                        placeholder={selectedChannelPlatformDefinition?.access_token_label || "Channel access token"}
                       />
+                      {selectedChannelPlatformDefinition?.access_token_help && (
+                        <p className="text-xs text-slate-500">
+                          {selectedChannelPlatformDefinition.access_token_help}
+                        </p>
+                      )}
+                      {selectedChannelPlatformDefinition?.config_fields.map((field) => (
+                        <div key={`${newChannelPlatform}:${field.key}`} className="space-y-1">
+                          <input
+                            value={newChannelConfig[field.key] || ""}
+                            onChange={(e) => setNewChannelConfig((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                            type={field.secret ? "password" : "text"}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder={field.placeholder || field.label}
+                          />
+                          <p className="text-xs text-slate-500">
+                            {field.label}{field.required ? " (required)" : ""}{field.help ? ` - ${field.help}` : ""}
+                          </p>
+                        </div>
+                      ))}
                       <button
                         onClick={() => void handleSaveChannel()}
-                        disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEventChannelWritesLocked}
+                        disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEventChannelWritesLocked || channelFormMissingRequirements.length > 0}
                         className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
                       >
-                        Link Channel to Event
+                        {editingChannelKey ? "Update Channel" : "Link Channel to Event"}
                       </button>
+                      {channelFormMissingRequirements.length > 0 && (
+                        <p className="text-xs text-amber-700">
+                          Missing before save: {channelFormMissingRequirements.join(", ")}
+                        </p>
+                      )}
                       {selectedEvent && selectedEventChannelWritesLocked && (
                         <p className="text-xs text-amber-700">
                           Closed or cancelled events cannot link or re-enable channels. You can still disable an active channel if you want to stop replies entirely.
                         </p>
                       )}
                       <p className="text-xs text-slate-500">
-                        Facebook can still fall back to the global <code>PAGE_ACCESS_TOKEN</code>. Other platforms in this screen are groundwork for future integrations and are not wired into live messaging yet.
+                        Facebook is still the only platform wired into live messaging right now. LINE OA, Instagram, WhatsApp, and Telegram in this screen are now structured with platform-specific setup fields so their adapters can be added without moving event content out of the event workspace.
                       </p>
                     </div>
                   </div>
@@ -3441,7 +3631,8 @@ export default function App() {
                       </p>
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
                         <p><span className="font-semibold text-slate-800">Current</span>: Facebook Page routing with optional page-level access token.</p>
-                        <p><span className="font-semibold text-slate-800">Next</span>: add channel account records for LINE OA, WhatsApp, and Telegram without moving event context out of the event workspace.</p>
+                        <p><span className="font-semibold text-slate-800">Current</span>: platform-specific channel setup fields now exist for LINE OA, Instagram, WhatsApp, and Telegram.</p>
+                        <p><span className="font-semibold text-slate-800">Next</span>: wire live adapters one platform at a time without moving event context out of the event workspace.</p>
                         <p><span className="font-semibold text-slate-800">Current</span>: documents and knowledge stay attached to the event, not to individual pages, so one event can answer consistently across channels.</p>
                       </div>
                       <p className="text-xs text-slate-500">

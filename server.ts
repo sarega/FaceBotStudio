@@ -15,6 +15,17 @@ import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
 import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
 import {
+  ALLOWED_CHANNEL_PLATFORMS,
+  CHANNEL_PLATFORM_DEFINITIONS,
+  getChannelConfigSummary,
+  getChannelConnectionStatus,
+  getChannelMissingRequirements,
+  getChannelPlatformDefinition,
+  getPresentSecretConfigFields,
+  safeParseChannelConfig,
+  sanitizeChannelConfig,
+} from "./backend/channelPlatforms";
+import {
   ALL_USER_ROLES,
   SESSION_COOKIE_NAME,
   cookieSerialize,
@@ -1803,11 +1814,25 @@ async function startServer() {
         channels.map((channel) => ({
           id: channel.id,
           platform: channel.platform,
+          platform_label: getChannelPlatformDefinition(channel.platform)?.label || channel.platform,
+          platform_description: getChannelPlatformDefinition(channel.platform)?.description || "",
           external_id: channel.external_id,
           display_name: channel.display_name,
           event_id: channel.event_id,
           is_active: channel.is_active,
           has_access_token: Boolean(channel.access_token),
+          live_messaging_ready: getChannelPlatformDefinition(channel.platform)?.live_messaging_ready || false,
+          connection_status: getChannelConnectionStatus(channel.platform, {
+            hasAccessToken: Boolean(channel.access_token),
+            config: safeParseChannelConfig(channel.config_json),
+          }),
+          missing_requirements: getChannelMissingRequirements(channel.platform, {
+            hasAccessToken: Boolean(channel.access_token),
+            config: safeParseChannelConfig(channel.config_json),
+          }),
+          config: safeParseChannelConfig(channel.config_json),
+          config_summary: getChannelConfigSummary(channel.platform, safeParseChannelConfig(channel.config_json)),
+          secret_config_fields_present: getPresentSecretConfigFields(channel.platform, safeParseChannelConfig(channel.config_json)),
           created_at: channel.created_at,
           updated_at: channel.updated_at,
         })),
@@ -1815,6 +1840,15 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to fetch channels:", error);
       return res.status(500).json({ error: "Failed to fetch channels" });
+    }
+  });
+
+  app.get("/api/channel-platforms", requireAuth, async (_req, res) => {
+    try {
+      return res.json(ALLOWED_CHANNEL_PLATFORMS.map((platform) => CHANNEL_PLATFORM_DEFINITIONS[platform]));
+    } catch (error) {
+      console.error("Failed to fetch channel platform definitions:", error);
+      return res.status(500).json({ error: "Failed to fetch channel platform definitions" });
     }
   });
 
@@ -1866,9 +1900,7 @@ async function startServer() {
       const eventId = String(req.body?.event_id || "").trim();
       const accessToken = String(req.body?.access_token || "").trim();
       const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
-      const allowedPlatforms = new Set<ChannelPlatform>(["facebook", "line_oa", "whatsapp", "telegram"]);
-
-      if (!allowedPlatforms.has(platform)) {
+      if (!ALLOWED_CHANNEL_PLATFORMS.includes(platform)) {
         return res.status(400).json({ error: "Invalid channel platform" });
       }
       if (!externalId || !eventId) {
@@ -1881,6 +1913,16 @@ async function startServer() {
       }
 
       const existingChannel = await appDb.getChannelAccount(platform, externalId);
+      const nextConfig = sanitizeChannelConfig(platform, req.body?.config);
+      const mergedConfig = {
+        ...(existingChannel ? safeParseChannelConfig(existingChannel.config_json) : {}),
+        ...nextConfig,
+      };
+      const effectiveHasAccessToken = Boolean(accessToken || existingChannel?.access_token || (platform === "facebook" && process.env.PAGE_ACCESS_TOKEN));
+      const missingRequirements = getChannelMissingRequirements(platform, {
+        hasAccessToken: effectiveHasAccessToken,
+        config: mergedConfig,
+      });
       const isDisableOnlyUpdate =
         Boolean(existingChannel) &&
         existingChannel?.event_id === eventId &&
@@ -1892,12 +1934,20 @@ async function startServer() {
         });
       }
 
+      if (isActive && missingRequirements.length > 0) {
+        return res.status(400).json({
+          error: `Missing required channel setup: ${missingRequirements.join(", ")}`,
+          missing_requirements: missingRequirements,
+        });
+      }
+
       const channel = await appDb.upsertChannelAccount({
         platform,
         external_id: externalId,
         display_name: displayName || externalId,
         event_id: eventId,
         access_token: accessToken,
+        config_json: JSON.stringify(mergedConfig),
         is_active: isActive,
       });
 
@@ -1911,11 +1961,25 @@ async function startServer() {
       return res.json({
         id: channel.id,
         platform: channel.platform,
+        platform_label: getChannelPlatformDefinition(channel.platform)?.label || channel.platform,
+        platform_description: getChannelPlatformDefinition(channel.platform)?.description || "",
         external_id: channel.external_id,
         display_name: channel.display_name,
         event_id: channel.event_id,
         is_active: channel.is_active,
         has_access_token: Boolean(channel.access_token),
+        live_messaging_ready: getChannelPlatformDefinition(channel.platform)?.live_messaging_ready || false,
+        connection_status: getChannelConnectionStatus(channel.platform, {
+          hasAccessToken: Boolean(channel.access_token),
+          config: safeParseChannelConfig(channel.config_json),
+        }),
+        missing_requirements: getChannelMissingRequirements(channel.platform, {
+          hasAccessToken: Boolean(channel.access_token),
+          config: safeParseChannelConfig(channel.config_json),
+        }),
+        config: safeParseChannelConfig(channel.config_json),
+        config_summary: getChannelConfigSummary(channel.platform, safeParseChannelConfig(channel.config_json)),
+        secret_config_fields_present: getPresentSecretConfigFields(channel.platform, safeParseChannelConfig(channel.config_json)),
         created_at: channel.created_at,
         updated_at: channel.updated_at,
       });
