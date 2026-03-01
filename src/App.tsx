@@ -30,7 +30,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventDocumentRecord, EventRecord, EventStatus, Message, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -266,6 +266,9 @@ export default function App() {
   const [documentSourceType, setDocumentSourceType] = useState<"note" | "document" | "url">("note");
   const [documentSourceUrl, setDocumentSourceUrl] = useState("");
   const [documentContent, setDocumentContent] = useState("");
+  const [documentChunks, setDocumentChunks] = useState<EventDocumentChunkRecord[]>([]);
+  const [documentChunksLoading, setDocumentChunksLoading] = useState(false);
+  const [selectedDocumentForChunksId, setSelectedDocumentForChunksId] = useState("");
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
@@ -311,6 +314,7 @@ export default function App() {
   };
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
+  const selectedDocumentForChunks = documents.find((document) => document.id === selectedDocumentForChunksId) || null;
   const canUseQrScanner =
     typeof window !== "undefined" &&
     typeof navigator !== "undefined" &&
@@ -501,7 +505,14 @@ export default function App() {
     setDocumentSourceType("note");
     setDocumentSourceUrl("");
     setDocumentContent("");
+    setDocumentChunks([]);
+    setSelectedDocumentForChunksId("");
   }, [selectedEventId]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !selectedEventId || !selectedDocumentForChunksId) return;
+    void fetchDocumentChunks(selectedDocumentForChunksId, selectedEventId);
+  }, [authStatus, selectedEventId, selectedDocumentForChunksId]);
 
   const stopQrScanner = () => {
     if (scanIntervalRef.current != null) {
@@ -602,6 +613,8 @@ export default function App() {
   const fetchDocuments = async (eventId = selectedEventId) => {
     if (!eventId) {
       setDocuments([]);
+      setSelectedDocumentForChunksId("");
+      setDocumentChunks([]);
       return [];
     }
 
@@ -614,6 +627,7 @@ export default function App() {
       }
       const rows = Array.isArray(data) ? data as EventDocumentRecord[] : [];
       setDocuments(rows);
+      setSelectedDocumentForChunksId((prev) => prev && rows.some((document) => document.id === prev) ? prev : rows[0]?.id || "");
       return rows;
     } catch (err) {
       console.error("Failed to fetch documents", err);
@@ -621,6 +635,32 @@ export default function App() {
       return [];
     } finally {
       setDocumentsLoading(false);
+    }
+  };
+
+  const fetchDocumentChunks = async (documentId = selectedDocumentForChunksId, eventId = selectedEventId) => {
+    if (!documentId || !eventId) {
+      setDocumentChunks([]);
+      return [];
+    }
+
+    setDocumentChunksLoading(true);
+    try {
+      const res = await apiFetch(`/api/documents/${encodeURIComponent(documentId)}/chunks?event_id=${encodeURIComponent(eventId)}`);
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch document chunks");
+      }
+      const rows = Array.isArray(data) ? data as EventDocumentChunkRecord[] : [];
+      setDocumentChunks(rows);
+      return rows;
+    } catch (err) {
+      console.error("Failed to fetch document chunks", err);
+      setDocumentsMessage(err instanceof Error ? err.message : "Failed to fetch document chunks");
+      setDocumentChunks([]);
+      return [];
+    } finally {
+      setDocumentChunksLoading(false);
     }
   };
 
@@ -764,6 +804,7 @@ export default function App() {
     setDocumentSourceType(document.source_type);
     setDocumentSourceUrl(document.source_url || "");
     setDocumentContent(document.content);
+    setSelectedDocumentForChunksId(document.id);
     setDocumentsMessage(`Editing document ${document.title}`);
   };
 
@@ -796,6 +837,10 @@ export default function App() {
       }
 
       await fetchDocuments(selectedEventId);
+      if (data?.id) {
+        setSelectedDocumentForChunksId(String(data.id));
+        await fetchDocumentChunks(String(data.id), selectedEventId);
+      }
       setDocumentsMessage(editingDocumentId ? "Document updated" : "Document saved");
       resetDocumentForm();
       window.setTimeout(() => setDocumentsMessage(""), 2500);
@@ -821,6 +866,9 @@ export default function App() {
       }
 
       await fetchDocuments(selectedEventId);
+      if (selectedDocumentForChunksId === documentId) {
+        await fetchDocumentChunks(documentId, selectedEventId);
+      }
       setDocumentsMessage(!isActive ? "Document enabled" : "Document disabled");
       window.setTimeout(() => setDocumentsMessage(""), 2500);
     } catch (err) {
@@ -2064,6 +2112,16 @@ export default function App() {
                               Edit
                             </button>
                             <button
+                              onClick={() => setSelectedDocumentForChunksId(document.id)}
+                              className={`rounded-xl px-3 py-2 text-xs font-semibold ${
+                                selectedDocumentForChunksId === document.id
+                                  ? "bg-blue-600 text-white"
+                                  : "bg-blue-50 hover:bg-blue-100 text-blue-700"
+                              }`}
+                            >
+                              View Chunks
+                            </button>
+                            <button
                               onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
                               disabled={documentsLoading}
                               className={`rounded-xl px-3 py-2 text-xs font-semibold ${document.is_active ? "bg-amber-50 hover:bg-amber-100 text-amber-700" : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700"} disabled:opacity-50`}
@@ -2074,6 +2132,68 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <h3 className="font-semibold text-slate-900">Chunk Inspector</h3>
+                        <p className="text-xs text-slate-500">
+                          Preview the exact chunks available for retrieval from the selected document.
+                        </p>
+                      </div>
+                      {selectedDocumentForChunks && (
+                        <button
+                          onClick={() => void fetchDocumentChunks(selectedDocumentForChunks.id, selectedEventId)}
+                          disabled={documentChunksLoading}
+                          className="p-2 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+                          title="Refresh chunks"
+                        >
+                          <RefreshCw className={`w-4 h-4 text-slate-500 ${documentChunksLoading ? "animate-spin" : ""}`} />
+                        </button>
+                      )}
+                    </div>
+
+                    {!selectedDocumentForChunks ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500 mb-4">
+                        Select a document to inspect its chunks.
+                      </div>
+                    ) : (
+                      <div className="space-y-3 mb-4">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <p className="font-semibold text-slate-900">{selectedDocumentForChunks.title}</p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
+                            <span className="rounded-full bg-slate-100 text-slate-600 px-2 py-1">{selectedDocumentForChunks.source_type}</span>
+                            <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1">{selectedDocumentForChunks.chunk_count || 0} chunks</span>
+                            <span className={`rounded-full px-2 py-1 ${selectedDocumentForChunks.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                              {selectedDocumentForChunks.is_active ? "active" : "inactive"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 max-h-[24rem] overflow-y-auto pr-1">
+                          {documentChunksLoading && (
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-500">
+                              Loading chunks...
+                            </div>
+                          )}
+                          {!documentChunksLoading && documentChunks.length === 0 && (
+                            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                              No chunks generated for this document yet.
+                            </div>
+                          )}
+                          {!documentChunksLoading && documentChunks.map((chunk) => (
+                            <div key={chunk.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+                                Chunk {chunk.chunk_index + 1}
+                              </p>
+                              <p className="text-sm text-slate-700 whitespace-pre-wrap">{chunk.content}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">

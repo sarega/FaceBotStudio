@@ -73,6 +73,16 @@ export interface EventDocumentRecord {
   updated_at: string;
 }
 
+export interface EventDocumentChunkRecord {
+  id: string;
+  document_id: string;
+  event_id: string;
+  chunk_index: number;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Settings {
   context: string;
   llm_model: string;

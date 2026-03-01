@@ -2064,6 +2064,28 @@ async function startServer() {
     }
   });
 
+  app.get("/api/documents/:id/chunks", requireAuth, async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const documentId = String(req.params.id || "").trim();
+      if (!documentId) {
+        return res.status(400).json({ error: "Document ID is required" });
+      }
+
+      const documents = await getEventDocuments(eventId);
+      const document = documents.find((row) => row.id === documentId);
+      if (!document) {
+        return res.status(404).json({ error: "Document not found for this event" });
+      }
+
+      const chunks = await getEventDocumentChunks(eventId);
+      return res.json(chunks.filter((chunk) => chunk.document_id === documentId));
+    } catch (error) {
+      console.error("Failed to fetch document chunks:", error);
+      return res.status(500).json({ error: "Failed to fetch document chunks" });
+    }
+  });
+
   app.post("/api/documents", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
