@@ -799,6 +799,39 @@ export class SqliteAppDatabase implements AppDatabase {
     return mapEventDocumentRow(row);
   }
 
+  async resetEventKnowledge(eventId: string) {
+    const normalizedEventId = String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    let documentsDeleted = 0;
+    let chunksDeleted = 0;
+    let contextCleared = false;
+
+    const transaction = this.db.transaction(() => {
+      const chunkCountRow = this.db.prepare(
+        "SELECT COUNT(*) AS count FROM event_document_chunks WHERE event_id = ?",
+      ).get(normalizedEventId) as { count?: number } | undefined;
+      const documentCountRow = this.db.prepare(
+        "SELECT COUNT(*) AS count FROM event_documents WHERE event_id = ?",
+      ).get(normalizedEventId) as { count?: number } | undefined;
+      const contextResult = this.db.prepare(
+        "DELETE FROM event_settings WHERE event_id = ? AND key = 'context'",
+      ).run(normalizedEventId);
+      this.db.prepare("DELETE FROM event_document_chunks WHERE event_id = ?").run(normalizedEventId);
+      this.db.prepare("DELETE FROM event_documents WHERE event_id = ?").run(normalizedEventId);
+
+      chunksDeleted = Number(chunkCountRow?.count || 0);
+      documentsDeleted = Number(documentCountRow?.count || 0);
+      contextCleared = Boolean(contextResult.changes);
+    });
+
+    transaction();
+
+    return {
+      documentsDeleted,
+      chunksDeleted,
+      contextCleared,
+    };
+  }
+
   async setEventDocumentActive(documentId: string, isActive: boolean) {
     const normalizedDocumentId = String(documentId || "").trim();
     const status = getDefaultEmbeddingStatus(isActive);

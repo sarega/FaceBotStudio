@@ -380,6 +380,7 @@ export default function App() {
   const [embeddingPreviewLoading, setEmbeddingPreviewLoading] = useState(false);
   const [embeddingPreviewMessage, setEmbeddingPreviewMessage] = useState("");
   const [embeddingEnqueueLoading, setEmbeddingEnqueueLoading] = useState(false);
+  const [knowledgeResetting, setKnowledgeResetting] = useState(false);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
@@ -413,6 +414,7 @@ export default function App() {
   const canViewLogs = role === "owner" || role === "admin" || role === "operator" || role === "viewer";
   const canManageRegistrations = role === "owner" || role === "admin" || role === "operator" || role === "checker";
   const canChangeRegistrationStatus = role === "owner" || role === "admin" || role === "operator";
+  const canManageKnowledge = role === "owner" || role === "admin" || role === "operator";
   const canManageUsers = role === "owner" || role === "admin";
   const canChangeRoles = role === "owner" || role === "admin";
   const canManageTargetRole = (user: AuthUser) => {
@@ -1045,6 +1047,64 @@ export default function App() {
     setDocumentSourceType("note");
     setDocumentSourceUrl("");
     setDocumentContent("");
+  };
+
+  const handleResetEventKnowledge = async () => {
+    const eventId = selectedEventId;
+    if (!eventId) return false;
+
+    const eventLabel = selectedEvent?.name || "the selected event";
+    const confirmed = window.confirm(
+      `Reset all event knowledge for "${eventLabel}"?\n\nThis will remove:\n- Event Context\n- Attached documents\n- Generated chunks\n- Embedding state\n\nThis cannot be undone from the app.`,
+    );
+    if (!confirmed) return false;
+
+    setKnowledgeResetting(true);
+    setSettingsMessage("");
+    setDocumentsMessage("");
+    try {
+      const res = await apiFetch("/api/event-knowledge/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: eventId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to reset event knowledge");
+      }
+
+      if (selectedEventIdRef.current !== eventId) return false;
+
+      setSettings((prev) => ({ ...prev, context: "" }));
+      setDocuments([]);
+      resetDocumentForm();
+      setDocumentChunks([]);
+      setSelectedDocumentForChunksId("");
+      setRetrievalQuery("");
+      setRetrievalDebug(null);
+      setRetrievalMessage("");
+      setEmbeddingPreview(null);
+      setEmbeddingPreviewMessage("");
+      if (documentFileInputRef.current) {
+        documentFileInputRef.current.value = "";
+      }
+
+      await fetchSettings(eventId);
+      setSettingsMessage("Event knowledge reset");
+      setDocumentsMessage(
+        `Cleared ${Number((data as { documents_deleted?: number }).documents_deleted || 0)} documents and ${Number((data as { chunks_deleted?: number }).chunks_deleted || 0)} chunks for this event.`,
+      );
+      window.setTimeout(() => setSettingsMessage(""), 3000);
+      window.setTimeout(() => setDocumentsMessage(""), 4000);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to reset event knowledge";
+      setSettingsMessage(message);
+      setDocumentsMessage(message);
+      return false;
+    } finally {
+      setKnowledgeResetting(false);
+    }
   };
 
   const handleImportDocumentFile = async (file: File | null) => {
@@ -2296,14 +2356,24 @@ export default function App() {
                         <h2 className="text-lg font-semibold">Event Context</h2>
                         <p className="text-sm text-slate-500">Per-event context, FAQ, and source text that guide responses for the selected event.</p>
                       </div>
-                      <button
-                        onClick={() => void saveEventContext()}
-                        disabled={saving}
-                        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
-                      >
-                        {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        Save Event Context
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => void handleResetEventKnowledge()}
+                          disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
+                          className="flex items-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                        >
+                          {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
+                          Reset Event Knowledge
+                        </button>
+                        <button
+                          onClick={() => void saveEventContext()}
+                          disabled={saving || !canManageKnowledge}
+                          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                        >
+                          {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                          Save Event Context
+                        </button>
+                      </div>
                     </div>
                     <textarea
                       value={settings.context}
@@ -2315,6 +2385,12 @@ export default function App() {
                       <p className="font-semibold mb-1">How the bot uses this tab</p>
                       <p>
                         The selected event now has two knowledge layers: this free-form event context, plus structured documents below. Active documents are already used by the bot through simple retrieval. Vector search and embeddings can be added later without moving this content model again.
+                      </p>
+                    </div>
+                    <div className="mt-3 rounded-2xl bg-rose-50 border border-rose-100 p-4 text-sm text-rose-700">
+                      <p className="font-semibold mb-1">Need a clean reset?</p>
+                      <p>
+                        Use <span className="font-semibold">Reset Event Knowledge</span> to clear this event&apos;s context, attached documents, generated chunks, and embedding state in one action before loading a new content set.
                       </p>
                     </div>
                     {settingsMessage && (
