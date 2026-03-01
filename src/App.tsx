@@ -1357,6 +1357,188 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <CalendarRange className="w-5 h-5 text-blue-600" />
+                          Event Workspace
+                        </h3>
+                        <p className="text-sm text-slate-500">Create, switch, and manage the lifecycle of event workspaces.</p>
+                      </div>
+                      <button
+                        onClick={() => void Promise.all([fetchEvents(), fetchFacebookPages()])}
+                        disabled={eventLoading}
+                        className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
+                        title="Refresh events"
+                      >
+                        <RefreshCw className={`w-4 h-4 text-slate-500 ${eventLoading ? "animate-spin" : ""}`} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {workingEvents.map((event) => (
+                        <button
+                          key={event.id}
+                          onClick={() => setSelectedEventId(event.id)}
+                          className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                            selectedEventId === event.id
+                              ? "border-blue-200 bg-blue-50"
+                              : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold">{event.name}</p>
+                              <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {event.is_default && (
+                                <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-700">
+                                  default
+                                </span>
+                              )}
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                                {getEventStatusLabel(event.effective_status)}
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                      {workingEvents.length === 0 && (
+                        <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                          No active or pending events yet.
+                        </div>
+                      )}
+                    </div>
+
+                    {closedEvents.length > 0 && (
+                      <div className="border-t border-slate-100 pt-5 space-y-2">
+                        <p className="text-sm font-semibold text-slate-700">Closed Events</p>
+                        {closedEvents.map((event) => (
+                          <button
+                            key={event.id}
+                            onClick={() => setSelectedEventId(event.id)}
+                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                              selectedEventId === event.id
+                                ? "border-slate-300 bg-slate-100"
+                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
+                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
+                              </div>
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                                {getEventStatusLabel(event.effective_status)}
+                              </span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {cancelledEvents.length > 0 && (
+                      <div className="border-t border-slate-100 pt-5 space-y-2">
+                        <p className="text-sm font-semibold text-slate-700">Cancelled Events</p>
+                        {cancelledEvents.map((event) => (
+                          <button
+                            key={event.id}
+                            onClick={() => setSelectedEventId(event.id)}
+                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                              selectedEventId === event.id
+                                ? "border-rose-200 bg-rose-50"
+                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
+                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
+                              </div>
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                                {getEventStatusLabel(event.effective_status)}
+                              </span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="border-t border-slate-100 pt-5 space-y-3">
+                      <p className="text-sm font-semibold">Selected Event Details</p>
+                      <input
+                        value={editingEventName}
+                        onChange={(e) => setEditingEventName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Event name"
+                        disabled={!selectedEvent}
+                      />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          onClick={() => void handleUpdateEvent()}
+                          disabled={!selectedEvent || !editingEventName.trim() || editingEventName.trim() === selectedEvent?.name || eventLoading}
+                          className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          Save Event Name
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button
+                          onClick={() => void handleUpdateEvent("pending")}
+                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || selectedEvent.effective_status === "closed" || eventLoading}
+                          className="rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          Set Pending
+                        </button>
+                        <button
+                          onClick={() => void handleUpdateEvent("active")}
+                          disabled={!selectedEvent || selectedEvent.status === "active" || selectedEvent.effective_status === "closed" || eventLoading}
+                          className="rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          Launch Event
+                        </button>
+                        <button
+                          onClick={() => void handleUpdateEvent("cancelled")}
+                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "cancelled" || eventLoading}
+                          className="rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          Cancel Event
+                        </button>
+                      </div>
+                      {selectedEvent && (
+                        <p className="text-xs text-slate-500">
+                          Manual status: <code>{selectedEvent.status}</code>. Effective status now: <code>{selectedEvent.effective_status}</code>.
+                          {selectedEvent.effective_status === "closed" ? " This event is automatically closed because its event date has passed." : ""}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="border-t border-slate-100 pt-5 space-y-3">
+                      <p className="text-sm font-semibold">Create New Event</p>
+                      <input
+                        value={newEventName}
+                        onChange={(e) => setNewEventName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="New event name"
+                      />
+                      <button
+                        onClick={() => void handleCreateEvent()}
+                        disabled={!newEventName.trim() || eventLoading}
+                        className="w-full rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                      >
+                        Create Event
+                      </button>
+                    </div>
+
+                    {eventMessage && (
+                      <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {eventMessage}
+                      </p>
+                    )}
+                  </div>
+
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                     <h3 className="text-lg font-semibold mb-3">Event Status Logic</h3>
                     <div className="space-y-3 text-sm text-slate-600">
@@ -2044,188 +2226,6 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <CalendarRange className="w-5 h-5 text-blue-600" />
-                          Event Workspace
-                        </h3>
-                        <p className="text-sm text-slate-500">Create events, switch scope, and keep settings isolated per event.</p>
-                      </div>
-                      <button
-                        onClick={() => void Promise.all([fetchEvents(), fetchFacebookPages()])}
-                        disabled={eventLoading}
-                        className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
-                        title="Refresh events"
-                      >
-                        <RefreshCw className={`w-4 h-4 text-slate-500 ${eventLoading ? "animate-spin" : ""}`} />
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      {workingEvents.map((event) => (
-                        <button
-                          key={event.id}
-                          onClick={() => setSelectedEventId(event.id)}
-                          className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
-                            selectedEventId === event.id
-                              ? "border-blue-200 bg-blue-50"
-                              : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold">{event.name}</p>
-                              <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {event.is_default && (
-                                <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-700">
-                                  default
-                                </span>
-                              )}
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
-                                {getEventStatusLabel(event.effective_status)}
-                              </span>
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                      {workingEvents.length === 0 && (
-                        <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                          No active or pending events yet.
-                        </div>
-                      )}
-                    </div>
-
-                    {closedEvents.length > 0 && (
-                      <div className="border-t border-slate-100 pt-5 space-y-2">
-                        <p className="text-sm font-semibold text-slate-700">Closed Events</p>
-                        {closedEvents.map((event) => (
-                          <button
-                            key={event.id}
-                            onClick={() => setSelectedEventId(event.id)}
-                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
-                              selectedEventId === event.id
-                                ? "border-slate-300 bg-slate-100"
-                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
-                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
-                              </div>
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
-                                {getEventStatusLabel(event.effective_status)}
-                              </span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {cancelledEvents.length > 0 && (
-                      <div className="border-t border-slate-100 pt-5 space-y-2">
-                        <p className="text-sm font-semibold text-slate-700">Cancelled Events</p>
-                        {cancelledEvents.map((event) => (
-                          <button
-                            key={event.id}
-                            onClick={() => setSelectedEventId(event.id)}
-                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
-                              selectedEventId === event.id
-                                ? "border-rose-200 bg-rose-50"
-                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
-                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
-                              </div>
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
-                                {getEventStatusLabel(event.effective_status)}
-                              </span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="border-t border-slate-100 pt-5 space-y-3">
-                      <p className="text-sm font-semibold">Selected Event Details</p>
-                      <input
-                        value={editingEventName}
-                        onChange={(e) => setEditingEventName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Event name"
-                        disabled={!selectedEvent}
-                      />
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <button
-                          onClick={() => void handleUpdateEvent()}
-                          disabled={!selectedEvent || !editingEventName.trim() || editingEventName.trim() === selectedEvent?.name || eventLoading}
-                          className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                        >
-                          Save Event Name
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <button
-                          onClick={() => void handleUpdateEvent("pending")}
-                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || selectedEvent.effective_status === "closed" || eventLoading}
-                          className="rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                        >
-                          Set Pending
-                        </button>
-                        <button
-                          onClick={() => void handleUpdateEvent("active")}
-                          disabled={!selectedEvent || selectedEvent.status === "active" || selectedEvent.effective_status === "closed" || eventLoading}
-                          className="rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                        >
-                          Launch Event
-                        </button>
-                        <button
-                          onClick={() => void handleUpdateEvent("cancelled")}
-                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "cancelled" || eventLoading}
-                          className="rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                        >
-                          Cancel Event
-                        </button>
-                      </div>
-                      {selectedEvent && (
-                        <p className="text-xs text-slate-500">
-                          Manual status: <code>{selectedEvent.status}</code>. Effective status now: <code>{selectedEvent.effective_status}</code>.
-                          {selectedEvent.effective_status === "closed" ? " This event is automatically closed because its event date has passed." : ""}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="border-t border-slate-100 pt-5 space-y-3">
-                      <p className="text-sm font-semibold">Create New Event</p>
-                      <input
-                        value={newEventName}
-                        onChange={(e) => setNewEventName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="New event name"
-                      />
-                      <button
-                        onClick={() => void handleCreateEvent()}
-                        disabled={!newEventName.trim() || eventLoading}
-                        className="w-full rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                      >
-                        Create Event
-                      </button>
-                    </div>
-
-                    {eventMessage && (
-                      <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {eventMessage}
-                      </p>
-                    )}
-                  </div>
-
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
                     <div>
                       <h3 className="text-lg font-semibold flex items-center gap-2">
