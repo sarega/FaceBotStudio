@@ -514,6 +514,20 @@ async function getLineChannelSecret(destination?: string) {
   return String(config.channel_secret || "").trim();
 }
 
+async function getInstagramChannel(accountId?: string) {
+  if (!accountId) return null;
+  const channel = await appDb.getChannelAccount("instagram", accountId);
+  if (!channel || channel.is_active === false) {
+    return null;
+  }
+  return channel;
+}
+
+async function getInstagramAccessToken(accountId?: string) {
+  const channel = await getInstagramChannel(accountId);
+  return channel?.access_token || "";
+}
+
 async function getWebChatChannel(widgetKey?: string) {
   if (!widgetKey) return null;
   const channel = await appDb.getChannelAccount("web_chat", widgetKey);
@@ -1538,6 +1552,70 @@ async function sendLinePushImageMessage(recipientId: string, imageUrl: string, d
   return payload;
 }
 
+async function sendInstagramTextMessage(recipientId: string, text: string, accountId?: string) {
+  const accessToken = await getInstagramAccessToken(accountId);
+  if (!accessToken) {
+    throw new Error("Instagram access token is not configured");
+  }
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
+  url.searchParams.set("access_token", accessToken);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      message: {
+        text,
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "Failed to send message to Instagram");
+  }
+
+  return payload;
+}
+
+async function sendInstagramImageMessage(recipientId: string, imageUrl: string, accountId?: string) {
+  const accessToken = await getInstagramAccessToken(accountId);
+  if (!accessToken) {
+    throw new Error("Instagram access token is not configured");
+  }
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
+  url.searchParams.set("access_token", accessToken);
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: "image",
+          payload: {
+            url: imageUrl,
+            is_reusable: false,
+          },
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || "Failed to send image to Instagram");
+  }
+
+  return payload;
+}
+
 async function handleIncomingFacebookText(senderId: string, text: string, pageId?: string) {
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
@@ -1744,6 +1822,94 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
   }
 }
 
+async function handleIncomingInstagramText(senderId: string, text: string, accountId?: string) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+
+  const resolvedEventId = accountId ? await appDb.resolveEventIdForChannel("instagram", accountId) : null;
+  if (!resolvedEventId) {
+    console.warn(`No active event mapping found for Instagram account ${accountId || "unknown"}; skipping automated reply`);
+    return;
+  }
+  const eventId = resolvedEventId;
+  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, accountId);
+
+  if (!(await getInstagramAccessToken(accountId))) {
+    console.warn(`Instagram access token is unavailable for account ${accountId || "unknown"}; skipping outbound reply`);
+    return;
+  }
+
+  let replyText = "";
+  let ticketRegistrationIds: string[] = [];
+  try {
+    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    replyText = result.text;
+    ticketRegistrationIds = result.ticketRegistrationIds;
+  } catch (error) {
+    console.error("Failed to generate Instagram bot reply:", error);
+    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+  }
+
+  if (replyText) {
+    await sendInstagramTextMessage(senderId, replyText, accountId);
+    await saveMessage(senderId, replyText, "outgoing", eventId, accountId);
+  }
+
+  const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
+  let sentTicketArtifact = false;
+  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap(eventId) : null;
+  for (const registrationId of uniqueTicketIds) {
+    const reg = await getRegistrationById(registrationId);
+    if (reg && settings) {
+      const ticketSummaryText = buildTicketSummaryText(reg, settings);
+      try {
+        await sendInstagramTextMessage(senderId, ticketSummaryText, accountId);
+        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, accountId);
+      } catch (error) {
+        console.error("Failed to send Instagram ticket summary:", error);
+      }
+    }
+
+    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    if (!ticketPngUrl && !ticketSvgUrl) {
+      console.warn("APP_URL is not set; skipping Instagram ticket image send");
+      continue;
+    }
+
+    try {
+      if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
+      await sendInstagramImageMessage(senderId, ticketPngUrl, accountId);
+      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, accountId);
+      sentTicketArtifact = true;
+    } catch (error) {
+      console.error("Failed to send Instagram PNG ticket image:", error);
+      try {
+        const textUrl = ticketPngUrl || ticketSvgUrl;
+        if (!textUrl) throw new Error("No ticket URL available");
+        await sendInstagramTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, accountId);
+        await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, accountId);
+        sentTicketArtifact = true;
+      } catch (fallbackError) {
+        console.error("Failed to send Instagram ticket link fallback:", fallbackError);
+      }
+    }
+  }
+
+  if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
+    const mapUrl = String(settings?.event_map_url || "").trim();
+    if (mapUrl) {
+      try {
+        await sendInstagramTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, accountId);
+        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, accountId);
+      } catch (error) {
+        console.error("Failed to send Instagram map link:", error);
+      }
+    }
+  }
+}
+
 function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | null {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
@@ -1784,6 +1950,23 @@ function normalizeLineTextEvent(event: any, destination: string) {
     eventTimestamp: Number(event?.timestamp || Date.now()),
     webhookEventId: String(event?.webhookEventId || event?.message?.id || "").trim() || null,
   } satisfies LineInboundJob;
+}
+
+function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: string) {
+  const senderId = String(webhookEvent?.sender?.id || "").trim();
+  const accountId = String(webhookEvent?.recipient?.id || fallbackAccountId || "").trim();
+  const text = String(webhookEvent?.message?.text || "").trim();
+  const isEcho = Boolean(webhookEvent?.message?.is_echo);
+
+  if (!senderId || !accountId || !text || isEcho) {
+    return null;
+  }
+
+  return {
+    senderId,
+    accountId,
+    text,
+  };
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
@@ -3000,6 +3183,66 @@ async function startServer() {
       console.error("LINE webhook handler failed:", error);
       return res.sendStatus(500);
     }
+  });
+
+  app.get("/api/webhook/instagram", webhookRateLimit, (req, res) => {
+    void (async () => {
+      const mode = req.query["hub.mode"];
+      const token = req.query["hub.verify_token"];
+      const challenge = req.query["hub.challenge"];
+      const verifyToken = await appDb.getSettingValue("verify_token");
+
+      if (mode && token) {
+        if (mode === "subscribe" && token === verifyToken) {
+          console.log("INSTAGRAM_WEBHOOK_VERIFIED");
+          res.status(200).send(challenge);
+        } else {
+          res.sendStatus(403);
+        }
+      } else {
+        res.sendStatus(400);
+      }
+    })().catch((error) => {
+      console.error("Instagram webhook verification lookup failed:", error);
+      res.sendStatus(500);
+    });
+  });
+
+  app.post("/api/webhook/instagram", webhookRateLimit, (req: RawBodyRequest, res) => {
+    if (!verifyFacebookWebhookSignature(req)) {
+      console.warn("Rejected Instagram webhook due to invalid signature");
+      res.sendStatus(401);
+      return;
+    }
+
+    const body = req.body;
+    if (!body || body.object !== "instagram") {
+      res.sendStatus(404);
+      return;
+    }
+
+    res.status(200).send("EVENT_RECEIVED");
+
+    const entries = Array.isArray(body.entry) ? body.entry : [];
+    void (async () => {
+      for (const entry of entries) {
+        const entryAccountId = String(entry?.id || "").trim();
+        const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
+        for (const webhookEvent of messagingEvents) {
+          try {
+            const normalized = normalizeInstagramTextEvent(webhookEvent, entryAccountId);
+            if (!normalized) continue;
+            await handleIncomingInstagramText(
+              normalized.senderId,
+              normalized.text,
+              normalized.accountId,
+            );
+          } catch (error) {
+            console.error("Failed to handle incoming Instagram message:", error);
+          }
+        }
+      }
+    })();
   });
 
   app.options("/api/webchat/messages", async (req, res) => {

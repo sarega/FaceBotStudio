@@ -87,10 +87,10 @@ export const CHANNEL_PLATFORM_DEFINITIONS: Record<ChannelPlatform, ChannelPlatfo
         required: true,
       },
     ],
-    live_messaging_ready: false,
+    live_messaging_ready: true,
     notes: [
-      "Uses Meta infrastructure but requires an Instagram-specific routing layer.",
-      "Groundwork only in this phase.",
+      "Instagram webhook + outbound text/image path are wired in this phase.",
+      "Use the Instagram business account ID as the channel external ID.",
     ],
   },
   whatsapp: {
