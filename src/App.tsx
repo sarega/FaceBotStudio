@@ -673,6 +673,11 @@ export default function App() {
   };
 
   const saveEventDetails = async () => {
+    if (timingInfo.registrationStatus === "invalid") {
+      setSettingsMessage("Close Date must be later than or equal to Open Date");
+      return;
+    }
+
     const saved = await saveSettingsSubset([
       "event_name",
       "event_timezone",

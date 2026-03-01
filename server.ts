@@ -2034,6 +2034,14 @@ async function startServer() {
           .filter(([key]) => key !== "event_id")
           .map(([key, value]) => [key, String(value)]),
       ) as Record<string, string>;
+      const mergedSettings = {
+        ...(await getSettingsMap(eventId)),
+        ...body,
+      };
+      const timingState = getEventState(mergedSettings);
+      if (timingState.registrationStatus === "invalid") {
+        return res.status(400).json({ error: "Close date must be later than or equal to open date" });
+      }
       await appDb.upsertSettings(body, eventId);
       await recordAudit(req, "settings.updated", "settings", eventId, {
         keys: Object.keys(body),
