@@ -495,18 +495,24 @@ function tokenizeForDocumentMatch(value: string) {
     .filter((token) => token.length >= 2);
 }
 
-function buildKnowledgeContext(
+function rankKnowledgeMatches(
   documents: Array<{ id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
   chunks: Array<{ document_id: string; chunk_index: number; content: string }>,
   message: string,
 ) {
   const activeDocuments = documents.filter((document) => document.is_active);
-  if (!activeDocuments.length) return "";
+  if (!activeDocuments.length) return [] as Array<{
+    document: { id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean };
+    chunk: { document_id: string; chunk_index: number; content: string };
+    index: number;
+    score: number;
+  }>;
 
   const documentMap = new Map(activeDocuments.map((document) => [document.id, document]));
   const normalizedMessage = String(message || "").trim().toLowerCase();
   const tokens = tokenizeForDocumentMatch(message);
-  const rankedChunks = chunks
+
+  return chunks
     .filter((chunk) => documentMap.has(chunk.document_id))
     .map((chunk, index) => {
       const document = documentMap.get(chunk.document_id)!;
@@ -526,6 +532,14 @@ function buildKnowledgeContext(
       return { document, chunk, index, score };
     })
     .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+}
+
+function buildKnowledgeContext(
+  documents: Array<{ id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
+  chunks: Array<{ document_id: string; chunk_index: number; content: string }>,
+  message: string,
+) {
+  const rankedChunks = rankKnowledgeMatches(documents, chunks, message);
 
   const selected = rankedChunks
     .filter((entry, index) => entry.score > 0 || index < 2)
@@ -2083,6 +2097,51 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to fetch document chunks:", error);
       return res.status(500).json({ error: "Failed to fetch document chunks" });
+    }
+  });
+
+  app.get("/api/documents/retrieval-debug", requireAuth, async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const query = String(req.query?.query || "").trim();
+      const documents = await getEventDocuments(eventId);
+      const chunks = await getEventDocumentChunks(eventId);
+      const settings = await getSettingsMap(eventId);
+      const activeDocuments = documents.filter((document) => document.is_active);
+      const activeDocumentIds = new Set(activeDocuments.map((document) => document.id));
+      const activeChunks = chunks.filter((chunk) => activeDocumentIds.has(chunk.document_id));
+      const ranked = rankKnowledgeMatches(documents, chunks, query);
+      const matches = ranked
+        .filter((entry, index) => entry.score > 0 || index < 3)
+        .slice(0, 8)
+        .map((entry, index) => ({
+          rank: index + 1,
+          score: entry.score,
+          document_id: entry.document.id,
+          document_title: entry.document.title,
+          source_type: entry.document.source_type,
+          source_url: entry.document.source_url || null,
+          chunk_index: entry.chunk.chunk_index,
+          chunk_content: entry.chunk.content,
+        }));
+
+      return res.json({
+        event_id: eventId,
+        query,
+        layers: {
+          global_system_prompt_present: Boolean(String(settings.global_system_prompt || "").trim()),
+          global_system_prompt_chars: String(settings.global_system_prompt || "").trim().length,
+          event_context_present: Boolean(String(settings.context || "").trim()),
+          event_context_chars: String(settings.context || "").trim().length,
+          active_document_count: activeDocuments.length,
+          active_chunk_count: activeChunks.length,
+        },
+        matches,
+        composed_knowledge_context: buildKnowledgeContext(documents, chunks, query),
+      });
+    } catch (error) {
+      console.error("Failed to fetch retrieval debug:", error);
+      return res.status(500).json({ error: "Failed to fetch retrieval debug" });
     }
   });
 

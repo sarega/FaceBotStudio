@@ -30,7 +30,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -327,6 +327,10 @@ export default function App() {
   const [documentChunks, setDocumentChunks] = useState<EventDocumentChunkRecord[]>([]);
   const [documentChunksLoading, setDocumentChunksLoading] = useState(false);
   const [selectedDocumentForChunksId, setSelectedDocumentForChunksId] = useState("");
+  const [retrievalQuery, setRetrievalQuery] = useState("");
+  const [retrievalDebug, setRetrievalDebug] = useState<RetrievalDebugResponse | null>(null);
+  const [retrievalLoading, setRetrievalLoading] = useState(false);
+  const [retrievalMessage, setRetrievalMessage] = useState("");
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
@@ -575,6 +579,9 @@ export default function App() {
     setDocumentContent("");
     setDocumentChunks([]);
     setSelectedDocumentForChunksId("");
+    setRetrievalQuery("");
+    setRetrievalDebug(null);
+    setRetrievalMessage("");
   }, [selectedEventId]);
 
   useEffect(() => {
@@ -730,6 +737,46 @@ export default function App() {
       return [];
     } finally {
       setDocumentChunksLoading(false);
+    }
+  };
+
+  const fetchRetrievalDebug = async (query = retrievalQuery, eventId = selectedEventId) => {
+    const trimmedQuery = String(query || "").trim();
+    if (!eventId) {
+      setRetrievalDebug(null);
+      setRetrievalMessage("");
+      return null;
+    }
+    if (!trimmedQuery) {
+      setRetrievalDebug(null);
+      setRetrievalMessage("Enter a test question to inspect retrieval for this event.");
+      return null;
+    }
+
+    setRetrievalLoading(true);
+    setRetrievalMessage("");
+    try {
+      const res = await apiFetch(
+        `/api/documents/retrieval-debug?event_id=${encodeURIComponent(eventId)}&query=${encodeURIComponent(trimmedQuery)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as any)?.error || "Failed to inspect retrieval");
+      }
+      if (selectedEventIdRef.current !== eventId) return null;
+      setRetrievalDebug(data as RetrievalDebugResponse);
+      if (!(data as RetrievalDebugResponse).matches?.length) {
+        setRetrievalMessage("No high-confidence chunk matches found. The bot will rely on event context and system prompt.");
+      }
+      return data as RetrievalDebugResponse;
+    } catch (err) {
+      console.error("Failed to inspect retrieval", err);
+      const message = err instanceof Error ? err.message : "Failed to inspect retrieval";
+      setRetrievalMessage(message);
+      setRetrievalDebug(null);
+      return null;
+    } finally {
+      setRetrievalLoading(false);
     }
   };
 
@@ -2268,8 +2315,148 @@ export default function App() {
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 mb-4">
+                      <div>
+                        <h3 className="font-semibold text-slate-900">Retrieval Debug</h3>
+                        <p className="text-xs text-slate-500">
+                          Inspect which event chunks this workspace would send into the prompt for a specific question.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr,0.9fr] gap-4">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                            Test Query
+                          </label>
+                          <textarea
+                            value={retrievalQuery}
+                            onChange={(e) => setRetrievalQuery(e.target.value)}
+                            rows={3}
+                            placeholder="Example: งานนี้จัดที่ไหน เดินทางยังไง และเปิดลงทะเบียนถึงวันไหน"
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                          />
+                          <div className="mt-3 flex items-center gap-2">
+                            <button
+                              onClick={() => void fetchRetrievalDebug()}
+                              disabled={!selectedEventId || retrievalLoading || !retrievalQuery.trim()}
+                              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                            >
+                              {retrievalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                              Analyze Retrieval
+                            </button>
+                            {retrievalDebug && (
+                              <span className="text-xs text-slate-500">
+                                Event-scoped results for <span className="font-semibold text-slate-700">{selectedEvent?.name || "selected event"}</span>
+                              </span>
+                            )}
+                          </div>
+                          {retrievalMessage && (
+                            <p className={`mt-3 text-xs ${retrievalMessage.toLowerCase().includes("failed") || retrievalMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-amber-700"}`}>
+                              {retrievalMessage}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+                            Prompt Layers
+                          </p>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-600">Global system prompt</span>
+                              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${retrievalDebug?.layers.global_system_prompt_present ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                                {retrievalDebug?.layers.global_system_prompt_present ? `${retrievalDebug.layers.global_system_prompt_chars} chars` : "empty"}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-600">Event context</span>
+                              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${retrievalDebug?.layers.event_context_present ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-600"}`}>
+                                {retrievalDebug?.layers.event_context_present ? `${retrievalDebug.layers.event_context_chars} chars` : "empty"}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-600">Active documents</span>
+                              <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                                {retrievalDebug?.layers.active_document_count ?? documents.filter((document) => document.is_active).length}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-600">Active chunks</span>
+                              <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                                {retrievalDebug?.layers.active_chunk_count ?? documentChunks.length}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {retrievalDebug && (
+                        <div className="grid grid-cols-1 xl:grid-cols-[1.2fr,0.9fr] gap-4">
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="flex items-center justify-between gap-3 mb-3">
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Matched Chunks</p>
+                                <p className="text-xs text-slate-500">Top ranked event chunks for this query.</p>
+                              </div>
+                              <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1 text-xs font-semibold">
+                                {retrievalDebug.matches.length} matches
+                              </span>
+                            </div>
+
+                            <div className="space-y-3 max-h-[26rem] overflow-y-auto pr-1">
+                              {retrievalDebug.matches.length === 0 && (
+                                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                  No ranked chunks for this query. The bot will answer from global rules and event context only.
+                                </div>
+                              )}
+                              {retrievalDebug.matches.map((match) => (
+                                <div key={`${match.document_id}:${match.chunk_index}:${match.rank}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                  <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] uppercase tracking-wider">
+                                    <span className="rounded-full bg-slate-900 text-white px-2 py-1">#{match.rank}</span>
+                                    <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1">score {match.score}</span>
+                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">{match.source_type}</span>
+                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">chunk {match.chunk_index + 1}</span>
+                                  </div>
+                                  <p className="font-semibold text-slate-900">{match.document_title}</p>
+                                  {match.source_url && (
+                                    <a
+                                      href={match.source_url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="mt-1 inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                                    >
+                                      <ExternalLink className="w-3 h-3" />
+                                      Open source URL
+                                    </a>
+                                  )}
+                                  <p className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">{match.chunk_content}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+                              Injected Knowledge Context
+                            </p>
+                            <div className="max-h-[26rem] overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <pre className="whitespace-pre-wrap text-xs text-slate-700 font-mono">
+                                {retrievalDebug.composed_knowledge_context || "No knowledge context was composed for this query."}
+                              </pre>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
                     <h3 className="font-semibold text-slate-900 mb-2">Retrieval behavior right now</h3>
                     <div className="space-y-2">
+                      <p><span className="font-semibold">Global</span>: system prompt lives in <span className="font-semibold">Setup</span> and applies to every event.</p>
+                      <p><span className="font-semibold">Event</span>: context and documents stay attached to the selected event only.</p>
                       <p><span className="font-semibold">Current</span>: the bot ranks active document chunks against the incoming message and injects the best matches into the prompt.</p>
                       <p><span className="font-semibold">Current</span>: text-based file import already feeds the same chunk store after save.</p>
                       <p><span className="font-semibold">Later</span>: replace simple chunk matching with embeddings/vector search without changing the event workspace model.</p>

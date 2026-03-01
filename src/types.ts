@@ -83,6 +83,32 @@ export interface EventDocumentChunkRecord {
   updated_at: string;
 }
 
+export interface RetrievalDebugMatch {
+  rank: number;
+  score: number;
+  document_id: string;
+  document_title: string;
+  source_type: "note" | "document" | "url";
+  source_url?: string | null;
+  chunk_index: number;
+  chunk_content: string;
+}
+
+export interface RetrievalDebugResponse {
+  event_id: string;
+  query: string;
+  layers: {
+    global_system_prompt_present: boolean;
+    global_system_prompt_chars: number;
+    event_context_present: boolean;
+    event_context_chars: number;
+    active_document_count: number;
+    active_chunk_count: number;
+  };
+  matches: RetrievalDebugMatch[];
+  composed_knowledge_context: string;
+}
+
 export interface Settings {
   context: string;
   llm_model: string;
