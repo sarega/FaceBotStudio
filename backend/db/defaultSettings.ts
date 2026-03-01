@@ -1,6 +1,8 @@
 export const DEFAULT_SETTINGS_ENTRIES = {
-  context: "You are a helpful assistant for a Facebook Page. Be polite and professional.",
-  llm_model: process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview",
+  context: "",
+  llm_model: "",
+  global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
+  global_llm_model: process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview",
   verify_token: "my_secret_verify_token",
   event_name: "AI Innovation Summit 2026",
   event_timezone: process.env.EVENT_TIMEZONE || "Asia/Bangkok",
@@ -29,6 +31,6 @@ export const EVENT_SETTING_KEYS = [
   "reg_end",
 ] as const;
 
-export const GLOBAL_SETTING_KEYS = ["verify_token"] as const;
+export const GLOBAL_SETTING_KEYS = ["verify_token", "global_system_prompt", "global_llm_model"] as const;
 
 export const DEFAULT_EVENT_ID = "evt_default";

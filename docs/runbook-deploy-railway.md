@@ -10,6 +10,7 @@
 - `REDIS_URL`
 - `OPENROUTER_API_KEY`
 - `PAGE_ACCESS_TOKEN`
+- `FACEBOOK_APP_SECRET` (recommended)
 - `APP_URL`
 - `ADMIN_USER`
 - `ADMIN_PASS`
@@ -34,7 +35,8 @@ The migration runner will:
 3. Verify `/api/health` returns `database: postgres`.
 4. Test registration creation.
 5. Test ticket preview/download.
-6. Test Facebook webhook verification and a live message.
+6. If `FACEBOOK_APP_SECRET` is configured, confirm Meta webhook signature verification passes.
+7. Test Facebook webhook verification and a live message.
 
 ## Rollback notes
 - Keep the SQLite volume in place during Sprint 1.

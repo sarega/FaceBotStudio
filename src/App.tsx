@@ -116,7 +116,7 @@ function getEventStatusBadgeClass(status: EventStatus) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"design" | "test" | "logs" | "settings" | "registrations">("design");
+  const [activeTab, setActiveTab] = useState<"event" | "design" | "test" | "logs" | "settings" | "registrations">("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState("");
@@ -125,7 +125,9 @@ export default function App() {
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [settings, setSettings] = useState<Settings>({ 
     context: "", 
-    llm_model: "google/gemini-3-flash-preview",
+    llm_model: "",
+    global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
+    global_llm_model: "google/gemini-3-flash-preview",
     verify_token: "",
     event_name: "",
     event_timezone: "Asia/Bangkok",
@@ -140,6 +142,7 @@ export default function App() {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [pages, setPages] = useState<FacebookPageRecord[]>([]);
@@ -417,12 +420,13 @@ export default function App() {
 
   useEffect(() => {
     const allowedTabs = [
+      ...(canEditSettings ? ["event"] : []),
       ...(canEditSettings ? ["design"] : []),
       ...(canRunTest ? ["test"] : []),
       "registrations",
       ...(canViewLogs ? ["logs"] : []),
       ...(canEditSettings ? ["settings"] : []),
-    ] as Array<"design" | "test" | "logs" | "settings" | "registrations">;
+    ] as Array<"event" | "design" | "test" | "logs" | "settings" | "registrations">;
 
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || "registrations");
@@ -445,7 +449,9 @@ export default function App() {
       setSettings((prev) => ({
         ...prev,
         ...data,
-        llm_model: data.llm_model || prev.llm_model,
+        llm_model: typeof data.llm_model === "string" ? data.llm_model : prev.llm_model,
+        global_llm_model: typeof data.global_llm_model === "string" ? data.global_llm_model : prev.global_llm_model,
+        global_system_prompt: typeof data.global_system_prompt === "string" ? data.global_system_prompt : prev.global_system_prompt,
         event_timezone: data.event_timezone || prev.event_timezone,
         event_date: normalizeDateTimeLocalValue(data.event_date || prev.event_date),
         reg_start: normalizeDateTimeLocalValue(data.reg_start || prev.reg_start),
@@ -487,15 +493,19 @@ export default function App() {
     }
   };
 
-  const saveSettings = async () => {
+  const normalizeSettingsForSave = (source: Settings): Settings => ({
+    ...source,
+    event_date: normalizeDateTimeLocalValue(source.event_date),
+    reg_start: normalizeDateTimeLocalValue(source.reg_start),
+    reg_end: normalizeDateTimeLocalValue(source.reg_end),
+  });
+
+  const saveSettingsSubset = async (keys: Array<keyof Settings>, successLabel: string) => {
     setSaving(true);
+    setSettingsMessage("");
     try {
-      const payload: Settings = {
-        ...settings,
-        event_date: normalizeDateTimeLocalValue(settings.event_date),
-        reg_start: normalizeDateTimeLocalValue(settings.reg_start),
-        reg_end: normalizeDateTimeLocalValue(settings.reg_end),
-      };
+      const normalized = normalizeSettingsForSave(settings);
+      const payload = Object.fromEntries(keys.map((key) => [key, normalized[key]])) as Partial<Settings>;
       const res = await apiFetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -505,14 +515,39 @@ export default function App() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.error || "Failed to save settings");
       }
-      setSettings(payload);
-      // Show success toast or something
+      setSettings(normalized);
+      setSettingsMessage(successLabel);
+      window.setTimeout(() => setSettingsMessage(""), 2500);
     } catch (err) {
       console.error("Failed to save settings", err);
+      setSettingsMessage(err instanceof Error ? err.message : "Failed to save settings");
     } finally {
       setSaving(false);
     }
   };
+
+  const saveEventDetails = async () => saveSettingsSubset([
+    "event_name",
+    "event_timezone",
+    "event_location",
+    "event_map_url",
+    "event_date",
+    "event_description",
+    "event_travel",
+    "reg_limit",
+    "reg_start",
+    "reg_end",
+  ], "Event setup saved");
+
+  const saveEventContext = async () => saveSettingsSubset(["context"], "Event context saved");
+
+  const saveAiSettings = async () => saveSettingsSubset([
+    "global_system_prompt",
+    "global_llm_model",
+    "llm_model",
+  ], "AI settings saved");
+
+  const saveWebhookSettings = async () => saveSettingsSubset(["verify_token"], "Webhook settings saved");
 
   const fetchRegistrations = async (eventId = selectedEventId) => {
     try {
@@ -1116,7 +1151,8 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
             {[
-              ...(canEditSettings ? [{ id: "design", icon: Code, label: "Design" }] : []),
+              ...(canEditSettings ? [{ id: "event", icon: CalendarRange, label: "Event" }] : []),
+              ...(canEditSettings ? [{ id: "design", icon: Code, label: "Context" }] : []),
               ...(canRunTest ? [{ id: "test", icon: MessageSquare, label: "Test" }] : []),
               { id: "registrations", icon: Users, label: "Registrations" },
               ...(canViewLogs ? [{ id: "logs", icon: Activity, label: "Logs" }] : []),
@@ -1124,7 +1160,7 @@ export default function App() {
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => setActiveTab(tab.id as "event" | "design" | "test" | "registrations" | "logs" | "settings")}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                   activeTab === tab.id 
                     ? "bg-white text-blue-600 shadow-sm" 
@@ -1155,6 +1191,196 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-4 py-8">
         <AnimatePresence mode="wait">
+          {activeTab === "event" && (
+            <motion.div
+              key="event"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-6"
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="lg:col-span-2 space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-6">
+                      <div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Bot className="w-5 h-5 text-blue-600" />
+                          Event Information
+                        </h3>
+                        <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
+                      </div>
+                      <button
+                        onClick={() => void saveEventDetails()}
+                        disabled={saving}
+                        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                      >
+                        {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        Save Event Setup
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Name</label>
+                        <input
+                          value={settings.event_name}
+                          onChange={(e) => setSettings({ ...settings, event_name: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. AI Innovation Summit 2026"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Location</label>
+                        <input
+                          value={settings.event_location}
+                          onChange={(e) => setSettings({ ...settings, event_location: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. Tech Plaza, Bangkok"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Time Zone</label>
+                        <input
+                          value={settings.event_timezone}
+                          onChange={(e) => setSettings({ ...settings, event_timezone: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. Asia/Bangkok"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
+                        <input
+                          value={settings.event_map_url}
+                          onChange={(e) => setSettings({ ...settings, event_map_url: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="https://maps.app.goo.gl/..."
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Date & Time</label>
+                        <input
+                          type="datetime-local"
+                          value={settings.event_date}
+                          onChange={(e) => setSettings({ ...settings, event_date: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label>
+                        <textarea
+                          value={settings.event_description}
+                          onChange={(e) => setSettings({ ...settings, event_description: e.target.value })}
+                          className="w-full h-24 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                          placeholder="What is this event about?"
+                        />
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Travel Instructions</label>
+                        <textarea
+                          value={settings.event_travel}
+                          onChange={(e) => setSettings({ ...settings, event_travel: e.target.value })}
+                          className="w-full h-20 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                          placeholder="How to get there?"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 mb-6">
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Activity className="w-5 h-5 text-blue-600" />
+                        Registration Rules
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        {selectedEvent && (
+                          <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(selectedEvent.effective_status)}`}>
+                            {getEventStatusLabel(selectedEvent.effective_status)}
+                          </span>
+                        )}
+                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                          registrationWindowInfo.status === "open"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : registrationWindowInfo.status === "not_started"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-rose-100 text-rose-700"
+                        }`}>
+                          {registrationWindowInfo.label}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max Capacity</label>
+                        <input
+                          type="number"
+                          value={settings.reg_limit}
+                          onChange={(e) => setSettings({ ...settings, reg_limit: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Open Date</label>
+                        <input
+                          type="datetime-local"
+                          value={settings.reg_start}
+                          onChange={(e) => setSettings({ ...settings, reg_start: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Close Date</label>
+                        <input
+                          type="datetime-local"
+                          value={settings.reg_end}
+                          onChange={(e) => setSettings({ ...settings, reg_end: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                    <p className="mt-4 text-xs text-slate-500">
+                      Registration rules are event-scoped. The system derives the effective event state from both the manual status and the event date.
+                    </p>
+                    {settingsMessage && (
+                      <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {settingsMessage}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                    <h3 className="text-lg font-semibold mb-3">Event Status Logic</h3>
+                    <div className="space-y-3 text-sm text-slate-600">
+                      <p><span className="font-semibold text-slate-800">Pending</span>: event is being prepared. Bot should say registration is not launched yet.</p>
+                      <p><span className="font-semibold text-slate-800">Active</span>: event is live, but registration still follows open/close rules.</p>
+                      <p><span className="font-semibold text-slate-800">Closed</span>: event date has already passed. System closes it automatically.</p>
+                      <p><span className="font-semibold text-slate-800">Cancelled</span>: event is cancelled and bot should explain that clearly.</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6">
+                    <h3 className="text-blue-800 font-semibold mb-2 flex items-center gap-2">
+                      <Code className="w-5 h-5" />
+                      Event Context Lives Separately
+                    </h3>
+                    <p className="text-sm text-blue-700 leading-relaxed">
+                      Event information and registration rules live in this tab. Event-specific knowledge, FAQ, and future RAG documents belong in the <span className="font-semibold">Context</span> tab.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
           {activeTab === "design" && (
             <motion.div
               key="design"
@@ -1166,24 +1392,33 @@ export default function App() {
               <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <h2 className="text-lg font-semibold">Custom Context</h2>
-                    <p className="text-sm text-slate-500">Define how your bot should behave and what it knows.</p>
+                    <h2 className="text-lg font-semibold">Event Context</h2>
+                    <p className="text-sm text-slate-500">Per-event context, FAQ, and source text that guide responses for the selected event.</p>
                   </div>
                   <button
-                    onClick={saveSettings}
+                    onClick={() => void saveEventContext()}
                     disabled={saving}
                     className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
                   >
                     {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    Save Changes
+                    Save Event Context
                   </button>
                 </div>
                 <textarea
                   value={settings.context}
                   onChange={(e) => setSettings({ ...settings, context: e.target.value })}
                   className="w-full h-96 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono text-sm resize-none"
-                  placeholder="Enter system instructions, business details, FAQs, etc..."
+                  placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
                 />
+                <div className="mt-4 rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">
+                  <p className="font-semibold text-slate-800 mb-1">Future RAG slot</p>
+                  <p>Document upload and retrieval for this event should live here later. The current context box is the temporary source of truth for event-specific knowledge.</p>
+                </div>
+                {settingsMessage && (
+                  <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                    {settingsMessage}
+                  </p>
+                )}
               </div>
             </motion.div>
           )}
@@ -1702,141 +1937,109 @@ export default function App() {
                 <div className="lg:col-span-2 space-y-6">
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                     <div className="flex items-center justify-between mb-6">
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Bot className="w-5 h-5 text-blue-600" />
-                        Event Information
-                      </h3>
+                      <div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Bot className="w-5 h-5 text-blue-600" />
+                          AI Settings
+                        </h3>
+                        <p className="text-sm text-slate-500">Global prompt and model policy for the organization, with optional event-level override.</p>
+                      </div>
                       <button
-                        onClick={saveSettings}
+                        onClick={() => void saveAiSettings()}
                         disabled={saving}
                         className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
                       >
                         {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        Save Event Settings
+                        Save AI Settings
                       </button>
                     </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Name</label>
-                        <input
-                          value={settings.event_name}
-                          onChange={(e) => setSettings({ ...settings, event_name: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. AI Innovation Summit 2026"
-                        />
-                      </div>
-                      
+                    <div className="space-y-5">
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Location</label>
-                        <input
-                          value={settings.event_location}
-                          onChange={(e) => setSettings({ ...settings, event_location: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. Tech Plaza, Bangkok"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Time Zone</label>
-                        <input
-                          value={settings.event_timezone}
-                          onChange={(e) => setSettings({ ...settings, event_timezone: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. Asia/Bangkok"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
-                        <input
-                          value={settings.event_map_url}
-                          onChange={(e) => setSettings({ ...settings, event_map_url: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="https://maps.app.goo.gl/..."
-                        />
-                      </div>
-                      
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Date & Time</label>
-                        <input
-                          type="datetime-local"
-                          value={settings.event_date}
-                          onChange={(e) => setSettings({ ...settings, event_date: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Global System Prompt</label>
                         <textarea
-                          value={settings.event_description}
-                          onChange={(e) => setSettings({ ...settings, event_description: e.target.value })}
-                          className="w-full h-24 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
-                          placeholder="What is this event about?"
+                          value={settings.global_system_prompt}
+                          onChange={(e) => setSettings({ ...settings, global_system_prompt: e.target.value })}
+                          className="w-full h-40 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                          placeholder="Global operating rules for the bot across all events and channels."
                         />
+                        <p className="mt-2 text-xs text-slate-500">
+                          Use this for organization-wide tone, safety rules, escalation behavior, and response format. Event-specific content belongs in the <span className="font-semibold">Context</span> tab.
+                        </p>
                       </div>
 
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Travel Instructions</label>
-                        <textarea
-                          value={settings.event_travel}
-                          onChange={(e) => setSettings({ ...settings, event_travel: e.target.value })}
-                          className="w-full h-20 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
-                          placeholder="How to get there?"
-                        />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Global Default Model</label>
+                          <select
+                            value={settings.global_llm_model}
+                            onChange={(e) => setSettings({ ...settings, global_llm_model: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview (recommended)</option>
+                            <option value="openrouter/auto">openrouter/auto</option>
+                            {llmModels.map((model) => (
+                              <option key={`global-${model.id}`} value={model.id}>
+                                {model.id}
+                                {model.context_length ? ` (${model.context_length.toLocaleString()} ctx)` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Selected Event Model Override</label>
+                          <select
+                            value={settings.llm_model}
+                            onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">Use global default model</option>
+                            <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview</option>
+                            <option value="openrouter/auto">openrouter/auto</option>
+                            {llmModels.map((model) => (
+                              <option key={`event-${model.id}`} value={model.id}>
+                                {model.id}
+                                {model.context_length ? ` (${model.context_length.toLocaleString()} ctx)` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Custom Model ID</label>
+                        <input
+                          value={settings.llm_model}
+                          onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Leave blank to use the global default. Or set a specific event model ID."
+                        />
+                        <p className="mt-2 text-xs text-slate-500">
+                          This override applies only to the currently selected event. Channel-specific overrides can be added later without changing this structure.
+                        </p>
+                      </div>
+
+                      {llmModelsError && (
+                        <p className="text-xs text-rose-600">{llmModelsError}</p>
+                      )}
+                      {settingsMessage && (
+                        <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                          {settingsMessage}
+                        </p>
+                      )}
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 mb-6">
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Activity className="w-5 h-5 text-blue-600" />
-                        Registration Rules
-                      </h3>
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                        registrationWindowInfo.status === "open"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : registrationWindowInfo.status === "not_started"
-                          ? "bg-amber-100 text-amber-700"
-                          : "bg-rose-100 text-rose-700"
-                      }`}>
-                        {registrationWindowInfo.label}
-                      </span>
+                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6">
+                    <h3 className="text-blue-800 font-semibold mb-2 flex items-center gap-2">
+                      <Code className="w-5 h-5" />
+                      Config Split
+                    </h3>
+                    <div className="space-y-2 text-sm text-blue-700">
+                      <p><span className="font-semibold">Event tab</span>: event information, registration rules, lifecycle.</p>
+                      <p><span className="font-semibold">Context tab</span>: event-specific FAQ, source text, future RAG documents.</p>
+                      <p><span className="font-semibold">Setup tab</span>: system prompt, model policy, channels, team, webhook, and workspace administration.</p>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max Capacity</label>
-                        <input
-                          type="number"
-                          value={settings.reg_limit}
-                          onChange={(e) => setSettings({ ...settings, reg_limit: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Open Date</label>
-                        <input
-                          type="datetime-local"
-                          value={settings.reg_start}
-                          onChange={(e) => setSettings({ ...settings, reg_start: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Close Date</label>
-                        <input
-                          type="datetime-local"
-                          value={settings.reg_end}
-                          onChange={(e) => setSettings({ ...settings, reg_end: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                    </div>
-                    <p className="mt-4 text-xs text-slate-500">
-                      Saved as local event time in <code>{settings.event_timezone || "Asia/Bangkok"}</code>. This status badge helps verify whether registration should be open right now.
-                    </p>
                   </div>
                 </div>
 
@@ -2112,7 +2315,7 @@ export default function App() {
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <Bot className="w-5 h-5 text-blue-600" />
-                        OpenRouter LLM
+                        Channel & Platform Notes
                       </h3>
                       <button
                         onClick={fetchLlmModels}
@@ -2125,40 +2328,17 @@ export default function App() {
                     </div>
 
                     <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Model</label>
-                        <select
-                          value={settings.llm_model}
-                          onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview (recommended)</option>
-                          <option value="openrouter/auto">openrouter/auto</option>
-                          {llmModels.map((model) => (
-                            <option key={model.id} value={model.id}>
-                              {model.id}
-                              {model.context_length ? ` (${model.context_length.toLocaleString()} ctx)` : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Custom Model ID (optional)</label>
-                        <input
-                          value={settings.llm_model}
-                          onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. openai/gpt-4o-mini or anthropic/claude-3.5-sonnet"
-                        />
-                      </div>
-
-                      <p className="text-xs text-slate-500">
-                        API key stays on the server in <code>.env</code> as <code>OPENROUTER_API_KEY</code>.
+                      <p className="text-sm text-slate-600">
+                        One event can eventually map to multiple platforms such as Facebook, LINE OA, WhatsApp, and Telegram. This Setup page is now structured so channel credentials stay here while event content stays under the selected event workspace.
                       </p>
-                      {llmModelsError && (
-                        <p className="text-xs text-rose-600">{llmModelsError}</p>
-                      )}
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
+                        <p><span className="font-semibold text-slate-800">Current</span>: Facebook Page routing with optional page-level access token.</p>
+                        <p><span className="font-semibold text-slate-800">Next</span>: add channel account records for LINE OA, WhatsApp, and Telegram without moving event context out of the event workspace.</p>
+                        <p><span className="font-semibold text-slate-800">Later</span>: attach documents and RAG knowledge to the event, not to individual pages, so a single event can answer consistently across channels.</p>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        OpenRouter credentials stay server-side in <code>OPENROUTER_API_KEY</code>. Per-channel secrets should also remain server-side and never be embedded in the client.
+                      </p>
                     </div>
                   </div>
 
@@ -2193,7 +2373,7 @@ export default function App() {
                             className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
                           />
                           <button 
-                            onClick={saveSettings}
+                            onClick={() => void saveWebhookSettings()}
                             className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
                           >
                             <Save className="w-5 h-5 text-blue-600" />
@@ -2340,21 +2520,6 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6">
-                    <h3 className="text-blue-800 font-semibold mb-2 flex items-center gap-2">
-                      <AlertCircle className="w-5 h-5" />
-                      System Context
-                    </h3>
-                    <p className="text-sm text-blue-700 leading-relaxed mb-4">
-                      The bot automatically uses the event details above to inform users. You can add additional custom instructions below.
-                    </p>
-                    <textarea
-                      value={settings.context}
-                      onChange={(e) => setSettings({ ...settings, context: e.target.value })}
-                      className="w-full h-32 p-3 bg-white/50 border border-blue-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-xs resize-none"
-                      placeholder="Additional bot instructions..."
-                    />
-                  </div>
                 </div>
               </div>
             </motion.div>

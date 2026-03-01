@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
 import QRCode from "qrcode";
+import { createHmac, timingSafeEqual } from "crypto";
 import { readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -89,6 +90,10 @@ type AuthenticatedRequest = Request & {
   auth?: AuthContext;
 };
 
+type RawBodyRequest = Request & {
+  rawBody?: Buffer;
+};
+
 function buildEventInfo(settings: Record<string, any>, eventStatus = "active") {
   const eventState = getEventState(settings);
   return `
@@ -110,8 +115,11 @@ Current Event Details:
 }
 
 function getSystemInstruction(settings: Record<string, any>, eventStatus = "active") {
+  const globalPrompt = String(settings.global_system_prompt || "").trim();
+  const eventContext = String(settings.context || "").trim();
   return [
-    settings.context || "",
+    globalPrompt,
+    eventContext ? `Event Context:\n${eventContext}` : "",
     buildEventInfo(settings, eventStatus),
     "Never guess the current date or time. Use the Current System Time above as the source of truth.",
     "Respect the Event Status Right Now field.",
@@ -269,6 +277,36 @@ function getRequestIp(req: Request) {
     return forwarded.split(",")[0].trim();
   }
   return req.socket.remoteAddress || "";
+}
+
+function verifyFacebookWebhookSignature(req: RawBodyRequest) {
+  const appSecret = String(process.env.FACEBOOK_APP_SECRET || "").trim();
+  if (!appSecret) return true;
+
+  const signatureHeader = req.headers["x-hub-signature-256"];
+  if (typeof signatureHeader !== "string" || !signatureHeader.startsWith("sha256=")) {
+    return false;
+  }
+
+  if (!req.rawBody?.length) {
+    return false;
+  }
+
+  const expectedHex = createHmac("sha256", appSecret)
+    .update(req.rawBody)
+    .digest("hex");
+  const providedHex = signatureHeader.slice("sha256=".length).trim().toLowerCase();
+
+  try {
+    const expected = Buffer.from(expectedHex, "hex");
+    const provided = Buffer.from(providedHex, "hex");
+    if (expected.length === 0 || provided.length === 0 || expected.length !== provided.length) {
+      return false;
+    }
+    return timingSafeEqual(expected, provided);
+  } catch {
+    return false;
+  }
 }
 
 function getCookieSecurity(req: Request) {
@@ -865,6 +903,8 @@ async function requestOpenRouterChat(
 
   const model = (typeof settings.llm_model === "string" && settings.llm_model.trim())
     ? settings.llm_model.trim()
+    : (typeof settings.global_llm_model === "string" && settings.global_llm_model.trim())
+    ? settings.global_llm_model.trim()
     : DEFAULT_OPENROUTER_MODEL;
 
   const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -1225,7 +1265,11 @@ async function startServer() {
   await appDb.initialize();
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      (req as RawBodyRequest).rawBody = Buffer.from(buf);
+    },
+  }));
   app.use(express.static(path.join(__dirname, "public")));
   app.use(attachSession);
 
@@ -1836,7 +1880,13 @@ async function startServer() {
   });
 
   // Facebook Webhook Event Handling
-  app.post("/api/webhook", (req, res) => {
+  app.post("/api/webhook", (req: RawBodyRequest, res) => {
+    if (!verifyFacebookWebhookSignature(req)) {
+      console.warn("Rejected Facebook webhook due to invalid signature");
+      res.sendStatus(401);
+      return;
+    }
+
     const body = req.body;
 
     if (!body || body.object !== "page") {

@@ -25,6 +25,7 @@ To auto-reply in Messenger (not just log messages), set these in `.env`:
 
 - `OPENROUTER_API_KEY`
 - `PAGE_ACCESS_TOKEN`
+- `FACEBOOK_APP_SECRET` (recommended for webhook signature verification)
 - `APP_URL` (public URL)
 
 Then set your Facebook webhook callback URL to:
@@ -40,6 +41,7 @@ Recommended for low-traffic demos with SQLite:
 3. Set environment variables:
    - `OPENROUTER_API_KEY`
    - `PAGE_ACCESS_TOKEN` (for real Messenger auto-replies)
+   - `FACEBOOK_APP_SECRET` (recommended)
    - `OPENROUTER_DEFAULT_MODEL=google/gemini-3-flash-preview`
    - `DB_PATH=/data/bot.db`
    - `APP_URL=https://YOUR_APP.up.railway.app`

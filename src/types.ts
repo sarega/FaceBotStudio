@@ -50,6 +50,8 @@ export interface FacebookPageRecord {
 export interface Settings {
   context: string;
   llm_model: string;
+  global_system_prompt: string;
+  global_llm_model: string;
   verify_token: string;
   event_name: string;
   event_timezone: string;
