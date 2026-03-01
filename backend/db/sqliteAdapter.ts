@@ -656,7 +656,7 @@ export class SqliteAppDatabase implements AppDatabase {
     const row = this.db.prepare(
       "SELECT event_id FROM channel_accounts WHERE platform = ? AND external_id = ? AND is_active = 1 LIMIT 1",
     ).get(platform, String(externalId || "").trim()) as { event_id?: string } | undefined;
-    return row?.event_id || DEFAULT_EVENT_ID;
+    return row?.event_id;
   }
 
   async listFacebookPages() {

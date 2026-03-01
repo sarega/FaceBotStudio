@@ -449,6 +449,9 @@ async function saveMessage(senderId: string, text: string, type: "incoming" | "o
 async function getFacebookAccessToken(pageId?: string) {
   if (pageId) {
     const channel = await appDb.getChannelAccount("facebook", pageId);
+    if (channel?.is_active === false) {
+      return "";
+    }
     if (channel?.access_token) {
       return channel.access_token;
     }
@@ -1257,12 +1260,17 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
   const trimmed = String(text || "").trim();
   if (!trimmed) return;
 
-  const eventId = pageId ? await appDb.resolveEventIdForPage(pageId) : DEFAULT_EVENT_ID;
+  const resolvedEventId = pageId ? await appDb.resolveEventIdForPage(pageId) : DEFAULT_EVENT_ID;
+  if (pageId && !resolvedEventId) {
+    console.warn(`No active event mapping found for Facebook page ${pageId}; skipping automated reply`);
+    return;
+  }
+  const eventId = resolvedEventId || DEFAULT_EVENT_ID;
   const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
   await saveMessage(senderId, trimmed, "incoming", eventId, pageId);
 
   if (!(await getFacebookAccessToken(pageId))) {
-    console.warn("PAGE_ACCESS_TOKEN is not set; skipping outbound Facebook reply");
+    console.warn(`Facebook access token is unavailable for page ${pageId || "default"}; skipping outbound reply`);
     return;
   }
 
@@ -1770,6 +1778,23 @@ async function startServer() {
       }
       if (!externalId || !eventId) {
         return res.status(400).json({ error: "external_id and event_id are required" });
+      }
+
+      const event = await appDb.getEventById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+
+      const existingChannel = await appDb.getChannelAccount(platform, externalId);
+      const isDisableOnlyUpdate =
+        Boolean(existingChannel) &&
+        existingChannel?.event_id === eventId &&
+        isActive === false;
+
+      if ((event.effective_status === "closed" || event.effective_status === "cancelled") && !isDisableOnlyUpdate) {
+        return res.status(400).json({
+          error: "Closed or cancelled events cannot link or re-enable channels",
+        });
       }
 
       const channel = await appDb.upsertChannelAccount({

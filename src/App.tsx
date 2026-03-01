@@ -228,6 +228,8 @@ export default function App() {
   const registrationWindowInfo = describeRegistrationWindow(settings);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
+  const selectedEventChannelWritesLocked =
+    selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled";
   const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
   const closedEvents = events.filter((event) => event.effective_status === "closed");
   const cancelledEvents = events.filter((event) => event.effective_status === "cancelled");
@@ -2564,10 +2566,14 @@ export default function App() {
                             </div>
                             <button
                               onClick={() => void handleSaveChannel(channel)}
-                              disabled={eventLoading}
+                              disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
                               className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-50"
                             >
-                              {channel.is_active ? "Disable Channel" : "Enable Channel"}
+                              {selectedEventChannelWritesLocked && !channel.is_active
+                                ? "Locked by Event Status"
+                                : channel.is_active
+                                ? "Disable Channel"
+                                : "Enable Channel"}
                             </button>
                           </div>
                         ))
@@ -2606,14 +2612,14 @@ export default function App() {
                       />
                       <button
                         onClick={() => void handleSaveChannel()}
-                        disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled"}
+                        disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEventChannelWritesLocked}
                         className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
                       >
                         Link Channel to Event
                       </button>
-                      {selectedEvent && (selectedEvent.effective_status === "closed" || selectedEvent.effective_status === "cancelled") && (
+                      {selectedEvent && selectedEventChannelWritesLocked && (
                         <p className="text-xs text-amber-700">
-                          Closed or cancelled events are read-only for channel routing.
+                          Closed or cancelled events cannot link or re-enable channels. You can still disable an active channel if you want to stop replies entirely.
                         </p>
                       )}
                       <p className="text-xs text-slate-500">

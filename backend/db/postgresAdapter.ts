@@ -567,7 +567,7 @@ export class PostgresAppDatabase implements AppDatabase {
       "SELECT event_id FROM channel_accounts WHERE platform = $1 AND external_id = $2 AND is_active = TRUE LIMIT 1",
       [platform, String(externalId || "").trim()],
     );
-    return result.rows[0]?.event_id || DEFAULT_EVENT_ID;
+    return result.rows[0]?.event_id;
   }
 
   async listFacebookPages() {
