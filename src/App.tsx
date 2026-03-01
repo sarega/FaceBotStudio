@@ -2358,96 +2358,38 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-              <Bot className="text-white w-5 h-5" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="font-bold text-xl tracking-tight">FB Bot Studio</h1>
-              {selectedEvent && (
-                <p className="text-[11px] text-slate-500 hidden md:block truncate max-w-[16rem] lg:max-w-[22rem] xl:max-w-[28rem]">
-                  {getEventStatusLabel(selectedEvent.effective_status)} event:{" "}
-                  <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
-                </p>
-              )}
-            </div>
-            <div className="hidden lg:flex items-center gap-2 ml-3 min-w-0">
-              <CalendarRange className="w-4 h-4 text-slate-400" />
-              <select
-                value={selectedEventId}
-                onChange={(e) => setSelectedEventId(e.target.value)}
-                disabled={!selectorEvents.length || eventLoading}
-                className="min-w-[15rem] max-w-[22rem] bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
-              >
-                {selectorEvents.map((event) => (
-                  <option key={event.id} value={event.id}>
-                    {event.name} ({getEventStatusLabel(event.effective_status)})
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
-            {[
-              ...(canEditSettings ? [{ id: "event", icon: CalendarRange, label: "Event" }] : []),
-              ...(canEditSettings ? [{ id: "design", icon: Code, label: "Context" }] : []),
-              ...(canRunTest ? [{ id: "test", icon: MessageSquare, label: "Test" }] : []),
-              ...(canEditSettings ? [{ id: "settings", icon: SettingsIcon, label: "Setup" }] : []),
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as AppTab)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  activeTab === tab.id 
-                    ? "bg-white text-blue-600 shadow-sm" 
-                    : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                <tab.icon className="w-4 h-4" />
-                <span className="hidden sm:inline">{tab.label}</span>
-              </button>
-            ))}
-            {operationsTabs.length > 0 && (
-              <div className="relative" ref={operationsMenuRef}>
-                <button
-                  onClick={() => setOperationsMenuOpen((open) => !open)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    isOperationsTab || operationsMenuOpen
-                      ? "bg-white text-blue-600 shadow-sm"
-                      : "text-slate-500 hover:text-slate-700"
-                  }`}
-                >
-                  <Users className="w-4 h-4" />
-                  <span className="hidden sm:inline">Operations</span>
-                  <ChevronDown className={`w-4 h-4 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
-                </button>
-                {operationsMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-52 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                    {operationsTabs.map((tab) => (
-                      <button
-                        key={tab.id}
-                        onClick={() => {
-                          setActiveTab(tab.id);
-                          setOperationsMenuOpen(false);
-                        }}
-                        className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
-                          activeTab === tab.id
-                            ? "bg-blue-50 text-blue-700"
-                            : "text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        <tab.icon className="w-4 h-4" />
-                        <span className="font-medium">{tab.label}</span>
-                      </button>
-                    ))}
-                  </div>
+        <div className="max-w-7xl mx-auto px-4 py-3 space-y-3">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
+                <Bot className="text-white w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="font-bold text-xl tracking-tight">FB Bot Studio</h1>
+                {selectedEvent && (
+                  <p className="text-[11px] text-slate-500 hidden md:block truncate max-w-[16rem] lg:max-w-[22rem] xl:max-w-[28rem]">
+                    {getEventStatusLabel(selectedEvent.effective_status)} event:{" "}
+                    <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
+                  </p>
                 )}
               </div>
-            )}
+              <div className="hidden lg:flex items-center gap-2 ml-3 min-w-0">
+                <CalendarRange className="w-4 h-4 text-slate-400 shrink-0" />
+                <select
+                  value={selectedEventId}
+                  onChange={(e) => setSelectedEventId(e.target.value)}
+                  disabled={!selectorEvents.length || eventLoading}
+                  className="min-w-[15rem] max-w-[22rem] bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+                >
+                  {selectorEvents.map((event) => (
+                    <option key={event.id} value={event.id}>
+                      {event.name} ({getEventStatusLabel(event.effective_status)})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between gap-3">
               <div className="hidden md:flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2">
                 <MonitorCog className="w-4 h-4 text-slate-500" />
                 <select
@@ -2472,6 +2414,83 @@ export default function App() {
                 <LogOut className="w-4 h-4" />
                 <span className="hidden sm:inline">Logout</span>
               </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex lg:hidden items-center gap-2 min-w-0">
+              <CalendarRange className="w-4 h-4 text-slate-400 shrink-0" />
+              <select
+                value={selectedEventId}
+                onChange={(e) => setSelectedEventId(e.target.value)}
+                disabled={!selectorEvents.length || eventLoading}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+              >
+                {selectorEvents.map((event) => (
+                  <option key={event.id} value={event.id}>
+                    {event.name} ({getEventStatusLabel(event.effective_status)})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto lg:overflow-visible lg:flex-wrap">
+              {[
+                ...(canEditSettings ? [{ id: "event", icon: CalendarRange, label: "Event" }] : []),
+                ...(canEditSettings ? [{ id: "design", icon: Code, label: "Context" }] : []),
+                ...(canRunTest ? [{ id: "test", icon: MessageSquare, label: "Test" }] : []),
+                ...(canEditSettings ? [{ id: "settings", icon: SettingsIcon, label: "Setup" }] : []),
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as AppTab)}
+                  className={`shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    activeTab === tab.id
+                      ? "bg-white text-blue-600 shadow-sm"
+                      : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  <tab.icon className="w-4 h-4" />
+                  <span className="hidden sm:inline">{tab.label}</span>
+                </button>
+              ))}
+              {operationsTabs.length > 0 && (
+                <div className="relative shrink-0" ref={operationsMenuRef}>
+                  <button
+                    onClick={() => setOperationsMenuOpen((open) => !open)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isOperationsTab || operationsMenuOpen
+                        ? "bg-white text-blue-600 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    <Users className="w-4 h-4" />
+                    <span className="hidden sm:inline">Operations</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {operationsMenuOpen && (
+                    <div className="absolute right-0 top-full z-30 mt-2 w-52 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                      {operationsTabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          onClick={() => {
+                            setActiveTab(tab.id);
+                            setOperationsMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
+                            activeTab === tab.id
+                              ? "bg-blue-50 text-blue-700"
+                              : "text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          <tab.icon className="w-4 h-4" />
+                          <span className="font-medium">{tab.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
