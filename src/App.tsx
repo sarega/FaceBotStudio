@@ -20,12 +20,15 @@ import {
   Camera,
   Play,
   Square,
-  ExternalLink
+  ExternalLink,
+  Shield,
+  LogOut,
+  UserPlus
 } from "lucide-react";
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { Message, Settings } from "./types";
+import { AuthUser, Message, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -46,8 +49,18 @@ interface LlmModelOption {
 
 type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 
+type AuthStatus = "checking" | "authenticated" | "unauthenticated";
+
+const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<"design" | "test" | "logs" | "settings" | "registrations">("design");
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState("");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [settings, setSettings] = useState<Settings>({ 
     context: "", 
     llm_model: "google/gemini-3-flash-preview",
@@ -65,6 +78,13 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamMessage, setTeamMessage] = useState("");
+  const [newUserUsername, setNewUserUsername] = useState("");
+  const [newUserDisplayName, setNewUserDisplayName] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("operator");
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
@@ -89,6 +109,14 @@ export default function App() {
   const scanBusyRef = useRef(false);
   const scannerCooldownRef = useRef(false);
 
+  const role = authUser?.role;
+  const canEditSettings = role === "owner" || role === "admin";
+  const canRunTest = role === "owner" || role === "admin" || role === "operator";
+  const canViewLogs = role === "owner" || role === "admin" || role === "operator" || role === "viewer";
+  const canManageRegistrations = role === "owner" || role === "admin" || role === "operator" || role === "checker";
+  const canChangeRegistrationStatus = role === "owner" || role === "admin" || role === "operator";
+  const canManageUsers = role === "owner";
+
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const canUseQrScanner =
     typeof window !== "undefined" &&
@@ -102,17 +130,96 @@ export default function App() {
     ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
     : "";
 
+  const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const res = await fetch(input, init);
+    if (res.status === 401) {
+      setAuthStatus("unauthenticated");
+      setAuthUser(null);
+      setLoading(false);
+      stopQrScanner();
+    }
+    return res;
+  };
+
+  const fetchCurrentUser = async () => {
+    const res = await fetch("/api/auth/me");
+    if (!res.ok) {
+      throw new Error("Not authenticated");
+    }
+    const data = await res.json();
+    return data.user as AuthUser;
+  };
+
+  const fetchTeamUsers = async () => {
+    if (!(role === "owner" || role === "admin")) {
+      setTeamUsers([]);
+      return;
+    }
+
+    setTeamLoading(true);
+    try {
+      const res = await apiFetch("/api/auth/users");
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch users");
+      }
+      setTeamUsers(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Failed to fetch users", err);
+      setTeamMessage(err instanceof Error ? err.message : "Failed to fetch users");
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const loadAppData = async () => {
+    setLoading(true);
+    try {
+      await Promise.all([
+        fetchSettings(),
+        canViewLogs ? fetchMessages() : Promise.resolve(),
+        fetchRegistrations(),
+        canRunTest ? fetchLlmModels() : Promise.resolve(),
+        role === "owner" || role === "admin" ? fetchTeamUsers() : Promise.resolve(),
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetchSettings();
-    fetchMessages();
-    fetchRegistrations();
-    fetchLlmModels();
-    const interval = setInterval(() => {
-      fetchMessages();
-      fetchRegistrations();
-    }, 10000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const user = await fetchCurrentUser();
+        if (cancelled) return;
+        setAuthUser(user);
+        setAuthStatus("authenticated");
+      } catch {
+        if (cancelled) return;
+        setAuthStatus("unauthenticated");
+        setAuthUser(null);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
+    void loadAppData();
+    const interval = setInterval(() => {
+      void Promise.all([
+        canViewLogs ? fetchMessages() : Promise.resolve(),
+        fetchRegistrations(),
+      ]);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [authStatus, canRunTest, canViewLogs, role]);
 
   const stopQrScanner = () => {
     if (scanIntervalRef.current != null) {
@@ -148,6 +255,20 @@ export default function App() {
     }
   }, [activeTab]);
 
+  useEffect(() => {
+    const allowedTabs = [
+      ...(canEditSettings ? ["design"] : []),
+      ...(canRunTest ? ["test"] : []),
+      "registrations",
+      ...(canViewLogs ? ["logs"] : []),
+      ...(canEditSettings ? ["settings"] : []),
+    ] as Array<"design" | "test" | "logs" | "settings" | "registrations">;
+
+    if (!allowedTabs.includes(activeTab)) {
+      setActiveTab(allowedTabs[0] || "registrations");
+    }
+  }, [activeTab, canEditSettings, canRunTest, canViewLogs]);
+
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
     const match = text.match(/REG-[A-Z0-9]+/);
@@ -156,7 +277,10 @@ export default function App() {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch("/api/settings");
+      const res = await apiFetch("/api/settings");
+      if (!res.ok) {
+        throw new Error("Failed to fetch settings");
+      }
       const data = await res.json();
       setSettings((prev) => ({
         ...prev,
@@ -165,8 +289,6 @@ export default function App() {
       }));
     } catch (err) {
       console.error("Failed to fetch settings", err);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -174,7 +296,7 @@ export default function App() {
     setLlmModelsLoading(true);
     setLlmModelsError("");
     try {
-      const res = await fetch("/api/llm/models");
+      const res = await apiFetch("/api/llm/models");
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.error || "Failed to fetch LLM models");
@@ -190,7 +312,10 @@ export default function App() {
 
   const fetchMessages = async () => {
     try {
-      const res = await fetch("/api/messages");
+      const res = await apiFetch("/api/messages");
+      if (!res.ok) {
+        throw new Error("Failed to fetch messages");
+      }
       const data = await res.json();
       setMessages(data);
     } catch (err) {
@@ -201,11 +326,15 @@ export default function App() {
   const saveSettings = async () => {
     setSaving(true);
     try {
-      await fetch("/api/settings", {
+      const res = await apiFetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || "Failed to save settings");
+      }
       // Show success toast or something
     } catch (err) {
       console.error("Failed to save settings", err);
@@ -216,7 +345,10 @@ export default function App() {
 
   const fetchRegistrations = async () => {
     try {
-      const res = await fetch("/api/registrations");
+      const res = await apiFetch("/api/registrations");
+      if (!res.ok) {
+        throw new Error("Failed to fetch registrations");
+      }
       const data = await res.json();
       setRegistrations(Array.isArray(data) ? data : []);
       setSelectedRegistrationId((prev) => {
@@ -240,7 +372,7 @@ export default function App() {
     setCheckinStatus("loading");
     setCheckinErrorMessage("");
     try {
-      const res = await fetch("/api/registrations/checkin", {
+      const res = await apiFetch("/api/registrations/checkin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: normalizedId }),
@@ -280,7 +412,7 @@ export default function App() {
     setStatusUpdateLoading(true);
     setStatusUpdateMessage("");
     try {
-      const res = await fetch("/api/registrations/status", {
+      const res = await apiFetch("/api/registrations/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: registrationId, status }),
@@ -405,7 +537,7 @@ export default function App() {
         for (const call of response.functionCalls) {
           if (call.name === "registerUser") {
             const regData = call.args as any;
-            const res = await fetch("/api/registrations", {
+            const res = await apiFetch("/api/registrations", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ ...regData, sender_id: "TEST_USER" }),
@@ -432,7 +564,7 @@ export default function App() {
             fetchRegistrations();
           } else if (call.name === "cancelRegistration") {
             const { registration_id } = call.args as any;
-            const res = await fetch("/api/registrations/cancel", {
+            const res = await apiFetch("/api/registrations/cancel", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id: registration_id }),
@@ -466,11 +598,171 @@ export default function App() {
     }
   };
 
+  const handleLogin = async () => {
+    setLoginSubmitting(true);
+    setAuthError("");
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: loginUsername,
+          password: loginPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to login");
+      }
+
+      setAuthUser(data.user as AuthUser);
+      setAuthStatus("authenticated");
+      setLoginPassword("");
+      setTeamMessage("");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Failed to login");
+    } finally {
+      setLoginSubmitting(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (err) {
+      console.error("Failed to logout", err);
+    } finally {
+      setAuthStatus("unauthenticated");
+      setAuthUser(null);
+      setMessages([]);
+      setRegistrations([]);
+      setTeamUsers([]);
+      setLoading(false);
+      stopQrScanner();
+    }
+  };
+
+  const handleCreateUser = async () => {
+    setTeamLoading(true);
+    setTeamMessage("");
+    try {
+      const res = await apiFetch("/api/auth/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: newUserUsername,
+          display_name: newUserDisplayName,
+          password: newUserPassword,
+          role: newUserRole,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to create user");
+      }
+      setTeamMessage(`Created user ${data.user?.username || newUserUsername}`);
+      setNewUserUsername("");
+      setNewUserDisplayName("");
+      setNewUserPassword("");
+      setNewUserRole("operator");
+      await fetchTeamUsers();
+      window.setTimeout(() => setTeamMessage(""), 2500);
+    } catch (err) {
+      setTeamMessage(err instanceof Error ? err.message : "Failed to create user");
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const handleUserRoleChange = async (userId: string, role: UserRole) => {
+    setTeamLoading(true);
+    setTeamMessage("");
+    try {
+      const res = await apiFetch(`/api/auth/users/${encodeURIComponent(userId)}/role`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to update role");
+      }
+      setTeamMessage("Updated user role");
+      await fetchTeamUsers();
+      window.setTimeout(() => setTeamMessage(""), 2500);
+    } catch (err) {
+      setTeamMessage(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  if (authStatus === "checking") {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
+      </div>
+    );
+  }
+
+  if (authStatus === "unauthenticated") {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 backdrop-blur p-8 shadow-2xl">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center">
+              <Shield className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold">FaceBotStudio Admin</h1>
+              <p className="text-sm text-slate-300">Sign in to access registrations, logs, and event settings.</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Username</label>
+              <input
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !loginSubmitting && handleLogin()}
+                className="w-full rounded-2xl bg-slate-900 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="owner"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Password</label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !loginSubmitting && handleLogin()}
+                className="w-full rounded-2xl bg-slate-900 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="••••••••"
+              />
+            </div>
+            {authError && (
+              <p className="text-sm text-rose-300">{authError}</p>
+            )}
+            <button
+              onClick={handleLogin}
+              disabled={!loginUsername.trim() || !loginPassword || loginSubmitting}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-4 py-3 font-semibold transition-colors"
+            >
+              {loginSubmitting && <RefreshCw className="w-4 h-4 animate-spin" />}
+              Sign In
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -494,13 +786,14 @@ export default function App() {
             </div>
             <h1 className="font-bold text-xl tracking-tight">FB Bot Studio</h1>
           </div>
-          <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
             {[
-              { id: "design", icon: Code, label: "Design" },
-              { id: "test", icon: MessageSquare, label: "Test" },
+              ...(canEditSettings ? [{ id: "design", icon: Code, label: "Design" }] : []),
+              ...(canRunTest ? [{ id: "test", icon: MessageSquare, label: "Test" }] : []),
               { id: "registrations", icon: Users, label: "Registrations" },
-              { id: "logs", icon: Activity, label: "Logs" },
-              { id: "settings", icon: SettingsIcon, label: "Setup" },
+              ...(canViewLogs ? [{ id: "logs", icon: Activity, label: "Logs" }] : []),
+              ...(canEditSettings ? [{ id: "settings", icon: SettingsIcon, label: "Setup" }] : []),
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -515,6 +808,20 @@ export default function App() {
                 <span className="hidden sm:inline">{tab.label}</span>
               </button>
             ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="text-right hidden sm:block">
+                <p className="text-sm font-semibold leading-none">{authUser?.display_name || authUser?.username}</p>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider mt-1">{authUser?.role}</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Logout</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -821,6 +1128,7 @@ export default function App() {
                           </a>
                         </div>
 
+                        {canChangeRegistrationStatus && (
                         <div className="border-t border-slate-100 pt-4">
                           <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Admin Status Override</p>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -852,10 +1160,12 @@ export default function App() {
                             </p>
                           )}
                         </div>
+                        )}
                       </div>
                     )}
                   </div>
 
+                  {canManageRegistrations && (
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                     <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                       <QrCode className="w-5 h-5 text-blue-600" />
@@ -895,7 +1205,9 @@ export default function App() {
                       )}
                     </div>
                   </div>
+                  )}
 
+                  {canManageRegistrations && (
                   <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
                     <div className="flex items-start justify-between gap-3 mb-4">
                       <div>
@@ -958,6 +1270,7 @@ export default function App() {
                     )}
                     {scannerError && <p className="mt-2 text-xs text-rose-600">{scannerError}</p>}
                   </div>
+                  )}
 
                   <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-xl">
                     <div className="flex items-center gap-3 mb-4">
@@ -1271,6 +1584,120 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {(role === "owner" || role === "admin") && (
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <Shield className="w-5 h-5 text-blue-600" />
+                            Team Access
+                          </h3>
+                          <p className="text-sm text-slate-500">Session-based admin access with roles stored in the database.</p>
+                        </div>
+                        <button
+                          onClick={fetchTeamUsers}
+                          disabled={teamLoading}
+                          className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
+                          title="Refresh users"
+                        >
+                          <RefreshCw className={`w-4 h-4 text-slate-500 ${teamLoading ? "animate-spin" : ""}`} />
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {teamUsers.length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                            No users loaded yet.
+                          </div>
+                        ) : (
+                          teamUsers.map((user) => (
+                            <div key={user.id} className="rounded-2xl border border-slate-200 p-3 bg-slate-50 space-y-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold">{user.display_name}</p>
+                                  <p className="text-xs text-slate-500">{user.username}</p>
+                                </div>
+                                <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700">
+                                  {user.role}
+                                </span>
+                              </div>
+
+                              {canManageUsers ? (
+                                <select
+                                  value={user.role}
+                                  onChange={(e) => handleUserRoleChange(user.id, e.target.value as UserRole)}
+                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  disabled={teamLoading || user.id === authUser?.id}
+                                >
+                                  {MANAGEABLE_ROLES.map((roleOption) => (
+                                    <option key={roleOption} value={roleOption}>
+                                      {roleOption}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <p className="text-xs text-slate-400">Only owners can change roles.</p>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      {canManageUsers && (
+                        <div className="border-t border-slate-100 pt-5 space-y-3">
+                          <div className="flex items-center gap-2">
+                            <UserPlus className="w-4 h-4 text-blue-600" />
+                            <p className="text-sm font-semibold">Add Team Member</p>
+                          </div>
+                          <input
+                            value={newUserDisplayName}
+                            onChange={(e) => setNewUserDisplayName(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Display name"
+                          />
+                          <input
+                            value={newUserUsername}
+                            onChange={(e) => setNewUserUsername(e.target.value.toLowerCase())}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="username"
+                          />
+                          <input
+                            type="password"
+                            value={newUserPassword}
+                            onChange={(e) => setNewUserPassword(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Temporary password"
+                          />
+                          <select
+                            value={newUserRole}
+                            onChange={(e) => setNewUserRole(e.target.value as UserRole)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            {MANAGEABLE_ROLES.filter((roleOption) => roleOption !== "owner").map((roleOption) => (
+                              <option key={roleOption} value={roleOption}>
+                                {roleOption}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={handleCreateUser}
+                            disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8}
+                            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                          >
+                            <UserPlus className="w-4 h-4" />
+                            Create User
+                          </button>
+                        </div>
+                      )}
+
+                      {teamMessage && (
+                        <p className={`text-xs ${teamMessage.toLowerCase().includes("failed") || teamMessage.toLowerCase().includes("error") || teamMessage.toLowerCase().includes("exists") ? "text-rose-600" : "text-emerald-600"}`}>
+                          {teamMessage}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6">
                     <h3 className="text-blue-800 font-semibold mb-2 flex items-center gap-2">

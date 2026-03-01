@@ -1,4 +1,4 @@
-import express from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import { createServer as createViteServer } from "vite";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
@@ -9,7 +9,22 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
 import {
+  ALL_USER_ROLES,
+  SESSION_COOKIE_NAME,
+  cookieSerialize,
+  createSessionToken,
+  getSessionTtlMs,
+  hashPassword,
+  hashSessionToken,
+  isValidUsername,
+  normalizeUsername,
+  parseCookies,
+  verifyPassword,
+  type UserRole,
+} from "./backend/auth";
+import {
   createAppDatabase,
+  type AuthUserRow,
   type RegistrationInput,
   type RegistrationRow,
   type RegistrationStatus,
@@ -60,6 +75,16 @@ type ToolExecutionBundle = {
 type BotReplyResult = {
   text: string;
   ticketRegistrationIds: string[];
+};
+
+type AuthContext = {
+  sessionId: string;
+  tokenHash: string;
+  user: AuthUserRow;
+};
+
+type AuthenticatedRequest = Request & {
+  auth?: AuthContext;
 };
 
 function buildEventInfo(settings: Record<string, any>) {
@@ -219,43 +244,108 @@ function wrapTextLines(value: unknown, maxCharsPerLine: number, maxLines: number
   return lines.slice(0, maxLines);
 }
 
-function isPublicRequestPath(reqPath: string) {
-  if (reqPath === "/api/health") return true;
-  if (reqPath === "/api/webhook") return true;
-  if (/^\/api\/tickets\/[^/]+\.(svg|png)$/i.test(reqPath)) return true;
-  return false;
+function userHasRole(role: UserRole, allowedRoles: UserRole[]) {
+  return allowedRoles.includes(role);
 }
 
-function adminBasicAuth(req: any, res: any, next: any) {
-  if (isPublicRequestPath(req.path || req.url || "")) {
+function getRequestIp(req: Request) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.socket.remoteAddress || "";
+}
+
+function getCookieSecurity(req: Request) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "");
+  return process.env.NODE_ENV === "production" || forwardedProto.includes("https");
+}
+
+function setSessionCookie(res: Response, token: string, req: Request) {
+  res.setHeader(
+    "Set-Cookie",
+    cookieSerialize(SESSION_COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: getCookieSecurity(req),
+      sameSite: "Lax",
+      path: "/",
+      maxAgeSeconds: Math.floor(getSessionTtlMs() / 1000),
+    }),
+  );
+}
+
+function clearSessionCookie(res: Response, req: Request) {
+  res.setHeader(
+    "Set-Cookie",
+    cookieSerialize(SESSION_COOKIE_NAME, "", {
+      httpOnly: true,
+      secure: getCookieSecurity(req),
+      sameSite: "Lax",
+      path: "/",
+      maxAgeSeconds: 0,
+    }),
+  );
+}
+
+function toPublicAuthUser(user: AuthUserRow) {
+  return {
+    id: user.id,
+    username: user.username,
+    display_name: user.display_name,
+    role: user.role,
+    organization_id: user.organization_id,
+    organization_name: user.organization_name,
+    is_active: user.is_active,
+    created_at: user.created_at,
+    last_login_at: user.last_login_at,
+  };
+}
+
+async function attachSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const cookies = parseCookies(req.headers.cookie);
+    const sessionToken = cookies.get(SESSION_COOKIE_NAME);
+    if (!sessionToken) {
+      return next();
+    }
+
+    const tokenHash = hashSessionToken(sessionToken);
+    const session = await appDb.getSessionWithUser(tokenHash);
+    if (!session || !session.user.is_active) {
+      clearSessionCookie(res, req);
+      return next();
+    }
+
+    req.auth = {
+      sessionId: session.session_id,
+      tokenHash,
+      user: session.user,
+    };
+    await appDb.touchSession(session.session_id);
+    return next();
+  } catch (error) {
+    console.error("Failed to attach session:", error);
+    return res.status(500).json({ error: "Failed to validate session" });
+  }
+}
+
+function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  if (req.auth?.user) {
     return next();
   }
+  return res.status(401).json({ error: "Authentication required" });
+}
 
-  const user = process.env.ADMIN_USER;
-  const pass = process.env.ADMIN_PASS;
-
-  // Fail closed if admin credentials are not configured
-  if (!user || !pass) {
-    return res.status(503).send("Admin auth is not configured.");
-  }
-
-  const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Basic ")) {
-    res.setHeader("WWW-Authenticate", 'Basic realm="FaceBotStudio Admin"');
-    return res.status(401).send("Authentication required.");
-  }
-
-  const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
-  const separatorIndex = decoded.indexOf(":");
-  const providedUser = separatorIndex >= 0 ? decoded.slice(0, separatorIndex) : decoded;
-  const providedPass = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : "";
-
-  if (providedUser === user && providedPass === pass) {
+function requireRoles(allowedRoles: UserRole[]) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.auth?.user) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    if (!userHasRole(req.auth.user.role, allowedRoles)) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
     return next();
-  }
-
-  res.setHeader("WWW-Authenticate", 'Basic realm="FaceBotStudio Admin"');
-  return res.status(401).send("Invalid credentials.");
+  };
 }
 
 async function getSettingsMap() {
@@ -268,6 +358,25 @@ async function getRegistrationById(id: string) {
 
 async function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing") {
   await appDb.saveMessage(senderId, text, type);
+}
+
+async function recordAudit(
+  req: AuthenticatedRequest,
+  action: string,
+  targetType?: string | null,
+  targetId?: string | null,
+  metadata?: Record<string, unknown>,
+) {
+  await appDb.recordAuditLog({
+    actor_user_id: req.auth?.user.id || null,
+    action,
+    target_type: targetType || null,
+    target_id: targetId || null,
+    metadata: {
+      ...metadata,
+      ip: getRequestIp(req),
+    },
+  });
 }
 
 function formatTicketDate(value: string) {
@@ -1070,7 +1179,7 @@ async function startServer() {
   const app = express();
   app.use(express.json());
   app.use(express.static(path.join(__dirname, "public")));
-  app.use(adminBasicAuth);
+  app.use(attachSession);
 
   const PORT = Number(process.env.PORT || 3000);
 
@@ -1085,7 +1194,158 @@ async function startServer() {
     }
   });
 
-  app.get("/api/registrations", async (_req, res) => {
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const username = normalizeUsername(req.body?.username);
+      const password = String(req.body?.password || "");
+
+      if (!username || !password) {
+        return res.status(400).json({ error: "Username and password are required" });
+      }
+
+      const user = await appDb.getUserByUsername(username);
+      if (!user || !user.is_active) {
+        return res.status(401).json({ error: "Invalid username or password" });
+      }
+
+      const passwordHash = await appDb.getUserPasswordHash(username);
+      const valid = typeof passwordHash === "string" && verifyPassword(password, passwordHash);
+
+      if (!valid) {
+        return res.status(401).json({ error: "Invalid username or password" });
+      }
+
+      const sessionToken = createSessionToken();
+      const tokenHash = hashSessionToken(sessionToken);
+      const expiresAt = new Date(Date.now() + getSessionTtlMs());
+      await appDb.createSession(user.id, tokenHash, expiresAt);
+      await appDb.updateUserLastLogin(user.id);
+      setSessionCookie(res, sessionToken, req);
+      await appDb.recordAuditLog({
+        actor_user_id: user.id,
+        action: "auth.login",
+        target_type: "user",
+        target_id: user.id,
+        metadata: {
+          ip: getRequestIp(req),
+          username: user.username,
+        },
+      });
+
+      const refreshedUser = await appDb.getUserById(user.id);
+      return res.json({ user: toPublicAuthUser(refreshedUser || user) });
+    } catch (error) {
+      console.error("Login failed:", error);
+      return res.status(500).json({ error: "Failed to login" });
+    }
+  });
+
+  app.post("/api/auth/logout", async (req: AuthenticatedRequest, res) => {
+    try {
+      if (req.auth?.tokenHash) {
+        await appDb.deleteSession(req.auth.tokenHash);
+        await appDb.recordAuditLog({
+          actor_user_id: req.auth.user.id,
+          action: "auth.logout",
+          target_type: "user",
+          target_id: req.auth.user.id,
+          metadata: {
+            ip: getRequestIp(req),
+          },
+        });
+      }
+      clearSessionCookie(res, req);
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Logout failed:", error);
+      return res.status(500).json({ error: "Failed to logout" });
+    }
+  });
+
+  app.get("/api/auth/me", async (req: AuthenticatedRequest, res) => {
+    if (!req.auth?.user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    return res.json({ user: toPublicAuthUser(req.auth.user) });
+  });
+
+  app.get("/api/auth/users", requireRoles(["owner", "admin"]), async (_req: AuthenticatedRequest, res) => {
+    try {
+      const users = await appDb.listUsers();
+      return res.json(users.map(toPublicAuthUser));
+    } catch (error) {
+      console.error("Failed to list users:", error);
+      return res.status(500).json({ error: "Failed to list users" });
+    }
+  });
+
+  app.post("/api/auth/users", requireRoles(["owner"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const username = normalizeUsername(req.body?.username);
+      const password = String(req.body?.password || "");
+      const displayName = String(req.body?.display_name || username).trim();
+      const role = String(req.body?.role || "").trim() as UserRole;
+
+      if (!username || !isValidUsername(username)) {
+        return res.status(400).json({ error: "Username must be 3-32 chars and use only a-z, 0-9, dot, dash, or underscore" });
+      }
+      if (password.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+      if (!ALL_USER_ROLES.includes(role)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+
+      const user = await appDb.createUser({
+        username,
+        display_name: displayName,
+        password_hash: hashPassword(password),
+        role,
+      });
+      await recordAudit(req, "auth.user_created", "user", user.id, {
+        username: user.username,
+        role: user.role,
+      });
+      return res.status(201).json({ user: toPublicAuthUser(user) });
+    } catch (error: any) {
+      console.error("Failed to create user:", error);
+      const conflict = error?.code === "23505" || String(error?.message || "").includes("UNIQUE");
+      return res.status(conflict ? 409 : 500).json({ error: conflict ? "Username already exists" : "Failed to create user" });
+    }
+  });
+
+  app.post("/api/auth/users/:id/role", requireRoles(["owner"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = String(req.params.id || "").trim();
+      const role = String(req.body?.role || "").trim() as UserRole;
+      if (!userId || !ALL_USER_ROLES.includes(role)) {
+        return res.status(400).json({ error: "Invalid user or role" });
+      }
+
+      const updated = await appDb.updateUserRole(userId, role);
+      if (!updated) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      await recordAudit(req, "auth.role_updated", "user", userId, { role });
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Failed to update user role:", error);
+      return res.status(500).json({ error: "Failed to update user role" });
+    }
+  });
+
+  app.get("/api/audit-logs", requireRoles(["owner", "admin"]), async (_req: AuthenticatedRequest, res) => {
+    try {
+      const logs = await appDb.listAuditLogs(100);
+      return res.json(logs);
+    } catch (error) {
+      console.error("Failed to fetch audit logs:", error);
+      return res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  app.get("/api/registrations", requireAuth, async (_req, res) => {
     try {
       const rows = await appDb.listRegistrations();
       res.json(rows);
@@ -1094,9 +1354,14 @@ async function startServer() {
     }
   });
 
-  app.post("/api/registrations", async (req, res) => {
+  app.post("/api/registrations", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
       const result = await createRegistration(req.body || {});
+      if (result.statusCode === 200 && typeof result.content.id === "string") {
+        await recordAudit(req, "registration.created", "registration", String(result.content.id), {
+          sender_id: req.body?.sender_id || null,
+        });
+      }
       res.status(result.statusCode).json(result.content);
     } catch (error) {
       console.error(error);
@@ -1104,11 +1369,12 @@ async function startServer() {
     }
   });
 
-  app.post("/api/registrations/checkin", async (req, res) => {
+  app.post("/api/registrations/checkin", requireRoles(["owner", "admin", "operator", "checker"]), async (req: AuthenticatedRequest, res) => {
     try {
       const { id } = req.body;
       const updated = await appDb.checkInRegistration(id);
       if (updated) {
+        await recordAudit(req, "registration.checked_in", "registration", String(id || "").trim().toUpperCase());
         res.json({ status: "success" });
       } else {
         res.status(404).json({ error: "Registration not found or already cancelled" });
@@ -1118,16 +1384,19 @@ async function startServer() {
     }
   });
 
-  app.post("/api/registrations/cancel", async (req, res) => {
+  app.post("/api/registrations/cancel", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
       const result = await cancelRegistration(req.body?.id);
+      if (result.statusCode === 200) {
+        await recordAudit(req, "registration.cancelled", "registration", String(req.body?.id || "").trim().toUpperCase());
+      }
       res.status(result.statusCode).json(result.content);
     } catch (error) {
       res.status(500).json({ error: "Failed to cancel registration" });
     }
   });
 
-  app.post("/api/registrations/status", async (req, res) => {
+  app.post("/api/registrations/status", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
       const id = String(req.body?.id || "").trim().toUpperCase();
       const status = String(req.body?.status || "").trim();
@@ -1139,6 +1408,9 @@ async function startServer() {
 
       const updated = await appDb.updateRegistrationStatus(id, status as RegistrationStatus);
       if (updated) {
+        await recordAudit(req, "registration.status_updated", "registration", id, {
+          status,
+        });
         return res.json({ status: "success", id, registration_status: status });
       }
 
@@ -1149,7 +1421,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/registrations/export", async (_req, res) => {
+  app.get("/api/registrations/export", requireAuth, async (_req, res) => {
     try {
       const rows = await appDb.exportRegistrations();
       const eventName = (await appDb.getSettingValue("event_name")) || "event";
@@ -1237,7 +1509,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/settings", async (_req, res) => {
+  app.get("/api/settings", requireAuth, async (_req, res) => {
     try {
       res.json(await getSettingsMap());
     } catch (error) {
@@ -1245,19 +1517,22 @@ async function startServer() {
     }
   });
 
-  app.post("/api/settings", async (req, res) => {
+  app.post("/api/settings", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const body = Object.fromEntries(
         Object.entries(req.body || {}).map(([key, value]) => [key, String(value)]),
       ) as Record<string, string>;
       await appDb.upsertSettings(body);
+      await recordAudit(req, "settings.updated", "settings", "global", {
+        keys: Object.keys(body),
+      });
       res.json({ status: "ok" });
     } catch (error) {
       res.status(500).json({ error: "Failed to update settings" });
     }
   });
 
-  app.get("/api/messages", async (_req, res) => {
+  app.get("/api/messages", requireRoles(["owner", "admin", "operator", "viewer"]), async (_req, res) => {
     try {
       const messages = await appDb.listMessages(100);
       res.json(messages);
@@ -1266,7 +1541,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/llm/models", async (req, res) => {
+  app.get("/api/llm/models", requireRoles(["owner", "admin", "operator"]), async (req, res) => {
     if (!process.env.OPENROUTER_API_KEY) {
       return res.status(400).json({ error: "OPENROUTER_API_KEY is not configured in .env" });
     }
@@ -1302,7 +1577,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/llm/chat", async (req, res) => {
+  app.post("/api/llm/chat", requireRoles(["owner", "admin", "operator"]), async (req, res) => {
     try {
       const body = req.body || {};
       const message = typeof body.message === "string" ? body.message : "";

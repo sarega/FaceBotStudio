@@ -6,6 +6,20 @@ export interface Message {
   type: "incoming" | "outgoing";
 }
 
+export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  organization_id: string;
+  organization_name: string;
+  is_active: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
 export interface Settings {
   context: string;
   llm_model: string;
