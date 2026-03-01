@@ -48,6 +48,56 @@
     border-color: #334155 !important;
   }
 
+  html.theme-dark .border-blue-100,
+  html.theme-dark .border-blue-200 {
+    border-color: #1d4ed8 !important;
+  }
+
+  html.theme-dark .border-emerald-100,
+  html.theme-dark .border-emerald-200 {
+    border-color: #047857 !important;
+  }
+
+  html.theme-dark .border-amber-100,
+  html.theme-dark .border-amber-200 {
+    border-color: #b45309 !important;
+  }
+
+  html.theme-dark .border-rose-100,
+  html.theme-dark .border-rose-200 {
+    border-color: #be123c !important;
+  }
+
+  html.theme-dark .border-violet-100,
+  html.theme-dark .border-violet-200 {
+    border-color: #7c3aed !important;
+  }
+
+  html.theme-dark .bg-blue-50,
+  html.theme-dark .bg-blue-100 {
+    background-color: rgba(30, 64, 175, 0.18) !important;
+  }
+
+  html.theme-dark .bg-emerald-50,
+  html.theme-dark .bg-emerald-100 {
+    background-color: rgba(5, 150, 105, 0.18) !important;
+  }
+
+  html.theme-dark .bg-amber-50,
+  html.theme-dark .bg-amber-100 {
+    background-color: rgba(217, 119, 6, 0.18) !important;
+  }
+
+  html.theme-dark .bg-rose-50,
+  html.theme-dark .bg-rose-100 {
+    background-color: rgba(225, 29, 72, 0.18) !important;
+  }
+
+  html.theme-dark .bg-violet-50,
+  html.theme-dark .bg-violet-100 {
+    background-color: rgba(124, 58, 237, 0.18) !important;
+  }
+
   html.theme-dark .text-slate-900,
   html.theme-dark .text-slate-800 {
     color: #e2e8f0 !important;
@@ -61,6 +111,36 @@
   html.theme-dark .text-slate-500,
   html.theme-dark .text-slate-400 {
     color: #94a3b8 !important;
+  }
+
+  html.theme-dark .text-blue-800,
+  html.theme-dark .text-blue-700,
+  html.theme-dark .text-blue-600 {
+    color: #93c5fd !important;
+  }
+
+  html.theme-dark .text-emerald-800,
+  html.theme-dark .text-emerald-700,
+  html.theme-dark .text-emerald-600 {
+    color: #86efac !important;
+  }
+
+  html.theme-dark .text-amber-800,
+  html.theme-dark .text-amber-700,
+  html.theme-dark .text-amber-600 {
+    color: #fcd34d !important;
+  }
+
+  html.theme-dark .text-rose-800,
+  html.theme-dark .text-rose-700,
+  html.theme-dark .text-rose-600 {
+    color: #fda4af !important;
+  }
+
+  html.theme-dark .text-violet-800,
+  html.theme-dark .text-violet-700,
+  html.theme-dark .text-violet-600 {
+    color: #c4b5fd !important;
   }
 
   html.theme-dark input:not([type="checkbox"]):not([type="radio"]),
@@ -85,6 +165,30 @@
 
   html.theme-dark .hover\:bg-slate-200:hover {
     background-color: #334155 !important;
+  }
+
+  html.theme-dark .hover\:bg-blue-50:hover,
+  html.theme-dark .hover\:bg-blue-100:hover {
+    background-color: rgba(30, 64, 175, 0.28) !important;
+  }
+
+  html.theme-dark .hover\:bg-emerald-50:hover,
+  html.theme-dark .hover\:bg-emerald-100:hover {
+    background-color: rgba(5, 150, 105, 0.28) !important;
+  }
+
+  html.theme-dark .hover\:bg-amber-50:hover,
+  html.theme-dark .hover\:bg-amber-100:hover {
+    background-color: rgba(217, 119, 6, 0.28) !important;
+  }
+
+  html.theme-dark .hover\:bg-rose-50:hover,
+  html.theme-dark .hover\:bg-rose-100:hover {
+    background-color: rgba(225, 29, 72, 0.28) !important;
+  }
+
+  html.theme-dark .hover\:bg-violet-100:hover {
+    background-color: rgba(124, 58, 237, 0.28) !important;
   }
 }
 

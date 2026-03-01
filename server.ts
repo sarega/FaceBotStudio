@@ -13,6 +13,8 @@ import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
 import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
 import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup, buildLineWebhookDedupKey, canUseLineWebhookQueue, type LineInboundJob } from "./backend/runtime/lineQueue";
+import { enqueueTelegramInboundJob, startEmbeddedTelegramWorker, acquireTelegramWebhookDedup, buildTelegramWebhookDedupKey, canUseTelegramWebhookQueue, type TelegramInboundJob } from "./backend/runtime/telegramQueue";
+import { enqueueWhatsAppInboundJob, startEmbeddedWhatsAppWorker, acquireWhatsAppWebhookDedup, buildWhatsAppWebhookDedupKey, canUseWhatsAppWebhookQueue, type WhatsAppInboundJob } from "./backend/runtime/whatsappQueue";
 import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
 import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
@@ -2320,13 +2322,16 @@ function normalizeWhatsAppTextEvent(message: any, phoneNumberId?: string) {
   }
 
   return {
+    dedupKey: buildWhatsAppWebhookDedupKey(message, phoneNumberId),
     senderId,
     phoneNumberId: resolvedPhoneNumberId,
     text,
-  };
+    messageId: typeof message?.id === "string" ? message.id.trim() : null,
+    eventTimestamp: Number(message?.timestamp || Date.now()),
+  } satisfies WhatsAppInboundJob;
 }
 
-function normalizeTelegramTextUpdate(update: any) {
+function normalizeTelegramTextUpdate(update: any, botKey: string) {
   const message = update?.message;
   const senderId = String(message?.chat?.id || message?.from?.id || "").trim();
   const text = String(message?.text || "").trim();
@@ -2335,9 +2340,13 @@ function normalizeTelegramTextUpdate(update: any) {
   }
 
   return {
+    dedupKey: buildTelegramWebhookDedupKey(update, botKey),
     senderId,
+    botKey,
     text,
-  };
+    updateId: Number.isFinite(Number(update?.update_id)) ? String(update.update_id) : null,
+    eventTimestamp: Number(message?.date || Date.now()),
+  } satisfies TelegramInboundJob;
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
@@ -2350,6 +2359,14 @@ async function processInstagramInboundJob(job: InstagramInboundJob) {
 
 async function processLineInboundJob(job: LineInboundJob) {
   await handleIncomingLineText(job.senderId, job.text, job.destination, job.replyToken || undefined);
+}
+
+async function processWhatsAppInboundJob(job: WhatsAppInboundJob) {
+  await handleIncomingWhatsAppText(job.senderId, job.text, job.phoneNumberId);
+}
+
+async function processTelegramInboundJob(job: TelegramInboundJob) {
+  await handleIncomingTelegramText(job.senderId, job.text, job.botKey);
 }
 
 async function processEmbeddingJob(job: EmbeddingJob) {
@@ -2417,6 +2434,8 @@ async function startServer() {
     await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true });
     await startEmbeddedInstagramWorker(processInstagramInboundJob, { enabled: true });
     await startEmbeddedLineWorker(processLineInboundJob, { enabled: true });
+    await startEmbeddedWhatsAppWorker(processWhatsAppInboundJob, { enabled: true });
+    await startEmbeddedTelegramWorker(processTelegramInboundJob, { enabled: true });
     await startEmbeddedEmbeddingWorker(processEmbeddingJob, { enabled: true });
   }
 
@@ -2478,6 +2497,8 @@ async function startServer() {
         queue: canUseFacebookWebhookQueue() ? "redis" : "inline",
         instagram_queue: canUseInstagramWebhookQueue() ? "redis" : "inline",
         line_queue: canUseLineWebhookQueue() ? "redis" : "inline",
+        whatsapp_queue: canUseWhatsAppWebhookQueue() ? "redis" : "inline",
+        telegram_queue: canUseTelegramWebhookQueue() ? "redis" : "inline",
         embedding_queue: canUseEmbeddingQueue() ? "redis" : "inline",
         redis: redis.configured ? (redis.healthy ? "ok" : "error") : "disabled",
       });
@@ -3681,11 +3702,20 @@ async function startServer() {
             try {
               const normalized = normalizeWhatsAppTextEvent(message, phoneNumberId);
               if (!normalized) continue;
-              await handleIncomingWhatsAppText(
-                normalized.senderId,
-                normalized.text,
-                normalized.phoneNumberId,
-              );
+              const acquired = await acquireWhatsAppWebhookDedup(normalized.dedupKey);
+              if (!acquired) {
+                console.log("Skipped duplicate WhatsApp webhook event:", normalized.dedupKey);
+                continue;
+              }
+
+              if (canUseWhatsAppWebhookQueue()) {
+                const queued = await enqueueWhatsAppInboundJob(normalized);
+                if (queued) {
+                  continue;
+                }
+              }
+
+              await processWhatsAppInboundJob(normalized);
             } catch (error) {
               console.error("Failed to handle incoming WhatsApp message:", error);
             }
@@ -3718,16 +3748,27 @@ async function startServer() {
 
       res.status(200).json({ status: "ok" });
 
-      const normalized = normalizeTelegramTextUpdate(req.body);
+      const normalized = normalizeTelegramTextUpdate(req.body, botKey);
       if (!normalized) {
         return;
       }
 
-      void handleIncomingTelegramText(
-        normalized.senderId,
-        normalized.text,
-        botKey,
-      ).catch((error) => {
+      void (async () => {
+        const acquired = await acquireTelegramWebhookDedup(normalized.dedupKey);
+        if (!acquired) {
+          console.log("Skipped duplicate Telegram webhook event:", normalized.dedupKey);
+          return;
+        }
+
+        if (canUseTelegramWebhookQueue()) {
+          const queued = await enqueueTelegramInboundJob(normalized);
+          if (queued) {
+            return;
+          }
+        }
+
+        await processTelegramInboundJob(normalized);
+      })().catch((error) => {
         console.error("Failed to handle incoming Telegram message:", error);
       });
     } catch (error) {
