@@ -463,6 +463,73 @@ async function getRegistrationById(id: string) {
   return appDb.getRegistrationById(id);
 }
 
+async function buildCheckinSessionAccessPayload(session: Awaited<ReturnType<typeof appDb.getCheckinSessionByTokenHash>>) {
+  if (!session) return null;
+  const event = await appDb.getEventById(session.event_id);
+  if (!event) return null;
+  const settings = await getSettingsMap(session.event_id);
+  return {
+    id: session.id,
+    label: session.label,
+    event_id: session.event_id,
+    event_name: settings.event_name || event.name,
+    event_location: settings.event_location || "",
+    event_timezone: settings.event_timezone || "Asia/Bangkok",
+    event_date: settings.event_date || "",
+    event_status: event.effective_status,
+    expires_at: session.expires_at,
+    last_used_at: session.last_used_at,
+  };
+}
+
+function serializeRegistrationForCheckin(registration: RegistrationRow) {
+  return {
+    id: registration.id,
+    event_id: registration.event_id || null,
+    first_name: registration.first_name,
+    last_name: registration.last_name,
+    phone: registration.phone,
+    email: registration.email,
+    timestamp: registration.timestamp,
+    status: registration.status,
+  };
+}
+
+async function performCheckinForRegistration(registrationId: unknown, eventId?: string) {
+  const normalizedId = String(registrationId || "").trim().toUpperCase();
+  if (!normalizedId) {
+    return { statusCode: 400, body: { error: "Registration ID is required" } };
+  }
+
+  const existing = await getRegistrationById(normalizedId);
+  if (!existing || (eventId && existing.event_id !== eventId)) {
+    return { statusCode: 404, body: { error: "Registration not found" } };
+  }
+
+  if (existing.status === "cancelled") {
+    return { statusCode: 400, body: { error: "Registration has been cancelled", registration: serializeRegistrationForCheckin(existing) } };
+  }
+
+  const alreadyCheckedIn = existing.status === "checked-in";
+  if (!alreadyCheckedIn) {
+    const updated = await appDb.checkInRegistration(normalizedId);
+    if (!updated) {
+      return { statusCode: 404, body: { error: "Registration not found or already cancelled" } };
+    }
+  }
+
+  const fresh = await getRegistrationById(normalizedId);
+  const registration = fresh || existing;
+  return {
+    statusCode: 200,
+    body: {
+      status: "success",
+      already_checked_in: alreadyCheckedIn,
+      registration: serializeRegistrationForCheckin(registration),
+    },
+  };
+}
+
 async function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing", eventId?: string, pageId?: string) {
   await appDb.saveMessage(senderId, text, type, eventId, pageId);
 }
@@ -2705,6 +2772,142 @@ async function startServer() {
     }
   });
 
+  app.get("/api/checkin-sessions", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const sessions = await appDb.listCheckinSessions(eventId);
+      return res.json(sessions);
+    } catch (error) {
+      console.error("Failed to fetch check-in sessions:", error);
+      return res.status(500).json({ error: "Failed to fetch check-in sessions" });
+    }
+  });
+
+  app.post("/api/checkin-sessions", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = String(req.body?.event_id || "").trim() || DEFAULT_EVENT_ID;
+      const label = String(req.body?.label || "").trim();
+      const expiresHours = Number.parseInt(String(req.body?.expires_hours || "8"), 10);
+
+      if (!label) {
+        return res.status(400).json({ error: "Session label is required" });
+      }
+      if (!Number.isFinite(expiresHours) || expiresHours < 1 || expiresHours > 168) {
+        return res.status(400).json({ error: "Expiry must be between 1 and 168 hours" });
+      }
+
+      const event = await appDb.getEventById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+      if (event.effective_status === "closed" || event.effective_status === "cancelled") {
+        return res.status(400).json({ error: "Check-in access cannot be generated for closed or cancelled events" });
+      }
+
+      const rawToken = createSessionToken();
+      const tokenHash = hashSessionToken(rawToken);
+      const expiresAt = new Date(Date.now() + expiresHours * 60 * 60 * 1000);
+      const session = await appDb.createCheckinSession({
+        event_id: eventId,
+        label,
+        created_by_user_id: req.auth?.user.id || null,
+        expires_at: expiresAt,
+        token_hash: tokenHash,
+      });
+
+      await recordAudit(req, "checkin.session_created", "checkin_session", session.id, {
+        event_id: eventId,
+        label,
+        expires_at: expiresAt.toISOString(),
+      });
+
+      const appUrl = String(process.env.APP_URL || "").trim();
+      const accessPath = `/?checkin_token=${encodeURIComponent(rawToken)}`;
+      return res.status(201).json({
+        session,
+        access_token: rawToken,
+        access_path: accessPath,
+        access_url: appUrl ? `${appUrl}${accessPath}` : accessPath,
+      });
+    } catch (error) {
+      console.error("Failed to create check-in session:", error);
+      return res.status(500).json({ error: "Failed to create check-in session" });
+    }
+  });
+
+  app.post("/api/checkin-sessions/:id/revoke", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const sessionId = String(req.params.id || "").trim();
+      if (!sessionId) {
+        return res.status(400).json({ error: "Session ID is required" });
+      }
+      const revoked = await appDb.revokeCheckinSession(sessionId);
+      if (!revoked) {
+        return res.status(404).json({ error: "Check-in session not found" });
+      }
+      await recordAudit(req, "checkin.session_revoked", "checkin_session", sessionId);
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Failed to revoke check-in session:", error);
+      return res.status(500).json({ error: "Failed to revoke check-in session" });
+    }
+  });
+
+  app.get("/api/checkin-access/session", async (req, res) => {
+    try {
+      const rawToken = String(req.query.token || "").trim();
+      if (!rawToken) {
+        return res.status(400).json({ error: "Check-in token is required" });
+      }
+      const session = await appDb.getCheckinSessionByTokenHash(hashSessionToken(rawToken));
+      const payload = await buildCheckinSessionAccessPayload(session);
+      if (!payload) {
+        return res.status(404).json({ error: "Check-in session not found or expired" });
+      }
+      await appDb.touchCheckinSession(session.id);
+      return res.json({ session: payload });
+    } catch (error) {
+      console.error("Failed to resolve check-in session:", error);
+      return res.status(500).json({ error: "Failed to resolve check-in session" });
+    }
+  });
+
+  app.post("/api/checkin-access/checkin", async (req, res) => {
+    try {
+      const rawToken = String(req.body?.token || "").trim();
+      if (!rawToken) {
+        return res.status(400).json({ error: "Check-in token is required" });
+      }
+
+      const session = await appDb.getCheckinSessionByTokenHash(hashSessionToken(rawToken));
+      if (!session) {
+        return res.status(401).json({ error: "Check-in session not found or expired" });
+      }
+
+      const result = await performCheckinForRegistration(req.body?.id, session.event_id);
+      await appDb.touchCheckinSession(session.id);
+
+      if (result.statusCode === 200) {
+        await appDb.recordAuditLog({
+          actor_user_id: null,
+          action: result.body.already_checked_in ? "registration.checkin_repeated" : "registration.checked_in_via_token",
+          target_type: "registration",
+          target_id: String(req.body?.id || "").trim().toUpperCase(),
+          metadata: {
+            event_id: session.event_id,
+            checkin_session_id: session.id,
+            ip: getRequestIp(req),
+          },
+        });
+      }
+
+      return res.status(result.statusCode).json(result.body);
+    } catch (error) {
+      console.error("Failed to check in via token:", error);
+      return res.status(500).json({ error: "Failed to check in attendee" });
+    }
+  });
+
   app.get("/api/events", requireAuth, async (_req, res) => {
     try {
       const events = await appDb.listEvents();
@@ -2987,14 +3190,11 @@ async function startServer() {
 
   app.post("/api/registrations/checkin", requireRoles(["owner", "admin", "operator", "checker"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const { id } = req.body;
-      const updated = await appDb.checkInRegistration(id);
-      if (updated) {
-        await recordAudit(req, "registration.checked_in", "registration", String(id || "").trim().toUpperCase());
-        res.json({ status: "success" });
-      } else {
-        res.status(404).json({ error: "Registration not found or already cancelled" });
+      const result = await performCheckinForRegistration(req.body?.id);
+      if (result.statusCode === 200) {
+        await recordAudit(req, result.body.already_checked_in ? "registration.checkin_repeated" : "registration.checked_in", "registration", String(req.body?.id || "").trim().toUpperCase());
       }
+      res.status(result.statusCode).json(result.body);
     } catch (error) {
       res.status(500).json({ error: "Failed to check in" });
     }

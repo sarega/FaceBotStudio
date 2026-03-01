@@ -26,6 +26,31 @@ export interface AuthUser {
   last_login_at: string | null;
 }
 
+export interface CheckinSessionRecord {
+  id: string;
+  event_id: string;
+  created_by_user_id: string | null;
+  label: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  is_active: boolean;
+}
+
+export interface CheckinAccessSession {
+  id: string;
+  label: string;
+  event_id: string;
+  event_name: string;
+  event_location: string;
+  event_timezone: string;
+  event_date: string;
+  event_status: EventStatus;
+  expires_at: string;
+  last_used_at: string | null;
+}
+
 export interface EventRecord {
   id: string;
   name: string;

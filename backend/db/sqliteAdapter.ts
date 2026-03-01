@@ -12,7 +12,9 @@ import type {
   AuthUserRow,
   ChannelAccountRow,
   ChannelPlatform,
+  CheckinSessionRow,
   CreateEventInput,
+  CreateCheckinSessionInput,
   EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
@@ -142,6 +144,23 @@ function mapEventDocumentChunkRow(row: Record<string, unknown>) {
   } satisfies EventDocumentChunkRow;
 }
 
+function mapCheckinSessionRow(row: Record<string, unknown>) {
+  const revokedAt = typeof row.revoked_at === "string" ? row.revoked_at : null;
+  const expiresAt = String(row.expires_at || "");
+  const expiresAtMs = Number.isFinite(Date.parse(expiresAt)) ? Date.parse(expiresAt) : 0;
+  return {
+    id: String(row.id),
+    event_id: String(row.event_id),
+    created_by_user_id: typeof row.created_by_user_id === "string" ? row.created_by_user_id : null,
+    label: String(row.label || ""),
+    created_at: String(row.created_at || ""),
+    expires_at: expiresAt,
+    last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
+    revoked_at: revokedAt,
+    is_active: !revokedAt && expiresAtMs > Date.now(),
+  } satisfies CheckinSessionRow;
+}
+
 export class SqliteAppDatabase implements AppDatabase {
   public readonly driver = "sqlite" as const;
 
@@ -211,6 +230,19 @@ export class SqliteAppDatabase implements AppDatabase {
         expires_at DATETIME NOT NULL,
         last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS checkin_sessions (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        created_by_user_id TEXT,
+        label TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME NOT NULL,
+        last_used_at DATETIME,
+        revoked_at DATETIME,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
       );
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -342,6 +374,7 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.ensureEventDocumentChunks();
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
+    await this.deleteExpiredCheckinSessions();
 
     this.initialized = true;
   }
@@ -1175,6 +1208,96 @@ export class SqliteAppDatabase implements AppDatabase {
       metadata: parseAuditMetadata(row.metadata),
       created_at: String(row.created_at),
     } satisfies AuditLogRow));
+  }
+
+  async listCheckinSessions(eventId: string) {
+    const rows = this.db.prepare(
+      `SELECT
+        id,
+        event_id,
+        created_by_user_id,
+        label,
+        created_at,
+        expires_at,
+        last_used_at,
+        revoked_at
+       FROM checkin_sessions
+       WHERE event_id = ?
+       ORDER BY created_at DESC`,
+    ).all(String(eventId || "").trim()) as Array<Record<string, unknown>>;
+    return rows.map(mapCheckinSessionRow);
+  }
+
+  async createCheckinSession(input: CreateCheckinSessionInput) {
+    const id = generateEntityId("cki");
+    this.db.prepare(
+      `INSERT INTO checkin_sessions (id, event_id, created_by_user_id, label, token_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      String(input.event_id || "").trim(),
+      input.created_by_user_id || null,
+      String(input.label || "").trim(),
+      String(input.token_hash || "").trim(),
+      input.expires_at.toISOString(),
+    );
+
+    const row = this.db.prepare(
+      `SELECT
+        id,
+        event_id,
+        created_by_user_id,
+        label,
+        created_at,
+        expires_at,
+        last_used_at,
+        revoked_at
+       FROM checkin_sessions
+       WHERE id = ?`,
+    ).get(id) as Record<string, unknown> | undefined;
+
+    if (!row) {
+      throw new Error("Failed to load created check-in session");
+    }
+    return mapCheckinSessionRow(row);
+  }
+
+  async getCheckinSessionByTokenHash(tokenHash: string) {
+    const row = this.db.prepare(
+      `SELECT
+        id,
+        event_id,
+        created_by_user_id,
+        label,
+        created_at,
+        expires_at,
+        last_used_at,
+        revoked_at
+       FROM checkin_sessions
+       WHERE token_hash = ?
+         AND revoked_at IS NULL
+         AND expires_at > CURRENT_TIMESTAMP
+       LIMIT 1`,
+    ).get(String(tokenHash || "").trim()) as Record<string, unknown> | undefined;
+
+    return row ? mapCheckinSessionRow(row) : undefined;
+  }
+
+  async touchCheckinSession(sessionId: string) {
+    this.db.prepare(
+      "UPDATE checkin_sessions SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(String(sessionId || "").trim());
+  }
+
+  async revokeCheckinSession(sessionId: string) {
+    const result = this.db.prepare(
+      "UPDATE checkin_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL",
+    ).run(String(sessionId || "").trim());
+    return result.changes > 0;
+  }
+
+  async deleteExpiredCheckinSessions() {
+    this.db.prepare("DELETE FROM checkin_sessions WHERE expires_at <= CURRENT_TIMESTAMP").run();
   }
 
   private ensureColumn(tableName: string, columnName: string, definition: string) {

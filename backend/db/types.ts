@@ -93,6 +93,18 @@ export interface AuditLogRow {
   created_at: string;
 }
 
+export interface CheckinSessionRow {
+  id: string;
+  event_id: string;
+  created_by_user_id: string | null;
+  label: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  is_active: boolean;
+}
+
 export interface EventRow {
   id: string;
   name: string;
@@ -199,6 +211,14 @@ export interface UpsertEventDocumentInput {
   is_active?: boolean;
 }
 
+export interface CreateCheckinSessionInput {
+  event_id: string;
+  label: string;
+  created_by_user_id?: string | null;
+  expires_at: Date;
+  token_hash: string;
+}
+
 export interface AppDatabase {
   driver: "postgres" | "sqlite";
   initialize(): Promise<void>;
@@ -259,4 +279,10 @@ export interface AppDatabase {
   updateUserLastLogin(userId: string): Promise<void>;
   recordAuditLog(entry: AuditLogEntryInput): Promise<void>;
   listAuditLogs(limit: number): Promise<AuditLogRow[]>;
+  listCheckinSessions(eventId: string): Promise<CheckinSessionRow[]>;
+  createCheckinSession(input: CreateCheckinSessionInput): Promise<CheckinSessionRow>;
+  getCheckinSessionByTokenHash(tokenHash: string): Promise<CheckinSessionRow | undefined>;
+  touchCheckinSession(sessionId: string): Promise<void>;
+  revokeCheckinSession(sessionId: string): Promise<boolean>;
+  deleteExpiredCheckinSessions(): Promise<void>;
 }

@@ -15,7 +15,9 @@ import type {
   AuthUserRow,
   ChannelAccountRow,
   ChannelPlatform,
+  CheckinSessionRow,
   CreateEventInput,
+  CreateCheckinSessionInput,
   EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
@@ -139,6 +141,23 @@ function mapEventDocumentChunkRow(row: Record<string, unknown>) {
   } satisfies EventDocumentChunkRow;
 }
 
+function mapCheckinSessionRow(row: Record<string, unknown>) {
+  const revokedAt = typeof row.revoked_at === "string" ? row.revoked_at : null;
+  const expiresAt = String(row.expires_at || "");
+  const expiresAtMs = Number.isFinite(Date.parse(expiresAt)) ? Date.parse(expiresAt) : 0;
+  return {
+    id: String(row.id),
+    event_id: String(row.event_id),
+    created_by_user_id: typeof row.created_by_user_id === "string" ? row.created_by_user_id : null,
+    label: String(row.label || ""),
+    created_at: String(row.created_at || ""),
+    expires_at: expiresAt,
+    last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
+    revoked_at: revokedAt,
+    is_active: !revokedAt && expiresAtMs > Date.now(),
+  } satisfies CheckinSessionRow;
+}
+
 export class PostgresAppDatabase implements AppDatabase {
   public readonly driver = "postgres" as const;
 
@@ -168,6 +187,7 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.ensureEventDocumentChunks();
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
+    await this.deleteExpiredCheckinSessions();
     this.initialized = true;
   }
 
@@ -1097,6 +1117,103 @@ export class PostgresAppDatabase implements AppDatabase {
       metadata: parseAuditMetadata(row.metadata),
       created_at: String(row.created_at),
     } satisfies AuditLogRow));
+  }
+
+  async listCheckinSessions(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+        id,
+        event_id,
+        created_by_user_id,
+        label,
+        created_at::text AS created_at,
+        expires_at::text AS expires_at,
+        last_used_at::text AS last_used_at,
+        revoked_at::text AS revoked_at
+       FROM checkin_sessions
+       WHERE event_id = $1
+       ORDER BY created_at DESC`,
+      [String(eventId || "").trim()],
+    );
+    return result.rows.map(mapCheckinSessionRow);
+  }
+
+  async createCheckinSession(input: CreateCheckinSessionInput) {
+    const id = generateEntityId("cki");
+    await this.pool.query(
+      `INSERT INTO checkin_sessions (
+        id, event_id, created_by_user_id, label, token_hash, expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        id,
+        String(input.event_id || "").trim(),
+        input.created_by_user_id || null,
+        String(input.label || "").trim(),
+        String(input.token_hash || "").trim(),
+        input.expires_at.toISOString(),
+      ],
+    );
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+        id,
+        event_id,
+        created_by_user_id,
+        label,
+        created_at::text AS created_at,
+        expires_at::text AS expires_at,
+        last_used_at::text AS last_used_at,
+        revoked_at::text AS revoked_at
+       FROM checkin_sessions
+       WHERE id = $1`,
+      [id],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error("Failed to load created check-in session");
+    }
+    return mapCheckinSessionRow(row);
+  }
+
+  async getCheckinSessionByTokenHash(tokenHash: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+        id,
+        event_id,
+        created_by_user_id,
+        label,
+        created_at::text AS created_at,
+        expires_at::text AS expires_at,
+        last_used_at::text AS last_used_at,
+        revoked_at::text AS revoked_at
+       FROM checkin_sessions
+       WHERE token_hash = $1
+         AND revoked_at IS NULL
+         AND expires_at > CURRENT_TIMESTAMP
+       LIMIT 1`,
+      [String(tokenHash || "").trim()],
+    );
+    return result.rows[0] ? mapCheckinSessionRow(result.rows[0]) : undefined;
+  }
+
+  async touchCheckinSession(sessionId: string) {
+    await this.pool.query(
+      "UPDATE checkin_sessions SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1",
+      [String(sessionId || "").trim()],
+    );
+  }
+
+  async revokeCheckinSession(sessionId: string) {
+    const result = await this.pool.query(
+      "UPDATE checkin_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1 AND revoked_at IS NULL",
+      [String(sessionId || "").trim()],
+    );
+    return result.rowCount > 0;
+  }
+
+  async deleteExpiredCheckinSessions() {
+    await this.pool.query(
+      "DELETE FROM checkin_sessions WHERE expires_at <= CURRENT_TIMESTAMP",
+    );
   }
 
   private async uniqueEventSlug(baseName: string, excludeId?: string) {
