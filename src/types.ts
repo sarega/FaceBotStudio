@@ -9,6 +9,8 @@ export interface Message {
 }
 
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
+export type ManualEventStatus = "pending" | "active" | "cancelled";
+export type EventStatus = ManualEventStatus | "closed";
 
 export interface AuthUser {
   id: string;
@@ -26,6 +28,8 @@ export interface EventRecord {
   id: string;
   name: string;
   slug: string;
+  status: ManualEventStatus;
+  effective_status: EventStatus;
   is_default: boolean;
   is_active: boolean;
   created_at: string;

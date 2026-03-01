@@ -9,6 +9,8 @@ type DateTimeParts = {
 };
 
 export type RegistrationWindowState = "open" | "not_started" | "closed";
+export type ManualEventStatus = "pending" | "active" | "cancelled";
+export type EventStatus = ManualEventStatus | "closed";
 
 function parseDateTimeLocalInput(value: string): DateTimeParts | null {
   const match = String(value || "")
@@ -114,6 +116,28 @@ export function getEventState(settings: Record<string, string>, now = new Date()
     endLabel: end ? formatInTimeZone(end, timeZone) : "-",
     eventDateLabel: eventDate ? formatInTimeZone(eventDate, timeZone) : settings.event_date || "-",
   };
+}
+
+export function getEffectiveEventStatus(
+  manualStatus: string | undefined,
+  settings: Record<string, string>,
+  now = new Date(),
+): EventStatus {
+  const normalizedManual = String(manualStatus || "").trim().toLowerCase();
+  if (normalizedManual === "cancelled") {
+    return "cancelled";
+  }
+
+  const eventState = getEventState(settings, now);
+  if (eventState.eventDate && now.getTime() >= eventState.eventDate.getTime()) {
+    return "closed";
+  }
+
+  if (normalizedManual === "pending") {
+    return "pending";
+  }
+
+  return "active";
 }
 
 export function formatStoredDateForDisplay(value: string, timeZone: string) {

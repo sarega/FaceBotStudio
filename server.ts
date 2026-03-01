@@ -89,13 +89,14 @@ type AuthenticatedRequest = Request & {
   auth?: AuthContext;
 };
 
-function buildEventInfo(settings: Record<string, any>) {
+function buildEventInfo(settings: Record<string, any>, eventStatus = "active") {
   const eventState = getEventState(settings);
   return `
 Current Event Details:
 - Name: ${settings.event_name || ""}
 - Location: ${settings.event_location || ""}
 - Map: ${settings.event_map_url || ""}
+- Event Status Right Now: ${eventStatus}
 - Time Zone: ${eventState.timeZone}
 - Current System Time: ${eventState.nowLabel}
 - Date: ${formatStoredDateForDisplay(settings.event_date || "", eventState.timeZone)}
@@ -108,11 +109,15 @@ Current Event Details:
 `;
 }
 
-function getSystemInstruction(settings: Record<string, any>) {
+function getSystemInstruction(settings: Record<string, any>, eventStatus = "active") {
   return [
     settings.context || "",
-    buildEventInfo(settings),
+    buildEventInfo(settings, eventStatus),
     "Never guess the current date or time. Use the Current System Time above as the source of truth.",
+    "Respect the Event Status Right Now field.",
+    "If event status is pending, explain that the event is still being prepared and registration has not launched yet.",
+    "If event status is cancelled, clearly explain that the event has been cancelled.",
+    "If event status is closed, clearly explain that the event has already ended.",
     "Respect the Registration Status Right Now field. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
     "If the event lifecycle is past, explain that the event date has already passed.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
@@ -852,6 +857,7 @@ async function requestOpenRouterChat(
   message: string,
   history: ChatHistoryMessage[],
   settings: Record<string, any>,
+  eventStatus = "active",
 ): Promise<NormalizedChatResponse> {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is not configured in .env");
@@ -869,7 +875,7 @@ async function requestOpenRouterChat(
       messages: [
         {
           role: "system",
-          content: getSystemInstruction(settings),
+          content: getSystemInstruction(settings, eventStatus),
         },
         ...normalizeHistoryForOpenRouter(history),
         {
@@ -1025,9 +1031,10 @@ async function generateBotReplyForSender(
   historyOverride?: ChatHistoryMessage[],
 ): Promise<BotReplyResult> {
   const settings = await getSettingsMap(eventId);
+  const event = await appDb.getEventById(eventId);
   const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId);
 
-  const firstResponse = await requestOpenRouterChat(incomingText, history, settings);
+  const firstResponse = await requestOpenRouterChat(incomingText, history, settings, event?.effective_status || "active");
   let finalResponse = firstResponse;
   let ticketRegistrationIds: string[] = [];
 
@@ -1049,6 +1056,7 @@ async function generateBotReplyForSender(
         ...toolMessages,
       ],
       settings,
+      event?.effective_status || "active",
     );
   }
 
@@ -1460,15 +1468,19 @@ async function startServer() {
     try {
       const eventId = String(req.params.id || "").trim();
       const name = typeof req.body?.name === "string" ? req.body.name : undefined;
-      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : undefined;
+      const status = typeof req.body?.status === "string" ? req.body.status : undefined;
+      const allowedStatuses = new Set(["pending", "active", "cancelled"]);
       if (!eventId) {
         return res.status(400).json({ error: "Event ID is required" });
       }
-      const updated = await appDb.updateEvent(eventId, { name, is_active: isActive });
+      if (status && !allowedStatuses.has(status)) {
+        return res.status(400).json({ error: "Invalid event status" });
+      }
+      const updated = await appDb.updateEvent(eventId, { name, status: status as any });
       if (!updated) {
         return res.status(404).json({ error: "Event not found" });
       }
-      await recordAudit(req, "event.updated", "event", eventId, { name, is_active: isActive });
+      await recordAudit(req, "event.updated", "event", eventId, { name, status });
       return res.json({ status: "ok" });
     } catch (error) {
       console.error("Failed to update event:", error);
@@ -1788,7 +1800,8 @@ async function startServer() {
       const settings = (body.settings && typeof body.settings === "object")
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
-      const response = await requestOpenRouterChat(message, history, settings);
+      const event = await appDb.getEventById(eventId);
+      const response = await requestOpenRouterChat(message, history, settings, event?.effective_status || "active");
       res.json(response);
     } catch (error) {
       console.error("OpenRouter chat error:", error);

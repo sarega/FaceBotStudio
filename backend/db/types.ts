@@ -1,6 +1,8 @@
 export type MessageType = "incoming" | "outgoing";
 export type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
+export type ManualEventStatus = "pending" | "active" | "cancelled";
+export type EventStatus = ManualEventStatus | "closed";
 
 export interface SettingRow {
   key: string;
@@ -93,6 +95,8 @@ export interface EventRow {
   id: string;
   name: string;
   slug: string;
+  status: ManualEventStatus;
+  effective_status: EventStatus;
   is_default: boolean;
   is_active: boolean;
   created_at: string;
@@ -116,7 +120,7 @@ export interface CreateEventInput {
 
 export interface UpdateEventInput {
   name?: string;
-  is_active?: boolean;
+  status?: ManualEventStatus;
 }
 
 export interface UpsertFacebookPageInput {

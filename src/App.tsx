@@ -30,7 +30,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, EventRecord, FacebookPageRecord, Message, Settings, UserRole } from "./types";
+import { AuthUser, EventRecord, EventStatus, FacebookPageRecord, Message, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -83,6 +83,36 @@ function describeRegistrationWindow(settings: Settings) {
     return { status: "closed", label: "Closed" };
   }
   return { status: "open", label: "Open" };
+}
+
+function getEventStatusLabel(status: EventStatus) {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "active":
+      return "active";
+    case "closed":
+      return "closed";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return status;
+  }
+}
+
+function getEventStatusBadgeClass(status: EventStatus) {
+  switch (status) {
+    case "active":
+      return "bg-emerald-100 text-emerald-700";
+    case "pending":
+      return "bg-amber-100 text-amber-700";
+    case "closed":
+      return "bg-slate-200 text-slate-600";
+    case "cancelled":
+      return "bg-rose-100 text-rose-700";
+    default:
+      return "bg-slate-200 text-slate-600";
+  }
 }
 
 export default function App() {
@@ -186,6 +216,16 @@ export default function App() {
   const registrationWindowInfo = describeRegistrationWindow(settings);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
   const selectedEventPages = pages.filter((page) => page.event_id === selectedEventId);
+  const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
+  const closedEvents = events.filter((event) => event.effective_status === "closed");
+  const cancelledEvents = events.filter((event) => event.effective_status === "cancelled");
+  const selectorEvents = (() => {
+    const base = workingEvents.length > 0 ? [...workingEvents] : [...events];
+    if (selectedEvent && !base.some((event) => event.id === selectedEvent.id)) {
+      base.unshift(selectedEvent);
+    }
+    return base;
+  })();
 
   const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const res = await fetch(input, init);
@@ -217,8 +257,9 @@ export default function App() {
       }
       const rows = Array.isArray(data) ? (data as EventRecord[]) : [];
       setEvents(rows);
-      setSelectedEventId((prev) => prev && rows.some((event) => event.id === prev) ? prev : rows[0]?.id || "");
-      setEditingEventName((prev) => prev || rows[0]?.name || "");
+      const firstWorking = rows.find((event) => event.effective_status === "active") || rows.find((event) => event.effective_status === "pending");
+      setSelectedEventId((prev) => prev && rows.some((event) => event.id === prev) ? prev : firstWorking?.id || rows[0]?.id || "");
+      setEditingEventName((prev) => prev || firstWorking?.name || rows[0]?.name || "");
       return rows;
     } catch (err) {
       console.error("Failed to fetch events", err);
@@ -806,14 +847,14 @@ export default function App() {
     }
   };
 
-  const handleUpdateEvent = async (isActive?: boolean) => {
+  const handleUpdateEvent = async (status?: "pending" | "active" | "cancelled") => {
     if (!selectedEventId || !selectedEvent) return;
     const payload: Record<string, unknown> = {};
     if (editingEventName.trim() && editingEventName.trim() !== selectedEvent.name) {
       payload.name = editingEventName.trim();
     }
-    if (typeof isActive === "boolean" && isActive !== selectedEvent.is_active) {
-      payload.is_active = isActive;
+    if (status && status !== selectedEvent.status) {
+      payload.status = status;
     }
     if (!Object.keys(payload).length) return;
 
@@ -1042,30 +1083,31 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <Bot className="text-white w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h1 className="font-bold text-xl tracking-tight">FB Bot Studio</h1>
               {selectedEvent && (
-                <p className="text-[11px] text-slate-500 hidden md:block">
-                  Active event: <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
+                <p className="text-[11px] text-slate-500 hidden md:block truncate max-w-[16rem] lg:max-w-[22rem] xl:max-w-[28rem]">
+                  {getEventStatusLabel(selectedEvent.effective_status)} event:{" "}
+                  <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
                 </p>
               )}
             </div>
-            <div className="hidden lg:flex items-center gap-2 ml-3">
+            <div className="hidden lg:flex items-center gap-2 ml-3 min-w-0">
               <CalendarRange className="w-4 h-4 text-slate-400" />
               <select
                 value={selectedEventId}
                 onChange={(e) => setSelectedEventId(e.target.value)}
-                disabled={!events.length || eventLoading}
-                className="min-w-[15rem] bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+                disabled={!selectorEvents.length || eventLoading}
+                className="min-w-[15rem] max-w-[22rem] bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
               >
-                {events.map((event) => (
+                {selectorEvents.map((event) => (
                   <option key={event.id} value={event.id}>
-                    {event.name}{event.is_active ? "" : " (inactive)"}
+                    {event.name} ({getEventStatusLabel(event.effective_status)})
                   </option>
                 ))}
               </select>
@@ -1819,7 +1861,7 @@ export default function App() {
                     </div>
 
                     <div className="space-y-2">
-                      {events.map((event) => (
+                      {workingEvents.map((event) => (
                         <button
                           key={event.id}
                           onClick={() => setSelectedEventId(event.id)}
@@ -1840,16 +1882,73 @@ export default function App() {
                                   default
                                 </span>
                               )}
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                event.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
-                              }`}>
-                                {event.is_active ? "active" : "inactive"}
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                                {getEventStatusLabel(event.effective_status)}
                               </span>
                             </div>
                           </div>
                         </button>
                       ))}
+                      {workingEvents.length === 0 && (
+                        <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                          No active or pending events yet.
+                        </div>
+                      )}
                     </div>
+
+                    {closedEvents.length > 0 && (
+                      <div className="border-t border-slate-100 pt-5 space-y-2">
+                        <p className="text-sm font-semibold text-slate-700">Closed Events</p>
+                        {closedEvents.map((event) => (
+                          <button
+                            key={event.id}
+                            onClick={() => setSelectedEventId(event.id)}
+                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                              selectedEventId === event.id
+                                ? "border-slate-300 bg-slate-100"
+                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
+                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
+                              </div>
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                                {getEventStatusLabel(event.effective_status)}
+                              </span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {cancelledEvents.length > 0 && (
+                      <div className="border-t border-slate-100 pt-5 space-y-2">
+                        <p className="text-sm font-semibold text-slate-700">Cancelled Events</p>
+                        {cancelledEvents.map((event) => (
+                          <button
+                            key={event.id}
+                            onClick={() => setSelectedEventId(event.id)}
+                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                              selectedEventId === event.id
+                                ? "border-rose-200 bg-rose-50"
+                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
+                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
+                              </div>
+                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                                {getEventStatusLabel(event.effective_status)}
+                              </span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
                     <div className="border-t border-slate-100 pt-5 space-y-3">
                       <p className="text-sm font-semibold">Selected Event Details</p>
@@ -1868,14 +1967,36 @@ export default function App() {
                         >
                           Save Event Name
                         </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <button
-                          onClick={() => void handleUpdateEvent(!(selectedEvent?.is_active))}
-                          disabled={!selectedEvent || selectedEvent?.is_default || eventLoading}
-                          className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                          onClick={() => void handleUpdateEvent("pending")}
+                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || selectedEvent.effective_status === "closed" || eventLoading}
+                          className="rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
                         >
-                          {selectedEvent?.is_active ? "Deactivate Event" : "Activate Event"}
+                          Set Pending
+                        </button>
+                        <button
+                          onClick={() => void handleUpdateEvent("active")}
+                          disabled={!selectedEvent || selectedEvent.status === "active" || selectedEvent.effective_status === "closed" || eventLoading}
+                          className="rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          Launch Event
+                        </button>
+                        <button
+                          onClick={() => void handleUpdateEvent("cancelled")}
+                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "cancelled" || eventLoading}
+                          className="rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        >
+                          Cancel Event
                         </button>
                       </div>
+                      {selectedEvent && (
+                        <p className="text-xs text-slate-500">
+                          Manual status: <code>{selectedEvent.status}</code>. Effective status now: <code>{selectedEvent.effective_status}</code>.
+                          {selectedEvent.effective_status === "closed" ? " This event is automatically closed because its event date has passed." : ""}
+                        </p>
+                      )}
                     </div>
 
                     <div className="border-t border-slate-100 pt-5 space-y-3">
@@ -1971,11 +2092,16 @@ export default function App() {
                       />
                       <button
                         onClick={() => void handleSaveFacebookPage()}
-                        disabled={!selectedEventId || !newPageId.trim() || eventLoading}
+                        disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled"}
                         className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
                       >
                         Link Page to Event
                       </button>
+                      {selectedEvent && (selectedEvent.effective_status === "closed" || selectedEvent.effective_status === "cancelled") && (
+                        <p className="text-xs text-amber-700">
+                          Closed or cancelled events are read-only for page routing.
+                        </p>
+                      )}
                       <p className="text-xs text-slate-500">
                         For true multi-page replies, save each page's own access token here. If blank, the app falls back to the global <code>PAGE_ACCESS_TOKEN</code>.
                       </p>

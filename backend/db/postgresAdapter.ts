@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { Pool } from "pg";
 import { hashPassword, normalizeUsername } from "../auth";
-import { getEventState } from "../datetime";
+import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS } from "./defaultSettings";
 import { runPostgresMigrations } from "./migrate";
 import type {
@@ -14,8 +14,10 @@ import type {
   AuthUserRow,
   CreateEventInput,
   CreateUserInput,
+  EventStatus,
   EventRow,
   FacebookPageRow,
+  ManualEventStatus,
   MessageRow,
   MessageType,
   RegistrationInput,
@@ -52,16 +54,16 @@ function parseAuditMetadata(value: unknown) {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
-function mapEventRow(row: Record<string, unknown>) {
+function mapEventBaseRow(row: Record<string, unknown>) {
   return {
     id: String(row.id),
     name: String(row.name),
     slug: String(row.slug),
+    status: (String(row.status || "active") as ManualEventStatus),
     is_default: Boolean(row.is_default),
-    is_active: Boolean(row.is_active),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
-  } satisfies EventRow;
+  };
 }
 
 function mapPageRow(row: Record<string, unknown>) {
@@ -113,6 +115,17 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async close() {
     await this.pool.end();
+  }
+
+  private async hydrateEventRow(baseRow: Record<string, unknown>) {
+    const base = mapEventBaseRow(baseRow);
+    const settings = await this.getSettingsMap(base.id);
+    const effectiveStatus = getEffectiveEventStatus(base.status, settings);
+    return {
+      ...base,
+      effective_status: effectiveStatus,
+      is_active: effectiveStatus === "active",
+    } satisfies EventRow;
   }
 
   async getSettingsMap(eventId = DEFAULT_EVENT_ID) {
@@ -224,6 +237,20 @@ export class PostgresAppDatabase implements AppDatabase {
       return { statusCode: 400, content: { error: "Missing required registration fields" } };
     }
 
+    const event = await this.getEventById(eventId);
+    if (!event) {
+      return { statusCode: 400, content: { error: "Invalid event" } };
+    }
+    if (event.effective_status === "cancelled") {
+      return { statusCode: 400, content: { error: "This event has been cancelled" } };
+    }
+    if (event.effective_status === "closed") {
+      return { statusCode: 400, content: { error: "This event has already ended" } };
+    }
+    if (event.effective_status === "pending") {
+      return { statusCode: 400, content: { error: "This event has not been launched yet" } };
+    }
+
     const settings = await this.getSettingsMap(eventId);
     const countResult = await this.pool.query<{ count: string }>(
       "SELECT COUNT(*)::text AS count FROM registrations WHERE event_id = $1 AND status != 'cancelled'",
@@ -327,17 +354,17 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async listEvents() {
     const result = await this.pool.query<Record<string, unknown>>(
-      "SELECT id, name, slug, is_default, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM events ORDER BY is_default DESC, created_at ASC",
+      "SELECT id, name, slug, status, is_default, created_at::text AS created_at, updated_at::text AS updated_at FROM events ORDER BY is_default DESC, created_at ASC",
     );
-    return result.rows.map(mapEventRow);
+    return Promise.all(result.rows.map((row) => this.hydrateEventRow(row)));
   }
 
   async getEventById(eventId: string) {
     const result = await this.pool.query<Record<string, unknown>>(
-      "SELECT id, name, slug, is_default, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM events WHERE id = $1",
+      "SELECT id, name, slug, status, is_default, created_at::text AS created_at, updated_at::text AS updated_at FROM events WHERE id = $1",
       [String(eventId || "").trim()],
     );
-    return result.rows[0] ? mapEventRow(result.rows[0]) : undefined;
+    return result.rows[0] ? this.hydrateEventRow(result.rows[0]) : undefined;
   }
 
   async createEvent(input: CreateEventInput) {
@@ -348,8 +375,8 @@ export class PostgresAppDatabase implements AppDatabase {
     try {
       await client.query("BEGIN");
       await client.query(
-        `INSERT INTO events (id, name, slug, is_default, is_active)
-         VALUES ($1, $2, $3, FALSE, TRUE)`,
+        `INSERT INTO events (id, name, slug, status, is_default)
+         VALUES ($1, $2, $3, 'pending', FALSE)`,
         [id, baseName, slug],
       );
       const templateSettings = await this.getSettingsMap(DEFAULT_EVENT_ID);
@@ -383,9 +410,9 @@ export class PostgresAppDatabase implements AppDatabase {
       values.push(await this.uniqueEventSlug(input.name.trim(), eventId));
       updates.push(`slug = $${values.length}`);
     }
-    if (typeof input.is_active === "boolean") {
-      values.push(input.is_active);
-      updates.push(`is_active = $${values.length}`);
+    if (typeof input.status === "string" && input.status.trim()) {
+      values.push(input.status.trim());
+      updates.push(`status = $${values.length}`);
     }
     if (!updates.length) return false;
     updates.push("updated_at = CURRENT_TIMESTAMP");
@@ -680,8 +707,8 @@ export class PostgresAppDatabase implements AppDatabase {
   private async ensureDefaultEvent() {
     const defaultName = String((await this.getSettingValue("event_name", DEFAULT_EVENT_ID)) || DEFAULT_SETTINGS_ENTRIES.event_name);
     await this.pool.query(
-      `INSERT INTO events (id, name, slug, is_default, is_active)
-       VALUES ($1, $2, $3, TRUE, TRUE)
+      `INSERT INTO events (id, name, slug, status, is_default)
+       VALUES ($1, $2, $3, 'active', TRUE)
        ON CONFLICT (id) DO NOTHING`,
       [DEFAULT_EVENT_ID, defaultName, "default-event"],
     );

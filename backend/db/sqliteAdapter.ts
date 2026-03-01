@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS } from "./defaultSettings";
 import { hashPassword, normalizeUsername } from "../auth";
-import { getEventState } from "../datetime";
+import { getEffectiveEventStatus, getEventState } from "../datetime";
 import type {
   AppDatabase,
   AuditLogEntryInput,
@@ -11,8 +11,10 @@ import type {
   AuthUserRow,
   CreateEventInput,
   CreateUserInput,
+  EventStatus,
   EventRow,
   FacebookPageRow,
+  ManualEventStatus,
   MessageRow,
   MessageType,
   RegistrationInput,
@@ -55,16 +57,16 @@ function parseAuditMetadata(value: unknown) {
   }
 }
 
-function mapEventRow(row: Record<string, unknown>) {
+function mapEventBaseRow(row: Record<string, unknown>) {
   return {
     id: String(row.id),
     name: String(row.name),
     slug: String(row.slug),
+    status: (String(row.status || "active") as ManualEventStatus),
     is_default: Boolean(row.is_default),
-    is_active: Boolean(row.is_active),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
-  } satisfies EventRow;
+  };
 }
 
 function mapPageRow(row: Record<string, unknown>) {
@@ -164,6 +166,7 @@ export class SqliteAppDatabase implements AppDatabase {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         slug TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'active',
         is_default INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -201,6 +204,15 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("messages", "event_id", "TEXT");
     this.ensureColumn("messages", "page_id", "TEXT");
     this.ensureColumn("facebook_pages", "page_access_token", "TEXT");
+    this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
+    this.db.exec(`
+      UPDATE events
+      SET status = CASE
+        WHEN COALESCE(TRIM(status), '') <> '' THEN status
+        WHEN is_active = 1 THEN 'active'
+        ELSE 'closed'
+      END
+    `);
 
     const insertSetting = this.db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS_ENTRIES)) {
@@ -221,6 +233,17 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async close() {
     this.db.close();
+  }
+
+  private async hydrateEventRow(baseRow: Record<string, unknown>) {
+    const base = mapEventBaseRow(baseRow);
+    const settings = await this.getSettingsMap(base.id);
+    const effectiveStatus = getEffectiveEventStatus(base.status, settings);
+    return {
+      ...base,
+      effective_status: effectiveStatus,
+      is_active: effectiveStatus === "active",
+    } satisfies EventRow;
   }
 
   async getSettingsMap(eventId = DEFAULT_EVENT_ID) {
@@ -309,6 +332,20 @@ export class SqliteAppDatabase implements AppDatabase {
 
     if (!senderId || !firstName || !lastName || !phone) {
       return { statusCode: 400, content: { error: "Missing required registration fields" } };
+    }
+
+    const event = await this.getEventById(eventId);
+    if (!event) {
+      return { statusCode: 400, content: { error: "Invalid event" } };
+    }
+    if (event.effective_status === "cancelled") {
+      return { statusCode: 400, content: { error: "This event has been cancelled" } };
+    }
+    if (event.effective_status === "closed") {
+      return { statusCode: 400, content: { error: "This event has already ended" } };
+    }
+    if (event.effective_status === "pending") {
+      return { statusCode: 400, content: { error: "This event has not been launched yet" } };
     }
 
     const countRow = this.db.prepare(
@@ -403,16 +440,16 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async listEvents() {
     const rows = this.db.prepare(
-      "SELECT id, name, slug, is_default, is_active, created_at, updated_at FROM events ORDER BY is_default DESC, created_at ASC",
+      "SELECT id, name, slug, status, is_default, created_at, updated_at FROM events ORDER BY is_default DESC, created_at ASC",
     ).all() as Array<Record<string, unknown>>;
-    return rows.map(mapEventRow);
+    return Promise.all(rows.map((row) => this.hydrateEventRow(row)));
   }
 
   async getEventById(eventId: string) {
     const row = this.db.prepare(
-      "SELECT id, name, slug, is_default, is_active, created_at, updated_at FROM events WHERE id = ?",
+      "SELECT id, name, slug, status, is_default, created_at, updated_at FROM events WHERE id = ?",
     ).get(String(eventId || "").trim()) as Record<string, unknown> | undefined;
-    return row ? mapEventRow(row) : undefined;
+    return row ? this.hydrateEventRow(row) : undefined;
   }
 
   async createEvent(input: CreateEventInput) {
@@ -420,8 +457,8 @@ export class SqliteAppDatabase implements AppDatabase {
     const baseName = String(input.name || "").trim() || "New Event";
     const slug = this.uniqueEventSlug(baseName);
     this.db.prepare(
-      `INSERT INTO events (id, name, slug, is_default, is_active, updated_at)
-       VALUES (?, ?, ?, 0, 1, CURRENT_TIMESTAMP)`,
+      `INSERT INTO events (id, name, slug, status, is_default, is_active, updated_at)
+       VALUES (?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP)`,
     ).run(id, baseName, slug);
 
     const templateSettings = await this.getSettingsMap(DEFAULT_EVENT_ID);
@@ -444,9 +481,9 @@ export class SqliteAppDatabase implements AppDatabase {
       updates.push("slug = ?");
       values.push(this.uniqueEventSlug(input.name.trim(), eventId));
     }
-    if (typeof input.is_active === "boolean") {
-      updates.push("is_active = ?");
-      values.push(input.is_active ? 1 : 0);
+    if (typeof input.status === "string" && input.status.trim()) {
+      updates.push("status = ?");
+      values.push(input.status.trim());
     }
     if (!updates.length) return false;
     updates.push("updated_at = CURRENT_TIMESTAMP");
@@ -705,8 +742,8 @@ export class SqliteAppDatabase implements AppDatabase {
   private async ensureDefaultEvent() {
     const defaultName = String((this.db.prepare("SELECT value FROM settings WHERE key = 'event_name'").get() as { value?: string } | undefined)?.value || DEFAULT_SETTINGS_ENTRIES.event_name);
     this.db.prepare(
-      `INSERT OR IGNORE INTO events (id, name, slug, is_default, is_active)
-       VALUES (?, ?, ?, 1, 1)`,
+      `INSERT OR IGNORE INTO events (id, name, slug, status, is_default, is_active)
+       VALUES (?, ?, ?, 'active', 1, 1)`,
     ).run(DEFAULT_EVENT_ID, defaultName, "default-event");
     this.db.prepare(
       `UPDATE events SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
