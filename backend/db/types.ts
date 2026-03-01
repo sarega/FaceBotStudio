@@ -225,6 +225,11 @@ export interface AppDatabase {
   listEventDocumentChunks(eventId: string): Promise<EventDocumentChunkRow[]>;
   upsertEventDocument(input: UpsertEventDocumentInput): Promise<EventDocumentRow>;
   setEventDocumentActive(documentId: string, isActive: boolean): Promise<boolean>;
+  setEventDocumentEmbeddingStatus(
+    documentId: string,
+    status: EmbeddingStatus,
+    options?: { embeddingModel?: string; embeddedAt?: Date | null },
+  ): Promise<boolean>;
   listChannelAccounts(platform?: ChannelPlatform): Promise<ChannelAccountRow[]>;
   getChannelAccount(platform: ChannelPlatform, externalId: string): Promise<ChannelAccountRow | undefined>;
   upsertChannelAccount(input: UpsertChannelAccountInput): Promise<ChannelAccountRow>;

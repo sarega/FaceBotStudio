@@ -50,6 +50,7 @@ Recommended for low-traffic demos with SQLite:
    - `REDIS_URL`
    - `OPENROUTER_DEFAULT_MODEL=google/gemini-3-flash-preview`
    - `OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small` (optional, for vector-ready document metadata)
+   - `EMBEDDING_HOOK_URL=https://your-worker-or-api.example.com/embeddings` (optional, for embedding job delivery)
    - `DB_PATH=/data/bot.db`
    - `APP_URL=https://YOUR_APP.up.railway.app`
 4. Build command: `npm run build`

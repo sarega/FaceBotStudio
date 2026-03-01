@@ -334,6 +334,7 @@ export default function App() {
   const [embeddingPreview, setEmbeddingPreview] = useState<EmbeddingPreviewResponse | null>(null);
   const [embeddingPreviewLoading, setEmbeddingPreviewLoading] = useState(false);
   const [embeddingPreviewMessage, setEmbeddingPreviewMessage] = useState("");
+  const [embeddingEnqueueLoading, setEmbeddingEnqueueLoading] = useState(false);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
@@ -814,6 +815,39 @@ export default function App() {
       return null;
     } finally {
       setEmbeddingPreviewLoading(false);
+    }
+  };
+
+  const handleEnqueueEmbedding = async (documentId = selectedDocumentForChunksId, eventId = selectedEventId) => {
+    if (!documentId || !eventId) return false;
+
+    setEmbeddingEnqueueLoading(true);
+    setEmbeddingPreviewMessage("");
+    try {
+      const res = await apiFetch(
+        `/api/documents/${encodeURIComponent(documentId)}/embedding-enqueue?event_id=${encodeURIComponent(eventId)}`,
+        {
+          method: "POST",
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as any)?.error || "Failed to queue embedding job");
+      }
+      await fetchDocuments(eventId);
+      await fetchEmbeddingPreview(documentId, eventId);
+      setEmbeddingPreviewMessage(
+        (data as any)?.queued
+          ? "Embedding job queued"
+          : "Embedding processed inline because Redis queue was unavailable",
+      );
+      return true;
+    } catch (err) {
+      console.error("Failed to queue embedding job", err);
+      setEmbeddingPreviewMessage(err instanceof Error ? err.message : "Failed to queue embedding job");
+      return false;
+    } finally {
+      setEmbeddingEnqueueLoading(false);
     }
   };
 
@@ -2382,14 +2416,28 @@ export default function App() {
                         </p>
                       </div>
                       {selectedDocumentForChunks && (
-                        <button
-                          onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
-                          disabled={embeddingPreviewLoading}
-                          className="p-2 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
-                          title="Refresh embedding preview"
-                        >
-                          <RefreshCw className={`w-4 h-4 text-slate-500 ${embeddingPreviewLoading ? "animate-spin" : ""}`} />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => void handleEnqueueEmbedding(selectedDocumentForChunks.id, selectedEventId)}
+                            disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
+                            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                          >
+                            {(embeddingPreviewLoading || embeddingEnqueueLoading) ? (
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Save className="w-4 h-4" />
+                            )}
+                            Queue Embedding
+                          </button>
+                          <button
+                            onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
+                            disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
+                            className="p-2 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+                            title="Refresh embedding preview"
+                          >
+                            <RefreshCw className={`w-4 h-4 text-slate-500 ${embeddingPreviewLoading ? "animate-spin" : ""}`} />
+                          </button>
+                        </div>
                       )}
                     </div>
 

@@ -19,6 +19,7 @@ import type {
   EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
+  EmbeddingStatus,
   EventStatus,
   EventRow,
   FacebookPageRow,
@@ -676,6 +677,46 @@ export class PostgresAppDatabase implements AppDatabase {
       await client.query(
         "UPDATE event_document_chunks SET embedding_status = $1, embedding_model = COALESCE(embedding_model, $2), embedded_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE document_id = $3",
         [status, embeddingModel, normalizedDocumentId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return result.rowCount > 0;
+  }
+
+  async setEventDocumentEmbeddingStatus(
+    documentId: string,
+    status: EmbeddingStatus,
+    options?: { embeddingModel?: string; embeddedAt?: Date | null },
+  ) {
+    const normalizedDocumentId = String(documentId || "").trim();
+    const embeddingModel = String(options?.embeddingModel || getEmbeddingModelName()).trim() || getEmbeddingModelName();
+    const embeddedAt = status === "ready" ? (options?.embeddedAt || new Date()) : null;
+    const client = await this.pool.connect();
+    let result;
+    try {
+      await client.query("BEGIN");
+      result = await client.query(
+        `UPDATE event_documents
+         SET embedding_status = $1,
+             embedding_model = $2,
+             last_embedded_at = $3,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $4`,
+        [status, embeddingModel, embeddedAt, normalizedDocumentId],
+      );
+      await client.query(
+        `UPDATE event_document_chunks
+         SET embedding_status = $1,
+             embedding_model = $2,
+             embedded_at = $3,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE document_id = $4`,
+        [status, embeddingModel, embeddedAt, normalizedDocumentId],
       );
       await client.query("COMMIT");
     } catch (error) {

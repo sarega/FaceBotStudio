@@ -9,6 +9,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
+import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
 import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
@@ -1410,11 +1411,70 @@ async function processFacebookInboundJob(job: FacebookInboundJob) {
   await handleIncomingFacebookText(job.senderId, job.text, job.pageId || undefined);
 }
 
+async function processEmbeddingJob(job: EmbeddingJob) {
+  const documents = await getEventDocuments(job.eventId);
+  const document = documents.find((row) => row.id === job.documentId);
+  if (!document) {
+    return;
+  }
+
+  if (!document.is_active) {
+    await appDb.setEventDocumentEmbeddingStatus(job.documentId, "skipped", {
+      embeddingModel: getEmbeddingModelName(),
+      embeddedAt: null,
+    });
+    return;
+  }
+
+  if (document.content_hash && job.contentHash && document.content_hash !== job.contentHash) {
+    return;
+  }
+
+  const chunks = (await getEventDocumentChunks(job.eventId)).filter((chunk) => chunk.document_id === job.documentId);
+  const payload = buildEmbeddingHookPayload(document, chunks);
+  const hookUrl = String(process.env.EMBEDDING_HOOK_URL || "").trim();
+
+  if (!hookUrl) {
+    console.warn("Embedding job skipped because EMBEDDING_HOOK_URL is not configured:", job.documentId);
+    await appDb.setEventDocumentEmbeddingStatus(job.documentId, "failed", {
+      embeddingModel: payload.embedding_model,
+      embeddedAt: null,
+    });
+    return;
+  }
+
+  try {
+    const response = await fetch(hookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Embedding hook responded with ${response.status}`);
+    }
+
+    await appDb.setEventDocumentEmbeddingStatus(job.documentId, "ready", {
+      embeddingModel: payload.embedding_model,
+      embeddedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Failed to process embedding job:", job.documentId, error);
+    await appDb.setEventDocumentEmbeddingStatus(job.documentId, "failed", {
+      embeddingModel: payload.embedding_model,
+      embeddedAt: null,
+    });
+  }
+}
+
 async function startServer() {
   await appDb.initialize();
 
   if (RUN_EMBEDDED_WORKER) {
     await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true });
+    await startEmbeddedEmbeddingWorker(processEmbeddingJob, { enabled: true });
   }
 
   if (!RUN_WEB_SERVER) {
@@ -1459,6 +1519,7 @@ async function startServer() {
         database: appDb.driver,
         runtime: APP_RUNTIME || "all",
         queue: canUseFacebookWebhookQueue() ? "redis" : "inline",
+        embedding_queue: canUseEmbeddingQueue() ? "redis" : "inline",
         redis: redis.configured ? (redis.healthy ? "ok" : "error") : "disabled",
       });
     } catch (error) {
@@ -2127,6 +2188,64 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to fetch embedding preview:", error);
       return res.status(500).json({ error: "Failed to fetch embedding preview" });
+    }
+  });
+
+  app.post("/api/documents/:id/embedding-enqueue", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const documentId = String(req.params.id || "").trim();
+      if (!documentId) {
+        return res.status(400).json({ error: "Document ID is required" });
+      }
+
+      const documents = await getEventDocuments(eventId);
+      const document = documents.find((row) => row.id === documentId);
+      if (!document) {
+        return res.status(404).json({ error: "Document not found for this event" });
+      }
+
+      await appDb.setEventDocumentEmbeddingStatus(documentId, document.is_active ? "pending" : "skipped", {
+        embeddingModel: getEmbeddingModelName(),
+        embeddedAt: null,
+      });
+
+      const job = {
+        eventId,
+        documentId,
+        contentHash: String(document.content_hash || ""),
+      } satisfies EmbeddingJob;
+
+      let queued = false;
+      if (canUseEmbeddingQueue()) {
+        queued = await enqueueEmbeddingJob(job);
+      }
+
+      if (!queued) {
+        await processEmbeddingJob(job);
+      }
+
+      await appDb.recordAuditLog({
+        actor_user_id: req.auth?.user.id || null,
+        action: "document.embedding.enqueue",
+        target_type: "event_document",
+        target_id: documentId,
+        metadata: {
+          event_id: eventId,
+          queued,
+          hook_configured: Boolean(String(process.env.EMBEDDING_HOOK_URL || "").trim()),
+        },
+      });
+
+      return res.json({
+        status: "ok",
+        queued,
+        document_id: documentId,
+        embedding_status: document.is_active ? "pending" : "skipped",
+      });
+    } catch (error) {
+      console.error("Failed to enqueue embedding job:", error);
+      return res.status(500).json({ error: "Failed to enqueue embedding job" });
     }
   });
 

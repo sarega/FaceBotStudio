@@ -16,6 +16,7 @@ import type {
   EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
+  EmbeddingStatus,
   EventStatus,
   EventRow,
   FacebookPageRow,
@@ -810,6 +811,31 @@ export class SqliteAppDatabase implements AppDatabase {
       this.db.prepare(
         "UPDATE event_document_chunks SET embedding_status = ?, embedding_model = COALESCE(embedding_model, ?), embedded_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE document_id = ?",
       ).run(status, embeddingModel, normalizedDocumentId);
+    });
+    transaction();
+    return Boolean(documentResult?.changes);
+  }
+
+  async setEventDocumentEmbeddingStatus(
+    documentId: string,
+    status: EmbeddingStatus,
+    options?: { embeddingModel?: string; embeddedAt?: Date | null },
+  ) {
+    const normalizedDocumentId = String(documentId || "").trim();
+    const embeddingModel = String(options?.embeddingModel || getEmbeddingModelName()).trim() || getEmbeddingModelName();
+    const embeddedAt = status === "ready" ? (options?.embeddedAt || new Date()).toISOString() : null;
+    let documentResult: Database.RunResult | null = null;
+    const transaction = this.db.transaction(() => {
+      documentResult = this.db.prepare(
+        `UPDATE event_documents
+         SET embedding_status = ?, embedding_model = ?, last_embedded_at = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+      ).run(status, embeddingModel, embeddedAt, normalizedDocumentId);
+      this.db.prepare(
+        `UPDATE event_document_chunks
+         SET embedding_status = ?, embedding_model = ?, embedded_at = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE document_id = ?`,
+      ).run(status, embeddingModel, embeddedAt, normalizedDocumentId);
     });
     transaction();
     return Boolean(documentResult?.changes);
