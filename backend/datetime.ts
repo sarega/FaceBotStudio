@@ -8,7 +8,7 @@ type DateTimeParts = {
   minute: number;
 };
 
-export type RegistrationWindowState = "open" | "not_started" | "closed";
+export type RegistrationWindowState = "open" | "not_started" | "closed" | "invalid";
 export type ManualEventStatus = "pending" | "active" | "cancelled";
 export type EventStatus = ManualEventStatus | "closed";
 
@@ -87,7 +87,9 @@ export function getEventState(settings: Record<string, string>, now = new Date()
   const end = zonedDateTimeToUtc(settings.reg_end || "", timeZone);
   let registrationStatus: RegistrationWindowState = "open";
 
-  if (start && now < start) {
+  if (start && end && end.getTime() < start.getTime()) {
+    registrationStatus = "invalid";
+  } else if (start && now < start) {
     registrationStatus = "not_started";
   } else if (end && now > end) {
     registrationStatus = "closed";

@@ -314,6 +314,9 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const eventState = getEventState(settings);
+    if (eventState.registrationStatus === "invalid") {
+      return { statusCode: 400, content: { error: "Registration window is invalid. Close date is earlier than open date." } };
+    }
     if (eventState.registrationStatus === "not_started") {
       return { statusCode: 400, content: { error: "Registration has not started yet" } };
     }

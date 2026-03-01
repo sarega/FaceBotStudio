@@ -51,6 +51,7 @@ interface LlmModelOption {
 }
 
 type RegistrationStatus = "registered" | "cancelled" | "checked-in";
+type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 
 type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
@@ -71,18 +72,113 @@ function normalizeDateTimeLocalValue(value: string | undefined) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function describeRegistrationWindow(settings: Settings) {
-  const now = new Date();
-  const start = settings.reg_start ? new Date(settings.reg_start) : null;
-  const end = settings.reg_end ? new Date(settings.reg_end) : null;
+const DEFAULT_TIMEZONE = "Asia/Bangkok";
 
-  if (start && !Number.isNaN(start.getTime()) && now < start) {
-    return { status: "not_started", label: "Not Open Yet" };
+function normalizeTimeZoneForUi(value: string | undefined) {
+  const timeZone = String(value || "").trim();
+  if (!timeZone) return DEFAULT_TIMEZONE;
+
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return DEFAULT_TIMEZONE;
   }
-  if (end && !Number.isNaN(end.getTime()) && now > end) {
-    return { status: "closed", label: "Closed" };
+}
+
+function getOffsetMinutesForUi(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+  });
+  const parts = formatter.formatToParts(date);
+  const token = parts.find((part) => part.type === "timeZoneName")?.value || "GMT";
+  const match = token.match(/^GMT([+-])(\d{1,2})(?::(\d{2}))?$/i);
+  if (!match) return 0;
+
+  const sign = match[1] === "-" ? -1 : 1;
+  const hours = Number.parseInt(match[2], 10);
+  const minutes = Number.parseInt(match[3] || "0", 10);
+  return sign * (hours * 60 + minutes);
+}
+
+function zonedDateTimeToUtcForUi(value: string, timeZone: string) {
+  const match = String(value || "")
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+
+  if (!match) return null;
+
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const hour = Number.parseInt(match[4], 10);
+  const minute = Number.parseInt(match[5], 10);
+
+  const zone = normalizeTimeZoneForUi(timeZone);
+  let instant = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  for (let i = 0; i < 2; i += 1) {
+    const offsetMinutes = getOffsetMinutesForUi(instant, zone);
+    instant = new Date(Date.UTC(year, month - 1, day, hour, minute, 0) - offsetMinutes * 60_000);
   }
-  return { status: "open", label: "Open" };
+  return instant;
+}
+
+function formatInTimeZoneForUi(date: Date, timeZone: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: normalizeTimeZoneForUi(timeZone),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function describeEventTiming(settings: Settings) {
+  const timeZone = normalizeTimeZoneForUi(settings.event_timezone);
+  const now = new Date();
+  const start = zonedDateTimeToUtcForUi(settings.reg_start || "", timeZone);
+  const end = zonedDateTimeToUtcForUi(settings.reg_end || "", timeZone);
+  const eventDate = zonedDateTimeToUtcForUi(settings.event_date || "", timeZone);
+
+  let registrationStatus: RegistrationWindowUiState = "open";
+  if (start && end && end.getTime() < start.getTime()) {
+    registrationStatus = "invalid";
+  } else if (start && now < start) {
+    registrationStatus = "not_started";
+  } else if (end && now > end) {
+    registrationStatus = "closed";
+  }
+
+  const eventLifecycle = !eventDate
+    ? "unscheduled"
+    : now.getTime() < eventDate.getTime()
+    ? "upcoming"
+    : "past";
+
+  return {
+    timeZone,
+    now,
+    nowLabel: formatInTimeZoneForUi(now, timeZone),
+    start,
+    end,
+    eventDate,
+    startLabel: start ? formatInTimeZoneForUi(start, timeZone) : "-",
+    endLabel: end ? formatInTimeZoneForUi(end, timeZone) : "-",
+    eventDateLabel: eventDate ? formatInTimeZoneForUi(eventDate, timeZone) : "-",
+    eventLifecycle,
+    registrationStatus,
+    registrationLabel:
+      registrationStatus === "invalid"
+        ? "Invalid Range"
+        : registrationStatus === "not_started"
+        ? "Not Open Yet"
+        : registrationStatus === "closed"
+        ? "Closed"
+        : "Open",
+  };
 }
 
 function getEventStatusLabel(status: EventStatus) {
@@ -226,7 +322,7 @@ export default function App() {
   const selectedTicketSvgUrl = selectedRegistration
     ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
     : "";
-  const registrationWindowInfo = describeRegistrationWindow(settings);
+  const timingInfo = describeEventTiming(settings);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
   const selectedEventChannelWritesLocked =
@@ -1492,13 +1588,15 @@ export default function App() {
                           </span>
                         )}
                         <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          registrationWindowInfo.status === "open"
+                          timingInfo.registrationStatus === "open"
                             ? "bg-emerald-100 text-emerald-700"
-                            : registrationWindowInfo.status === "not_started"
+                            : timingInfo.registrationStatus === "not_started"
                             ? "bg-amber-100 text-amber-700"
+                            : timingInfo.registrationStatus === "invalid"
+                            ? "bg-orange-100 text-orange-700"
                             : "bg-rose-100 text-rose-700"
                         }`}>
-                          {registrationWindowInfo.label}
+                          {timingInfo.registrationLabel}
                         </span>
                       </div>
                     </div>
@@ -1534,6 +1632,17 @@ export default function App() {
                     <p className="mt-4 text-xs text-slate-500">
                       Registration rules are event-scoped. The system derives the effective event state from both the manual status and the event date.
                     </p>
+                    <div className="mt-3 rounded-2xl bg-slate-50 border border-slate-200 p-4 text-xs text-slate-600 space-y-1">
+                      <p><span className="font-semibold text-slate-800">Current system time</span>: {timingInfo.nowLabel} ({timingInfo.timeZone})</p>
+                      <p><span className="font-semibold text-slate-800">Event date interpreted as</span>: {timingInfo.eventDateLabel}</p>
+                      <p><span className="font-semibold text-slate-800">Registration opens</span>: {timingInfo.startLabel}</p>
+                      <p><span className="font-semibold text-slate-800">Registration closes</span>: {timingInfo.endLabel}</p>
+                      {timingInfo.registrationStatus === "invalid" && (
+                        <p className="text-orange-700">
+                          Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
+                        </p>
+                      )}
+                    </div>
                     {settingsMessage && (
                       <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
                         {settingsMessage}
@@ -1673,14 +1782,14 @@ export default function App() {
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <button
                           onClick={() => void handleUpdateEvent("pending")}
-                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || selectedEvent.effective_status === "closed" || eventLoading}
+                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || eventLoading}
                           className="rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
                         >
                           Set Pending
                         </button>
                         <button
                           onClick={() => void handleUpdateEvent("active")}
-                          disabled={!selectedEvent || selectedEvent.status === "active" || selectedEvent.effective_status === "closed" || eventLoading}
+                          disabled={!selectedEvent || selectedEvent.status === "active" || eventLoading}
                           className="rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
                         >
                           Launch Event
@@ -1696,7 +1805,7 @@ export default function App() {
                       {selectedEvent && (
                         <p className="text-xs text-slate-500">
                           Manual status: <code>{selectedEvent.status}</code>. Effective status now: <code>{selectedEvent.effective_status}</code>.
-                          {selectedEvent.effective_status === "closed" ? " This event is automatically closed because its event date has passed." : ""}
+                          {selectedEvent.effective_status === "closed" ? ` This event is automatically closed because its event date (${timingInfo.eventDateLabel}) is already in the past compared with current system time (${timingInfo.nowLabel}).` : ""}
                         </p>
                       )}
                     </div>

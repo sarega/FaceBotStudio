@@ -134,7 +134,7 @@ function getSystemInstruction(settings: Record<string, any>, eventStatus = "acti
     "If event status is pending, explain that the event is still being prepared and registration has not launched yet.",
     "If event status is cancelled, clearly explain that the event has been cancelled.",
     "If event status is closed, clearly explain that the event has already ended.",
-    "Respect the Registration Status Right Now field. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
+    "Respect the Registration Status Right Now field. If it is invalid, explain that the registration schedule is misconfigured. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
     "If the event lifecycle is past, explain that the event date has already passed.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
     "Politely ask for any missing information one by one.",
