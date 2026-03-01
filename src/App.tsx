@@ -27,6 +27,7 @@ import {
   CalendarRange,
   Link2,
   MonitorCog,
+  Trash2,
 } from "lucide-react";
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
@@ -392,6 +393,7 @@ export default function App() {
   const [checkinErrorMessage, setCheckinErrorMessage] = useState("");
   const [statusUpdateLoading, setStatusUpdateLoading] = useState(false);
   const [statusUpdateMessage, setStatusUpdateMessage] = useState("");
+  const [deleteRegistrationLoading, setDeleteRegistrationLoading] = useState(false);
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
   const [llmModelsError, setLlmModelsError] = useState("");
@@ -1325,6 +1327,43 @@ export default function App() {
       setStatusUpdateMessage(message);
     } finally {
       setStatusUpdateLoading(false);
+    }
+  };
+
+  const deleteRegistration = async (registrationId: string) => {
+    const registration = registrations.find((row) => row.id === registrationId);
+    const label = registration ? `${registration.first_name} ${registration.last_name}`.trim() || registrationId : registrationId;
+    const confirmed = window.confirm(
+      `Delete registration "${label}" (${registrationId})?\n\nThis will permanently remove the attendee record from this event.`,
+    );
+    if (!confirmed) return false;
+
+    setDeleteRegistrationLoading(true);
+    setStatusUpdateMessage("");
+    try {
+      const res = await apiFetch("/api/registrations/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: registrationId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to delete registration");
+      }
+
+      setStatusUpdateMessage(`Deleted ${registrationId}`);
+      if (selectedRegistrationId === registrationId) {
+        setSelectedRegistrationId("");
+      }
+      await fetchRegistrations(selectedEventId);
+      window.setTimeout(() => setStatusUpdateMessage(""), 2500);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete registration";
+      setStatusUpdateMessage(message);
+      return false;
+    } finally {
+      setDeleteRegistrationLoading(false);
     }
   };
 
@@ -3130,8 +3169,8 @@ export default function App() {
                               <tr
                                 key={reg.id}
                                 onClick={() => setSelectedRegistrationId(reg.id)}
-                                className={`hover:bg-slate-50/70 transition-colors cursor-pointer ${
-                                  selectedRegistrationId === reg.id ? "bg-blue-50/70" : ""
+                                className={`registration-row hover:bg-slate-50 transition-colors cursor-pointer ${
+                                  selectedRegistrationId === reg.id ? "registration-row-selected bg-blue-50" : ""
                                 }`}
                               >
                                 <td className="px-6 py-4 font-mono text-xs font-bold text-blue-600">
@@ -3268,6 +3307,23 @@ export default function App() {
                             </p>
                           )}
                         </div>
+                        )}
+
+                        {canChangeRegistrationStatus && (
+                          <div className="border-t border-slate-100 pt-4">
+                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Danger Zone</p>
+                            <button
+                              onClick={() => void deleteRegistration(selectedRegistration.id)}
+                              disabled={deleteRegistrationLoading}
+                              className="inline-flex items-center gap-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50"
+                            >
+                              {deleteRegistrationLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                              Delete Registration
+                            </button>
+                            <p className="mt-2 text-xs text-slate-500">
+                              This permanently removes the attendee record from the registration list.
+                            </p>
+                          </div>
                         )}
                       </div>
                     )}

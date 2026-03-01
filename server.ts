@@ -3037,6 +3037,26 @@ async function startServer() {
     }
   });
 
+  app.post("/api/registrations/delete", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = String(req.body?.id || "").trim().toUpperCase();
+      if (!id) {
+        return res.status(400).json({ error: "Registration ID is required" });
+      }
+
+      const deleted = await appDb.deleteRegistration(id);
+      if (!deleted) {
+        return res.status(404).json({ error: "Registration not found" });
+      }
+
+      await recordAudit(req, "registration.deleted", "registration", id);
+      return res.json({ status: "success", id });
+    } catch (error) {
+      console.error("Failed to delete registration:", error);
+      return res.status(500).json({ error: "Failed to delete registration" });
+    }
+  });
+
   app.get("/api/registrations/export", requireAuth, async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);

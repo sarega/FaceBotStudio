@@ -535,6 +535,13 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
+  async deleteRegistration(id: string) {
+    const result = this.db.prepare("DELETE FROM registrations WHERE id = ?").run(
+      String(id || "").trim().toUpperCase(),
+    );
+    return result.changes > 0;
+  }
+
   async saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string) {
     this.db.prepare(
       "INSERT INTO messages (sender_id, event_id, page_id, text, type) VALUES (?, ?, ?, ?, ?)",

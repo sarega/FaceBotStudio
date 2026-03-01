@@ -383,6 +383,13 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
+  async deleteRegistration(id: string) {
+    const result = await this.pool.query("DELETE FROM registrations WHERE id = $1", [
+      String(id || "").trim().toUpperCase(),
+    ]);
+    return result.rowCount > 0;
+  }
+
   async saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string) {
     await this.pool.query(
       "INSERT INTO messages (sender_id, event_id, page_id, text, type) VALUES ($1, $2, $3, $4, $5)",

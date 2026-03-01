@@ -214,6 +214,7 @@ export interface AppDatabase {
   cancelRegistration(id: unknown): Promise<RegistrationResult>;
   checkInRegistration(id: string): Promise<boolean>;
   updateRegistrationStatus(id: string, status: RegistrationStatus): Promise<boolean>;
+  deleteRegistration(id: string): Promise<boolean>;
   saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string): Promise<void>;
   listMessages(limit: number, eventId?: string): Promise<MessageRow[]>;
   getMessageHistoryRows(senderId: string, limit: number, eventId?: string): Promise<Array<{ text: string; type: MessageType }>>;
