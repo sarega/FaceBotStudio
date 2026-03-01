@@ -74,6 +74,24 @@ function normalizeDateTimeLocalValue(value: string | undefined) {
 
 const DEFAULT_TIMEZONE = "Asia/Bangkok";
 
+function parseLineTraceMessage(text: string) {
+  const match = String(text || "").match(/^\[line:([a-z-]+)\]\s*(.*)$/i);
+  if (!match) return null;
+
+  return {
+    status: match[1].toLowerCase(),
+    detail: match[2] || "",
+  };
+}
+
+function formatTraceStatusLabel(status: string) {
+  return status
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function normalizeTimeZoneForUi(value: string | undefined) {
   const timeZone = String(value || "").trim();
   if (!timeZone) return DEFAULT_TIMEZONE;
@@ -3239,7 +3257,7 @@ export default function App() {
                 <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                   <div>
                     <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
-                    <p className="text-sm text-slate-500">Real messages received from your Facebook Page.</p>
+                    <p className="text-sm text-slate-500">Inbound messages plus delivery traces from active channels.</p>
                   </div>
                   <button onClick={() => void fetchMessages(selectedEventId)} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
                     <RefreshCw className="w-4 h-4 text-slate-400" />
@@ -3263,26 +3281,52 @@ export default function App() {
                           </td>
                         </tr>
                       ) : (
-                        messages.map((msg) => (
-                          <tr key={msg.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4 whitespace-nowrap text-slate-500">
-                              {new Date(msg.timestamp).toLocaleString()}
-                            </td>
-                            <td className="px-6 py-4 font-mono text-xs text-blue-600">
-                              {msg.sender_id}
-                            </td>
-                            <td className="px-6 py-4 max-w-md truncate">
-                              {msg.text}
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-tighter ${
-                                msg.type === "incoming" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"
-                              }`}>
-                                {msg.type}
-                              </span>
-                            </td>
-                          </tr>
-                        ))
+                        messages.map((msg) => {
+                          const lineTrace = parseLineTraceMessage(msg.text);
+                          return (
+                            <tr key={msg.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-6 py-4 whitespace-nowrap text-slate-500">
+                                {new Date(msg.timestamp).toLocaleString()}
+                              </td>
+                              <td className="px-6 py-4 font-mono text-xs text-blue-600">
+                                {msg.sender_id}
+                              </td>
+                              <td className="px-6 py-4 max-w-md">
+                                {lineTrace ? (
+                                  <div className="space-y-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-50 text-green-700 border border-green-100">
+                                        LINE
+                                      </span>
+                                      <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-100">
+                                        Delivery Trace
+                                      </span>
+                                      <span className="text-[11px] font-semibold text-slate-600">
+                                        {formatTraceStatusLabel(lineTrace.status)}
+                                      </span>
+                                    </div>
+                                    <p className="text-sm text-slate-700 break-words">
+                                      {lineTrace.detail || "-"}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <span className="truncate block">{msg.text}</span>
+                                )}
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-tighter ${
+                                  lineTrace
+                                    ? "bg-amber-100 text-amber-700"
+                                    : msg.type === "incoming"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-blue-100 text-blue-700"
+                                }`}>
+                                  {lineTrace ? "trace" : msg.type}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>

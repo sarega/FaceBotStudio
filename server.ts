@@ -464,6 +464,23 @@ async function saveMessage(senderId: string, text: string, type: "incoming" | "o
   await appDb.saveMessage(senderId, text, type, eventId, pageId);
 }
 
+async function saveLineDeliveryTrace(
+  senderId: string,
+  eventId: string,
+  destination: string,
+  status: string,
+  detail: string,
+) {
+  const normalizedDetail = String(detail || "").trim();
+  await saveMessage(
+    senderId,
+    `[line:${status}] ${normalizedDetail}`.trim(),
+    "outgoing",
+    eventId,
+    destination,
+  );
+}
+
 async function getFacebookAccessToken(pageId?: string) {
   if (pageId) {
     const channel = await appDb.getChannelAccount("facebook", pageId);
@@ -1539,6 +1556,7 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
 
   if (!(await getLineAccessToken(destination))) {
     console.warn(`LINE access token is unavailable for destination ${destination}; skipping outbound reply`);
+    await saveLineDeliveryTrace(senderId, eventId, destination, "channel-misconfigured", "Missing LINE access token");
     return;
   }
 
@@ -1557,18 +1575,23 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
     try {
       if (replyToken) {
         await sendLineReplyTextMessage(replyToken, replyText, destination);
+        await saveLineDeliveryTrace(senderId, eventId, destination, "reply-sent", "Sent via reply token");
       } else {
         await sendLinePushTextMessage(senderId, replyText, destination);
+        await saveLineDeliveryTrace(senderId, eventId, destination, "push-sent", "Sent via push fallback");
       }
       await saveMessage(senderId, replyText, "outgoing", eventId, destination);
     } catch (error) {
       console.error("Failed to send LINE reply text:", error);
+      await saveLineDeliveryTrace(senderId, eventId, destination, "reply-failed", error instanceof Error ? error.message : String(error));
       if (replyToken) {
         try {
           await sendLinePushTextMessage(senderId, replyText, destination);
+          await saveLineDeliveryTrace(senderId, eventId, destination, "push-fallback-sent", "Reply token failed; delivered via push");
           await saveMessage(senderId, replyText, "outgoing", eventId, destination);
         } catch (pushError) {
           console.error("Failed to send LINE push fallback text:", pushError);
+          await saveLineDeliveryTrace(senderId, eventId, destination, "push-fallback-failed", pushError instanceof Error ? pushError.message : String(pushError));
         }
       }
     }
