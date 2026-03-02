@@ -1,20 +1,42 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Noto Sans Thai", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
   html {
     color-scheme: light;
+    height: 100%;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+    -webkit-text-size-adjust: 100%;
   }
 
   html.theme-dark {
     color-scheme: dark;
   }
 
+  body,
+  #root {
+    min-height: 100%;
+  }
+
   body {
     @apply bg-slate-50 text-slate-900 antialiased;
+    margin: 0;
+    overflow-x: clip;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+    touch-action: manipulation;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    -webkit-tap-highlight-color: transparent;
   }
 
   html.theme-dark body {
@@ -215,6 +237,20 @@
   html.theme-dark .registration-row-selected .text-slate-600 {
     color: #cbd5e1 !important;
   }
+}
+
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select,
+  button {
+    font-size: 16px;
+  }
+}
+
+.app-shell {
+  min-height: 100dvh;
+  overflow-x: clip;
 }
 
 .chat-scroll::-webkit-scrollbar {

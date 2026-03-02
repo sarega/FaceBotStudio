@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { BrowserQRCodeReader, type IScannerControls } from "@zxing/browser";
 import { 
@@ -30,6 +30,11 @@ import {
   MonitorCog,
   Trash2,
   ChevronDown,
+  CircleHelp,
+  Eye,
+  PencilLine,
+  Power,
+  X,
 } from "lucide-react";
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
@@ -58,8 +63,148 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "design" | "test" | "logs" | "settings" | "registrations" | "checkin";
+type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
+type ActionTone = BadgeTone;
 
 type AuthStatus = "checking" | "authenticated" | "unauthenticated";
+
+interface HelpContent {
+  title: string;
+  summary: string;
+  points: Array<{
+    label: string;
+    body: string;
+  }>;
+}
+
+const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
+  event: {
+    title: "Event Workspace Help",
+    summary: "Keep operational event facts here. This tab defines what the event is and when registration should behave as open, closed, or unavailable.",
+    points: [
+      {
+        label: "Event details",
+        body: "Name, location, date, description, travel notes, and map URL belong here because they are first-party facts about the event itself.",
+      },
+      {
+        label: "Registration rules",
+        body: "Open and close dates are evaluated in the selected event time zone. If the close date is earlier than the open date, registration will stay unavailable.",
+      },
+      {
+        label: "Lifecycle",
+        body: "Manual status still matters, but the effective status can auto-close once the event date is already in the past.",
+      },
+    ],
+  },
+  design: {
+    title: "Context Help",
+    summary: "Use this tab for long-form knowledge that should guide responses for one event without cluttering the main screen.",
+    points: [
+      {
+        label: "Event context",
+        body: "Put FAQ, speaker notes, agenda details, venue policies, and structured reference text in the free-form context area.",
+      },
+      {
+        label: "Knowledge documents",
+        body: "Attached documents are stored separately so they can be chunked, inspected, enabled or disabled, and later upgraded into deeper retrieval flows.",
+      },
+      {
+        label: "Reset actions",
+        body: "Clear Knowledge Docs removes attached documents, chunks, and embedding state. Reset All Knowledge also wipes the free-form context text.",
+      },
+    ],
+  },
+  test: {
+    title: "Test Console Help",
+    summary: "Use the test surface to verify prompts, event context, and retrieval before exposing the flow to real users.",
+    points: [
+      {
+        label: "Probe behavior",
+        body: "Ask the bot representative questions and inspect whether the selected event is producing the right operational answers.",
+      },
+      {
+        label: "Check retrieval",
+        body: "When debugging, compare the response with the active documents and chunk inspector to confirm the correct knowledge source was used.",
+      },
+      {
+        label: "Keep it isolated",
+        body: "This tab is for simulation only. It should help verify behavior without changing production registrations or channels.",
+      },
+    ],
+  },
+  settings: {
+    title: "Setup Help",
+    summary: "Global controls live here: AI policy, channel wiring, team permissions, and integration endpoints.",
+    points: [
+      {
+        label: "Global prompt",
+        body: "Organization-wide tone, safety rules, and escalation behavior belong in the global system prompt. Event-specific content should stay in Context.",
+      },
+      {
+        label: "Channel mapping",
+        body: "Link channels to the selected event so incoming messages land in the correct workspace. Keep status badges green before going live.",
+      },
+      {
+        label: "Model overrides",
+        body: "Only set an event-level model override when one event truly needs different behavior. Otherwise keep the global default simple.",
+      },
+    ],
+  },
+  registrations: {
+    title: "Registrations Help",
+    summary: "Review attendee records, export data, and verify ticket state from one place.",
+    points: [
+      {
+        label: "Selection",
+        body: "Choose one attendee to inspect full details, ticket output, and operational status without losing the list context.",
+      },
+      {
+        label: "Status control",
+        body: "Use the action buttons for explicit operational changes. Badges indicate state only and are not interactive.",
+      },
+      {
+        label: "Exports",
+        body: "Use export flows only after confirming the selected event and current filters to avoid pulling the wrong attendee set.",
+      },
+    ],
+  },
+  checkin: {
+    title: "Check-in Help",
+    summary: "This tab is optimized for front-desk operations, with QR scanning first and manual lookup as fallback.",
+    points: [
+      {
+        label: "Scanner flow",
+        body: "Allow camera access and keep the attendee ticket inside the scan frame. The latest result panel confirms the most recent scan.",
+      },
+      {
+        label: "Manual fallback",
+        body: "If scanning fails, enter the registration ID directly. Use this only when the ticket or camera flow is unavailable.",
+      },
+      {
+        label: "Access links",
+        body: "Generate separate mobile-friendly check-in sessions for staff so they can work without full admin access.",
+      },
+    ],
+  },
+  logs: {
+    title: "Logs Help",
+    summary: "Use logs to inspect live conversations, traces, and failures without editing the underlying event setup.",
+    points: [
+      {
+        label: "Trace first",
+        body: "Start from status traces and message flow so you can separate channel delivery issues from model or retrieval issues.",
+      },
+      {
+        label: "Event scope",
+        body: "Logs are scoped to the selected event, so confirm the workspace before diagnosing missing or unexpected conversations.",
+      },
+      {
+        label: "Operational use",
+        body: "Use this tab for diagnosis and audit. Content or policy changes should still happen in Event, Context, or Setup.",
+      },
+    ],
+  },
+};
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
@@ -260,6 +405,150 @@ function getEventStatusBadgeClass(status: EventStatus) {
   }
 }
 
+function getRegistrationWindowTone(status: RegistrationWindowUiState): BadgeTone {
+  switch (status) {
+    case "open":
+      return "emerald";
+    case "not_started":
+      return "amber";
+    case "closed":
+      return "rose";
+    case "invalid":
+      return "rose";
+    default:
+      return "neutral";
+  }
+}
+
+function getDocumentEmbeddingTone(status: string | null | undefined): BadgeTone {
+  switch (status) {
+    case "ready":
+      return "emerald";
+    case "failed":
+      return "rose";
+    case "skipped":
+      return "neutral";
+    default:
+      return "amber";
+  }
+}
+
+function getConnectionStatusTone(status: string | null | undefined): BadgeTone {
+  switch (status) {
+    case "ready":
+      return "emerald";
+    case "partial":
+      return "amber";
+    default:
+      return "rose";
+  }
+}
+
+function getRegistrationStatusTone(status: string | null | undefined): BadgeTone {
+  switch (status) {
+    case "checked-in":
+      return "emerald";
+    case "cancelled":
+      return "neutral";
+    default:
+      return "blue";
+  }
+}
+
+function getCheckinSessionTone(session: CheckinSessionRecord): BadgeTone {
+  if (session.revoked_at) return "neutral";
+  return session.is_active ? "emerald" : "amber";
+}
+
+function getUserAccessTone(isActive: boolean): BadgeTone {
+  return isActive ? "emerald" : "neutral";
+}
+
+function getTokenStatusTone(channel: ChannelAccountRecord): BadgeTone {
+  if (channel.platform === "web_chat") return "violet";
+  if (channel.has_access_token) return "blue";
+  return "amber";
+}
+
+const BADGE_BASE_CLASS =
+  "inline-flex max-w-full items-center justify-center rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] leading-tight text-center select-none";
+
+const BADGE_TONE_CLASSES: Record<BadgeTone, string> = {
+  neutral: "border-slate-200 bg-slate-100 text-slate-700",
+  blue: "border-blue-200 bg-blue-50 text-blue-700",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  amber: "border-amber-200 bg-amber-50 text-amber-700",
+  rose: "border-rose-200 bg-rose-50 text-rose-700",
+  violet: "border-violet-200 bg-violet-50 text-violet-700",
+};
+
+function StatusBadge({
+  tone = "neutral",
+  className = "",
+  children,
+}: {
+  tone?: BadgeTone;
+  className?: string;
+  children: ReactNode;
+}) {
+  return <span className={`${BADGE_BASE_CLASS} ${BADGE_TONE_CLASSES[tone]} ${className}`.trim()}>{children}</span>;
+}
+
+const ACTION_BUTTON_BASE_CLASS =
+  "inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+
+const ACTION_BUTTON_TONE_CLASSES: Record<ActionTone, { idle: string; active: string }> = {
+  neutral: {
+    idle: "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50",
+    active: "border-slate-900 bg-slate-900 text-white",
+  },
+  blue: {
+    idle: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+    active: "border-blue-600 bg-blue-600 text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)]",
+  },
+  emerald: {
+    idle: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+    active: "border-emerald-600 bg-emerald-600 text-white",
+  },
+  amber: {
+    idle: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+    active: "border-amber-600 bg-amber-600 text-white",
+  },
+  rose: {
+    idle: "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100",
+    active: "border-rose-600 bg-rose-600 text-white",
+  },
+  violet: {
+    idle: "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100",
+    active: "border-violet-600 bg-violet-600 text-white",
+  },
+};
+
+function ActionButton({
+  tone = "neutral",
+  active = false,
+  className = "",
+  children,
+  type,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  tone?: ActionTone;
+  active?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  const toneClasses = active ? ACTION_BUTTON_TONE_CLASSES[tone].active : ACTION_BUTTON_TONE_CLASSES[tone].idle;
+  return (
+    <button
+      {...props}
+      type={type || "button"}
+      className={`${ACTION_BUTTON_BASE_CLASS} ${toneClasses} ${className}`.trim()}
+    >
+      {children}
+    </button>
+  );
+}
+
 const INITIAL_SETTINGS: Settings = {
   context: "",
   llm_model: "",
@@ -422,6 +711,7 @@ export default function App() {
   const [scannerError, setScannerError] = useState("");
   const [lastScannedValue, setLastScannedValue] = useState("");
   const [operationsMenuOpen, setOperationsMenuOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<number | null>(null);
@@ -469,11 +759,18 @@ export default function App() {
     typeof navigator !== "undefined" &&
     Boolean(navigator.mediaDevices?.getUserMedia);
   const isOperationsTab = activeTab === "registrations" || activeTab === "checkin" || activeTab === "logs";
+  const primaryTabs = [
+    ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
+    ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: "Context" }] : []),
+    ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: "Test" }] : []),
+    ...(canEditSettings ? [{ id: "settings" as const, icon: SettingsIcon, label: "Setup" }] : []),
+  ];
   const operationsTabs = [
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
     ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: "Check-in" }] : []),
     ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: "Logs" }] : []),
   ];
+  const helpContent = TAB_HELP_CONTENT[activeTab];
   const selectedTicketPngUrl = selectedRegistration
     ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.png`
     : "";
@@ -859,6 +1156,11 @@ export default function App() {
   }, [activeTab]);
 
   useEffect(() => {
+    setOperationsMenuOpen(false);
+    setHelpOpen(false);
+  }, [activeTab]);
+
+  useEffect(() => {
     if (!operationsMenuOpen) return;
 
     const handlePointerDown = (event: MouseEvent) => {
@@ -870,6 +1172,19 @@ export default function App() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [operationsMenuOpen]);
+
+  useEffect(() => {
+    if (!helpOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setHelpOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [helpOpen]);
 
   useEffect(() => {
     const allowedTabs = [
@@ -2134,23 +2449,26 @@ export default function App() {
                 </h2>
                 <p className="text-sm text-slate-500">Allow camera access, then scan attendee tickets continuously.</p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
+              <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2">
+                <ActionButton
                   onClick={startQrScanner}
                   disabled={!canUseQrScanner || scannerActive || scannerStarting}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                  tone="blue"
+                  active
+                  className="w-full text-sm"
                 >
                   {scannerStarting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   Start Camera
-                </button>
-                <button
+                </ActionButton>
+                <ActionButton
                   onClick={stopQrScanner}
                   disabled={!scannerActive && !scannerStarting}
-                  className="inline-flex items-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                  tone="neutral"
+                  className="w-full text-sm"
                 >
                   <Square className="w-4 h-4" />
                   Stop
-                </button>
+                </ActionButton>
               </div>
             </div>
 
@@ -2205,22 +2523,18 @@ export default function App() {
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-base font-mono outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              <button
+              <ActionButton
                 onClick={handleCheckin}
                 disabled={!searchId || checkinStatus === "loading"}
-                className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-                  checkinStatus === "success"
-                    ? "bg-emerald-500 text-white"
-                    : checkinStatus === "error"
-                    ? "bg-rose-500 text-white"
-                    : "bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
-                }`}
+                tone={checkinStatus === "success" ? "emerald" : checkinStatus === "error" ? "rose" : "blue"}
+                active
+                className="w-full text-sm"
               >
                 {checkinStatus === "loading" && <RefreshCw className="w-4 h-4 animate-spin" />}
                 {checkinStatus === "success" && <CheckCircle2 className="w-4 h-4" />}
                 {checkinStatus === "error" && <AlertCircle className="w-4 h-4" />}
                 {checkinStatus === "success" ? "Checked In!" : checkinStatus === "error" ? "Check-in Failed" : "Check In Attendee"}
-              </button>
+              </ActionButton>
               {checkinStatus === "error" && checkinErrorMessage && (
                 <p className="text-xs text-rose-600">{checkinErrorMessage}</p>
               )}
@@ -2234,15 +2548,9 @@ export default function App() {
                 <p className="text-xs text-slate-500">The most recently scanned or checked-in attendee.</p>
               </div>
               {latestCheckinRegistration && (
-                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                  latestCheckinRegistration.status === "checked-in"
-                    ? "bg-emerald-100 text-emerald-700"
-                    : latestCheckinRegistration.status === "cancelled"
-                    ? "bg-slate-200 text-slate-600"
-                    : "bg-blue-100 text-blue-700"
-                }`}>
+                <StatusBadge tone={getRegistrationStatusTone(latestCheckinRegistration.status)}>
                   {latestCheckinRegistration.status}
-                </span>
+                </StatusBadge>
               )}
             </div>
 
@@ -2355,43 +2663,37 @@ export default function App() {
   const webChatMessageUrl = `${appUrl}/api/webchat/messages`;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-3 space-y-3">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
-                <Bot className="text-white w-5 h-5" />
+    <div className="app-shell min-h-dvh bg-slate-50 text-slate-900 font-sans">
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
+        <div className="max-w-7xl mx-auto px-3 py-3 sm:px-4 lg:px-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3 lg:max-w-[22rem]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.2)]">
+                <Bot className="h-5 w-5 text-white" />
               </div>
               <div className="min-w-0">
-                <h1 className="font-bold text-xl tracking-tight">FB Bot Studio</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="truncate text-xl font-bold tracking-tight sm:text-2xl">FB Bot Studio</h1>
+                  {selectedEvent && (
+                    <StatusBadge
+                      tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}
+                      className="hidden md:inline-flex"
+                    >
+                      {getEventStatusLabel(selectedEvent.effective_status)}
+                    </StatusBadge>
+                  )}
+                </div>
                 {selectedEvent && (
-                  <p className="text-[11px] text-slate-500 hidden md:block truncate max-w-[16rem] lg:max-w-[22rem] xl:max-w-[28rem]">
-                    {getEventStatusLabel(selectedEvent.effective_status)} event:{" "}
-                    <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
+                  <p className="hidden truncate text-[11px] text-slate-500 sm:block">
+                    workspace: <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
                   </p>
                 )}
               </div>
-              <div className="hidden lg:flex items-center gap-2 ml-3 min-w-0">
-                <CalendarRange className="w-4 h-4 text-slate-400 shrink-0" />
-                <select
-                  value={selectedEventId}
-                  onChange={(e) => setSelectedEventId(e.target.value)}
-                  disabled={!selectorEvents.length || eventLoading}
-                  className="min-w-[15rem] max-w-[22rem] bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
-                >
-                  {selectorEvents.map((event) => (
-                    <option key={event.id} value={event.id}>
-                      {event.name} ({getEventStatusLabel(event.effective_status)})
-                    </option>
-                  ))}
-                </select>
-              </div>
             </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="hidden md:flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2">
-                <MonitorCog className="w-4 h-4 text-slate-500" />
+
+            <div className="ml-auto flex items-center gap-2 sm:gap-3">
+              <div className="hidden md:flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <MonitorCog className="h-4 w-4 text-slate-500" />
                 <select
                   value={themeMode}
                   onChange={(e) => setThemeMode(e.target.value as ThemeMode)}
@@ -2403,73 +2705,77 @@ export default function App() {
                   <option value="system">System</option>
                 </select>
               </div>
-              <div className="text-right hidden sm:block">
+              <div className="hidden text-right sm:block">
                 <p className="text-sm font-semibold leading-none">{authUser?.display_name || authUser?.username}</p>
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mt-1">{authUser?.role}</p>
+                <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
               </div>
               <button
                 onClick={handleLogout}
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition-colors"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="h-4 w-4" />
                 <span className="hidden sm:inline">Logout</span>
               </button>
             </div>
+
+            <div className="order-3 w-full lg:order-none lg:max-w-[34rem] lg:flex-1">
+              <label htmlFor="event-selector" className="sr-only">
+                Active event
+              </label>
+              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <CalendarRange className="h-4 w-4 shrink-0 text-slate-400" />
+                <select
+                  id="event-selector"
+                  value={selectedEventId}
+                  onChange={(e) => setSelectedEventId(e.target.value)}
+                  disabled={!selectorEvents.length || eventLoading}
+                  className="min-w-0 w-full bg-transparent text-sm font-medium outline-none disabled:opacity-60"
+                >
+                  {selectorEvents.map((event) => (
+                    <option key={event.id} value={event.id}>
+                      {event.name} ({getEventStatusLabel(event.effective_status)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
 
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex lg:hidden items-center gap-2 min-w-0">
-              <CalendarRange className="w-4 h-4 text-slate-400 shrink-0" />
-              <select
-                value={selectedEventId}
-                onChange={(e) => setSelectedEventId(e.target.value)}
-                disabled={!selectorEvents.length || eventLoading}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
-              >
-                {selectorEvents.map((event) => (
-                  <option key={event.id} value={event.id}>
-                    {event.name} ({getEventStatusLabel(event.effective_status)})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto lg:overflow-visible lg:flex-wrap">
-              {[
-                ...(canEditSettings ? [{ id: "event", icon: CalendarRange, label: "Event" }] : []),
-                ...(canEditSettings ? [{ id: "design", icon: Code, label: "Context" }] : []),
-                ...(canRunTest ? [{ id: "test", icon: MessageSquare, label: "Test" }] : []),
-                ...(canEditSettings ? [{ id: "settings", icon: SettingsIcon, label: "Setup" }] : []),
-              ].map((tab) => (
+          <div className="mt-3 flex items-center gap-2">
+            <div className="grid flex-1 grid-flow-col auto-cols-fr gap-2 rounded-2xl bg-slate-100/90 p-1.5 sm:flex sm:flex-wrap sm:gap-1.5">
+              {primaryTabs.map((tab) => (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id as AppTab)}
-                  className={`shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl px-2 py-2.5 text-sm font-semibold transition-all sm:px-3 ${
                     activeTab === tab.id
                       ? "bg-white text-blue-600 shadow-sm"
-                      : "text-slate-500 hover:text-slate-700"
+                      : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
                   }`}
+                  aria-current={activeTab === tab.id ? "page" : undefined}
                 >
-                  <tab.icon className="w-4 h-4" />
-                  <span className="hidden sm:inline">{tab.label}</span>
+                  <tab.icon className="h-4 w-4 shrink-0" />
+                  <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
                 </button>
               ))}
               {operationsTabs.length > 0 && (
-                <div className="relative shrink-0" ref={operationsMenuRef}>
+                <div className="relative min-w-0" ref={operationsMenuRef}>
                   <button
                     onClick={() => setOperationsMenuOpen((open) => !open)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    className={`flex min-h-11 w-full min-w-0 items-center justify-center gap-2 rounded-xl px-2 py-2.5 text-sm font-semibold transition-all sm:px-3 ${
                       isOperationsTab || operationsMenuOpen
                         ? "bg-white text-blue-600 shadow-sm"
-                        : "text-slate-500 hover:text-slate-700"
+                        : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
                     }`}
+                    aria-expanded={operationsMenuOpen}
+                    aria-haspopup="menu"
                   >
-                    <Users className="w-4 h-4" />
-                    <span className="hidden sm:inline">Operations</span>
-                    <ChevronDown className={`w-4 h-4 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
+                    <Users className="h-4 w-4 shrink-0" />
+                    <span className="sr-only sm:not-sr-only sm:truncate">Operations</span>
+                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {operationsMenuOpen && (
-                    <div className="absolute right-0 top-full z-30 mt-2 w-52 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="absolute left-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl sm:left-auto sm:right-0">
                       {operationsTabs.map((tab) => (
                         <button
                           key={tab.id}
@@ -2482,8 +2788,9 @@ export default function App() {
                               ? "bg-blue-50 text-blue-700"
                               : "text-slate-600 hover:bg-slate-50"
                           }`}
+                          role="menuitem"
                         >
-                          <tab.icon className="w-4 h-4" />
+                          <tab.icon className="h-4 w-4" />
                           <span className="font-medium">{tab.label}</span>
                         </button>
                       ))}
@@ -2496,7 +2803,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-3 py-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-6 lg:px-6 lg:py-8">
         <AnimatePresence mode="wait">
           {activeTab === "event" && (
             <motion.div
@@ -2508,8 +2815,8 @@ export default function App() {
             >
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <div className="flex items-center justify-between mb-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Bot className="w-5 h-5 text-blue-600" />
@@ -2520,7 +2827,7 @@ export default function App() {
                       <button
                         onClick={() => void saveEventDetails()}
                         disabled={saving}
-                        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                        className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-blue-700 disabled:opacity-50 sm:w-auto sm:shrink-0"
                       >
                         {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                         Save Event Setup
@@ -2600,29 +2907,21 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 mb-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <Activity className="w-5 h-5 text-blue-600" />
                         Registration Rules
                       </h3>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         {selectedEvent && (
-                          <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(selectedEvent.effective_status)}`}>
+                          <StatusBadge tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}>
                             {getEventStatusLabel(selectedEvent.effective_status)}
-                          </span>
+                          </StatusBadge>
                         )}
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          timingInfo.registrationStatus === "open"
-                            ? "bg-emerald-100 text-emerald-700"
-                            : timingInfo.registrationStatus === "not_started"
-                            ? "bg-amber-100 text-amber-700"
-                            : timingInfo.registrationStatus === "invalid"
-                            ? "bg-orange-100 text-orange-700"
-                            : "bg-rose-100 text-rose-700"
-                        }`}>
+                        <StatusBadge tone={getRegistrationWindowTone(timingInfo.registrationStatus)}>
                           {timingInfo.registrationLabel}
-                        </span>
+                        </StatusBadge>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -2657,13 +2956,13 @@ export default function App() {
                     <p className="mt-4 text-xs text-slate-500">
                       Registration rules are event-scoped. The system derives the effective event state from both the manual status and the event date.
                     </p>
-                    <div className="mt-3 rounded-2xl bg-slate-50 border border-slate-200 p-4 text-xs text-slate-600 space-y-1">
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 space-y-1">
                       <p><span className="font-semibold text-slate-800">Current system time</span>: {timingInfo.nowLabel} ({timingInfo.timeZone})</p>
                       <p><span className="font-semibold text-slate-800">Event date interpreted as</span>: {timingInfo.eventDateLabel}</p>
                       <p><span className="font-semibold text-slate-800">Registration opens</span>: {timingInfo.startLabel}</p>
                       <p><span className="font-semibold text-slate-800">Registration closes</span>: {timingInfo.endLabel}</p>
                       {timingInfo.registrationStatus === "invalid" && (
-                        <p className="text-orange-700">
+                        <p className="text-rose-700">
                           Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
                         </p>
                       )}
@@ -2677,7 +2976,7 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-5 sm:p-6">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -2712,15 +3011,15 @@ export default function App() {
                               <p className="text-sm font-semibold">{event.name}</p>
                               <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center justify-end gap-2">
                               {event.is_default && (
-                                <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-700">
+                                <StatusBadge tone="neutral">
                                   default
-                                </span>
+                                </StatusBadge>
                               )}
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                              <StatusBadge tone={event.effective_status === "active" ? "emerald" : event.effective_status === "pending" ? "amber" : event.effective_status === "cancelled" ? "rose" : "neutral"}>
                                 {getEventStatusLabel(event.effective_status)}
-                              </span>
+                              </StatusBadge>
                             </div>
                           </div>
                         </button>
@@ -2750,9 +3049,9 @@ export default function App() {
                                 <p className="text-sm font-semibold text-slate-700">{event.name}</p>
                                 <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
                               </div>
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                              <StatusBadge tone="neutral">
                                 {getEventStatusLabel(event.effective_status)}
-                              </span>
+                              </StatusBadge>
                             </div>
                           </button>
                         ))}
@@ -2777,9 +3076,9 @@ export default function App() {
                                 <p className="text-sm font-semibold text-slate-700">{event.name}</p>
                                 <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
                               </div>
-                              <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${getEventStatusBadgeClass(event.effective_status)}`}>
+                              <StatusBadge tone="rose">
                                 {getEventStatusLabel(event.effective_status)}
-                              </span>
+                              </StatusBadge>
                             </div>
                           </button>
                         ))}
@@ -2796,36 +3095,41 @@ export default function App() {
                         disabled={!selectedEvent}
                       />
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <button
+                        <ActionButton
                           onClick={() => void handleUpdateEvent()}
                           disabled={!selectedEvent || !editingEventName.trim() || editingEventName.trim() === selectedEvent?.name || eventLoading}
-                          className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                          tone="blue"
+                          active
+                          className="w-full text-sm"
                         >
                           Save Event Name
-                        </button>
+                        </ActionButton>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <button
+                        <ActionButton
                           onClick={() => void handleUpdateEvent("pending")}
                           disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || eventLoading}
-                          className="rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                          tone="amber"
+                          className="w-full text-sm"
                         >
                           Set Pending
-                        </button>
-                        <button
+                        </ActionButton>
+                        <ActionButton
                           onClick={() => void handleUpdateEvent("active")}
                           disabled={!selectedEvent || selectedEvent.status === "active" || eventLoading}
-                          className="rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                          tone="emerald"
+                          className="w-full text-sm"
                         >
                           Launch Event
-                        </button>
-                        <button
+                        </ActionButton>
+                        <ActionButton
                           onClick={() => void handleUpdateEvent("cancelled")}
                           disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "cancelled" || eventLoading}
-                          className="rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                          tone="rose"
+                          className="w-full text-sm"
                         >
                           Cancel Event
-                        </button>
+                        </ActionButton>
                       </div>
                       {selectedEvent && (
                         <p className="text-xs text-slate-500">
@@ -2843,13 +3147,15 @@ export default function App() {
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="New event name"
                       />
-                      <button
+                      <ActionButton
                         onClick={() => void handleCreateEvent()}
                         disabled={!newEventName.trim() || eventLoading}
-                        className="w-full rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        tone="neutral"
+                        active
+                        className="w-full text-sm"
                       >
                         Create Event
-                      </button>
+                      </ActionButton>
                     </div>
 
                     {eventMessage && (
@@ -2859,25 +3165,6 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <h3 className="text-lg font-semibold mb-3">Event Status Logic</h3>
-                    <div className="space-y-3 text-sm text-slate-600">
-                      <p><span className="font-semibold text-slate-800">Pending</span>: event is being prepared. Bot should say registration is not launched yet.</p>
-                      <p><span className="font-semibold text-slate-800">Active</span>: event is live, but registration still follows open/close rules.</p>
-                      <p><span className="font-semibold text-slate-800">Closed</span>: event date has already passed. System closes it automatically.</p>
-                      <p><span className="font-semibold text-slate-800">Cancelled</span>: event is cancelled and bot should explain that clearly.</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6">
-                    <h3 className="text-blue-800 font-semibold mb-2 flex items-center gap-2">
-                      <Code className="w-5 h-5" />
-                      Event Context Lives Separately
-                    </h3>
-                    <p className="text-sm text-blue-700 leading-relaxed">
-                      Event information and registration rules live in this tab. Event-specific knowledge, FAQ, and attached documents belong in the <span className="font-semibold">Context</span> tab.
-                    </p>
-                  </div>
                 </div>
               </div>
             </motion.div>
@@ -2893,43 +3180,44 @@ export default function App() {
             >
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="xl:col-span-2 space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-4 space-y-3">
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <h2 className="text-lg font-semibold">Event Context</h2>
-                        <p className="text-sm text-slate-500">Per-event context, FAQ, and source text that guide responses for the selected event.</p>
-                      </div>
-                        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                        <button
+                        <div>
+                          <h2 className="text-lg font-semibold">Event Context</h2>
+                          <p className="text-sm text-slate-500">Per-event FAQ, source text, and response guidance for the selected workspace.</p>
+                        </div>
+                        <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-3 lg:flex lg:flex-wrap lg:justify-end">
+                        <ActionButton
                           onClick={() => void handleResetEventKnowledge(false)}
                           disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
-                          className="flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                          tone="amber"
+                          className="w-full text-sm sm:w-auto"
                         >
                           {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
                           Clear Knowledge Docs
-                        </button>
-                        <button
+                        </ActionButton>
+                        <ActionButton
                           onClick={() => void handleResetEventKnowledge(true)}
                           disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
-                          className="flex items-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                          tone="rose"
+                          className="w-full text-sm sm:w-auto"
                         >
                           {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
                           Reset All Knowledge
-                        </button>
-                        <button
+                        </ActionButton>
+                        <ActionButton
                           onClick={() => void saveEventContext()}
                           disabled={saving || !canManageKnowledge}
-                          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                          tone="blue"
+                          active
+                          className="w-full text-sm sm:w-auto"
                         >
                           {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                           Save Event Context
-                        </button>
+                        </ActionButton>
+                        </div>
                       </div>
-                      </div>
-                      <p className="text-xs text-slate-500">
-                        Use <span className="font-semibold">Clear Knowledge Docs</span> to wipe attached documents, chunks, and embedding state while keeping the text in Event Context. Use <span className="font-semibold">Reset All Knowledge</span> only when you want a completely blank event knowledge layer.
-                      </p>
                     </div>
                     <textarea
                       value={settings.context}
@@ -2937,18 +3225,6 @@ export default function App() {
                       className="w-full h-80 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono text-sm resize-none"
                       placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
                     />
-                    <div className="mt-4 rounded-2xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-800">
-                      <p className="font-semibold mb-1">How the bot uses this tab</p>
-                      <p>
-                        The selected event now has two knowledge layers: this free-form event context, plus structured documents below. Active documents are already used by the bot through simple retrieval. Vector search and embeddings can be added later without moving this content model again.
-                      </p>
-                    </div>
-                    <div className="mt-3 rounded-2xl bg-rose-50 border border-rose-100 p-4 text-sm text-rose-700">
-                      <p className="font-semibold mb-1">Need a clean reset?</p>
-                      <p>
-                        You can now clear only the structured knowledge documents, or reset the entire event knowledge layer including the free-form context.
-                      </p>
-                    </div>
                     {settingsMessage && (
                       <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
                         {settingsMessage}
@@ -2956,13 +3232,13 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <div className="flex items-center justify-between mb-4">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <h3 className="text-lg font-semibold">Knowledge Documents</h3>
                         <p className="text-sm text-slate-500">Attach reusable notes, FAQ fragments, policy text, URLs, or import text-based files into the selected event.</p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <input
                           ref={documentFileInputRef}
                           type="file"
@@ -2970,20 +3246,22 @@ export default function App() {
                           className="hidden"
                           onChange={(e) => void handleImportDocumentFile(e.target.files?.[0] || null)}
                         />
-                        <button
+                        <ActionButton
                           onClick={() => documentFileInputRef.current?.click()}
                           disabled={documentsLoading}
-                          className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-medium disabled:opacity-50"
+                          tone="neutral"
+                          className="text-sm"
                         >
                           Import File
-                        </button>
+                        </ActionButton>
                         {editingDocumentId && (
-                          <button
+                          <ActionButton
                             onClick={resetDocumentForm}
-                            className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-medium"
+                            tone="neutral"
+                            className="text-sm"
                           >
                             Cancel Edit
-                          </button>
+                          </ActionButton>
                         )}
                       </div>
                     </div>
@@ -3030,17 +3308,19 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="mt-4 flex items-center gap-3">
-                      <button
+                    <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <ActionButton
                         onClick={() => void handleSaveDocument()}
                         disabled={!selectedEventId || documentsLoading || !documentTitle.trim() || !documentContent.trim()}
-                        className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        tone="blue"
+                        active
+                        className="w-full text-sm sm:w-auto"
                       >
                         {documentsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                         {editingDocumentId ? "Update Document" : "Save Document"}
-                      </button>
+                      </ActionButton>
                       <p className="text-xs text-slate-500">
-                        Text-based imports are chunked on the server after save, so this same document store can grow into full RAG later.
+                        Imported text is chunked after save so the same document store stays clean and reusable.
                       </p>
                     </div>
 
@@ -3053,8 +3333,8 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <div className="flex items-center justify-between mb-4">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                    <div className="mb-4 flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-lg font-semibold">Attached Documents</h3>
                         <p className="text-sm text-slate-500">Only active documents are used during retrieval.</p>
@@ -3076,29 +3356,21 @@ export default function App() {
                         </div>
                       )}
                       {documents.map((document) => (
-                        <div key={document.id} className="rounded-2xl border border-slate-200 p-4 space-y-3">
-                          <div className="flex items-start justify-between gap-3">
+                        <div key={document.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
                               <p className="font-semibold text-slate-900 truncate">{document.title}</p>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
-                                <span className="rounded-full bg-slate-100 text-slate-600 px-2 py-1">{document.source_type}</span>
-                                <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1">
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <StatusBadge tone="neutral">{document.source_type}</StatusBadge>
+                                <StatusBadge tone="blue">
                                   {document.chunk_count || 0} chunks
-                                </span>
-                                <span className={`rounded-full px-2 py-1 ${document.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                                </StatusBadge>
+                                <StatusBadge tone={document.is_active ? "emerald" : "neutral"}>
                                   {document.is_active ? "active" : "inactive"}
-                                </span>
-                                <span className={`rounded-full px-2 py-1 ${
-                                  document.embedding_status === "ready"
-                                    ? "bg-emerald-100 text-emerald-700"
-                                    : document.embedding_status === "failed"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : document.embedding_status === "skipped"
-                                    ? "bg-slate-200 text-slate-600"
-                                    : "bg-amber-100 text-amber-700"
-                                }`}>
+                                </StatusBadge>
+                                <StatusBadge tone={getDocumentEmbeddingTone(document.embedding_status)}>
                                   embedding {document.embedding_status || "pending"}
-                                </span>
+                                </StatusBadge>
                               </div>
                             </div>
                           </div>
@@ -3116,30 +3388,30 @@ export default function App() {
                           <p className="text-sm text-slate-600 whitespace-pre-wrap">
                             {document.content.length > 280 ? `${document.content.slice(0, 280)}...` : document.content}
                           </p>
-                          <div className="flex items-center gap-2">
-                            <button
+                          <div className="flex flex-wrap items-center gap-2">
+                            <ActionButton
                               onClick={() => loadDocumentIntoForm(document)}
-                              className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold"
+                              tone="neutral"
                             >
+                              <PencilLine className="h-3.5 w-3.5" />
                               Edit
-                            </button>
-                            <button
+                            </ActionButton>
+                            <ActionButton
                               onClick={() => setSelectedDocumentForChunksId(document.id)}
-                              className={`rounded-xl px-3 py-2 text-xs font-semibold ${
-                                selectedDocumentForChunksId === document.id
-                                  ? "bg-blue-600 text-white"
-                                  : "bg-blue-50 hover:bg-blue-100 text-blue-700"
-                              }`}
+                              tone="blue"
+                              active={selectedDocumentForChunksId === document.id}
                             >
+                              <Eye className="h-3.5 w-3.5" />
                               View Chunks
-                            </button>
-                            <button
+                            </ActionButton>
+                            <ActionButton
                               onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
                               disabled={documentsLoading}
-                              className={`rounded-xl px-3 py-2 text-xs font-semibold ${document.is_active ? "bg-amber-50 hover:bg-amber-100 text-amber-700" : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700"} disabled:opacity-50`}
+                              tone={document.is_active ? "amber" : "emerald"}
                             >
+                              <Power className="h-3.5 w-3.5" />
                               {document.is_active ? "Disable" : "Enable"}
-                            </button>
+                            </ActionButton>
                           </div>
                         </div>
                       ))}
@@ -3174,23 +3446,15 @@ export default function App() {
                       <div className="space-y-3 mb-4">
                         <div className="rounded-2xl border border-slate-200 bg-white p-4">
                           <p className="font-semibold text-slate-900">{selectedDocumentForChunks.title}</p>
-                          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
-                            <span className="rounded-full bg-slate-100 text-slate-600 px-2 py-1">{selectedDocumentForChunks.source_type}</span>
-                            <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1">{selectedDocumentForChunks.chunk_count || 0} chunks</span>
-                            <span className={`rounded-full px-2 py-1 ${selectedDocumentForChunks.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <StatusBadge tone="neutral">{selectedDocumentForChunks.source_type}</StatusBadge>
+                            <StatusBadge tone="blue">{selectedDocumentForChunks.chunk_count || 0} chunks</StatusBadge>
+                            <StatusBadge tone={selectedDocumentForChunks.is_active ? "emerald" : "neutral"}>
                               {selectedDocumentForChunks.is_active ? "active" : "inactive"}
-                            </span>
-                            <span className={`rounded-full px-2 py-1 ${
-                              selectedDocumentForChunks.embedding_status === "ready"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : selectedDocumentForChunks.embedding_status === "failed"
-                                ? "bg-rose-100 text-rose-700"
-                                : selectedDocumentForChunks.embedding_status === "skipped"
-                                ? "bg-slate-200 text-slate-600"
-                                : "bg-amber-100 text-amber-700"
-                            }`}>
+                            </StatusBadge>
+                            <StatusBadge tone={getDocumentEmbeddingTone(selectedDocumentForChunks.embedding_status)}>
                               embedding {selectedDocumentForChunks.embedding_status || "pending"}
-                            </span>
+                            </StatusBadge>
                           </div>
                         </div>
 
@@ -3229,10 +3493,11 @@ export default function App() {
                       </div>
                       {selectedDocumentForChunks && (
                         <div className="flex items-center gap-2">
-                          <button
+                          <ActionButton
                             onClick={() => void handleEnqueueEmbedding(selectedDocumentForChunks.id, selectedEventId)}
                             disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
-                            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                            tone="neutral"
+                            active
                           >
                             {(embeddingPreviewLoading || embeddingEnqueueLoading) ? (
                               <RefreshCw className="w-4 h-4 animate-spin" />
@@ -3240,7 +3505,7 @@ export default function App() {
                               <Save className="w-4 h-4" />
                             )}
                             Queue Embedding
-                          </button>
+                          </ActionButton>
                           <button
                             onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
                             disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
@@ -3265,23 +3530,15 @@ export default function App() {
                             <div className="space-y-2 text-sm">
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Embedding model</span>
-                                <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                                <StatusBadge tone="neutral">
                                   {embeddingPreview?.embedding_model || "text-embedding-3-small"}
-                                </span>
+                                </StatusBadge>
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Document status</span>
-                                <span className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                                  embeddingPreview?.document.embedding_status === "ready"
-                                    ? "bg-emerald-100 text-emerald-700"
-                                    : embeddingPreview?.document.embedding_status === "failed"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : embeddingPreview?.document.embedding_status === "skipped"
-                                    ? "bg-slate-200 text-slate-600"
-                                    : "bg-amber-100 text-amber-700"
-                                }`}>
+                                <StatusBadge tone={getDocumentEmbeddingTone(embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status)}>
                                   {embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status || "pending"}
-                                </span>
+                                </StatusBadge>
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Document content hash</span>
@@ -3291,9 +3548,9 @@ export default function App() {
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Chunk count</span>
-                                <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                                <StatusBadge tone="neutral">
                                   {embeddingPreview?.chunks.length ?? selectedDocumentForChunks.chunk_count ?? 0}
-                                </span>
+                                </StatusBadge>
                               </div>
                             </div>
                             {embeddingPreviewMessage && (
@@ -3319,20 +3576,12 @@ export default function App() {
                               {!embeddingPreviewLoading && embeddingPreview?.chunks.map((chunk) => (
                                 <div key={chunk.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                                   <div className="flex flex-wrap items-center gap-2 mb-2 text-[11px] uppercase tracking-wider">
-                                    <span className="rounded-full bg-slate-900 text-white px-2 py-1">chunk {chunk.chunk_index + 1}</span>
-                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">{chunk.char_count || chunk.content.length} chars</span>
-                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">~{chunk.token_estimate || 0} tokens</span>
-                                    <span className={`rounded-full px-2 py-1 ${
-                                      chunk.embedding_status === "ready"
-                                        ? "bg-emerald-100 text-emerald-700"
-                                        : chunk.embedding_status === "failed"
-                                        ? "bg-rose-100 text-rose-700"
-                                        : chunk.embedding_status === "skipped"
-                                        ? "bg-slate-200 text-slate-600"
-                                        : "bg-amber-100 text-amber-700"
-                                    }`}>
+                                    <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">chunk {chunk.chunk_index + 1}</StatusBadge>
+                                    <StatusBadge tone="neutral">{chunk.char_count || chunk.content.length} chars</StatusBadge>
+                                    <StatusBadge tone="neutral">~{chunk.token_estimate || 0} tokens</StatusBadge>
+                                    <StatusBadge tone={getDocumentEmbeddingTone(chunk.embedding_status)}>
                                       {chunk.embedding_status || "pending"}
-                                    </span>
+                                    </StatusBadge>
                                   </div>
                                   <p className="text-xs font-mono text-slate-500 break-all">{chunk.content_hash || "-"}</p>
                                 </div>
@@ -3377,14 +3626,16 @@ export default function App() {
                             className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                           />
                           <div className="mt-3 flex items-center gap-2">
-                            <button
+                            <ActionButton
                               onClick={() => void fetchRetrievalDebug()}
                               disabled={!selectedEventId || retrievalLoading || !retrievalQuery.trim()}
-                              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                              tone="neutral"
+                              active
+                              className="text-sm"
                             >
                               {retrievalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                               Analyze Retrieval
-                            </button>
+                            </ActionButton>
                             {retrievalDebug && (
                               <span className="text-xs text-slate-500">
                                 Event-scoped results for <span className="font-semibold text-slate-700">{selectedEvent?.name || "selected event"}</span>
@@ -3405,27 +3656,27 @@ export default function App() {
                           <div className="space-y-2 text-sm">
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-slate-600">Global system prompt</span>
-                              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${retrievalDebug?.layers.global_system_prompt_present ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                              <StatusBadge tone={retrievalDebug?.layers.global_system_prompt_present ? "emerald" : "neutral"}>
                                 {retrievalDebug?.layers.global_system_prompt_present ? `${retrievalDebug.layers.global_system_prompt_chars} chars` : "empty"}
-                              </span>
+                              </StatusBadge>
                             </div>
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-slate-600">Event context</span>
-                              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${retrievalDebug?.layers.event_context_present ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-600"}`}>
+                              <StatusBadge tone={retrievalDebug?.layers.event_context_present ? "blue" : "neutral"}>
                                 {retrievalDebug?.layers.event_context_present ? `${retrievalDebug.layers.event_context_chars} chars` : "empty"}
-                              </span>
+                              </StatusBadge>
                             </div>
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-slate-600">Active documents</span>
-                              <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                              <StatusBadge tone="neutral">
                                 {retrievalDebug?.layers.active_document_count ?? documents.filter((document) => document.is_active).length}
-                              </span>
+                              </StatusBadge>
                             </div>
                             <div className="flex items-center justify-between gap-3">
                               <span className="text-slate-600">Active chunks</span>
-                              <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1 text-xs font-semibold">
+                              <StatusBadge tone="neutral">
                                 {retrievalDebug?.layers.active_chunk_count ?? documentChunks.length}
-                              </span>
+                              </StatusBadge>
                             </div>
                           </div>
                         </div>
@@ -3439,9 +3690,9 @@ export default function App() {
                                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Matched Chunks</p>
                                 <p className="text-xs text-slate-500">Top ranked event chunks for this query.</p>
                               </div>
-                              <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1 text-xs font-semibold">
+                              <StatusBadge tone="blue">
                                 {retrievalDebug.matches.length} matches
-                              </span>
+                              </StatusBadge>
                             </div>
 
                             <div className="space-y-3 max-h-[26rem] overflow-y-auto pr-1">
@@ -3453,10 +3704,10 @@ export default function App() {
                               {retrievalDebug.matches.map((match) => (
                                 <div key={`${match.document_id}:${match.chunk_index}:${match.rank}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                                   <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] uppercase tracking-wider">
-                                    <span className="rounded-full bg-slate-900 text-white px-2 py-1">#{match.rank}</span>
-                                    <span className="rounded-full bg-blue-100 text-blue-700 px-2 py-1">score {match.score}</span>
-                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">{match.source_type}</span>
-                                    <span className="rounded-full bg-slate-100 text-slate-700 px-2 py-1">chunk {match.chunk_index + 1}</span>
+                                    <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">#{match.rank}</StatusBadge>
+                                    <StatusBadge tone="blue">score {match.score}</StatusBadge>
+                                    <StatusBadge tone="neutral">{match.source_type}</StatusBadge>
+                                    <StatusBadge tone="neutral">chunk {match.chunk_index + 1}</StatusBadge>
                                   </div>
                                   <p className="font-semibold text-slate-900">{match.document_title}</p>
                                   {match.source_url && (
@@ -3512,7 +3763,7 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="h-[calc(100vh-200px)] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden"
+              className="flex min-h-[calc(100dvh-13rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-12rem)]"
             >
               <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -3627,25 +3878,66 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-6">
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                    <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <h2 className="text-lg font-semibold">Registered Attendees</h2>
-                          <span className="px-2 py-0.5 bg-blue-50 text-blue-600 text-[10px] font-bold rounded-md uppercase tracking-wider border border-blue-100">
+                          <StatusBadge tone="blue" className="rounded-md">
                             {settings.event_name || "Untitled Event"}
-                          </span>
+                          </StatusBadge>
                         </div>
                         <p className="text-sm text-slate-500">Manage, preview tickets, and export event registrations. Click a row to open the ticket panel.</p>
                       </div>
                       <a 
                         href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}
-                        className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-all"
+                        className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.neutral.idle} w-full text-sm sm:w-auto`}
                       >
                         <Download className="w-4 h-4" />
                         Export CSV
                       </a>
                     </div>
-                    <div className="overflow-x-auto">
+                    <div className="space-y-3 p-4 md:hidden">
+                      {registrations.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+                          No registrations yet.
+                        </div>
+                      ) : (
+                        registrations.map((reg) => (
+                          <button
+                            key={reg.id}
+                            onClick={() => setSelectedRegistrationId(reg.id)}
+                            className={`w-full rounded-2xl border p-4 text-left transition-colors ${
+                              selectedRegistrationId === reg.id
+                                ? "border-blue-200 bg-blue-50"
+                                : "border-slate-200 bg-white hover:bg-slate-50"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
+                                <p className="mt-1 font-mono text-xs font-bold text-blue-600">{reg.id}</p>
+                                <p className="mt-1 text-[11px] text-slate-500">{new Date(reg.timestamp).toLocaleString()}</p>
+                              </div>
+                              <div className="flex flex-wrap justify-end gap-2">
+                                <StatusBadge tone={getRegistrationStatusTone(reg.status)}>{reg.status}</StatusBadge>
+                                {selectedRegistrationId === reg.id && <StatusBadge tone="blue">selected</StatusBadge>}
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-2 text-xs text-slate-600">
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Phone</p>
+                                <p className="mt-1">{reg.phone || "-"}</p>
+                              </div>
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Email</p>
+                                <p className="mt-1 break-all">{reg.email || "-"}</p>
+                              </div>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                    <div className="hidden overflow-x-auto md:block">
                       <table className="w-full text-left text-sm">
                         <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                           <tr>
@@ -3683,13 +3975,9 @@ export default function App() {
                                   <p className="text-[10px] text-slate-400">{reg.email}</p>
                                 </td>
                                 <td className="px-6 py-4">
-                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-tighter ${
-                                    reg.status === "checked-in" ? "bg-emerald-100 text-emerald-700" : 
-                                    reg.status === "cancelled" ? "bg-slate-200 text-slate-500" :
-                                    "bg-blue-100 text-blue-700"
-                                  }`}>
+                                  <StatusBadge tone={getRegistrationStatusTone(reg.status)}>
                                     {reg.status}
-                                  </span>
+                                  </StatusBadge>
                                   {selectedRegistrationId === reg.id && (
                                     <p className="mt-1 text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Selected</p>
                                   )}
@@ -3713,11 +4001,11 @@ export default function App() {
                         </h3>
                         <p className="text-xs text-slate-500">Live totals for the selected event.</p>
                       </div>
-                      <span className="rounded-full bg-slate-100 text-slate-600 px-2 py-1 text-[10px] font-bold uppercase tracking-wider">
+                      <StatusBadge tone="neutral">
                         {registrations.length} total
-                      </span>
+                      </StatusBadge>
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
                         <div className="flex items-start justify-between gap-2">
                           <div>
@@ -3771,15 +4059,9 @@ export default function App() {
                         <p className="text-xs text-slate-500">Click a registration row to preview, download, and edit status.</p>
                       </div>
                       {selectedRegistration && (
-                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          selectedRegistration.status === "checked-in"
-                            ? "bg-emerald-100 text-emerald-700"
-                            : selectedRegistration.status === "cancelled"
-                            ? "bg-slate-200 text-slate-600"
-                            : "bg-blue-100 text-blue-700"
-                        }`}>
+                        <StatusBadge tone={getRegistrationStatusTone(selectedRegistration.status)}>
                           {selectedRegistration.status}
-                        </span>
+                        </StatusBadge>
                       )}
                     </div>
 
@@ -3809,7 +4091,7 @@ export default function App() {
                             href={selectedTicketPngUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm font-semibold transition-colors"
+                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.blue.active} text-sm`}
                           >
                             <ExternalLink className="w-4 h-4" />
                             Open PNG Ticket
@@ -3817,7 +4099,7 @@ export default function App() {
                           <a
                             href={selectedTicketPngUrl}
                             download={`${selectedRegistration.id}.png`}
-                            className="flex items-center justify-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-semibold transition-colors"
+                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.neutral.idle} text-sm`}
                           >
                             <Download className="w-4 h-4" />
                             Download PNG
@@ -3826,7 +4108,7 @@ export default function App() {
                             href={selectedTicketSvgUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center justify-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-sm font-semibold transition-colors sm:col-span-2"
+                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.neutral.idle} text-sm sm:col-span-2`}
                           >
                             <QrCode className="w-4 h-4" />
                             Open SVG Preview (fallback)
@@ -3840,22 +4122,22 @@ export default function App() {
                             {(["registered", "checked-in", "cancelled"] as RegistrationStatus[]).map((statusOption) => {
                               const active = selectedRegistration.status === statusOption;
                               return (
-                                <button
+                                <ActionButton
                                   key={statusOption}
                                   onClick={() => updateRegistrationStatus(selectedRegistration.id, statusOption)}
                                   disabled={statusUpdateLoading}
-                                  className={`px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all ${
-                                    active
-                                      ? statusOption === "checked-in"
-                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                        : statusOption === "cancelled"
-                                        ? "bg-slate-100 text-slate-700 border-slate-300"
-                                        : "bg-blue-50 text-blue-700 border-blue-200"
-                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                                  } disabled:opacity-60`}
+                                  tone={
+                                    statusOption === "checked-in"
+                                      ? "emerald"
+                                      : statusOption === "cancelled"
+                                      ? "neutral"
+                                      : "blue"
+                                  }
+                                  active={active}
+                                  className="w-full uppercase tracking-[0.18em]"
                                 >
                                   {statusOption}
-                                </button>
+                                </ActionButton>
                               );
                             })}
                           </div>
@@ -3870,14 +4152,15 @@ export default function App() {
                         {canChangeRegistrationStatus && (
                           <div className="border-t border-slate-100 pt-4">
                             <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Danger Zone</p>
-                            <button
+                            <ActionButton
                               onClick={() => void deleteRegistration(selectedRegistration.id)}
                               disabled={deleteRegistrationLoading}
-                              className="inline-flex items-center gap-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50"
+                              tone="rose"
+                              className="text-sm"
                             >
                               {deleteRegistrationLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                               Delete Registration
-                            </button>
+                            </ActionButton>
                             <p className="mt-2 text-xs text-slate-500">
                               This permanently removes the attendee record from the registration list.
                             </p>
@@ -3912,12 +4195,12 @@ export default function App() {
                           Mobile-first check-in flow for staff at the door. Use manual ID entry or scan a QR code.
                         </p>
                       </div>
-                      <span className="rounded-full bg-blue-50 text-blue-600 px-3 py-1 text-[10px] font-bold uppercase tracking-wider border border-blue-100">
+                      <StatusBadge tone="blue">
                         {settings.event_name || "Untitled Event"}
-                      </span>
+                      </StatusBadge>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                       <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
                         <div className="flex items-start justify-between gap-2">
                           <div>
@@ -3975,23 +4258,26 @@ export default function App() {
                           Open the camera and scan attendee QR codes continuously.
                         </p>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button
+                      <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2">
+                        <ActionButton
                           onClick={startQrScanner}
                           disabled={!canUseQrScanner || scannerActive || scannerStarting}
-                          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                          tone="blue"
+                          active
+                          className="w-full text-sm"
                         >
                           {scannerStarting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                           Start Camera
-                        </button>
-                        <button
+                        </ActionButton>
+                        <ActionButton
                           onClick={stopQrScanner}
                           disabled={!scannerActive && !scannerStarting}
-                          className="inline-flex items-center gap-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                          tone="neutral"
+                          className="w-full text-sm"
                         >
                           <Square className="w-4 h-4" />
                           Stop
-                        </button>
+                        </ActionButton>
                       </div>
                     </div>
 
@@ -4049,22 +4335,18 @@ export default function App() {
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-base font-mono outline-none focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
-                      <button
+                      <ActionButton
                         onClick={handleCheckin}
                         disabled={!searchId || checkinStatus === "loading"}
-                        className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
-                          checkinStatus === "success"
-                            ? "bg-emerald-500 text-white"
-                            : checkinStatus === "error"
-                            ? "bg-rose-500 text-white"
-                            : "bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
-                        }`}
+                        tone={checkinStatus === "success" ? "emerald" : checkinStatus === "error" ? "rose" : "blue"}
+                        active
+                        className="w-full text-sm"
                       >
                         {checkinStatus === "loading" && <RefreshCw className="w-4 h-4 animate-spin" />}
                         {checkinStatus === "success" && <CheckCircle2 className="w-4 h-4" />}
                         {checkinStatus === "error" && <AlertCircle className="w-4 h-4" />}
                         {checkinStatus === "success" ? "Checked In!" : checkinStatus === "error" ? "Check-in Failed" : "Check In Attendee"}
-                      </button>
+                      </ActionButton>
                       {checkinStatus === "error" && checkinErrorMessage && (
                         <p className="text-xs text-rose-600">{checkinErrorMessage}</p>
                       )}
@@ -4078,15 +4360,9 @@ export default function App() {
                         <p className="text-xs text-slate-500">The most recently scanned or checked-in attendee.</p>
                       </div>
                       {latestCheckinRegistration && (
-                        <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          latestCheckinRegistration.status === "checked-in"
-                            ? "bg-emerald-100 text-emerald-700"
-                            : latestCheckinRegistration.status === "cancelled"
-                            ? "bg-slate-200 text-slate-600"
-                            : "bg-blue-100 text-blue-700"
-                        }`}>
+                        <StatusBadge tone={getRegistrationStatusTone(latestCheckinRegistration.status)}>
                           {latestCheckinRegistration.status}
-                        </span>
+                        </StatusBadge>
                       )}
                     </div>
 
@@ -4113,12 +4389,13 @@ export default function App() {
                           </div>
                         </div>
                         {!checkinAccessMode && (
-                          <button
+                          <ActionButton
                             onClick={() => setActiveTab("registrations")}
-                            className="w-full rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 text-sm font-semibold transition-colors"
+                            tone="neutral"
+                            className="w-full text-sm"
                           >
                             Open Full Registration Record
-                          </button>
+                          </ActionButton>
                         )}
                       </div>
                     )}
@@ -4153,14 +4430,16 @@ export default function App() {
                           className="w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
-                      <button
+                      <ActionButton
                         onClick={handleCreateCheckinSession}
                         disabled={checkinSessionCreating || !selectedEventId || selectedEventChannelWritesLocked}
-                        className="inline-flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                        tone="blue"
+                        active
+                        className="w-full text-sm sm:w-auto"
                       >
                         {checkinSessionCreating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
                         Generate Check-in Link
-                      </button>
+                      </ActionButton>
 
                       {checkinSessionMessage && (
                         <p className={`text-xs ${checkinSessionMessage.toLowerCase().includes("failed") || checkinSessionMessage.toLowerCase().includes("required") ? "text-rose-600" : "text-emerald-600"}`}>
@@ -4179,13 +4458,14 @@ export default function App() {
                             <p className="text-xs break-all text-slate-700">{checkinSessionReveal.url}</p>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            <button
+                            <ActionButton
                               onClick={() => copyToClipboard(checkinSessionReveal.url)}
-                              className="inline-flex items-center gap-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 px-3 py-2 text-sm font-semibold transition-colors"
+                              tone="neutral"
+                              className="text-sm"
                             >
                               <Copy className="w-4 h-4" />
                               Copy Link
-                            </button>
+                            </ActionButton>
                           </div>
                         </div>
                       )}
@@ -4208,7 +4488,7 @@ export default function App() {
                           <div className="space-y-2">
                             {checkinSessions.map((session) => (
                               <div key={session.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                <div className="flex items-start justify-between gap-3">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                   <div className="min-w-0">
                                     <p className="text-sm font-semibold text-slate-900 truncate">{session.label}</p>
                                     <p className="text-[11px] text-slate-500">
@@ -4218,25 +4498,19 @@ export default function App() {
                                       Last used {session.last_used_at ? new Date(session.last_used_at).toLocaleString() : "never"}
                                     </p>
                                   </div>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                      session.revoked_at
-                                        ? "bg-slate-200 text-slate-600"
-                                        : session.is_active
-                                        ? "bg-emerald-100 text-emerald-700"
-                                        : "bg-amber-100 text-amber-700"
-                                    }`}>
+                                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                    <StatusBadge tone={getCheckinSessionTone(session)}>
                                       {session.revoked_at ? "revoked" : session.is_active ? "active" : "expired"}
-                                    </span>
+                                    </StatusBadge>
                                     {!session.revoked_at && (
-                                      <button
+                                      <ActionButton
                                         onClick={() => void handleRevokeCheckinSession(session.id)}
                                         disabled={checkinSessionRevokingId === session.id}
-                                        className="inline-flex items-center gap-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50"
+                                        tone="rose"
                                       >
                                         {checkinSessionRevokingId === session.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                                         Revoke
-                                      </button>
+                                      </ActionButton>
                                     )}
                                   </div>
                                 </div>
@@ -4260,7 +4534,7 @@ export default function App() {
               className="space-y-6"
             >
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center justify-between border-b border-slate-100 p-5 sm:p-6">
                   <div>
                     <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
                     <p className="text-sm text-slate-500">Inbound messages plus delivery traces from active channels.</p>
@@ -4269,7 +4543,45 @@ export default function App() {
                     <RefreshCw className="w-4 h-4 text-slate-400" />
                   </button>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="space-y-3 p-4 md:hidden">
+                  {messages.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+                      No messages received yet.
+                    </div>
+                  ) : (
+                    messages.map((msg) => {
+                      const lineTrace = parseLineTraceMessage(msg.text);
+                      return (
+                        <div key={msg.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs text-slate-500">{new Date(msg.timestamp).toLocaleString()}</p>
+                              <p className="mt-1 break-all font-mono text-xs text-blue-600">{msg.sender_id}</p>
+                            </div>
+                            <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
+                              {lineTrace ? "trace" : msg.type}
+                            </StatusBadge>
+                          </div>
+                          {lineTrace ? (
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge tone="emerald">line</StatusBadge>
+                                <StatusBadge tone="amber">delivery trace</StatusBadge>
+                                <span className="text-[11px] font-semibold text-slate-600">
+                                  {formatTraceStatusLabel(lineTrace.status)}
+                                </span>
+                              </div>
+                              <p className="text-sm break-words text-slate-700">{lineTrace.detail || "-"}</p>
+                            </div>
+                          ) : (
+                            <p className="text-sm break-words text-slate-700">{msg.text}</p>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="hidden overflow-x-auto md:block">
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                       <tr>
@@ -4301,12 +4613,8 @@ export default function App() {
                                 {lineTrace ? (
                                   <div className="space-y-1">
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-50 text-green-700 border border-green-100">
-                                        LINE
-                                      </span>
-                                      <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-100">
-                                        Delivery Trace
-                                      </span>
+                                      <StatusBadge tone="emerald">LINE</StatusBadge>
+                                      <StatusBadge tone="amber">Delivery Trace</StatusBadge>
                                       <span className="text-[11px] font-semibold text-slate-600">
                                         {formatTraceStatusLabel(lineTrace.status)}
                                       </span>
@@ -4320,15 +4628,9 @@ export default function App() {
                                 )}
                               </td>
                               <td className="px-6 py-4">
-                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-tighter ${
-                                  lineTrace
-                                    ? "bg-amber-100 text-amber-700"
-                                    : msg.type === "incoming"
-                                    ? "bg-emerald-100 text-emerald-700"
-                                    : "bg-blue-100 text-blue-700"
-                                }`}>
+                                <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
                                   {lineTrace ? "trace" : msg.type}
-                                </span>
+                                </StatusBadge>
                               </td>
                             </tr>
                           );
@@ -4351,8 +4653,8 @@ export default function App() {
             >
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 <div className="lg:col-span-2 space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <div className="flex items-center justify-between mb-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Bot className="w-5 h-5 text-blue-600" />
@@ -4360,14 +4662,16 @@ export default function App() {
                         </h3>
                         <p className="text-sm text-slate-500">Global prompt and model policy for the organization, with optional event-level override.</p>
                       </div>
-                      <button
+                      <ActionButton
                         onClick={() => void saveAiSettings()}
                         disabled={saving}
-                        className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+                        tone="blue"
+                        active
+                        className="w-full text-sm sm:w-auto"
                       >
                         {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                         Save AI Settings
-                      </button>
+                      </ActionButton>
                     </div>
                     <div className="space-y-5">
                       <div>
@@ -4378,9 +4682,7 @@ export default function App() {
                           className="w-full h-40 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
                           placeholder="Global operating rules for the bot across all events and channels."
                         />
-                        <p className="mt-2 text-xs text-slate-500">
-                          Use this for organization-wide tone, safety rules, escalation behavior, and response format. Event-specific content belongs in the <span className="font-semibold">Context</span> tab.
-                        </p>
+                        <p className="mt-2 text-xs text-slate-500">Global rules only. Event-specific content should stay in Context.</p>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -4430,9 +4732,7 @@ export default function App() {
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
                           placeholder="Leave blank to use the global default. Or set a specific event model ID."
                         />
-                        <p className="mt-2 text-xs text-slate-500">
-                          This override applies only to the currently selected event. Channel-specific overrides can be added later without changing this structure.
-                        </p>
+                        <p className="mt-2 text-xs text-slate-500">Only the selected event uses this override.</p>
                       </div>
 
                       {llmModelsError && (
@@ -4446,21 +4746,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6">
-                    <h3 className="text-blue-800 font-semibold mb-2 flex items-center gap-2">
-                      <Code className="w-5 h-5" />
-                      Config Split
-                    </h3>
-                    <div className="space-y-2 text-sm text-blue-700">
-                      <p><span className="font-semibold">Event tab</span>: event information, registration rules, lifecycle.</p>
-                      <p><span className="font-semibold">Context tab</span>: event-specific FAQ, source text, and attached event documents.</p>
-                      <p><span className="font-semibold">Setup tab</span>: system prompt, model policy, channels, team, webhook, and workspace administration.</p>
-                    </div>
-                  </div>
                 </div>
 
                 <div className="space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-5 sm:p-6">
                     <div>
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <Link2 className="w-5 h-5 text-blue-600" />
@@ -4476,37 +4765,25 @@ export default function App() {
                         </div>
                       ) : (
                         selectedEventChannels.map((channel) => (
-                          <div key={channel.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-2">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="flex items-center gap-2">
+                          <div key={channel.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
                                   <p className="text-sm font-semibold">{channel.display_name}</p>
-                                  <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-200 text-slate-700">
+                                  <StatusBadge tone="neutral">
                                     {channel.platform_label || channel.platform}
-                                  </span>
-                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                    channel.connection_status === "ready"
-                                      ? "bg-emerald-100 text-emerald-700"
-                                      : channel.connection_status === "partial"
-                                      ? "bg-amber-100 text-amber-700"
-                                      : "bg-rose-100 text-rose-700"
-                                  }`}>
+                                  </StatusBadge>
+                                  <StatusBadge tone={getConnectionStatusTone(channel.connection_status)}>
                                     {channel.connection_status || "incomplete"}
-                                  </span>
+                                  </StatusBadge>
                                 </div>
                                 <p className="text-xs font-mono text-slate-500">{channel.external_id}</p>
                                 {channel.platform_description && (
                                   <p className="mt-1 text-xs text-slate-500">{channel.platform_description}</p>
                                 )}
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                  channel.platform === "web_chat"
-                                    ? "bg-violet-100 text-violet-700"
-                                    : channel.has_access_token
-                                    ? "bg-blue-100 text-blue-700"
-                                    : "bg-amber-100 text-amber-700"
-                                }`}>
+                              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                                <StatusBadge tone={getTokenStatusTone(channel)}>
                                   {channel.platform === "web_chat"
                                     ? "no token needed"
                                     : channel.has_access_token
@@ -4514,12 +4791,10 @@ export default function App() {
                                     : channel.platform === "facebook"
                                     ? "env fallback"
                                     : "no token"}
-                                </span>
-                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                  channel.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
-                                }`}>
+                                </StatusBadge>
+                                <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
                                   {channel.is_active ? "active" : "inactive"}
-                                </span>
+                                </StatusBadge>
                               </div>
                             </div>
                             {channel.missing_requirements && channel.missing_requirements.length > 0 && (
@@ -4548,39 +4823,41 @@ export default function App() {
                                   <code>{buildWebChatEmbedSnippet(appUrl, channel.external_id)}</code>
                                 </pre>
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <button
+                                  <ActionButton
                                     onClick={() => copyToClipboard(buildWebChatEmbedSnippet(appUrl, channel.external_id))}
-                                    className="rounded-xl bg-violet-100 hover:bg-violet-200 text-violet-700 px-3 py-2 text-xs font-semibold"
+                                    tone="violet"
                                   >
                                     Copy Embed Snippet
-                                  </button>
-                                  <button
+                                  </ActionButton>
+                                  <ActionButton
                                     onClick={() => copyToClipboard(`${appUrl}/api/webchat/config/${encodeURIComponent(channel.external_id)}`)}
-                                    className="rounded-xl bg-white hover:bg-violet-100 text-violet-700 border border-violet-200 px-3 py-2 text-xs font-semibold"
+                                    tone="neutral"
                                   >
                                     Copy Config URL
-                                  </button>
+                                  </ActionButton>
                                 </div>
                               </div>
                             )}
                             <div className="flex flex-wrap items-center gap-2">
-                              <button
+                              <ActionButton
                                 onClick={() => loadChannelIntoForm(channel)}
-                                className="rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 px-3 py-2 text-xs font-semibold"
+                                tone="blue"
                               >
+                                <PencilLine className="h-3.5 w-3.5" />
                                 Edit Channel
-                              </button>
-                              <button
+                              </ActionButton>
+                              <ActionButton
                                 onClick={() => void handleToggleChannel(channel)}
                                 disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
-                                className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold disabled:opacity-50"
+                                tone={selectedEventChannelWritesLocked && !channel.is_active ? "neutral" : channel.is_active ? "amber" : "emerald"}
                               >
+                                <Power className="h-3.5 w-3.5" />
                                 {selectedEventChannelWritesLocked && !channel.is_active
                                   ? "Locked by Event Status"
                                   : channel.is_active
                                   ? "Disable Channel"
                                   : "Enable Channel"}
-                              </button>
+                              </ActionButton>
                             </div>
                           </div>
                         ))
@@ -4591,12 +4868,12 @@ export default function App() {
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-sm font-semibold">{editingChannelKey ? "Edit Channel" : "Link Channel to Selected Event"}</p>
                         {editingChannelKey && (
-                          <button
+                          <ActionButton
                             onClick={resetChannelForm}
-                            className="rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 text-xs font-semibold"
+                            tone="neutral"
                           >
                             Cancel Edit
-                          </button>
+                          </ActionButton>
                         )}
                       </div>
                       <select
@@ -4674,13 +4951,15 @@ export default function App() {
                           </p>
                         </div>
                       ))}
-                      <button
+                      <ActionButton
                         onClick={() => void handleSaveChannel()}
                         disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEventChannelWritesLocked || channelFormMissingRequirements.length > 0}
-                        className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                        tone="blue"
+                        active
+                        className="w-full text-sm"
                       >
                         {editingChannelKey ? "Update Channel" : "Link Channel to Event"}
-                      </button>
+                      </ActionButton>
                       {channelFormMissingRequirements.length > 0 && (
                         <p className="text-xs text-amber-700">
                           Missing before save: {channelFormMissingRequirements.join(", ")}
@@ -4917,20 +5196,18 @@ export default function App() {
                         ) : (
                           teamUsers.map((user) => (
                             <div key={user.id} className="rounded-2xl border border-slate-200 p-3 bg-slate-50 space-y-2">
-                              <div className="flex items-center justify-between gap-3">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 <div>
                                   <p className="text-sm font-semibold">{user.display_name}</p>
                                   <p className="text-xs text-slate-500">{user.username}</p>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                    user.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
-                                  }`}>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <StatusBadge tone={getUserAccessTone(user.is_active)}>
                                     {user.is_active ? "active" : "disabled"}
-                                  </span>
-                                  <span className="px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700">
+                                  </StatusBadge>
+                                  <StatusBadge tone="blue">
                                     {user.role}
-                                  </span>
+                                  </StatusBadge>
                                 </div>
                               </div>
 
@@ -4953,17 +5230,13 @@ export default function App() {
 
                               {canManageTargetAccess(user) && (
                                 <div className="flex justify-end">
-                                  <button
+                                  <ActionButton
                                     onClick={() => handleUserAccessToggle(user.id, !user.is_active)}
                                     disabled={teamLoading}
-                                    className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
-                                      user.is_active
-                                        ? "bg-rose-50 text-rose-700 hover:bg-rose-100"
-                                        : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                    } disabled:opacity-50`}
+                                    tone={user.is_active ? "rose" : "emerald"}
                                   >
                                     {user.is_active ? "Remove Access" : "Restore Access"}
-                                  </button>
+                                  </ActionButton>
                                 </div>
                               )}
                             </div>
@@ -5007,14 +5280,16 @@ export default function App() {
                               </option>
                             ))}
                           </select>
-                          <button
+                          <ActionButton
                             onClick={handleCreateUser}
                             disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8}
-                            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                            tone="blue"
+                            active
+                            className="w-full text-sm"
                           >
                             <UserPlus className="w-4 h-4" />
                             Create User
-                          </button>
+                          </ActionButton>
                         </div>
                       )}
 
@@ -5032,6 +5307,73 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      {helpContent && (
+        <>
+          <AnimatePresence>
+            {helpOpen && (
+              <motion.div
+                className="fixed inset-0 z-30 bg-slate-950/20 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setHelpOpen(false)}
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {helpOpen && (
+              <motion.aside
+                className="fixed inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 max-h-[min(70dvh,34rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(30rem,calc(100vw-3rem))]"
+                initial={{ opacity: 0, y: 20, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 16, scale: 0.98 }}
+                transition={{ duration: 0.18 }}
+              >
+                <div className="border-b border-slate-100 px-5 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Help Overlay</p>
+                      <h2 className="mt-1 text-lg font-semibold text-slate-900">{helpContent.title}</h2>
+                      <p className="mt-2 text-sm leading-relaxed text-slate-600">{helpContent.summary}</p>
+                    </div>
+                    <button
+                      onClick={() => setHelpOpen(false)}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
+                      aria-label="Close help"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-[calc(min(70dvh,34rem)-9rem)] space-y-3 overflow-y-auto px-5 py-4">
+                  {helpContent.points.map((point) => (
+                    <div key={point.label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <p className="text-sm font-semibold text-slate-900">{point.label}</p>
+                      <p className="mt-1 text-sm leading-relaxed text-slate-600">{point.body}</p>
+                    </div>
+                  ))}
+                </div>
+              </motion.aside>
+            )}
+          </AnimatePresence>
+
+          <button
+            onClick={() => setHelpOpen((open) => !open)}
+            className={`fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-40 inline-flex h-14 items-center gap-2 rounded-full border px-4 text-sm font-semibold shadow-lg transition-all sm:right-6 ${
+              helpOpen
+                ? "border-slate-900 bg-slate-900 text-white"
+                : "border-blue-200 bg-white text-blue-700 hover:border-blue-300 hover:bg-blue-50"
+            }`}
+            aria-expanded={helpOpen}
+            aria-label={helpOpen ? "Close help overlay" : "Open contextual help"}
+          >
+            {helpOpen ? <X className="h-4 w-4" /> : <CircleHelp className="h-4 w-4" />}
+            <span className="hidden sm:inline">{helpOpen ? "Close Help" : "Help"}</span>
+          </button>
+        </>
+      )}
     </div>
   );
 }
