@@ -482,6 +482,21 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows;
   }
 
+  async getConversationRowsForSender(senderId: string, limit: number, eventId?: string) {
+    if (eventId) {
+      const result = await this.pool.query<MessageRow>(
+        "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE sender_id = $1 AND event_id = $2 ORDER BY timestamp DESC, id DESC LIMIT $3",
+        [senderId, eventId, limit],
+      );
+      return result.rows;
+    }
+    const result = await this.pool.query<MessageRow>(
+      "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE sender_id = $1 ORDER BY timestamp DESC, id DESC LIMIT $2",
+      [senderId, limit],
+    );
+    return result.rows;
+  }
+
   async listEvents() {
     const result = await this.pool.query<Record<string, unknown>>(
       "SELECT id, name, slug, status, is_default, created_at::text AS created_at, updated_at::text AS updated_at FROM events ORDER BY is_default DESC, created_at ASC",

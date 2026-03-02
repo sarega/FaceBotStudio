@@ -272,6 +272,7 @@ export interface AppDatabase {
   saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string): Promise<void>;
   listMessages(limit: number, eventId?: string): Promise<MessageRow[]>;
   getMessageHistoryRows(senderId: string, limit: number, eventId?: string): Promise<Array<{ text: string; type: MessageType }>>;
+  getConversationRowsForSender(senderId: string, limit: number, eventId?: string): Promise<MessageRow[]>;
   listEvents(): Promise<EventRow[]>;
   getEventById(eventId: string): Promise<EventRow | undefined>;
   createEvent(input: CreateEventInput): Promise<EventRow>;

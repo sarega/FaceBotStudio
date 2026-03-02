@@ -28,6 +28,7 @@ import {
   CalendarRange,
   Link2,
   MonitorCog,
+  Plus,
   Trash2,
   ChevronDown,
   CircleHelp,
@@ -63,6 +64,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "design" | "test" | "logs" | "settings" | "registrations" | "checkin";
+type EventWorkspaceFilter = "all" | EventStatus;
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
 
@@ -401,6 +403,19 @@ function getEventStatusLabel(status: EventStatus) {
   }
 }
 
+function getEventStatusTone(status: EventStatus): BadgeTone {
+  switch (status) {
+    case "active":
+      return "emerald";
+    case "pending":
+      return "amber";
+    case "cancelled":
+      return "rose";
+    default:
+      return "neutral";
+  }
+}
+
 function getEventStatusBadgeClass(status: EventStatus) {
   switch (status) {
     case "active":
@@ -414,6 +429,38 @@ function getEventStatusBadgeClass(status: EventStatus) {
     default:
       return "bg-slate-200 text-slate-600";
   }
+}
+
+function getEventWorkspaceTimestamp(event: EventRecord) {
+  const updatedAt = Date.parse(String(event.updated_at || ""));
+  if (!Number.isNaN(updatedAt)) return updatedAt;
+  const createdAt = Date.parse(String(event.created_at || ""));
+  return Number.isNaN(createdAt) ? 0 : createdAt;
+}
+
+function formatEventWorkspaceDateLabel(value: string | null | undefined) {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function getEventHistoryGroupKey(value: string | null | undefined) {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatEventHistoryGroupLabel(value: string | null | undefined) {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) return "Older";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+  }).format(date);
 }
 
 function getRegistrationWindowTone(status: RegistrationWindowUiState): BadgeTone {
@@ -782,6 +829,49 @@ function CopyField({
   );
 }
 
+function EventWorkspaceRow({
+  event,
+  selected,
+  searchFocused,
+  onSelect,
+}: {
+  event: EventRecord;
+  selected: boolean;
+  searchFocused: boolean;
+  onSelect: () => void;
+}) {
+  const lastUpdatedLabel = formatEventWorkspaceDateLabel(event.updated_at || event.created_at);
+
+  return (
+    <button
+      id={getSearchTargetDomId("event", event.id)}
+      onClick={onSelect}
+      className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+        selected
+          ? "border-blue-200 bg-blue-50 shadow-sm"
+          : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+      } ${searchFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-slate-900">{event.name}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+            <span className="font-mono">{event.slug}</span>
+            <span className="text-slate-300">•</span>
+            <span>Updated {lastUpdatedLabel}</span>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {event.is_default && <StatusBadge tone="neutral">default</StatusBadge>}
+          <StatusBadge tone={getEventStatusTone(event.effective_status)}>
+            {getEventStatusLabel(event.effective_status)}
+          </StatusBadge>
+        </div>
+      </div>
+    </button>
+  );
+}
+
 const INITIAL_SETTINGS: Settings = {
   context: "",
   llm_model: "",
@@ -906,7 +996,7 @@ export default function App() {
   const [eventLoading, setEventLoading] = useState(false);
   const [eventMessage, setEventMessage] = useState("");
   const [newEventName, setNewEventName] = useState("");
-  const [editingEventName, setEditingEventName] = useState("");
+  const [eventCreateOpen, setEventCreateOpen] = useState(false);
   const [newPageId, setNewPageId] = useState("");
   const [newPageName, setNewPageName] = useState("");
   const [newPageAccessToken, setNewPageAccessToken] = useState("");
@@ -970,10 +1060,12 @@ export default function App() {
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [eventListQuery, setEventListQuery] = useState("");
+  const [eventWorkspaceFilter, setEventWorkspaceFilter] = useState<EventWorkspaceFilter>("all");
   const [channelListQuery, setChannelListQuery] = useState("");
   const [registrationListQuery, setRegistrationListQuery] = useState("");
   const [documentListQuery, setDocumentListQuery] = useState("");
   const [logListQuery, setLogListQuery] = useState("");
+  const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
@@ -1097,17 +1189,67 @@ export default function App() {
   const selectedEventChannelWritesLocked =
     selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled";
   const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
-  const closedEvents = events.filter((event) => event.effective_status === "closed");
-  const cancelledEvents = events.filter((event) => event.effective_status === "cancelled");
-  const filteredWorkingEvents = workingEvents.filter((event) =>
-    matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+  const queryMatchedEvents = [...events]
+    .sort((left, right) => {
+      const byRecency = getEventWorkspaceTimestamp(right) - getEventWorkspaceTimestamp(left);
+      if (byRecency !== 0) return byRecency;
+      return left.name.localeCompare(right.name);
+    })
+    .filter((event) =>
+      matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+    );
+  const eventWorkspaceCounts = {
+    all: queryMatchedEvents.length,
+    active: queryMatchedEvents.filter((event) => event.effective_status === "active").length,
+    pending: queryMatchedEvents.filter((event) => event.effective_status === "pending").length,
+    closed: queryMatchedEvents.filter((event) => event.effective_status === "closed").length,
+    cancelled: queryMatchedEvents.filter((event) => event.effective_status === "cancelled").length,
+  };
+  const filteredEventWorkspaceEvents = queryMatchedEvents.filter((event) =>
+    eventWorkspaceFilter === "all" ? true : event.effective_status === eventWorkspaceFilter,
   );
-  const filteredClosedEvents = closedEvents.filter((event) =>
-    matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+  const filteredWorkingEvents = filteredEventWorkspaceEvents.filter(
+    (event) => event.effective_status === "active" || event.effective_status === "pending",
   );
-  const filteredCancelledEvents = cancelledEvents.filter((event) =>
-    matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+  const filteredHistoricalEvents = filteredEventWorkspaceEvents.filter(
+    (event) => event.effective_status === "closed" || event.effective_status === "cancelled",
   );
+  const recentHistoricalEvents = filteredHistoricalEvents.slice(0, 6);
+  const historyEventGroups = filteredHistoricalEvents.slice(6).reduce<
+    Array<{ key: string; label: string; events: EventRecord[] }>
+  >((groups, event) => {
+    const key = getEventHistoryGroupKey(event.updated_at || event.created_at);
+    const existing = groups.find((group) => group.key === key);
+    if (existing) {
+      existing.events.push(event);
+      return groups;
+    }
+    groups.push({
+      key,
+      label: formatEventHistoryGroupLabel(event.updated_at || event.created_at),
+      events: [event],
+    });
+    return groups;
+  }, []);
+  const eventWorkspaceFilterOptions: Array<{ id: EventWorkspaceFilter; label: string; count: number }> = [
+    { id: "all", label: "All", count: eventWorkspaceCounts.all },
+    { id: "active", label: "Live", count: eventWorkspaceCounts.active },
+    { id: "pending", label: "Pending", count: eventWorkspaceCounts.pending },
+    { id: "closed", label: "Closed", count: eventWorkspaceCounts.closed },
+    { id: "cancelled", label: "Cancelled", count: eventWorkspaceCounts.cancelled },
+  ];
+  const liveWorkspaceHeading =
+    eventWorkspaceFilter === "active"
+      ? "Live Workspaces"
+      : eventWorkspaceFilter === "pending"
+      ? "Pending Workspaces"
+      : "Live & Pending";
+  const historyWorkspaceHeading =
+    eventWorkspaceFilter === "closed"
+      ? "Recently Closed"
+      : eventWorkspaceFilter === "cancelled"
+      ? "Recently Cancelled"
+      : "Recent History";
   const selectorEvents = (() => {
     const base = workingEvents.length > 0 ? [...workingEvents] : [...events];
     if (selectedEvent && !base.some((event) => event.id === selectedEvent.id)) {
@@ -1332,7 +1474,6 @@ export default function App() {
       setEvents(rows);
       const firstWorking = rows.find((event) => event.effective_status === "active") || rows.find((event) => event.effective_status === "pending");
       setSelectedEventId((prev) => prev && rows.some((event) => event.id === prev) ? prev : firstWorking?.id || rows[0]?.id || "");
-      setEditingEventName((prev) => prev || firstWorking?.name || rows[0]?.name || "");
       return rows;
     } catch (err) {
       console.error("Failed to fetch events", err);
@@ -1506,10 +1647,6 @@ export default function App() {
 
     return () => clearInterval(interval);
   }, [authStatus, selectedEventId, canRunTest, canViewLogs, canManageCheckinAccess, canEditSettings]);
-
-  useEffect(() => {
-    setEditingEventName(selectedEvent?.name || "");
-  }, [selectedEvent?.id, selectedEvent?.name]);
 
   useEffect(() => {
     setRegistrationVisibleCount(120);
@@ -2018,7 +2155,16 @@ export default function App() {
     ], "Event setup saved");
 
     if (saved) {
-      await fetchEvents();
+      const nextEventName = settings.event_name.trim();
+      if (selectedEvent && nextEventName && nextEventName !== selectedEvent.name) {
+        const synced = await handleUpdateEvent({
+          name: nextEventName,
+          silent: true,
+        });
+        if (!synced) return;
+      } else {
+        await fetchEvents();
+      }
     }
   };
 
@@ -2679,6 +2825,7 @@ export default function App() {
         throw new Error(data?.error || "Failed to create event");
       }
       setNewEventName("");
+      setEventCreateOpen(false);
       await fetchEvents();
       await fetchChannels();
       if (data?.id) {
@@ -2693,11 +2840,22 @@ export default function App() {
     }
   };
 
-  const handleUpdateEvent = async (status?: "pending" | "active" | "cancelled") => {
+  const handleUpdateEvent = async ({
+    status,
+    name,
+    successMessage = "Event updated",
+    silent = false,
+  }: {
+    status?: "pending" | "active" | "cancelled";
+    name?: string;
+    successMessage?: string;
+    silent?: boolean;
+  } = {}) => {
     if (!selectedEventId || !selectedEvent) return;
     const payload: Record<string, unknown> = {};
-    if (editingEventName.trim() && editingEventName.trim() !== selectedEvent.name) {
-      payload.name = editingEventName.trim();
+    const trimmedName = String(name || "").trim();
+    if (trimmedName && trimmedName !== selectedEvent.name) {
+      payload.name = trimmedName;
     }
     if (status && status !== selectedEvent.status) {
       payload.status = status;
@@ -2717,10 +2875,19 @@ export default function App() {
         throw new Error(data?.error || "Failed to update event");
       }
       await fetchEvents();
-      setEventMessage("Event updated");
-      window.setTimeout(() => setEventMessage(""), 2500);
+      if (!silent && successMessage) {
+        setEventMessage(successMessage);
+        window.setTimeout(() => setEventMessage(""), 2500);
+      }
+      return true;
     } catch (err) {
-      setEventMessage(err instanceof Error ? err.message : "Failed to update event");
+      const message = err instanceof Error ? err.message : "Failed to update event";
+      if (silent) {
+        setSettingsMessage(message);
+      } else {
+        setEventMessage(message);
+      }
+      return false;
     } finally {
       setEventLoading(false);
     }
@@ -3579,6 +3746,14 @@ export default function App() {
                           Event Information
                         </h3>
                         <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
+                        {selectedEvent && (
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.status)}>manual {selectedEvent.status}</StatusBadge>
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                              effective {selectedEvent.effective_status}
+                            </StatusBadge>
+                          </div>
+                        )}
                       </div>
                       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
                         <ActionButton
@@ -3592,7 +3767,7 @@ export default function App() {
                           Save Event Setup
                         </ActionButton>
                         <ActionButton
-                          onClick={() => void handleUpdateEvent(eventStatusToggle.nextStatus)}
+                          onClick={() => void handleUpdateEvent({ status: eventStatusToggle.nextStatus })}
                           disabled={eventStatusToggle.disabled}
                           tone={eventStatusToggle.tone}
                           active={eventStatusToggle.nextStatus === "active"}
@@ -3601,8 +3776,32 @@ export default function App() {
                           {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : eventStatusToggle.nextStatus === "active" ? <Power className="w-4 h-4" /> : <Activity className="w-4 h-4" />}
                           {eventStatusToggle.label}
                         </ActionButton>
+                        {!selectedEvent?.is_default && selectedEvent?.status !== "cancelled" && (
+                          <InlineActionsMenu label="Event Actions" tone="neutral">
+                            <MenuActionItem
+                              onClick={() => void handleUpdateEvent({ status: "cancelled" })}
+                              disabled={!selectedEvent || eventLoading}
+                              tone="rose"
+                            >
+                              <AlertCircle className="h-3.5 w-3.5" />
+                              <span className="font-medium">Cancel Event</span>
+                            </MenuActionItem>
+                          </InlineActionsMenu>
+                        )}
                       </div>
                     </div>
+
+                    {selectedEvent?.effective_status === "closed" && (
+                      <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                        This event is closed automatically because its event date ({timingInfo.eventDateLabel}) is already in the past compared with current system time ({timingInfo.nowLabel}).
+                      </div>
+                    )}
+
+                    {eventMessage && (
+                      <p className={`mb-4 text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {eventMessage}
+                      </p>
+                    )}
 
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <div className="md:col-span-2">
@@ -3779,205 +3978,207 @@ export default function App() {
                         </h3>
                         <p className="text-sm text-slate-500">Create, switch, and manage the lifecycle of event workspaces.</p>
                       </div>
-                      <button
-                        onClick={() => void Promise.all([fetchEvents(), fetchChannels()])}
-                        disabled={eventLoading}
-                        className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
-                        title="Refresh events"
-                      >
-                        <RefreshCw className={`w-4 h-4 text-slate-500 ${eventLoading ? "animate-spin" : ""}`} />
-                      </button>
-                    </div>
-
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={eventListQuery}
-                        onChange={(e) => setEventListQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Search events by name, slug, or status"
-                      />
-                      {eventListQuery && (
-                        <button
-                          onClick={() => setEventListQuery("")}
-                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                          aria-label="Clear event search"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="space-y-2">
-                      {filteredWorkingEvents.map((event) => (
-                        <button
-                          key={event.id}
-                          id={getSearchTargetDomId("event", event.id)}
-                          onClick={() => setSelectedEventId(event.id)}
-                          className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
-                            selectedEventId === event.id
-                              ? "border-blue-200 bg-blue-50"
-                              : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                          } ${isSearchFocused("event", event.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold">{event.name}</p>
-                              <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
-                            </div>
-                            <div className="flex flex-wrap items-center justify-end gap-2">
-                              {event.is_default && (
-                                <StatusBadge tone="neutral">
-                                  default
-                                </StatusBadge>
-                              )}
-                              <StatusBadge tone={event.effective_status === "active" ? "emerald" : event.effective_status === "pending" ? "amber" : event.effective_status === "cancelled" ? "rose" : "neutral"}>
-                                {getEventStatusLabel(event.effective_status)}
-                              </StatusBadge>
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                      {filteredWorkingEvents.length === 0 && (
-                        <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                          {deferredEventListQuery ? "No active or pending events match this search." : "No active or pending events yet."}
-                        </div>
-                      )}
-                    </div>
-
-                    {filteredClosedEvents.length > 0 && (
-                      <div className="border-t border-slate-100 pt-5 space-y-2">
-                        <p className="text-sm font-semibold text-slate-700">Closed Events</p>
-                        {filteredClosedEvents.map((event) => (
-                          <button
-                            key={event.id}
-                            id={getSearchTargetDomId("event", event.id)}
-                            onClick={() => setSelectedEventId(event.id)}
-                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
-                              selectedEventId === event.id
-                                ? "border-slate-300 bg-slate-100"
-                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                            } ${isSearchFocused("event", event.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
-                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
-                              </div>
-                              <StatusBadge tone="neutral">
-                                {getEventStatusLabel(event.effective_status)}
-                              </StatusBadge>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {filteredCancelledEvents.length > 0 && (
-                      <div className="border-t border-slate-100 pt-5 space-y-2">
-                        <p className="text-sm font-semibold text-slate-700">Cancelled Events</p>
-                        {filteredCancelledEvents.map((event) => (
-                          <button
-                            key={event.id}
-                            id={getSearchTargetDomId("event", event.id)}
-                            onClick={() => setSelectedEventId(event.id)}
-                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
-                              selectedEventId === event.id
-                                ? "border-rose-200 bg-rose-50"
-                                : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                            } ${isSearchFocused("event", event.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-slate-700">{event.name}</p>
-                                <p className="text-[10px] text-slate-500 font-mono">{event.slug}</p>
-                              </div>
-                              <StatusBadge tone="rose">
-                                {getEventStatusLabel(event.effective_status)}
-                              </StatusBadge>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="border-t border-slate-100 pt-5 space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold">Selected Event Details</p>
-                        {selectedEvent && (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <StatusBadge tone={selectedEvent.status === "active" ? "emerald" : selectedEvent.status === "pending" ? "amber" : selectedEvent.status === "cancelled" ? "rose" : "neutral"}>
-                              manual {selectedEvent.status}
-                            </StatusBadge>
-                            <StatusBadge tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}>
-                              effective {selectedEvent.effective_status}
-                            </StatusBadge>
-                          </div>
-                        )}
-                      </div>
-                      <input
-                        value={editingEventName}
-                        onChange={(e) => setEditingEventName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Event name"
-                        disabled={!selectedEvent}
-                      />
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex shrink-0 items-center gap-2">
                         <ActionButton
-                          onClick={() => void handleUpdateEvent()}
-                          disabled={!selectedEvent || !editingEventName.trim() || editingEventName.trim() === selectedEvent?.name || eventLoading}
-                          tone="blue"
-                          active
-                          className="min-w-0 flex-1 text-sm sm:flex-none"
-                        >
-                          Save Event Name
-                        </ActionButton>
-                        {!selectedEvent?.is_default && selectedEvent?.status !== "cancelled" && (
-                          <InlineActionsMenu label="Actions" tone="neutral">
-                            <MenuActionItem
-                              onClick={() => void handleUpdateEvent("cancelled")}
-                              disabled={!selectedEvent || eventLoading}
-                              tone="rose"
-                            >
-                              <AlertCircle className="h-3.5 w-3.5" />
-                              <span className="font-medium">Cancel Event</span>
-                            </MenuActionItem>
-                          </InlineActionsMenu>
-                        )}
-                      </div>
-                      {selectedEvent?.effective_status === "closed" && (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-                          This event is closed automatically because its event date ({timingInfo.eventDateLabel}) is already in the past compared with current system time ({timingInfo.nowLabel}).
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="border-t border-slate-100 pt-5 space-y-3">
-                      <p className="text-sm font-semibold">Create New Event</p>
-                      <div className="flex flex-col gap-2 sm:flex-row">
-                        <input
-                          value={newEventName}
-                          onChange={(e) => setNewEventName(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="New event name"
-                        />
-                        <ActionButton
-                          onClick={() => void handleCreateEvent()}
-                          disabled={!newEventName.trim() || eventLoading}
+                          onClick={() => setEventCreateOpen((current) => !current)}
                           tone="neutral"
-                          active
-                          className="w-full text-sm sm:w-auto"
+                          active={eventCreateOpen}
+                          className="text-sm"
                         >
-                          Create Event
+                          <Plus className="h-4 w-4" />
+                          {eventCreateOpen ? "Close" : "New Event"}
                         </ActionButton>
+                        <button
+                          onClick={() => void Promise.all([fetchEvents(), fetchChannels()])}
+                          disabled={eventLoading}
+                          className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
+                          title="Refresh events"
+                        >
+                          <RefreshCw className={`w-4 h-4 text-slate-500 ${eventLoading ? "animate-spin" : ""}`} />
+                        </button>
                       </div>
                     </div>
 
-                    {eventMessage && (
-                      <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {eventMessage}
-                      </p>
+                    {eventCreateOpen && (
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <input
+                            value={newEventName}
+                            onChange={(e) => setNewEventName(e.target.value)}
+                            className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="New event name"
+                          />
+                          <ActionButton
+                            onClick={() => void handleCreateEvent()}
+                            disabled={!newEventName.trim() || eventLoading}
+                            tone="blue"
+                            active
+                            className="w-full text-sm sm:w-auto"
+                          >
+                            Create Event
+                          </ActionButton>
+                        </div>
+                      </div>
                     )}
+
+                    <div className="space-y-3">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <input
+                          value={eventListQuery}
+                          onChange={(e) => setEventListQuery(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Search events by name, slug, or status"
+                        />
+                        {eventListQuery && (
+                          <button
+                            onClick={() => setEventListQuery("")}
+                            className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                            aria-label="Clear event search"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                        {eventWorkspaceFilterOptions.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => setEventWorkspaceFilter(option.id)}
+                            className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                              eventWorkspaceFilter === option.id
+                                ? "border-slate-900 bg-slate-900 text-white"
+                                : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                            }`}
+                          >
+                            <span>{option.label}</span>
+                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                              eventWorkspaceFilter === option.id ? "bg-white/15 text-white" : "bg-white text-slate-500"
+                            }`}>
+                              {option.count}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                        <span>{filteredEventWorkspaceEvents.length} matching events</span>
+                        <span className="text-slate-300">•</span>
+                        <span>{eventWorkspaceCounts.active + eventWorkspaceCounts.pending} active queue</span>
+                        <span className="text-slate-300">•</span>
+                        <span>{eventWorkspaceCounts.closed + eventWorkspaceCounts.cancelled} in history</span>
+                      </div>
+                    </div>
+
+                    <div className="max-h-[30rem] space-y-5 overflow-y-auto pr-1">
+                      {filteredEventWorkspaceEvents.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                          {deferredEventListQuery
+                            ? "No events match this search."
+                            : eventWorkspaceFilter === "all"
+                            ? "No event workspaces yet."
+                            : "No events for this lifecycle yet."}
+                        </div>
+                      ) : (
+                        <>
+                          {filteredWorkingEvents.length > 0 && (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-slate-700">{liveWorkspaceHeading}</p>
+                                <StatusBadge tone="blue">{filteredWorkingEvents.length}</StatusBadge>
+                              </div>
+                              <div className="space-y-2">
+                                {filteredWorkingEvents.map((event) => (
+                                  <EventWorkspaceRow
+                                    key={event.id}
+                                    event={event}
+                                    selected={selectedEventId === event.id}
+                                    searchFocused={isSearchFocused("event", event.id)}
+                                    onSelect={() => setSelectedEventId(event.id)}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {recentHistoricalEvents.length > 0 && (
+                            <div className="space-y-2 border-t border-slate-100 pt-5">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-slate-700">{historyWorkspaceHeading}</p>
+                                <StatusBadge tone="neutral">{recentHistoricalEvents.length}</StatusBadge>
+                              </div>
+                              <div className="space-y-2">
+                                {recentHistoricalEvents.map((event) => (
+                                  <EventWorkspaceRow
+                                    key={event.id}
+                                    event={event}
+                                    selected={selectedEventId === event.id}
+                                    searchFocused={isSearchFocused("event", event.id)}
+                                    onSelect={() => setSelectedEventId(event.id)}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {historyEventGroups.length > 0 && (
+                            <div className="space-y-2 border-t border-slate-100 pt-5">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-slate-700">History by Month</p>
+                                <StatusBadge tone="neutral">{historyEventGroups.length}</StatusBadge>
+                              </div>
+                              <div className="space-y-2">
+                                {historyEventGroups.map((group) => {
+                                  const open = Boolean(deferredEventListQuery) || eventHistoryOpenKeys.includes(group.key);
+                                  return (
+                                    <div key={group.key} className="rounded-2xl border border-slate-200 bg-slate-50/70">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setEventHistoryOpenKeys((current) =>
+                                            current.includes(group.key)
+                                              ? current.filter((item) => item !== group.key)
+                                              : [...current, group.key],
+                                          )
+                                        }
+                                        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                                      >
+                                        <div>
+                                          <p className="text-sm font-semibold text-slate-700">{group.label}</p>
+                                          <p className="text-xs text-slate-500">{group.events.length} events</p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <StatusBadge tone="neutral">{group.events.length}</StatusBadge>
+                                          {!deferredEventListQuery && (
+                                            <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} />
+                                          )}
+                                        </div>
+                                      </button>
+                                      {open && (
+                                        <div className="space-y-2 border-t border-slate-200 p-2">
+                                          {group.events.map((event) => (
+                                            <EventWorkspaceRow
+                                              key={event.id}
+                                              event={event}
+                                              selected={selectedEventId === event.id}
+                                              searchFocused={isSearchFocused("event", event.id)}
+                                              onSelect={() => setSelectedEventId(event.id)}
+                                            />
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+
                   </div>
 
                 </div>

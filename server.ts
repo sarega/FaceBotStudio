@@ -48,6 +48,7 @@ import {
   createAppDatabase,
   type AuthUserRow,
   type ChannelPlatform,
+  type MessageRow,
   type RegistrationInput,
   type RegistrationRow,
   type RegistrationStatus,
@@ -64,6 +65,9 @@ const appDb = createAppDatabase();
 const APP_RUNTIME = String(process.env.APP_RUNTIME || "all").trim().toLowerCase();
 const RUN_WEB_SERVER = APP_RUNTIME !== "worker";
 const RUN_EMBEDDED_WORKER = APP_RUNTIME === "all";
+const INBOUND_BURST_WINDOW_MS = Math.max(250, Number.parseInt(process.env.INBOUND_BURST_WINDOW_MS || "1400", 10) || 1400);
+const WEBCHAT_BURST_WINDOW_MS = Math.max(0, Number.parseInt(process.env.WEBCHAT_BURST_WINDOW_MS || "350", 10) || 350);
+const CONVERSATION_ROW_LIMIT = Math.max(12, Number.parseInt(process.env.CONVERSATION_ROW_LIMIT || "24", 10) || 24);
 
 type ChatPart = {
   text?: string;
@@ -113,6 +117,18 @@ type ToolExecutionBundle = {
   ticketRegistrationIds: string[];
 };
 
+type PendingConversationTurn = {
+  inputText: string;
+  history: ChatHistoryMessage[];
+  highestPendingMessageId: number;
+  pendingMessageCount: number;
+  latestVisibleOutgoingText: string;
+};
+
+type PreparedConversationTurn = PendingConversationTurn & {
+  conversationKey: string;
+};
+
 type BotReplyResult = {
   text: string;
   ticketRegistrationIds: string[];
@@ -131,6 +147,9 @@ type AuthenticatedRequest = Request & {
 type RawBodyRequest = Request & {
   rawBody?: Buffer;
 };
+
+const inboundConversationTails = new Map<string, Promise<void>>();
+const inboundHandledMessageIds = new Map<string, number>();
 
 function buildEventInfo(settings: Record<string, any>, eventStatus = "active") {
   const eventState = getEventState(settings);
@@ -167,11 +186,204 @@ function getSystemInstruction(settings: Record<string, any>, eventStatus = "acti
     "If event status is closed, clearly explain that the event has already ended.",
     "Respect the Registration Status Right Now field. If it is invalid, explain that the registration schedule is misconfigured. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
     "If the event lifecycle is past, explain that the event date has already passed.",
+    "Treat multiple user messages sent close together as one bundled request. Reply once and merge overlapping questions into one concise answer.",
+    "If recent history already has an assistant reply, do not greet again and do not restart the conversation from zero.",
+    "Do not repeat the same event benefits, registration call-to-action, or required registration fields if they were already stated in recent history.",
+    "If the latest user turn overlaps with a previous answer, reply only with the missing delta.",
+    "When answering multiple FAQ items in one turn, prefer short bullets or numbers instead of repeating long paragraphs.",
+    "Ask for registration details only after the user clearly wants to register or explicitly confirms they want to continue.",
+    "Summarize registration details exactly once, immediately before calling the registerUser tool.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
     "Politely ask for any missing information one by one.",
     "If registration fails (e.g. limit reached or period closed), explain why to the user.",
     "If a user wants to cancel, use the cancelRegistration tool with their ID.",
   ].join("\n\n");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildInboundConversationKey(channel: string, senderId: string, eventId: string) {
+  return `${channel}:${eventId}:${senderId}`;
+}
+
+function normalizeReplyComparisonText(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\[[^\]]+\]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isSyntheticOutgoingMessage(text: string) {
+  return /^\[[a-z0-9-]+\]/i.test(String(text || "").trim());
+}
+
+function isNearDuplicateReply(candidate: string, previous: string) {
+  const left = normalizeReplyComparisonText(candidate);
+  const right = normalizeReplyComparisonText(previous);
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  if (shorter.length >= 48 && longer.includes(shorter) && shorter.length / longer.length >= 0.82) {
+    return true;
+  }
+
+  const leftTokens = new Set(left.split(" ").filter((token) => token.length > 1));
+  const rightTokens = new Set(right.split(" ").filter((token) => token.length > 1));
+  if (!leftTokens.size || !rightTokens.size) return false;
+
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  return overlap / Math.min(leftTokens.size, rightTokens.size) >= 0.88;
+}
+
+function buildBundledIncomingPrompt(messages: string[]) {
+  const cleaned = messages.map((message) => String(message || "").trim()).filter(Boolean);
+  if (cleaned.length <= 1) return cleaned[0] || "";
+
+  return [
+    `The user sent ${cleaned.length} quick messages before the assistant replied. Treat them as one bundled request and answer once.`,
+    "User messages:",
+    ...cleaned.map((message, index) => `${index + 1}. ${message}`),
+    "Respond once, merge overlaps, and avoid repeating greetings or registration prompts that were already covered.",
+  ].join("\n");
+}
+
+function buildChatHistoryFromRows(rows: MessageRow[]) {
+  return [...rows]
+    .filter((row) => row.type === "incoming" || !isSyntheticOutgoingMessage(row.text || ""))
+    .sort((left, right) => left.id - right.id)
+    .map((row) => ({
+      role: row.type === "incoming" ? "user" : "model",
+      parts: [{ text: row.text || "" }],
+    }) satisfies ChatHistoryMessage);
+}
+
+function getPendingBoundaryMessageId(conversationKey: string, rows: MessageRow[]) {
+  const handledMessageId = inboundHandledMessageIds.get(conversationKey);
+  if (typeof handledMessageId === "number") {
+    return handledMessageId;
+  }
+
+  return rows.find((row) => row.type === "outgoing")?.id || 0;
+}
+
+async function buildPendingConversationTurn(
+  conversationKey: string,
+  senderId: string,
+  eventId: string,
+): Promise<PendingConversationTurn | null> {
+  const rows = await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId);
+  if (!rows.length) return null;
+
+  const boundaryMessageId = getPendingBoundaryMessageId(conversationKey, rows);
+  const pendingRows = rows
+    .filter((row) => row.type === "incoming" && row.id > boundaryMessageId)
+    .sort((left, right) => left.id - right.id);
+  if (!pendingRows.length) return null;
+
+  const pendingRowIds = new Set(pendingRows.map((row) => row.id));
+  const pendingTexts = pendingRows
+    .map((row) => String(row.text || "").trim())
+    .filter(Boolean)
+    .filter((text, index, list) => index === 0 || normalizeReplyComparisonText(text) !== normalizeReplyComparisonText(list[index - 1]));
+  if (!pendingTexts.length) return null;
+
+  const historyRows = rows.filter((row) => !pendingRowIds.has(row.id));
+  const latestVisibleOutgoingText =
+    historyRows.find((row) => row.type === "outgoing" && !isSyntheticOutgoingMessage(row.text || ""))?.text || "";
+
+  return {
+    inputText: buildBundledIncomingPrompt(pendingTexts),
+    history: buildChatHistoryFromRows(historyRows),
+    highestPendingMessageId: pendingRows[pendingRows.length - 1]?.id || 0,
+    pendingMessageCount: pendingTexts.length,
+    latestVisibleOutgoingText,
+  };
+}
+
+async function runSerializedInboundTask<T>(conversationKey: string, task: () => Promise<T>) {
+  const previous = inboundConversationTails.get(conversationKey) || Promise.resolve();
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const currentTail = previous.catch(() => undefined).then(() => gate);
+  inboundConversationTails.set(conversationKey, currentTail);
+  await previous.catch(() => undefined);
+
+  try {
+    return await task();
+  } finally {
+    release?.();
+    if (inboundConversationTails.get(conversationKey) === currentTail) {
+      inboundConversationTails.delete(conversationKey);
+    }
+  }
+}
+
+function markPendingConversationHandled(conversationKey: string, highestPendingMessageId: number) {
+  if (!Number.isFinite(highestPendingMessageId) || highestPendingMessageId <= 0) return;
+  const previous = inboundHandledMessageIds.get(conversationKey) || 0;
+  if (highestPendingMessageId > previous) {
+    inboundHandledMessageIds.set(conversationKey, highestPendingMessageId);
+  }
+  if (inboundHandledMessageIds.size > 4000) {
+    const keys = [...inboundHandledMessageIds.keys()].slice(0, 500);
+    for (const key of keys) {
+      inboundHandledMessageIds.delete(key);
+    }
+  }
+}
+
+async function prepareBundledConversationTurnForSender(
+  channel: string,
+  senderId: string,
+  eventId: string,
+  options?: { burstWindowMs?: number },
+): Promise<PreparedConversationTurn | null> {
+  const conversationKey = buildInboundConversationKey(channel, senderId, eventId);
+  const burstWindowMs = Math.max(0, options?.burstWindowMs ?? INBOUND_BURST_WINDOW_MS);
+
+  if (burstWindowMs > 0) {
+    await sleep(burstWindowMs);
+  }
+
+  return runSerializedInboundTask(conversationKey, async () => {
+    const pendingTurn = await buildPendingConversationTurn(conversationKey, senderId, eventId);
+    if (!pendingTurn) return null;
+
+    return {
+      ...pendingTurn,
+      conversationKey,
+    };
+  });
+}
+
+async function generateReplyForPreparedTurn(
+  senderId: string,
+  eventId: string,
+  preparedTurn: PreparedConversationTurn,
+): Promise<BotReplyResult> {
+  const result = await generateBotReplyForSender(senderId, eventId, preparedTurn.inputText, preparedTurn.history);
+  const shouldSuppressDuplicate =
+    preparedTurn.pendingMessageCount > 1 &&
+    isNearDuplicateReply(result.text, preparedTurn.latestVisibleOutgoingText);
+
+  return {
+    ...result,
+    text: shouldSuppressDuplicate ? "" : result.text,
+  };
 }
 
 function normalizeHistoryForOpenRouter(history: ChatHistoryMessage[] = []) {
@@ -1928,7 +2140,6 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
     return;
   }
   const eventId = resolvedEventId || DEFAULT_EVENT_ID;
-  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
   await saveMessage(senderId, trimmed, "incoming", eventId, pageId);
 
   if (!(await getFacebookAccessToken(pageId))) {
@@ -1936,10 +2147,13 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
     return;
   }
 
+  const preparedTurn = await prepareBundledConversationTurnForSender("facebook", senderId, eventId);
+  if (!preparedTurn) return;
+
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
   } catch (error) {
@@ -1951,6 +2165,7 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
     await sendFacebookTextMessage(senderId, replyText, pageId);
     await saveMessage(senderId, replyText, "outgoing", eventId, pageId);
   }
+  markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
   let sentTicketArtifact = false;
@@ -2024,7 +2239,6 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
     return;
   }
   const eventId = resolvedEventId;
-  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
   await saveMessage(senderId, trimmed, "incoming", eventId, destination);
 
   if (!(await getLineAccessToken(destination))) {
@@ -2033,10 +2247,13 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
     return;
   }
 
+  const preparedTurn = await prepareBundledConversationTurnForSender("line", senderId, eventId);
+  if (!preparedTurn) return;
+
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
   } catch (error) {
@@ -2054,6 +2271,7 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
         await saveLineDeliveryTrace(senderId, eventId, destination, "push-sent", "Sent via push fallback");
       }
       await saveMessage(senderId, replyText, "outgoing", eventId, destination);
+      markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
     } catch (error) {
       console.error("Failed to send LINE reply text:", error);
       await saveLineDeliveryTrace(senderId, eventId, destination, "reply-failed", error instanceof Error ? error.message : String(error));
@@ -2062,12 +2280,15 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
           await sendLinePushTextMessage(senderId, replyText, destination);
           await saveLineDeliveryTrace(senderId, eventId, destination, "push-fallback-sent", "Reply token failed; delivered via push");
           await saveMessage(senderId, replyText, "outgoing", eventId, destination);
+          markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
         } catch (pushError) {
           console.error("Failed to send LINE push fallback text:", pushError);
           await saveLineDeliveryTrace(senderId, eventId, destination, "push-fallback-failed", pushError instanceof Error ? pushError.message : String(pushError));
         }
       }
     }
+  } else {
+    markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
   }
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
@@ -2134,7 +2355,6 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
     return;
   }
   const eventId = resolvedEventId;
-  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
   await saveMessage(senderId, trimmed, "incoming", eventId, accountId);
 
   if (!(await getInstagramAccessToken(accountId))) {
@@ -2142,10 +2362,13 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
     return;
   }
 
+  const preparedTurn = await prepareBundledConversationTurnForSender("instagram", senderId, eventId);
+  if (!preparedTurn) return;
+
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
   } catch (error) {
@@ -2157,6 +2380,7 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
     await sendInstagramTextMessage(senderId, replyText, accountId);
     await saveMessage(senderId, replyText, "outgoing", eventId, accountId);
   }
+  markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
   let sentTicketArtifact = false;
@@ -2222,7 +2446,6 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
     return;
   }
   const eventId = resolvedEventId;
-  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
   await saveMessage(senderId, trimmed, "incoming", eventId, phoneNumberId);
 
   if (!(await getWhatsAppAccessToken(phoneNumberId))) {
@@ -2230,10 +2453,13 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
     return;
   }
 
+  const preparedTurn = await prepareBundledConversationTurnForSender("whatsapp", senderId, eventId);
+  if (!preparedTurn) return;
+
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
   } catch (error) {
@@ -2245,6 +2471,7 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
     await sendWhatsAppTextMessage(senderId, replyText, phoneNumberId);
     await saveMessage(senderId, replyText, "outgoing", eventId, phoneNumberId);
   }
+  markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
   let sentTicketArtifact = false;
@@ -2310,7 +2537,6 @@ async function handleIncomingTelegramText(senderId: string, text: string, botKey
     return;
   }
   const eventId = resolvedEventId;
-  const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
   await saveMessage(senderId, trimmed, "incoming", eventId, botKey);
 
   if (!(await getTelegramAccessToken(botKey))) {
@@ -2318,10 +2544,13 @@ async function handleIncomingTelegramText(senderId: string, text: string, botKey
     return;
   }
 
+  const preparedTurn = await prepareBundledConversationTurnForSender("telegram", senderId, eventId);
+  if (!preparedTurn) return;
+
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateBotReplyForSender(senderId, eventId, trimmed, priorHistory);
+    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
   } catch (error) {
@@ -2333,6 +2562,7 @@ async function handleIncomingTelegramText(senderId: string, text: string, botKey
     await sendTelegramTextMessage(senderId, replyText, botKey);
     await saveMessage(senderId, replyText, "outgoing", eventId, botKey);
   }
+  markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
 
   const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
   let sentTicketArtifact = false;
@@ -4241,22 +4471,30 @@ async function startServer() {
         return res.status(404).json({ error: "No active event mapping found for this widget" });
       }
 
-      const priorHistory = await getMessageHistoryForSender(senderId, 12, eventId);
       await saveMessage(senderId, text, "incoming", eventId, widgetKey);
+
+      const preparedTurn = await prepareBundledConversationTurnForSender("webchat", senderId, eventId, {
+        burstWindowMs: WEBCHAT_BURST_WINDOW_MS,
+      });
 
       let replyText = "";
       let ticketRegistrationIds: string[] = [];
-      try {
-        const result = await generateBotReplyForSender(senderId, eventId, text, priorHistory);
-        replyText = result.text;
-        ticketRegistrationIds = result.ticketRegistrationIds;
-      } catch (error) {
-        console.error("Failed to generate web chat bot reply:", error);
-        replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+      if (preparedTurn) {
+        try {
+          const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+          replyText = result.text;
+          ticketRegistrationIds = result.ticketRegistrationIds;
+        } catch (error) {
+          console.error("Failed to generate web chat bot reply:", error);
+          replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+        }
       }
 
       if (replyText) {
         await saveMessage(senderId, replyText, "outgoing", eventId, widgetKey);
+      }
+      if (preparedTurn) {
+        markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
       }
 
       const settings = await getSettingsMap(eventId);

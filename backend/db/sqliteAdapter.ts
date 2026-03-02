@@ -657,6 +657,17 @@ export class SqliteAppDatabase implements AppDatabase {
     ).all(senderId, limit) as Array<{ text: string; type: MessageType }>;
   }
 
+  async getConversationRowsForSender(senderId: string, limit: number, eventId?: string) {
+    if (eventId) {
+      return this.db.prepare(
+        "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages WHERE sender_id = ? AND event_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+      ).all(senderId, eventId, limit) as MessageRow[];
+    }
+    return this.db.prepare(
+      "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages WHERE sender_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+    ).all(senderId, limit) as MessageRow[];
+  }
+
   async listEvents() {
     const rows = this.db.prepare(
       "SELECT id, name, slug, status, is_default, created_at, updated_at FROM events ORDER BY is_default DESC, created_at ASC",

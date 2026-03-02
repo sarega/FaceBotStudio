@@ -265,13 +265,15 @@
           extraHtml = '<a class="fbs-link" href="' + escapeHtml(data.map_url) + '" target="_blank" rel="noopener noreferrer">Open Map</a>';
         }
 
-        storedMessages.push({
-          role: "bot",
-          text: data.reply_text || " ",
-          extraHtml: extraHtml,
-        });
-        saveJson(storageKey(config.widgetKey, "messages"), storedMessages);
-        renderConversation(ui, storedMessages);
+        if ((data.reply_text && String(data.reply_text).trim()) || extraHtml) {
+          storedMessages.push({
+            role: "bot",
+            text: data.reply_text || "",
+            extraHtml: extraHtml,
+          });
+          saveJson(storageKey(config.widgetKey, "messages"), storedMessages);
+          renderConversation(ui, storedMessages);
+        }
       } catch (error) {
         storedMessages.push({
           role: "bot",
