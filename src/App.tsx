@@ -608,6 +608,59 @@ function describeEventOperatorGuard(
   };
 }
 
+function describeCheckinOperatorGuard(
+  eventStatus: EventStatus | null | undefined,
+  registrationAvailability: RegistrationAvailabilityUiState | null | undefined,
+) {
+  if (eventStatus === "cancelled") {
+    return {
+      tone: "rose" as const,
+      label: "Revoke Check-in",
+      body: "This event was cancelled. Door staff should stop admitting attendees and revoke active check-in links.",
+    };
+  }
+  if (eventStatus === "closed") {
+    return {
+      tone: "neutral" as const,
+      label: "Past Event",
+      body: "The event date has passed. Check-in is usually no longer needed except for audit review.",
+    };
+  }
+  if (registrationAvailability === "full") {
+    return {
+      tone: "amber" as const,
+      label: "Door Only",
+      body: "Registration is full, but check-in for already registered attendees can continue normally.",
+    };
+  }
+  if (registrationAvailability === "closed") {
+    return {
+      tone: "amber" as const,
+      label: "Registration Closed",
+      body: "New signups are closed, but existing attendees can still be checked in.",
+    };
+  }
+  if (registrationAvailability === "not_started") {
+    return {
+      tone: "amber" as const,
+      label: "Pre-Launch",
+      body: "Registration has not opened yet. Use check-in only when your staff is intentionally preparing ahead of the event.",
+    };
+  }
+  if (registrationAvailability === "invalid") {
+    return {
+      tone: "rose" as const,
+      label: "Schedule Error",
+      body: "Registration dates are misconfigured. Check-in can still work for existing records, but the event setup should be fixed first.",
+    };
+  }
+  return {
+    tone: "emerald" as const,
+    label: "Door Ready",
+    body: "Check-in can run normally for this event.",
+  };
+}
+
 function getDocumentEmbeddingTone(status: string | null | undefined): BadgeTone {
   switch (status) {
     case "ready":
@@ -1311,6 +1364,10 @@ export default function App() {
     registrationCapacity.isFull,
   );
   const eventOperatorGuard = describeEventOperatorGuard(
+    selectedEvent?.effective_status,
+    selectedEvent?.registration_availability,
+  );
+  const checkinOperatorGuard = describeCheckinOperatorGuard(
     selectedEvent?.effective_status,
     selectedEvent?.registration_availability,
   );
@@ -5125,6 +5182,18 @@ export default function App() {
                       <div className="w-2 h-2 bg-emerald-500 rounded-full" />
                       <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Active</span>
                       <StatusBadge tone="neutral">{testMessages.length} msgs</StatusBadge>
+                      {selectedEvent && (
+                        <>
+                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                            {getEventStatusLabel(selectedEvent.effective_status)}
+                          </StatusBadge>
+                          {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
+                            <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
+                              {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                            </StatusBadge>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -5138,6 +5207,24 @@ export default function App() {
                     <span className="font-medium">Clear Chat</span>
                   </MenuActionItem>
                 </InlineActionsMenu>
+              </div>
+
+              <div className="border-b border-slate-100 bg-white px-3 py-3 sm:px-4">
+                <div className={`rounded-2xl border px-4 py-3 ${
+                  eventOperatorGuard.tone === "emerald"
+                    ? "border-emerald-200 bg-emerald-50"
+                    : eventOperatorGuard.tone === "amber"
+                    ? "border-amber-200 bg-amber-50"
+                    : eventOperatorGuard.tone === "rose"
+                    ? "border-rose-200 bg-rose-50"
+                    : "border-slate-200 bg-slate-50"
+                }`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Simulation Guard</p>
+                    <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-600">{eventOperatorGuard.body}</p>
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto bg-slate-50 p-4 space-y-2 sm:p-6">
@@ -5604,9 +5691,33 @@ export default function App() {
                           Mobile-first check-in flow for staff at the door. Use manual ID entry or scan a QR code.
                         </p>
                       </div>
-                      <StatusBadge tone="neutral">
-                        Door Flow
-                      </StatusBadge>
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <StatusBadge tone={checkinOperatorGuard.tone}>{checkinOperatorGuard.label}</StatusBadge>
+                        {selectedEvent && (
+                          <>
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                              {getEventStatusLabel(selectedEvent.effective_status)}
+                            </StatusBadge>
+                            {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
+                              <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
+                                {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                              </StatusBadge>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className={`mb-4 rounded-2xl border px-4 py-3 ${
+                      checkinOperatorGuard.tone === "emerald"
+                        ? "border-emerald-200 bg-emerald-50"
+                        : checkinOperatorGuard.tone === "amber"
+                        ? "border-amber-200 bg-amber-50"
+                        : checkinOperatorGuard.tone === "rose"
+                        ? "border-rose-200 bg-rose-50"
+                        : "border-slate-200 bg-slate-50"
+                    }`}>
+                      <p className="text-xs text-slate-600">{checkinOperatorGuard.body}</p>
                     </div>
 
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
