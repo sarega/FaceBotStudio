@@ -2064,13 +2064,13 @@ export default function App() {
       ...(canEditSettings ? ["event"] : []),
       ...(canEditSettings ? ["design"] : []),
       ...(canRunTest ? ["test"] : []),
-      ...(canManageRegistrations ? (canEditSettings ? ["registrations", "checkin"] : ["checkin", "registrations"]) : []),
+      ...(canManageRegistrations ? ["registrations", "checkin"] : []),
       ...(canViewLogs ? ["logs"] : []),
       ...(canEditSettings ? ["settings"] : []),
     ] as AppTab[];
 
     if (!allowedTabs.includes(activeTab)) {
-      setActiveTab(allowedTabs[0] || "checkin");
+      setActiveTab(allowedTabs[0] || "registrations");
     }
   }, [activeTab, canEditSettings, canRunTest, canViewLogs, canManageRegistrations]);
 
