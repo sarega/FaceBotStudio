@@ -978,8 +978,10 @@ export default function App() {
   const [scannerError, setScannerError] = useState("");
   const [lastScannedValue, setLastScannedValue] = useState("");
   const [operationsMenuOpen, setOperationsMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [knowledgeActionsOpen, setKnowledgeActionsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [registrationVisibleCount, setRegistrationVisibleCount] = useState(120);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<number | null>(null);
@@ -990,6 +992,7 @@ export default function App() {
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
   const knowledgeActionsRef = useRef<HTMLDivElement | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const searchFocusTimeoutRef = useRef<number | null>(null);
@@ -1156,6 +1159,8 @@ export default function App() {
       reg.status,
     ]),
   );
+  const visibleRegistrations = filteredRegistrations.slice(0, registrationVisibleCount);
+  const hasMoreRegistrations = filteredRegistrations.length > visibleRegistrations.length;
   const filteredDocuments = documents.filter((document) =>
     matchesSearchQuery(deferredDocumentListQuery, [
       document.title,
@@ -1497,6 +1502,10 @@ export default function App() {
   }, [selectedEvent?.id, selectedEvent?.name]);
 
   useEffect(() => {
+    setRegistrationVisibleCount(120);
+  }, [selectedEventId, deferredRegistrationListQuery]);
+
+  useEffect(() => {
     setSettings((prev) => ({
       ...prev,
       ...getBlankEventScopedSettings(),
@@ -1570,6 +1579,7 @@ export default function App() {
 
   useEffect(() => {
     setOperationsMenuOpen(false);
+    setUserMenuOpen(false);
     setKnowledgeActionsOpen(false);
     setGlobalSearchOpen(false);
     setHelpOpen(false);
@@ -1587,6 +1597,29 @@ export default function App() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [operationsMenuOpen]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!userMenuRef.current?.contains(event.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setUserMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [userMenuOpen]);
 
   useEffect(() => {
     if (!knowledgeActionsOpen) return;
@@ -2981,7 +3014,7 @@ export default function App() {
 
     return (
       <div className="min-h-dvh overflow-x-hidden bg-slate-50 text-slate-900 font-sans">
-        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
+        <header className="app-header-surface sticky top-0 z-10 border-b border-slate-200 bg-white backdrop-blur">
           <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 pb-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-3">
@@ -3246,83 +3279,102 @@ export default function App() {
 
   return (
     <div className="app-shell min-h-dvh bg-slate-50 text-slate-900 font-sans">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
-        <div className="max-w-7xl mx-auto px-3 py-2.5 sm:px-4 lg:px-6">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex min-w-0 flex-1 items-center gap-3 lg:max-w-[22rem]">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.2)]">
+      <header className="app-header-surface sticky top-0 z-20 border-b border-slate-200 bg-white backdrop-blur">
+        <div className="max-w-7xl mx-auto px-3 py-2 sm:px-4 lg:px-6">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)_auto] lg:items-center">
+            <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.2)] sm:h-10 sm:w-10">
                 <Bot className="h-5 w-5 text-white" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h1 className="truncate text-xl font-bold tracking-tight sm:text-2xl">FB Bot Studio</h1>
+                  <h1 className="truncate text-[1.05rem] font-bold tracking-tight sm:text-2xl">FB Bot Studio</h1>
                   {selectedEvent && (
                     <StatusBadge
                       tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}
-                      className="hidden md:inline-flex"
+                      className="inline-flex"
                     >
                       {getEventStatusLabel(selectedEvent.effective_status)}
                     </StatusBadge>
                   )}
                 </div>
-                {selectedEvent && (
-                  <p className="hidden truncate text-[11px] text-slate-500 sm:block">
-                    workspace: <span className="font-semibold text-slate-700">{selectedEvent.name}</span>
-                  </p>
-                )}
               </div>
             </div>
 
-            <div className="ml-auto flex items-center gap-2 sm:gap-3">
-              <div className="hidden md:flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <MonitorCog className="h-4 w-4 text-slate-500" />
-                <select
-                  value={themeMode}
-                  onChange={(e) => setThemeMode(e.target.value as ThemeMode)}
-                  className="bg-transparent text-xs font-semibold text-slate-600 outline-none"
-                  aria-label="Theme mode"
-                >
-                  <option value="light">Light</option>
-                  <option value="dark">Dark</option>
-                  <option value="system">System</option>
-                </select>
-              </div>
-              <div className="hidden text-right sm:block">
-                <p className="text-sm font-semibold leading-none">{authUser?.display_name || authUser?.username}</p>
-                <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
-              </div>
+            <div className="col-start-2 row-start-1 relative justify-self-end self-start" ref={userMenuRef}>
               <button
-                onClick={() => setGlobalSearchOpen(true)}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                aria-label="Open global search"
+                onClick={() => setUserMenuOpen((open) => !open)}
+                className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:px-3"
+                aria-expanded={userMenuOpen}
+                aria-haspopup="menu"
               >
-                <Search className="h-4 w-4" />
-                <span className="hidden sm:inline">Search</span>
-                <span className="hidden rounded-lg bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 lg:inline-flex">
-                  {searchShortcutLabel}
+                <div className="hidden text-right sm:block">
+                  <p className="text-sm font-semibold leading-none">{authUser?.display_name || authUser?.username}</p>
+                  <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
+                </div>
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+                  <User className="h-4 w-4" />
                 </span>
+                <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />
               </button>
-              <button
-                onClick={handleLogout}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-              >
-                <LogOut className="h-4 w-4" />
-                <span className="hidden sm:inline">Logout</span>
-              </button>
+              {userMenuOpen && (
+                <div className="absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                    <p className="truncate text-sm font-semibold text-slate-900">{authUser?.display_name || authUser?.username}</p>
+                    <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
+                  </div>
+                  <div className="mt-3">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                      <MonitorCog className="h-3.5 w-3.5" />
+                      Theme
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
+                      {([
+                        { id: "light", label: "Light" },
+                        { id: "dark", label: "Dark" },
+                        { id: "system", label: "System" },
+                      ] as Array<{ id: ThemeMode; label: string }>).map((mode) => (
+                        <button
+                          key={mode.id}
+                          onClick={() => {
+                            setThemeMode(mode.id);
+                            setUserMenuOpen(false);
+                          }}
+                          className={`rounded-lg px-2 py-2 text-xs font-semibold transition-colors ${
+                            themeMode === mode.id
+                              ? "bg-white text-blue-600 shadow-sm"
+                              : "text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          {mode.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                    role="menuitem"
+                  >
+                    <LogOut className="h-4 w-4" />
+                    Logout
+                  </button>
+                </div>
+              )}
             </div>
 
-            <div className="order-3 w-full lg:order-none lg:max-w-[34rem] lg:flex-1">
+            <div className="col-span-2 row-start-2 lg:col-span-1 lg:col-start-2 lg:row-start-1 lg:flex lg:justify-center lg:px-5">
               <label htmlFor="event-selector" className="sr-only">
                 Active event
               </label>
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-1.5 lg:w-full lg:max-w-[42rem]">
                 <CalendarRange className="h-4 w-4 shrink-0 text-slate-400" />
                 <select
                   id="event-selector"
                   value={selectedEventId}
                   onChange={(e) => setSelectedEventId(e.target.value)}
                   disabled={!selectorEvents.length || eventLoading}
-                  className="min-w-0 w-full bg-transparent text-sm font-medium outline-none disabled:opacity-60"
+                  className="min-w-0 w-full truncate bg-transparent text-sm font-medium outline-none disabled:opacity-60"
                 >
                   {selectorEvents.map((event) => (
                     <option key={event.id} value={event.id}>
@@ -3334,16 +3386,16 @@ export default function App() {
             </div>
           </div>
 
-          <div className="mt-2 flex items-center gap-2">
-            <div className="grid flex-1 grid-flow-col auto-cols-fr gap-1.5 rounded-2xl bg-slate-100/90 p-1 sm:flex sm:flex-wrap sm:gap-1">
+          <div className="mt-1.5 flex items-center gap-2">
+            <div className="app-toolbar-surface grid flex-1 grid-flow-col auto-cols-fr gap-1 rounded-xl bg-slate-100 p-1 sm:flex sm:flex-wrap sm:gap-1 sm:rounded-2xl">
               {primaryTabs.map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-sm font-semibold transition-all sm:min-h-10 sm:px-3 ${
+                  className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
                     activeTab === tab.id
                       ? "bg-white text-blue-600 shadow-sm"
-                      : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
+                      : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
                   }`}
                   aria-current={activeTab === tab.id ? "page" : undefined}
                 >
@@ -3355,10 +3407,10 @@ export default function App() {
                 <div className="relative min-w-0" ref={operationsMenuRef}>
                   <button
                     onClick={() => setOperationsMenuOpen((open) => !open)}
-                    className={`flex min-h-9 w-full min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-sm font-semibold transition-all sm:min-h-10 sm:px-3 ${
+                    className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
                       isOperationsTab || operationsMenuOpen
                         ? "bg-white text-blue-600 shadow-sm"
-                        : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
+                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
                     }`}
                     aria-expanded={operationsMenuOpen}
                     aria-haspopup="menu"
@@ -3391,6 +3443,21 @@ export default function App() {
                   )}
                 </div>
               )}
+              <button
+                onClick={() => setGlobalSearchOpen(true)}
+                className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
+                  globalSearchOpen
+                    ? "bg-white text-blue-600 shadow-sm"
+                    : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                }`}
+                aria-label="Open global search"
+              >
+                <Search className="h-4 w-4 shrink-0" />
+                <span className="sr-only sm:not-sr-only sm:truncate">Search</span>
+                <span className="hidden rounded-lg bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 lg:inline-flex">
+                  {searchShortcutLabel}
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -4055,8 +4122,8 @@ export default function App() {
                           id={getSearchTargetDomId("document", document.id)}
                           className={`rounded-2xl border p-4 space-y-3 ${
                             selectedDocumentForChunksId === document.id
-                              ? "border-blue-200 bg-blue-50/70"
-                              : "border-slate-200 bg-slate-50/80"
+                              ? "border-blue-200 bg-blue-50"
+                              : "border-slate-200 bg-slate-50"
                           } ${
                             isSearchFocused("document", document.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
                           }`}
@@ -4606,7 +4673,7 @@ export default function App() {
                 </InlineActionsMenu>
               </div>
 
-              <div className="flex-1 overflow-y-auto bg-slate-50/30 p-4 space-y-2 sm:p-6">
+              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 space-y-2 sm:p-6">
                 {testMessages.length === 0 && (
                   <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                     <MessageSquare className="h-10 w-10" />
@@ -4706,7 +4773,9 @@ export default function App() {
                           <h2 className="text-lg font-semibold">Registered Attendees</h2>
                           <StatusBadge tone="neutral">{filteredRegistrations.length}</StatusBadge>
                         </div>
-                        <p className="text-sm text-slate-500">Search and open attendees fast. Ticket details stay in the side panel.</p>
+                        <p className="text-sm text-slate-500">
+                          Search fast, then progressively load more rows when this event gets large.
+                        </p>
                       </div>
                       <InlineActionsMenu label="Actions" tone="neutral">
                         <MenuActionLink
@@ -4738,13 +4807,13 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                    <div className="space-y-3 p-4 md:hidden">
+                    <div className="max-h-[34rem] space-y-3 overflow-y-auto p-4 md:hidden">
                       {filteredRegistrations.length === 0 ? (
                         <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
                           {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
                         </div>
                       ) : (
-                        filteredRegistrations.map((reg) => (
+                        visibleRegistrations.map((reg) => (
                           <button
                             key={reg.id}
                             id={getSearchTargetDomId("registration", reg.id)}
@@ -4773,7 +4842,7 @@ export default function App() {
                         ))
                       )}
                     </div>
-                    <div className="hidden overflow-x-auto md:block">
+                    <div className="hidden max-h-[46rem] overflow-auto md:block">
                       <table className="w-full text-left text-sm">
                         <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                           <tr>
@@ -4791,7 +4860,7 @@ export default function App() {
                               </td>
                             </tr>
                           ) : (
-                            filteredRegistrations.map((reg) => (
+                            visibleRegistrations.map((reg) => (
                               <tr
                                 key={reg.id}
                                 id={getSearchTargetDomId("registration", reg.id)}
@@ -4799,7 +4868,7 @@ export default function App() {
                                 className={`registration-row hover:bg-slate-50 transition-colors cursor-pointer ${
                                   selectedRegistrationId === reg.id ? "registration-row-selected bg-blue-50" : ""
                                 } ${
-                                  isSearchFocused("registration", reg.id) ? "bg-blue-50/80" : ""
+                                  isSearchFocused("registration", reg.id) ? "bg-blue-50" : ""
                                 }`}
                               >
                                 <td className="px-6 py-4 font-mono text-xs font-bold text-blue-600">
@@ -4827,38 +4896,52 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
+                    <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                      <p>
+                        Showing {visibleRegistrations.length} of {filteredRegistrations.length} attendees
+                      </p>
+                      {hasMoreRegistrations && (
+                        <ActionButton
+                          onClick={() => setRegistrationVisibleCount((count) => count + 120)}
+                          tone="neutral"
+                          className="w-full text-sm sm:w-auto"
+                        >
+                          Load 120 More
+                        </ActionButton>
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 <div className="space-y-6">
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-3 mb-4">
+                    <div className="mb-3 flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-base font-semibold flex items-center gap-2">
                           <Activity className="w-4 h-4 text-blue-600" />
                           Event Stats
                         </h3>
-                        <p className="text-xs text-slate-500">Glanceable live totals for this event.</p>
+                        <p className="hidden text-xs text-slate-500 sm:block">Glanceable live totals for this event.</p>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                    <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-5">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total</p>
                         <p className="mt-1 text-base font-bold text-slate-900">{registrations.length}</p>
                       </div>
-                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
+                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Registered</p>
                         <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
                       </div>
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">Checked In</p>
                         <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
                       </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Cancelled</p>
                         <p className="mt-1 text-base font-bold text-slate-700">{cancelledCount}</p>
                       </div>
-                      <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2.5">
+                      <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-violet-600">Check-in Rate</p>
                         <p className="mt-1 text-base font-bold text-violet-700">{checkInRate}%</p>
                       </div>
@@ -4998,7 +5081,7 @@ export default function App() {
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                 <div className="xl:col-span-2 space-y-6">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                    <div className="flex items-start justify-between gap-3 mb-4">
+                    <div className="mb-4 flex items-start justify-between gap-3">
                       <div>
                         <h2 className="text-xl font-semibold flex items-center gap-2">
                           <QrCode className="w-5 h-5 text-blue-600" />
@@ -5008,13 +5091,13 @@ export default function App() {
                           Mobile-first check-in flow for staff at the door. Use manual ID entry or scan a QR code.
                         </p>
                       </div>
-                      <StatusBadge tone="blue">
-                        {settings.event_name || "Untitled Event"}
+                      <StatusBadge tone="neutral">
+                        Door Flow
                       </StatusBadge>
                     </div>
 
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
+                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-lg font-bold text-blue-700">{registeredCount}</p>
@@ -5025,7 +5108,7 @@ export default function App() {
                           </span>
                         </div>
                       </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-lg font-bold text-slate-700">{cancelledCount}</p>
@@ -5036,7 +5119,7 @@ export default function App() {
                           </span>
                         </div>
                       </div>
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-lg font-bold text-emerald-700">{checkedInCount}</p>
@@ -5048,7 +5131,7 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="mt-2 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5">
                       <div className="flex items-center gap-2 text-xs text-slate-600">
                         <Users className="w-3.5 h-3.5 text-slate-500" />
                         <span className="font-medium">Check-in rate</span>
@@ -5459,8 +5542,8 @@ export default function App() {
                             <tr
                               key={msg.id}
                               id={getSearchTargetDomId("log", String(msg.id))}
-                              className={`hover:bg-slate-50/50 transition-colors ${
-                                isSearchFocused("log", String(msg.id)) ? "bg-blue-50/80" : ""
+                              className={`transition-colors hover:bg-slate-50 ${
+                                isSearchFocused("log", String(msg.id)) ? "bg-blue-50" : ""
                               }`}
                             >
                               <td className="px-6 py-4 whitespace-nowrap text-slate-500">
@@ -5677,7 +5760,7 @@ export default function App() {
                               isSearchFocused("channel", channel.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
                             }`}
                           >
-                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
                               <button
                                 onClick={() => toggleChannelDetails(channel.id)}
                                 className="min-w-0 text-left"
@@ -5707,11 +5790,11 @@ export default function App() {
                                 </div>
                                 <p className="mt-2 text-xs font-mono text-slate-500">{channel.external_id}</p>
                               </button>
-                              <div className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-stretch">
+                              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap xl:justify-end">
                                 <ActionButton
                                   onClick={() => loadChannelIntoForm(channel)}
                                   tone="blue"
-                                  className="px-3 text-sm lg:w-full lg:justify-center"
+                                  className="px-3 text-sm"
                                 >
                                   <PencilLine className="h-3.5 w-3.5" />
                                   Edit
@@ -5719,7 +5802,6 @@ export default function App() {
                                 <InlineActionsMenu
                                   label="Actions"
                                   tone={channel.is_active ? "amber" : "neutral"}
-                                  className="lg:w-full"
                                 >
                                   <MenuActionItem
                                     onClick={() => toggleChannelDetails(channel.id)}
@@ -6156,26 +6238,26 @@ export default function App() {
 
       {canEditSettings && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 hidden lg:block">
-          <div className="mx-auto flex max-w-7xl justify-end px-6">
-            <div className="pointer-events-auto flex min-w-[34rem] items-center gap-3 rounded-2xl border border-slate-200 bg-white/92 px-4 py-3 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
+          <div className="mx-auto flex max-w-7xl justify-start px-6">
+            <div className="app-floating-status pointer-events-auto flex w-fit max-w-[min(30rem,calc(100vw-8.5rem))] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
               <StatusBadge tone={selectedEvent?.effective_status === "active" ? "emerald" : selectedEvent?.effective_status === "pending" ? "amber" : selectedEvent?.effective_status === "cancelled" ? "rose" : "neutral"}>
                 {selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No Event"}
               </StatusBadge>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-slate-900">
+                <p className="truncate text-xs font-semibold text-slate-900">
                   {selectedEvent?.name || "No selected event"}
                 </p>
-                <p className="truncate text-[11px] text-slate-500">
+                <p className="truncate text-[10px] text-slate-500">
                   OpenRouter • {activeLlmModel}
                 </p>
               </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right">
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Event Usage</p>
                 <p className="mt-1 text-xs font-semibold text-slate-900">
                   {formatCompactNumber(selectedEventUsage?.total_tokens || 0)} tk
                 </p>
               </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right">
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total Cost</p>
                 <p className="mt-1 text-xs font-semibold text-slate-900">
                   {formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0)}
@@ -6431,7 +6513,7 @@ export default function App() {
 
           <button
             onClick={() => setHelpOpen((open) => !open)}
-            className={`fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-40 inline-flex h-14 items-center gap-2 rounded-full border px-4 text-sm font-semibold shadow-lg transition-all sm:right-6 ${
+            className={`fixed bottom-[calc(0.9rem+env(safe-area-inset-bottom))] right-3 z-40 inline-flex h-12 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold shadow-lg transition-all sm:right-6 ${
               helpOpen
                 ? "border-slate-900 bg-slate-900 text-white"
                 : "border-blue-200 bg-white text-blue-700 hover:border-blue-300 hover:bg-blue-50"
