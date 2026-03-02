@@ -111,6 +111,12 @@ export interface EventRow {
   slug: string;
   status: ManualEventStatus;
   effective_status: EventStatus;
+  registration_availability?: "open" | "not_started" | "closed" | "invalid" | "full";
+  registration_limit?: number | null;
+  active_registration_count?: number;
+  cancelled_registration_count?: number;
+  remaining_seats?: number | null;
+  is_capacity_full?: boolean;
   is_default: boolean;
   is_active: boolean;
   created_at: string;

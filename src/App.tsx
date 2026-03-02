@@ -62,6 +62,7 @@ interface LlmModelOption {
 
 type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
+type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "design" | "test" | "logs" | "settings" | "registrations" | "checkin";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -526,6 +527,27 @@ function describeRegistrationAvailability(
   return { label: "Open", tone: "emerald" as const, helper: "New registrations can still be accepted." };
 }
 
+function getRegistrationAvailabilityTone(status: RegistrationAvailabilityUiState | null | undefined): BadgeTone {
+  if (status === "full") return "rose";
+  if (!status) return "neutral";
+  return getRegistrationWindowTone(status);
+}
+
+function getRegistrationAvailabilityLabel(status: RegistrationAvailabilityUiState | null | undefined) {
+  switch (status) {
+    case "full":
+      return "full";
+    case "not_started":
+      return "not open";
+    case "closed":
+      return "closed";
+    case "invalid":
+      return "schedule error";
+    default:
+      return "open";
+  }
+}
+
 function getDocumentEmbeddingTone(status: string | null | undefined): BadgeTone {
   switch (status) {
     case "ready":
@@ -911,6 +933,11 @@ function EventWorkspaceRow({
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           {event.is_default && <StatusBadge tone="neutral">default</StatusBadge>}
+          {event.registration_availability && event.registration_availability !== "open" && (
+            <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
+              {getRegistrationAvailabilityLabel(event.registration_availability)}
+            </StatusBadge>
+          )}
           <StatusBadge tone={getEventStatusTone(event.effective_status)}>
             {getEventStatusLabel(event.effective_status)}
           </StatusBadge>
@@ -1250,7 +1277,12 @@ export default function App() {
       return left.name.localeCompare(right.name);
     })
     .filter((event) =>
-      matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+      matchesSearchQuery(deferredEventListQuery, [
+        event.name,
+        event.slug,
+        getEventStatusLabel(event.effective_status),
+        getRegistrationAvailabilityLabel(event.registration_availability),
+      ]),
     );
   const eventWorkspaceCounts = {
     all: queryMatchedEvents.length,
@@ -1388,7 +1420,12 @@ export default function App() {
   );
   const globalEventResults = deferredGlobalSearchQuery
     ? events.filter((event) =>
-        matchesSearchQuery(deferredGlobalSearchQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+        matchesSearchQuery(deferredGlobalSearchQuery, [
+          event.name,
+          event.slug,
+          getEventStatusLabel(event.effective_status),
+          getRegistrationAvailabilityLabel(event.registration_availability),
+        ]),
       ).slice(0, 6)
     : [];
   const globalRegistrationResults = deferredGlobalSearchQuery
@@ -2608,7 +2645,7 @@ export default function App() {
       }
       setStatusUpdateMessage(`Updated ${registrationId} to ${status}`);
       setSelectedRegistrationId(registrationId);
-      void fetchRegistrations(selectedEventId);
+      await Promise.all([fetchRegistrations(selectedEventId), fetchEvents()]);
       window.setTimeout(() => setStatusUpdateMessage(""), 2500);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update registration status";
@@ -2643,7 +2680,7 @@ export default function App() {
       if (selectedRegistrationId === registrationId) {
         setSelectedRegistrationId("");
       }
-      await fetchRegistrations(selectedEventId);
+      await Promise.all([fetchRegistrations(selectedEventId), fetchEvents()]);
       window.setTimeout(() => setStatusUpdateMessage(""), 2500);
       return true;
     } catch (err) {
@@ -2770,7 +2807,7 @@ export default function App() {
             // Get follow-up response
             const followUp = await getChatResponse("Registration successful. ID is " + result.id, settings, [...history, newModelMsg, funcResponseMsg], selectedEventId);
             setTestMessages(prev => [...prev, { role: "model", parts: followUp.candidates[0].content.parts, timestamp: new Date().toISOString() }]);
-            void fetchRegistrations(selectedEventId);
+            void Promise.all([fetchRegistrations(selectedEventId), fetchEvents()]);
           } else if (call.name === "cancelRegistration") {
             const { registration_id } = call.args as any;
             const res = await apiFetch("/api/registrations/cancel", {
@@ -2795,7 +2832,7 @@ export default function App() {
             
             const followUp = await getChatResponse("Registration " + registration_id + " has been cancelled.", settings, [...history, newModelMsg, funcResponseMsg], selectedEventId);
             setTestMessages(prev => [...prev, { role: "model", parts: followUp.candidates[0].content.parts, timestamp: new Date().toISOString() }]);
-            void fetchRegistrations(selectedEventId);
+            void Promise.all([fetchRegistrations(selectedEventId), fetchEvents()]);
           }
         }
       }
@@ -3607,12 +3644,17 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <h1 className="truncate text-[1.05rem] font-bold tracking-tight sm:text-2xl">FB Bot Studio</h1>
                   {selectedEvent && (
-                    <StatusBadge
-                      tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}
-                      className="inline-flex"
-                    >
-                      {getEventStatusLabel(selectedEvent.effective_status)}
-                    </StatusBadge>
+                    <>
+                      <StatusBadge
+                        tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}
+                        className="inline-flex"
+                      >
+                        {getEventStatusLabel(selectedEvent.effective_status)}
+                      </StatusBadge>
+                      {selectedEvent.registration_availability === "full" && (
+                        <StatusBadge tone="rose" className="inline-flex">full</StatusBadge>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -3695,7 +3737,7 @@ export default function App() {
                 >
                   {selectorEvents.map((event) => (
                     <option key={event.id} value={event.id}>
-                      {event.name} ({getEventStatusLabel(event.effective_status)})
+                      {event.name} ({getEventStatusLabel(event.effective_status)}{event.registration_availability && event.registration_availability !== "open" ? ` • ${getRegistrationAvailabilityLabel(event.registration_availability)}` : ""})
                     </option>
                   ))}
                 </select>
@@ -6769,9 +6811,16 @@ export default function App() {
                             <p className="truncate text-sm font-semibold text-slate-900">{event.name}</p>
                             <p className="mt-1 truncate text-xs text-slate-500">{event.slug}</p>
                           </div>
-                          <StatusBadge tone={event.effective_status === "active" ? "emerald" : event.effective_status === "pending" ? "amber" : event.effective_status === "cancelled" ? "rose" : "neutral"}>
-                            {getEventStatusLabel(event.effective_status)}
-                          </StatusBadge>
+                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                            {event.registration_availability && event.registration_availability !== "open" && (
+                              <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
+                                {getRegistrationAvailabilityLabel(event.registration_availability)}
+                              </StatusBadge>
+                            )}
+                            <StatusBadge tone={event.effective_status === "active" ? "emerald" : event.effective_status === "pending" ? "amber" : event.effective_status === "cancelled" ? "rose" : "neutral"}>
+                              {getEventStatusLabel(event.effective_status)}
+                            </StatusBadge>
+                          </div>
                         </button>
                       ))
                     )}

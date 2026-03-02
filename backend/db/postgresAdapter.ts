@@ -243,9 +243,29 @@ export class PostgresAppDatabase implements AppDatabase {
     const base = mapEventBaseRow(baseRow);
     const settings = await this.getSettingsMap(base.id);
     const effectiveStatus = getEffectiveEventStatus(base.status, settings);
+    const eventState = getEventState(settings);
+    const countsResult = await this.pool.query<{ active_count: string | null; cancelled_count: string | null }>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN status != 'cancelled' THEN 1 ELSE 0 END), 0)::text AS active_count,
+         COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0)::text AS cancelled_count
+       FROM registrations
+       WHERE event_id = $1`,
+      [base.id],
+    );
+    const activeCount = Number.parseInt(countsResult.rows[0]?.active_count || "0", 10);
+    const cancelledCount = Number.parseInt(countsResult.rows[0]?.cancelled_count || "0", 10);
+    const registrationLimit = parseRegistrationLimit(settings.reg_limit);
+    const isCapacityFull = registrationLimit !== null && activeCount >= registrationLimit;
+    const remainingSeats = registrationLimit === null ? null : Math.max(registrationLimit - activeCount, 0);
     return {
       ...base,
       effective_status: effectiveStatus,
+      registration_availability: eventState.registrationStatus === "open" && isCapacityFull ? "full" : eventState.registrationStatus,
+      registration_limit: registrationLimit,
+      active_registration_count: activeCount,
+      cancelled_registration_count: cancelledCount,
+      remaining_seats: remainingSeats,
+      is_capacity_full: isCapacityFull,
       is_active: effectiveStatus === "active",
     } satisfies EventRow;
   }

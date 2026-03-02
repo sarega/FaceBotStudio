@@ -450,9 +450,28 @@ export class SqliteAppDatabase implements AppDatabase {
     const base = mapEventBaseRow(baseRow);
     const settings = await this.getSettingsMap(base.id);
     const effectiveStatus = getEffectiveEventStatus(base.status, settings);
+    const eventState = getEventState(settings);
+    const counts = this.db.prepare(
+      `SELECT
+         SUM(CASE WHEN status != 'cancelled' THEN 1 ELSE 0 END) AS active_count,
+         SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count
+       FROM registrations
+       WHERE event_id = ?`,
+    ).get(base.id) as { active_count?: number | null; cancelled_count?: number | null };
+    const activeCount = Number(counts.active_count || 0);
+    const cancelledCount = Number(counts.cancelled_count || 0);
+    const registrationLimit = parseRegistrationLimit(settings.reg_limit);
+    const isCapacityFull = registrationLimit !== null && activeCount >= registrationLimit;
+    const remainingSeats = registrationLimit === null ? null : Math.max(registrationLimit - activeCount, 0);
     return {
       ...base,
       effective_status: effectiveStatus,
+      registration_availability: eventState.registrationStatus === "open" && isCapacityFull ? "full" : eventState.registrationStatus,
+      registration_limit: registrationLimit,
+      active_registration_count: activeCount,
+      cancelled_registration_count: cancelledCount,
+      remaining_seats: remainingSeats,
+      is_capacity_full: isCapacityFull,
       is_active: effectiveStatus === "active",
     } satisfies EventRow;
   }
