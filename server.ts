@@ -150,6 +150,7 @@ type RawBodyRequest = Request & {
 
 const inboundConversationTails = new Map<string, Promise<void>>();
 const inboundHandledMessageIds = new Map<string, number>();
+const inboundConversationActivity = new Map<string, number>();
 
 function buildEventInfo(settings: Record<string, any>, eventStatus = "active") {
   const eventState = getEventState(settings);
@@ -206,6 +207,23 @@ function sleep(ms: number) {
 
 function buildInboundConversationKey(channel: string, senderId: string, eventId: string) {
   return `${channel}:${eventId}:${senderId}`;
+}
+
+function markInboundConversationActivity(conversationKey: string, activityAt = Date.now()) {
+  inboundConversationActivity.set(conversationKey, activityAt);
+  if (inboundConversationActivity.size > 4000) {
+    const keys = [...inboundConversationActivity.keys()].slice(0, 500);
+    for (const key of keys) {
+      inboundConversationActivity.delete(key);
+    }
+  }
+}
+
+function getRemainingQuietWindowMs(conversationKey: string, burstWindowMs: number, now = Date.now()) {
+  if (burstWindowMs <= 0) return 0;
+  const lastActivityAt = inboundConversationActivity.get(conversationKey);
+  if (!lastActivityAt) return 0;
+  return Math.max(0, burstWindowMs - (now - lastActivityAt));
 }
 
 function normalizeReplyComparisonText(value: string) {
@@ -360,13 +378,25 @@ async function prepareBundledConversationTurnForSender(
   }
 
   return runSerializedInboundTask(conversationKey, async () => {
-    const pendingTurn = await buildPendingConversationTurn(conversationKey, senderId, eventId);
-    if (!pendingTurn) return null;
+    while (true) {
+      const remainingQuietMs = getRemainingQuietWindowMs(conversationKey, burstWindowMs);
+      if (remainingQuietMs > 0) {
+        await sleep(remainingQuietMs);
+      }
 
-    return {
-      ...pendingTurn,
-      conversationKey,
-    };
+      const pendingTurn = await buildPendingConversationTurn(conversationKey, senderId, eventId);
+      if (!pendingTurn) return null;
+
+      const remainingAfterReadMs = getRemainingQuietWindowMs(conversationKey, burstWindowMs);
+      if (remainingAfterReadMs > 0) {
+        continue;
+      }
+
+      return {
+        ...pendingTurn,
+        conversationKey,
+      };
+    }
   });
 }
 
@@ -2141,6 +2171,7 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
   }
   const eventId = resolvedEventId || DEFAULT_EVENT_ID;
   await saveMessage(senderId, trimmed, "incoming", eventId, pageId);
+  markInboundConversationActivity(buildInboundConversationKey("facebook", senderId, eventId));
 
   if (!(await getFacebookAccessToken(pageId))) {
     console.warn(`Facebook access token is unavailable for page ${pageId || "default"}; skipping outbound reply`);
@@ -2240,6 +2271,7 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, destination);
+  markInboundConversationActivity(buildInboundConversationKey("line", senderId, eventId));
 
   if (!(await getLineAccessToken(destination))) {
     console.warn(`LINE access token is unavailable for destination ${destination}; skipping outbound reply`);
@@ -2356,6 +2388,7 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, accountId);
+  markInboundConversationActivity(buildInboundConversationKey("instagram", senderId, eventId));
 
   if (!(await getInstagramAccessToken(accountId))) {
     console.warn(`Instagram access token is unavailable for account ${accountId || "unknown"}; skipping outbound reply`);
@@ -2447,6 +2480,7 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, phoneNumberId);
+  markInboundConversationActivity(buildInboundConversationKey("whatsapp", senderId, eventId));
 
   if (!(await getWhatsAppAccessToken(phoneNumberId))) {
     console.warn(`WhatsApp access token is unavailable for phone number ${phoneNumberId || "unknown"}; skipping outbound reply`);
@@ -2538,6 +2572,7 @@ async function handleIncomingTelegramText(senderId: string, text: string, botKey
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, botKey);
+  markInboundConversationActivity(buildInboundConversationKey("telegram", senderId, eventId));
 
   if (!(await getTelegramAccessToken(botKey))) {
     console.warn(`Telegram bot token is unavailable for bot ${botKey || "unknown"}; skipping outbound reply`);
@@ -4472,6 +4507,7 @@ async function startServer() {
       }
 
       await saveMessage(senderId, text, "incoming", eventId, widgetKey);
+      markInboundConversationActivity(buildInboundConversationKey("webchat", senderId, eventId));
 
       const preparedTurn = await prepareBundledConversationTurnForSender("webchat", senderId, eventId, {
         burstWindowMs: WEBCHAT_BURST_WINDOW_MS,
