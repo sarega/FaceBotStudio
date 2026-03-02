@@ -604,6 +604,93 @@ function HelpPopover({
   );
 }
 
+function InlineActionsMenu({
+  label,
+  tone = "neutral",
+  children,
+}: {
+  label: string;
+  tone?: ActionTone;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0" ref={menuRef}>
+      <ActionButton
+        onClick={() => setOpen((current) => !current)}
+        tone={tone}
+        className="px-3 text-sm"
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        <span className="sr-only sm:not-sr-only">{label}</span>
+        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </ActionButton>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-2 w-[min(16rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuActionItem({
+  tone = "neutral",
+  className = "",
+  children,
+  type,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  tone?: ActionTone;
+  className?: string;
+  children: ReactNode;
+}) {
+  const textClasses: Record<ActionTone, string> = {
+    neutral: "text-slate-600 hover:bg-slate-50",
+    blue: "text-blue-700 hover:bg-blue-50",
+    emerald: "text-emerald-700 hover:bg-emerald-50",
+    amber: "text-amber-700 hover:bg-amber-50",
+    rose: "text-rose-700 hover:bg-rose-50",
+    violet: "text-violet-700 hover:bg-violet-50",
+  };
+
+  return (
+    <button
+      {...props}
+      type={type || "button"}
+      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${textClasses[tone]} ${className}`.trim()}
+    >
+      {children}
+    </button>
+  );
+}
+
 function CopyField({
   label,
   value,
@@ -4544,21 +4631,27 @@ export default function App() {
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-[1fr_8rem] gap-3">
-                        <input
-                          type="text"
-                          value={checkinSessionLabel}
-                          onChange={(e) => setCheckinSessionLabel(e.target.value)}
-                          placeholder="Front Desk A"
-                          className="w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                        <input
-                          type="number"
-                          min={1}
-                          max={168}
-                          value={checkinSessionHours}
-                          onChange={(e) => setCheckinSessionHours(e.target.value)}
-                          className="w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
+                        <div>
+                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Session Label</label>
+                          <input
+                            type="text"
+                            value={checkinSessionLabel}
+                            onChange={(e) => setCheckinSessionLabel(e.target.value)}
+                            placeholder="Front Desk A"
+                            className="w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Hours</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={168}
+                            value={checkinSessionHours}
+                            onChange={(e) => setCheckinSessionHours(e.target.value)}
+                            className="w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
                       </div>
                       <ActionButton
                         onClick={handleCreateCheckinSession}
@@ -4580,23 +4673,13 @@ export default function App() {
                       {checkinSessionReveal && (
                         <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 space-y-3">
                           <p className="text-xs font-bold uppercase tracking-wider text-blue-700">New check-in link</p>
-                          <p className="text-xs text-slate-600">
-                            The raw token is shown once. Share the access URL with staff who need scanner-only access.
-                          </p>
-                          <div className="rounded-xl bg-white border border-blue-100 px-3 py-3">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Access URL</p>
-                            <p className="text-xs break-all text-slate-700">{checkinSessionReveal.url}</p>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <ActionButton
-                              onClick={() => copyToClipboard(checkinSessionReveal.url)}
-                              tone="neutral"
-                              className="text-sm"
-                            >
-                              <Copy className="w-4 h-4" />
-                              Copy Link
-                            </ActionButton>
-                          </div>
+                          <CopyField
+                            label="Access URL"
+                            value={checkinSessionReveal.url}
+                            onCopy={() => copyToClipboard(checkinSessionReveal.url)}
+                            copied={copied}
+                            help="The raw token is shown once. Share this URL only with staff who need scanner-only access."
+                          />
                         </div>
                       )}
 
@@ -4617,31 +4700,37 @@ export default function App() {
                         ) : (
                           <div className="space-y-2">
                             {checkinSessions.map((session) => (
-                              <div key={session.id} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                              <div key={session.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-3">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                   <div className="min-w-0">
                                     <p className="text-sm font-semibold text-slate-900 truncate">{session.label}</p>
-                                    <p className="text-[11px] text-slate-500">
-                                      Expires {new Date(session.expires_at).toLocaleString()}
-                                    </p>
-                                    <p className="text-[11px] text-slate-500">
-                                      Last used {session.last_used_at ? new Date(session.last_used_at).toLocaleString() : "never"}
-                                    </p>
                                   </div>
                                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                                     <StatusBadge tone={getCheckinSessionTone(session)}>
                                       {session.revoked_at ? "revoked" : session.is_active ? "active" : "expired"}
                                     </StatusBadge>
                                     {!session.revoked_at && (
-                                      <ActionButton
-                                        onClick={() => void handleRevokeCheckinSession(session.id)}
-                                        disabled={checkinSessionRevokingId === session.id}
-                                        tone="rose"
-                                      >
-                                        {checkinSessionRevokingId === session.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                                        Revoke
-                                      </ActionButton>
+                                      <InlineActionsMenu label="Manage Access" tone="neutral">
+                                        <MenuActionItem
+                                          onClick={() => void handleRevokeCheckinSession(session.id)}
+                                          disabled={checkinSessionRevokingId === session.id}
+                                          tone="rose"
+                                        >
+                                          {checkinSessionRevokingId === session.id ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                                          <span className="font-medium">Revoke Link</span>
+                                        </MenuActionItem>
+                                      </InlineActionsMenu>
                                     )}
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Expires</p>
+                                    <p className="mt-1 text-[11px] text-slate-700">{new Date(session.expires_at).toLocaleString()}</p>
+                                  </div>
+                                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Last Used</p>
+                                    <p className="mt-1 text-[11px] text-slate-700">{session.last_used_at ? new Date(session.last_used_at).toLocaleString() : "never"}</p>
                                   </div>
                                 </div>
                               </div>
@@ -4810,19 +4899,28 @@ export default function App() {
                     </div>
                     <div className="space-y-5">
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Global System Prompt</label>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase">Global System Prompt</label>
+                          <HelpPopover label="Open note for Global System Prompt">
+                            Organization-wide tone, safety rules, and escalation behavior belong here. Event-specific content should stay in Context.
+                          </HelpPopover>
+                        </div>
                         <textarea
                           value={settings.global_system_prompt}
                           onChange={(e) => setSettings({ ...settings, global_system_prompt: e.target.value })}
                           className="w-full h-40 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
                           placeholder="Global operating rules for the bot across all events and channels."
                         />
-                        <p className="mt-2 text-xs text-slate-500">Global rules only. Event-specific content should stay in Context.</p>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Global Default Model</label>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <label className="block text-xs font-bold text-slate-500 uppercase">Global Default Model</label>
+                            <HelpPopover label="Open note for Global Default Model">
+                              Keep one stable default model here unless an event has a real reason to override it.
+                            </HelpPopover>
+                          </div>
                           <select
                             value={settings.global_llm_model}
                             onChange={(e) => setSettings({ ...settings, global_llm_model: e.target.value })}
@@ -4840,7 +4938,12 @@ export default function App() {
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Selected Event Model Override</label>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <label className="block text-xs font-bold text-slate-500 uppercase">Selected Event Model Override</label>
+                            <HelpPopover label="Open note for Selected Event Model Override">
+                              Set an event override only when this workspace truly needs different model behavior than the global default.
+                            </HelpPopover>
+                          </div>
                           <select
                             value={settings.llm_model}
                             onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
@@ -4860,14 +4963,18 @@ export default function App() {
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Custom Model ID</label>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase">Custom Model ID</label>
+                          <HelpPopover label="Open note for Custom Model ID">
+                            Leave this blank to inherit the global default. When filled, only the selected event uses this specific model ID.
+                          </HelpPopover>
+                        </div>
                         <input
                           value={settings.llm_model}
                           onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
                           placeholder="Leave blank to use the global default. Or set a specific event model ID."
                         />
-                        <p className="mt-2 text-xs text-slate-500">Only the selected event uses this override.</p>
                       </div>
 
                       {llmModelsError && (
@@ -4938,11 +5045,12 @@ export default function App() {
                               </p>
                             )}
                             {channel.config_summary && channel.config_summary.length > 0 && (
-                              <div className="flex flex-wrap gap-2 text-[11px]">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 {channel.config_summary.map((item) => (
-                                  <span key={`${channel.id}:${item.key}`} className="rounded-full bg-white border border-slate-200 px-2 py-1 text-slate-600">
-                                    {item.label}: {item.value}
-                                  </span>
+                                  <div key={`${channel.id}:${item.key}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
+                                    <p className="mt-1 break-all text-[11px] text-slate-700">{item.value}</p>
+                                  </div>
                                 ))}
                               </div>
                             )}
@@ -4981,18 +5089,25 @@ export default function App() {
                                 <PencilLine className="h-3.5 w-3.5" />
                                 Edit Channel
                               </ActionButton>
-                              <ActionButton
-                                onClick={() => void handleToggleChannel(channel)}
-                                disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
-                                tone={selectedEventChannelWritesLocked && !channel.is_active ? "neutral" : channel.is_active ? "amber" : "emerald"}
+                              <InlineActionsMenu
+                                label="Manage Channel"
+                                tone={channel.is_active ? "amber" : "neutral"}
                               >
-                                <Power className="h-3.5 w-3.5" />
-                                {selectedEventChannelWritesLocked && !channel.is_active
-                                  ? "Locked by Event Status"
-                                  : channel.is_active
-                                  ? "Disable Channel"
-                                  : "Enable Channel"}
-                              </ActionButton>
+                                <MenuActionItem
+                                  onClick={() => void handleToggleChannel(channel)}
+                                  disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
+                                  tone={selectedEventChannelWritesLocked && !channel.is_active ? "neutral" : channel.is_active ? "amber" : "emerald"}
+                                >
+                                  <Power className="h-3.5 w-3.5" />
+                                  <span className="font-medium">
+                                    {selectedEventChannelWritesLocked && !channel.is_active
+                                      ? "Locked by Event Status"
+                                      : channel.is_active
+                                      ? "Disable Channel"
+                                      : "Enable Channel"}
+                                  </span>
+                                </MenuActionItem>
+                              </InlineActionsMenu>
                             </div>
                           </div>
                         ))
