@@ -548,6 +548,66 @@ function getRegistrationAvailabilityLabel(status: RegistrationAvailabilityUiStat
   }
 }
 
+function describeEventOperatorGuard(
+  eventStatus: EventStatus | null | undefined,
+  registrationAvailability: RegistrationAvailabilityUiState | null | undefined,
+) {
+  if (eventStatus === "cancelled") {
+    return {
+      tone: "rose" as const,
+      label: "Event Cancelled",
+      body: "Channels can stay connected, but the bot should clearly tell users the event was cancelled and stop new registrations.",
+    };
+  }
+  if (eventStatus === "closed") {
+    return {
+      tone: "neutral" as const,
+      label: "Event Ended",
+      body: "The event date has passed. Logs may still arrive, but new registration attempts should be declined.",
+    };
+  }
+  if (eventStatus === "pending") {
+    return {
+      tone: "amber" as const,
+      label: "Launch Pending",
+      body: "Channels may stay wired, but the bot should explain that registration has not launched yet.",
+    };
+  }
+  if (registrationAvailability === "full") {
+    return {
+      tone: "rose" as const,
+      label: "Capacity Full",
+      body: "Channels remain live, but the bot should decline new registrations until seats open up.",
+    };
+  }
+  if (registrationAvailability === "not_started") {
+    return {
+      tone: "amber" as const,
+      label: "Registration Not Open",
+      body: "Channels are live, but the bot should wait for the configured registration start time before accepting signups.",
+    };
+  }
+  if (registrationAvailability === "closed") {
+    return {
+      tone: "rose" as const,
+      label: "Registration Closed",
+      body: "Channels are live, but the bot should tell users the registration window has closed.",
+    };
+  }
+  if (registrationAvailability === "invalid") {
+    return {
+      tone: "rose" as const,
+      label: "Schedule Error",
+      body: "Registration dates are misconfigured. The bot should avoid accepting signups until the range is fixed.",
+    };
+  }
+  return {
+    tone: "emerald" as const,
+    label: "Registration Open",
+    body: "Channels can accept normal FAQ and registration flows for this event.",
+  };
+}
+
 function getDocumentEmbeddingTone(status: string | null | undefined): BadgeTone {
   switch (status) {
     case "ready":
@@ -1249,6 +1309,10 @@ export default function App() {
     selectedEvent?.effective_status,
     timingInfo.registrationStatus,
     registrationCapacity.isFull,
+  );
+  const eventOperatorGuard = describeEventOperatorGuard(
+    selectedEvent?.effective_status,
+    selectedEvent?.registration_availability,
   );
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
   const selectedChannelPlatformDefinition = channelPlatformDefinitions.find((definition) => definition.id === newChannelPlatform) || null;
@@ -5886,12 +5950,41 @@ export default function App() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
                       <StatusBadge tone="neutral">{filteredMessages.length} items</StatusBadge>
+                      {selectedEvent && (
+                        <>
+                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                            {getEventStatusLabel(selectedEvent.effective_status)}
+                          </StatusBadge>
+                          {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
+                            <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
+                              {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                            </StatusBadge>
+                          )}
+                        </>
+                      )}
                     </div>
                     <p className="text-sm text-slate-500">Inbound messages plus delivery traces from active channels.</p>
                   </div>
                   <button onClick={() => void fetchMessages(selectedEventId)} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
                     <RefreshCw className="w-4 h-4 text-slate-400" />
                   </button>
+                </div>
+                <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
+                  <div className={`rounded-2xl border px-4 py-3 ${
+                    eventOperatorGuard.tone === "emerald"
+                      ? "border-emerald-200 bg-emerald-50"
+                      : eventOperatorGuard.tone === "amber"
+                      ? "border-amber-200 bg-amber-50"
+                      : eventOperatorGuard.tone === "rose"
+                      ? "border-rose-200 bg-rose-50"
+                      : "border-slate-200 bg-slate-50"
+                  }`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Reply Guard</p>
+                      <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">{eventOperatorGuard.body}</p>
+                  </div>
                 </div>
                 <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
                   <div className="relative">
@@ -6172,8 +6265,36 @@ export default function App() {
                           Channels
                         </h3>
                         <StatusBadge tone="neutral">{filteredSelectedEventChannels.length}</StatusBadge>
+                        {selectedEvent && (
+                          <>
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                              {getEventStatusLabel(selectedEvent.effective_status)}
+                            </StatusBadge>
+                            {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
+                              <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
+                                {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                              </StatusBadge>
+                            )}
+                          </>
+                        )}
                       </div>
                       <p className="text-sm text-slate-500">Compact channel list for the selected event. Open details only when needed.</p>
+                    </div>
+
+                    <div className={`rounded-2xl border px-4 py-3 ${
+                      eventOperatorGuard.tone === "emerald"
+                        ? "border-emerald-200 bg-emerald-50"
+                        : eventOperatorGuard.tone === "amber"
+                        ? "border-amber-200 bg-amber-50"
+                        : eventOperatorGuard.tone === "rose"
+                        ? "border-rose-200 bg-rose-50"
+                        : "border-slate-200 bg-slate-50"
+                    }`}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Channel Guard</p>
+                        <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-600">{eventOperatorGuard.body}</p>
                     </div>
 
                     <div className="relative">
@@ -6459,6 +6580,11 @@ export default function App() {
                       {selectedEvent && selectedEventChannelWritesLocked && (
                         <p className="text-xs text-amber-700">
                           Closed or cancelled events cannot link or re-enable channels. You can still disable an active channel if you want to stop replies entirely.
+                        </p>
+                      )}
+                      {selectedEvent && !selectedEventChannelWritesLocked && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
+                        <p className="text-xs text-slate-500">
+                          Channel wiring stays available, but this event currently responds with guardrails for <span className="font-semibold">{getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</span> instead of accepting normal registrations.
                         </p>
                       )}
                       <p className="text-xs text-slate-500">
