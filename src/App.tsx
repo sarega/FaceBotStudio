@@ -644,15 +644,23 @@ function InlineActionsMenu({
       <ActionButton
         onClick={() => setOpen((current) => !current)}
         tone={tone}
-        className="px-3 text-sm"
+        className="min-w-[3.75rem] px-3 text-sm"
         aria-expanded={open}
         aria-haspopup="menu"
       >
-        <span className="sr-only sm:not-sr-only">{label}</span>
+        <span className="truncate">{label}</span>
         <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
       </ActionButton>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-2 w-[min(16rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+        <div
+          className="absolute right-0 top-full z-20 mt-2 w-[min(16rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+          onClickCapture={(event) => {
+            const target = event.target as HTMLElement | null;
+            if (target?.closest('[role="menuitem"]')) {
+              setOpen(false);
+            }
+          }}
+        >
           {children}
         </div>
       )}
@@ -684,10 +692,41 @@ function MenuActionItem({
     <button
       {...props}
       type={type || "button"}
+      role="menuitem"
       className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${textClasses[tone]} ${className}`.trim()}
     >
       {children}
     </button>
+  );
+}
+
+function MenuActionLink({
+  tone = "neutral",
+  className = "",
+  children,
+  ...props
+}: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+  tone?: ActionTone;
+  className?: string;
+  children: ReactNode;
+}) {
+  const textClasses: Record<ActionTone, string> = {
+    neutral: "text-slate-600 hover:bg-slate-50",
+    blue: "text-blue-700 hover:bg-blue-50",
+    emerald: "text-emerald-700 hover:bg-emerald-50",
+    amber: "text-amber-700 hover:bg-amber-50",
+    rose: "text-rose-700 hover:bg-rose-50",
+    violet: "text-violet-700 hover:bg-violet-50",
+  };
+
+  return (
+    <a
+      {...props}
+      role="menuitem"
+      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors ${textClasses[tone]} ${className}`.trim()}
+    >
+      {children}
+    </a>
   );
 }
 
@@ -3026,17 +3065,19 @@ export default function App() {
                         </h3>
                         <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
                       </div>
-                      <button
+                      <ActionButton
                         onClick={() => void saveEventDetails()}
                         disabled={saving}
-                        className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-blue-700 disabled:opacity-50 sm:w-auto sm:shrink-0"
+                        tone="blue"
+                        active
+                        className="w-full text-sm sm:w-auto sm:shrink-0"
                       >
                         {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                         Save Event Setup
-                      </button>
+                      </ActionButton>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <div className="md:col-span-2">
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Name</label>
                         <input
@@ -3092,7 +3133,7 @@ export default function App() {
                         <textarea
                           value={settings.event_description}
                           onChange={(e) => setSettings({ ...settings, event_description: e.target.value })}
-                          className="w-full h-24 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                          className="w-full h-20 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
                           placeholder="What is this event about?"
                         />
                       </div>
@@ -3102,7 +3143,7 @@ export default function App() {
                         <textarea
                           value={settings.event_travel}
                           onChange={(e) => setSettings({ ...settings, event_travel: e.target.value })}
-                          className="w-full h-20 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                          className="w-full h-16 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
                           placeholder="How to get there?"
                         />
                       </div>
@@ -3111,10 +3152,17 @@ export default function App() {
 
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Activity className="w-5 h-5 text-blue-600" />
-                        Registration Rules
-                      </h3>
+                      <div className="flex items-start justify-between gap-3 sm:block">
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Activity className="w-5 h-5 text-blue-600" />
+                          Registration Rules
+                        </h3>
+                        <div className="sm:hidden">
+                          <HelpPopover label="Open note for Registration Rules">
+                            Registration availability depends on the event time zone, the open and close range, and the event date itself.
+                          </HelpPopover>
+                        </div>
+                      </div>
                       <div className="flex flex-wrap items-center gap-2">
                         {selectedEvent && (
                           <StatusBadge tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}>
@@ -3124,9 +3172,14 @@ export default function App() {
                         <StatusBadge tone={getRegistrationWindowTone(timingInfo.registrationStatus)}>
                           {timingInfo.registrationLabel}
                         </StatusBadge>
+                        <div className="hidden sm:block">
+                          <HelpPopover label="Open note for Registration Rules">
+                            Registration availability depends on the event time zone, the open and close range, and the event date itself.
+                          </HelpPopover>
+                        </div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max Capacity</label>
                         <input
@@ -3155,20 +3208,30 @@ export default function App() {
                         />
                       </div>
                     </div>
-                    <p className="mt-4 text-xs text-slate-500">
-                      Registration rules are event-scoped. The system derives the effective event state from both the manual status and the event date.
-                    </p>
-                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 space-y-1">
-                      <p><span className="font-semibold text-slate-800">Current system time</span>: {timingInfo.nowLabel} ({timingInfo.timeZone})</p>
-                      <p><span className="font-semibold text-slate-800">Event date interpreted as</span>: {timingInfo.eventDateLabel}</p>
-                      <p><span className="font-semibold text-slate-800">Registration opens</span>: {timingInfo.startLabel}</p>
-                      <p><span className="font-semibold text-slate-800">Registration closes</span>: {timingInfo.endLabel}</p>
-                      {timingInfo.registrationStatus === "invalid" && (
-                        <p className="text-rose-700">
-                          Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
-                        </p>
-                      )}
+                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Current Time</p>
+                        <p className="mt-1 text-xs text-slate-700">{timingInfo.nowLabel}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">{timingInfo.timeZone}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Event Date</p>
+                        <p className="mt-1 text-xs text-slate-700">{timingInfo.eventDateLabel}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration Opens</p>
+                        <p className="mt-1 text-xs text-slate-700">{timingInfo.startLabel}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration Closes</p>
+                        <p className="mt-1 text-xs text-slate-700">{timingInfo.endLabel}</p>
+                      </div>
                     </div>
+                    {timingInfo.registrationStatus === "invalid" && (
+                      <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
+                        Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
+                      </div>
+                    )}
                     {settingsMessage && (
                       <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
                         {settingsMessage}
@@ -3288,7 +3351,19 @@ export default function App() {
                     )}
 
                     <div className="border-t border-slate-100 pt-5 space-y-3">
-                      <p className="text-sm font-semibold">Selected Event Details</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold">Selected Event Details</p>
+                        {selectedEvent && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge tone={selectedEvent.status === "active" ? "emerald" : selectedEvent.status === "pending" ? "amber" : selectedEvent.status === "cancelled" ? "rose" : "neutral"}>
+                              manual {selectedEvent.status}
+                            </StatusBadge>
+                            <StatusBadge tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}>
+                              effective {selectedEvent.effective_status}
+                            </StatusBadge>
+                          </div>
+                        )}
+                      </div>
                       <input
                         value={editingEventName}
                         onChange={(e) => setEditingEventName(e.target.value)}
@@ -3296,68 +3371,71 @@ export default function App() {
                         placeholder="Event name"
                         disabled={!selectedEvent}
                       />
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <ActionButton
                           onClick={() => void handleUpdateEvent()}
                           disabled={!selectedEvent || !editingEventName.trim() || editingEventName.trim() === selectedEvent?.name || eventLoading}
                           tone="blue"
                           active
-                          className="w-full text-sm"
+                          className="min-w-0 flex-1 text-sm sm:flex-none"
                         >
                           Save Event Name
                         </ActionButton>
+                        <InlineActionsMenu label="Status" tone="neutral">
+                          <MenuActionItem
+                            onClick={() => void handleUpdateEvent("pending")}
+                            disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || eventLoading}
+                            tone="amber"
+                          >
+                            <Activity className="h-3.5 w-3.5" />
+                            <span className="font-medium">Set Pending</span>
+                          </MenuActionItem>
+                          <MenuActionItem
+                            onClick={() => void handleUpdateEvent("active")}
+                            disabled={!selectedEvent || selectedEvent.status === "active" || eventLoading}
+                            tone="emerald"
+                            className="mt-1"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            <span className="font-medium">Launch Event</span>
+                          </MenuActionItem>
+                          <MenuActionItem
+                            onClick={() => void handleUpdateEvent("cancelled")}
+                            disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "cancelled" || eventLoading}
+                            tone="rose"
+                            className="mt-1"
+                          >
+                            <AlertCircle className="h-3.5 w-3.5" />
+                            <span className="font-medium">Cancel Event</span>
+                          </MenuActionItem>
+                        </InlineActionsMenu>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <ActionButton
-                          onClick={() => void handleUpdateEvent("pending")}
-                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || eventLoading}
-                          tone="amber"
-                          className="w-full text-sm"
-                        >
-                          Set Pending
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => void handleUpdateEvent("active")}
-                          disabled={!selectedEvent || selectedEvent.status === "active" || eventLoading}
-                          tone="emerald"
-                          className="w-full text-sm"
-                        >
-                          Launch Event
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => void handleUpdateEvent("cancelled")}
-                          disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "cancelled" || eventLoading}
-                          tone="rose"
-                          className="w-full text-sm"
-                        >
-                          Cancel Event
-                        </ActionButton>
-                      </div>
-                      {selectedEvent && (
-                        <p className="text-xs text-slate-500">
-                          Manual status: <code>{selectedEvent.status}</code>. Effective status now: <code>{selectedEvent.effective_status}</code>.
-                          {selectedEvent.effective_status === "closed" ? ` This event is automatically closed because its event date (${timingInfo.eventDateLabel}) is already in the past compared with current system time (${timingInfo.nowLabel}).` : ""}
-                        </p>
+                      {selectedEvent?.effective_status === "closed" && (
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                          This event is closed automatically because its event date ({timingInfo.eventDateLabel}) is already in the past compared with current system time ({timingInfo.nowLabel}).
+                        </div>
                       )}
                     </div>
 
                     <div className="border-t border-slate-100 pt-5 space-y-3">
                       <p className="text-sm font-semibold">Create New Event</p>
-                      <input
-                        value={newEventName}
-                        onChange={(e) => setNewEventName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="New event name"
-                      />
-                      <ActionButton
-                        onClick={() => void handleCreateEvent()}
-                        disabled={!newEventName.trim() || eventLoading}
-                        tone="neutral"
-                        active
-                        className="w-full text-sm"
-                      >
-                        Create Event
-                      </ActionButton>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          value={newEventName}
+                          onChange={(e) => setNewEventName(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="New event name"
+                        />
+                        <ActionButton
+                          onClick={() => void handleCreateEvent()}
+                          disabled={!newEventName.trim() || eventLoading}
+                          tone="neutral"
+                          active
+                          className="w-full text-sm sm:w-auto"
+                        >
+                          Create Event
+                        </ActionButton>
+                      </div>
                     </div>
 
                     {eventMessage && (
@@ -3977,34 +4055,38 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="flex min-h-[calc(100dvh-13rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-12rem)]"
+              className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)]"
             >
-              <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 p-4">
+              <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-3 sm:p-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-                    <Bot className="text-blue-600 w-6 h-6" />
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100">
+                    <Bot className="h-5 w-5 text-blue-600" />
                   </div>
                   <div>
                     <h3 className="font-semibold text-sm">Bot Simulator</h3>
-                    <div className="flex items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
                       <div className="w-2 h-2 bg-emerald-500 rounded-full" />
                       <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Active</span>
+                      <StatusBadge tone="neutral">{testMessages.length} msgs</StatusBadge>
                     </div>
                   </div>
                 </div>
-                <ActionButton 
-                  onClick={() => setTestMessages([])}
-                  tone="neutral"
-                  className="px-3 text-xs"
-                >
-                  Clear Chat
-                </ActionButton>
+                <InlineActionsMenu label="Actions" tone="neutral">
+                  <MenuActionItem
+                    onClick={() => setTestMessages([])}
+                    disabled={testMessages.length === 0}
+                    tone="neutral"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="font-medium">Clear Chat</span>
+                  </MenuActionItem>
+                </InlineActionsMenu>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-2 bg-slate-50/30">
+              <div className="flex-1 overflow-y-auto bg-slate-50/30 p-4 space-y-2 sm:p-6">
                 {testMessages.length === 0 && (
-                  <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-40">
-                    <MessageSquare className="w-12 h-12" />
+                  <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
+                    <MessageSquare className="h-10 w-10" />
                     <p className="text-sm max-w-xs">Start a conversation to test your bot's custom context.</p>
                   </div>
                 )}
@@ -4060,7 +4142,7 @@ export default function App() {
                 )}
               </div>
 
-              <div className="p-4 border-t border-slate-100">
+              <div className="border-t border-slate-100 p-3 sm:p-4">
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -4068,7 +4150,7 @@ export default function App() {
                     onChange={(e) => setInputText(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleTestSend()}
                     placeholder="Type a message..."
-                    className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   <ActionButton
                     onClick={handleTestSend}
@@ -4303,33 +4385,47 @@ export default function App() {
                           />
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <a
                             href={selectedTicketPngUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.blue.active} text-sm`}
+                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.blue.active} min-w-0 flex-1 text-sm sm:flex-none`}
                           >
                             <ExternalLink className="w-4 h-4" />
                             Open PNG Ticket
                           </a>
-                          <a
-                            href={selectedTicketPngUrl}
-                            download={`${selectedRegistration.id}.png`}
-                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.neutral.idle} text-sm`}
-                          >
-                            <Download className="w-4 h-4" />
-                            Download PNG
-                          </a>
-                          <a
-                            href={selectedTicketSvgUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.neutral.idle} text-sm sm:col-span-2`}
-                          >
-                            <QrCode className="w-4 h-4" />
-                            Open SVG Preview (fallback)
-                          </a>
+                          <InlineActionsMenu label="Ticket Actions" tone="neutral">
+                            <MenuActionLink
+                              href={selectedTicketPngUrl}
+                              download={`${selectedRegistration.id}.png`}
+                              tone="neutral"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              <span className="font-medium">Download PNG</span>
+                            </MenuActionLink>
+                            <MenuActionLink
+                              href={selectedTicketSvgUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              tone="blue"
+                              className="mt-1"
+                            >
+                              <QrCode className="h-3.5 w-3.5" />
+                              <span className="font-medium">Open SVG Preview</span>
+                            </MenuActionLink>
+                            {canChangeRegistrationStatus && (
+                              <MenuActionItem
+                                onClick={() => void deleteRegistration(selectedRegistration.id)}
+                                disabled={deleteRegistrationLoading}
+                                tone="rose"
+                                className="mt-1"
+                              >
+                                {deleteRegistrationLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                                <span className="font-medium">Delete Registration</span>
+                              </MenuActionItem>
+                            )}
+                          </InlineActionsMenu>
                         </div>
 
                         {canChangeRegistrationStatus && (
@@ -4351,9 +4447,13 @@ export default function App() {
                                       : "blue"
                                   }
                                   active={active}
-                                  className="w-full uppercase tracking-[0.18em]"
+                                  className="w-full text-sm"
                                 >
-                                  {statusOption}
+                                  {statusOption === "registered"
+                                    ? "Mark Registered"
+                                    : statusOption === "checked-in"
+                                    ? "Mark Checked In"
+                                    : "Mark Cancelled"}
                                 </ActionButton>
                               );
                             })}
@@ -4364,24 +4464,6 @@ export default function App() {
                             </p>
                           )}
                         </div>
-                        )}
-
-                        {canChangeRegistrationStatus && (
-                          <div className="border-t border-slate-100 pt-4">
-                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Danger Zone</p>
-                            <ActionButton
-                              onClick={() => void deleteRegistration(selectedRegistration.id)}
-                              disabled={deleteRegistrationLoading}
-                              tone="rose"
-                              className="text-sm"
-                            >
-                              {deleteRegistrationLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                              Delete Registration
-                            </ActionButton>
-                            <p className="mt-2 text-xs text-slate-500">
-                              This permanently removes the attendee record from the registration list.
-                            </p>
-                          </div>
                         )}
                       </div>
                     )}
@@ -4755,7 +4837,10 @@ export default function App() {
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="flex items-center justify-between border-b border-slate-100 p-5 sm:p-6">
                   <div>
-                    <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
+                      <StatusBadge tone="neutral">{messages.length} items</StatusBadge>
+                    </div>
                     <p className="text-sm text-slate-500">Inbound messages plus delivery traces from active channels.</p>
                   </div>
                   <button onClick={() => void fetchMessages(selectedEventId)} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
@@ -4774,26 +4859,36 @@ export default function App() {
                         <div key={msg.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-xs text-slate-500">{new Date(msg.timestamp).toLocaleString()}</p>
-                              <p className="mt-1 break-all font-mono text-xs text-blue-600">{msg.sender_id}</p>
+                              <p className="text-sm font-semibold text-slate-900">{lineTrace ? "Delivery Trace" : msg.type === "incoming" ? "Incoming Message" : "Outgoing Message"}</p>
                             </div>
-                            <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
-                              {lineTrace ? "trace" : msg.type}
-                            </StatusBadge>
+                            <div className="flex flex-wrap gap-2">
+                              {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
+                              <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
+                                {lineTrace ? "trace" : msg.type}
+                              </StatusBadge>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
+                              <p className="mt-1 break-all font-mono text-[11px] text-blue-600">{msg.sender_id}</p>
+                            </div>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Time</p>
+                              <p className="mt-1 text-[11px] text-slate-700">{new Date(msg.timestamp).toLocaleString()}</p>
+                            </div>
                           </div>
                           {lineTrace ? (
-                            <div className="space-y-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <StatusBadge tone="emerald">line</StatusBadge>
-                                <StatusBadge tone="amber">delivery trace</StatusBadge>
-                                <span className="text-[11px] font-semibold text-slate-600">
-                                  {formatTraceStatusLabel(lineTrace.status)}
-                                </span>
-                              </div>
-                              <p className="text-sm break-words text-slate-700">{lineTrace.detail || "-"}</p>
+                            <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-700">Trace Status</p>
+                              <p className="mt-1 text-sm font-semibold text-slate-900">{formatTraceStatusLabel(lineTrace.status)}</p>
+                              <p className="mt-2 text-sm break-words text-slate-700">{lineTrace.detail || "-"}</p>
                             </div>
                           ) : (
-                            <p className="text-sm break-words text-slate-700">{msg.text}</p>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Message</p>
+                              <p className="mt-2 text-sm break-words text-slate-700">{msg.text}</p>
+                            </div>
                           )}
                         </div>
                       );
