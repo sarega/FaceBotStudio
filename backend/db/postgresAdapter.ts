@@ -57,6 +57,11 @@ function generateEntityId(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, "")}`;
 }
 
+function parseRegistrationLimit(value: unknown) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function slugifyText(value: string) {
   return String(value || "")
     .toLowerCase()
@@ -372,16 +377,6 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const settings = await this.getSettingsMap(eventId);
-    const countResult = await this.pool.query<{ count: string }>(
-      "SELECT COUNT(*)::text AS count FROM registrations WHERE event_id = $1 AND status != 'cancelled'",
-      [eventId],
-    );
-    const activeCount = Number.parseInt(countResult.rows[0]?.count || "0", 10);
-    const limit = Number.parseInt(settings.reg_limit || "200", 10);
-    if (activeCount >= limit) {
-      return { statusCode: 400, content: { error: "Registration limit reached" } };
-    }
-
     const eventState = getEventState(settings);
     if (eventState.registrationStatus === "invalid") {
       return { statusCode: 400, content: { error: "Registration window is invalid. Close date is earlier than open date." } };
@@ -393,19 +388,41 @@ export class PostgresAppDatabase implements AppDatabase {
       return { statusCode: 400, content: { error: "Registration has closed" } };
     }
 
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const id = generateRegistrationId();
-      try {
-        await this.pool.query(
-          `INSERT INTO registrations (id, sender_id, event_id, first_name, last_name, phone, email)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [id, senderId, eventId, firstName, lastName, phone, email],
+    const limit = parseRegistrationLimit(settings.reg_limit);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM events WHERE id = $1 FOR UPDATE", [eventId]);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const countResult = await client.query<{ count: string }>(
+          "SELECT COUNT(*)::text AS count FROM registrations WHERE event_id = $1 AND status != 'cancelled'",
+          [eventId],
         );
-        return { statusCode: 200, content: { id, status: "success" } };
-      } catch (error: any) {
-        if (error?.code === "23505") continue;
-        throw error;
+        const activeCount = Number.parseInt(countResult.rows[0]?.count || "0", 10);
+        if (limit !== null && activeCount >= limit) {
+          await client.query("ROLLBACK");
+          return { statusCode: 400, content: { error: "Registration limit reached" } };
+        }
+
+        const id = generateRegistrationId();
+        try {
+          await client.query(
+            `INSERT INTO registrations (id, sender_id, event_id, first_name, last_name, phone, email)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [id, senderId, eventId, firstName, lastName, phone, email],
+          );
+          await client.query("COMMIT");
+          return { statusCode: 200, content: { id, status: "success" } };
+        } catch (error: any) {
+          if (error?.code === "23505") continue;
+          throw error;
+        }
       }
+
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
     }
 
     return { statusCode: 500, content: { error: "Failed to generate unique registration ID" } };

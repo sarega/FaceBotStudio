@@ -54,6 +54,11 @@ function generateEntityId(prefix: string) {
   return `${prefix}_${randomUUID().replace(/-/g, "")}`;
 }
 
+function parseRegistrationLimit(value: unknown) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function slugifyText(value: string) {
   return String(value || "")
     .toLowerCase()
@@ -557,12 +562,12 @@ export class SqliteAppDatabase implements AppDatabase {
       return { statusCode: 400, content: { error: "This event has not been launched yet" } };
     }
 
+    const settings = await this.getSettingsMap(eventId);
     const countRow = this.db.prepare(
       "SELECT COUNT(*) as count FROM registrations WHERE event_id = ? AND status != 'cancelled'",
     ).get(eventId) as { count: number };
-    const settings = await this.getSettingsMap(eventId);
-    const limit = Number.parseInt(settings.reg_limit || "200", 10);
-    if (countRow.count >= limit) {
+    const limit = parseRegistrationLimit(settings.reg_limit);
+    if (limit !== null && countRow.count >= limit) {
       return { statusCode: 400, content: { error: "Registration limit reached" } };
     }
 

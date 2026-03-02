@@ -478,6 +478,54 @@ function getRegistrationWindowTone(status: RegistrationWindowUiState): BadgeTone
   }
 }
 
+function parseRegistrationLimitValue(value: string | null | undefined) {
+  const parsed = Number.parseInt(String(value || "").trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function describeRegistrationCapacity(limitValue: string | null | undefined, activeCount: number) {
+  const limit = parseRegistrationLimitValue(limitValue);
+  const remaining = limit === null ? null : Math.max(limit - activeCount, 0);
+  const isFull = limit !== null && activeCount >= limit;
+  const fillPercent = limit === null ? null : limit <= 0 ? 100 : Math.min(100, Math.round((activeCount / limit) * 100));
+
+  return {
+    limit,
+    remaining,
+    isFull,
+    fillPercent,
+  };
+}
+
+function describeRegistrationAvailability(
+  eventStatus: EventStatus | null | undefined,
+  windowStatus: RegistrationWindowUiState,
+  isFull: boolean,
+) {
+  if (eventStatus === "cancelled") {
+    return { label: "Cancelled", tone: "rose" as const, helper: "This event was cancelled." };
+  }
+  if (eventStatus === "closed") {
+    return { label: "Ended", tone: "neutral" as const, helper: "The event date has already passed." };
+  }
+  if (eventStatus === "pending") {
+    return { label: "Pending", tone: "amber" as const, helper: "Launch the event before accepting registrations." };
+  }
+  if (windowStatus === "invalid") {
+    return { label: "Schedule Error", tone: "rose" as const, helper: "Registration dates are misconfigured." };
+  }
+  if (windowStatus === "not_started") {
+    return { label: "Not Open", tone: "amber" as const, helper: "Registration has not opened yet." };
+  }
+  if (windowStatus === "closed") {
+    return { label: "Closed", tone: "rose" as const, helper: "Registration has passed its close date." };
+  }
+  if (isFull) {
+    return { label: "Full", tone: "rose" as const, helper: "Capacity is full, so new registrations are blocked." };
+  }
+  return { label: "Open", tone: "emerald" as const, helper: "New registrations can still be accepted." };
+}
+
 function getDocumentEmbeddingTone(status: string | null | undefined): BadgeTone {
   switch (status) {
     case "ready":
@@ -1169,6 +1217,12 @@ export default function App() {
     : "";
   const timingInfo = describeEventTiming(settings);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
+  const registrationCapacity = describeRegistrationCapacity(settings.reg_limit, activeAttendeeCount);
+  const registrationAvailability = describeRegistrationAvailability(
+    selectedEvent?.effective_status,
+    timingInfo.registrationStatus,
+    registrationCapacity.isFull,
+  );
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
   const selectedChannelPlatformDefinition = channelPlatformDefinitions.find((definition) => definition.id === newChannelPlatform) || null;
   const editingChannel = channels.find((channel) => `${channel.platform}:${channel.external_id}` === editingChannelKey) || null;
@@ -3900,6 +3954,9 @@ export default function App() {
                         <StatusBadge tone={getRegistrationWindowTone(timingInfo.registrationStatus)}>
                           {timingInfo.registrationLabel}
                         </StatusBadge>
+                        {registrationCapacity.isFull && (
+                          <StatusBadge tone="rose">Capacity Full</StatusBadge>
+                        )}
                         <div className="hidden sm:block">
                           <HelpPopover label="Open note for Registration Rules">
                             Registration availability depends on the event time zone, the open and close range, and the event date itself.
@@ -3958,6 +4015,11 @@ export default function App() {
                     {timingInfo.registrationStatus === "invalid" && (
                       <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
                         Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
+                      </div>
+                    )}
+                    {registrationCapacity.isFull && (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
+                        Capacity is full. New registrations are blocked until you increase the limit or cancel an attendee.
                       </div>
                     )}
                     {settingsMessage && (
@@ -5071,9 +5133,14 @@ export default function App() {
                         <div className="mb-1 flex items-center gap-2">
                           <h2 className="text-lg font-semibold">Registered Attendees</h2>
                           <StatusBadge tone="neutral">{filteredRegistrations.length}</StatusBadge>
+                          <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
                         </div>
                         <p className="text-sm text-slate-500">
-                          Search fast, then progressively load more rows when this event gets large.
+                          {registrationCapacity.limit === null
+                            ? `${activeAttendeeCount} active attendees. Search fast, then progressively load more rows when this event gets large.`
+                            : registrationCapacity.remaining === 0
+                            ? `Capacity is full. ${activeAttendeeCount} of ${registrationCapacity.limit} seats are occupied, so new registrations are blocked.`
+                            : `${activeAttendeeCount} of ${registrationCapacity.limit} seats filled. ${registrationCapacity.remaining} seats remaining before registration closes for capacity.`}
                         </p>
                       </div>
                       <InlineActionsMenu label="Actions" tone="neutral">
@@ -5222,27 +5289,68 @@ export default function App() {
                         </h3>
                         <p className="hidden text-xs text-slate-500 sm:block">Glanceable live totals for this event.</p>
                       </div>
+                      <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
                     </div>
-                    <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-5">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total</p>
-                        <p className="mt-1 text-base font-bold text-slate-900">{registrations.length}</p>
+                    <div className="space-y-3">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Seat Capacity</p>
+                            <p className="mt-1 text-2xl font-bold text-slate-900">
+                              {registrationCapacity.limit === null ? activeAttendeeCount : `${activeAttendeeCount}/${registrationCapacity.limit}`}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {registrationCapacity.limit === null
+                                ? "No hard capacity limit is configured for this event."
+                                : registrationCapacity.remaining === 0
+                                ? "No seats remaining. Registration now stops at capacity."
+                                : `${registrationCapacity.remaining} seats remain before registration auto-closes for capacity.`}
+                            </p>
+                          </div>
+                          {registrationCapacity.limit !== null && (
+                            <div className="text-right">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Filled</p>
+                              <p className="mt-1 text-lg font-bold text-slate-900">{registrationCapacity.fillPercent}%</p>
+                            </div>
+                          )}
+                        </div>
+                        {registrationCapacity.limit !== null && (
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                            <div
+                              className={`h-full rounded-full transition-[width] ${
+                                registrationCapacity.isFull ? "bg-rose-500" : "bg-blue-600"
+                              }`}
+                              style={{ width: `${registrationCapacity.fillPercent}%` }}
+                            />
+                          </div>
+                        )}
                       </div>
-                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Registered</p>
-                        <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total</p>
+                          <p className="mt-1 text-base font-bold text-slate-900">{registrations.length}</p>
+                        </div>
+                        <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Registered</p>
+                          <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
+                        </div>
+                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">Checked</p>
+                          <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Cancelled</p>
+                          <p className="mt-1 text-base font-bold text-slate-700">{cancelledCount}</p>
+                        </div>
                       </div>
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">Checked In</p>
-                        <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Cancelled</p>
-                        <p className="mt-1 text-base font-bold text-slate-700">{cancelledCount}</p>
-                      </div>
-                      <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-violet-600">Check-in Rate</p>
-                        <p className="mt-1 text-base font-bold text-violet-700">{checkInRate}%</p>
+
+                      <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Check-in Rate</p>
+                          <p className="mt-1 text-xs text-slate-500">{registrationAvailability.helper}</p>
+                        </div>
+                        <p className="text-lg font-bold text-violet-700">{checkInRate}%</p>
                       </div>
                     </div>
                   </div>

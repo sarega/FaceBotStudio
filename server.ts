@@ -43,7 +43,7 @@ import {
   verifyPassword,
   type UserRole,
 } from "./backend/auth";
-import { formatStoredDateForDisplay, getEventState, normalizeTimeZone } from "./backend/datetime";
+import { formatStoredDateForDisplay, getEventState, normalizeTimeZone, type RegistrationWindowState } from "./backend/datetime";
 import {
   createAppDatabase,
   type AuthUserRow,
@@ -152,7 +152,48 @@ const inboundConversationTails = new Map<string, Promise<void>>();
 const inboundHandledMessageIds = new Map<string, number>();
 const inboundConversationActivity = new Map<string, number>();
 
-function buildEventInfo(settings: Record<string, any>, eventStatus = "active") {
+function parseRegistrationLimit(value: unknown) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+type EventCapacitySnapshot = {
+  activeCount: number;
+  cancelledCount: number;
+  limit: number | null;
+  remainingCount: number | null;
+  isFull: boolean;
+  capacityStatus: "available" | "full" | "unlimited";
+  registrationAvailability: RegistrationWindowState | "full";
+};
+
+async function getEventCapacitySnapshot(eventId: string, settings: Record<string, any>): Promise<EventCapacitySnapshot> {
+  const registrations = await appDb.listRegistrations(undefined, eventId);
+  const activeCount = registrations.filter((registration) => registration.status !== "cancelled").length;
+  const cancelledCount = registrations.length - activeCount;
+  const limit = parseRegistrationLimit(settings.reg_limit);
+  const remainingCount = limit === null ? null : Math.max(limit - activeCount, 0);
+  const isFull = limit !== null && activeCount >= limit;
+  const eventState = getEventState(settings);
+
+  return {
+    activeCount,
+    cancelledCount,
+    limit,
+    remainingCount,
+    isFull,
+    capacityStatus: limit === null ? "unlimited" : isFull ? "full" : "available",
+    registrationAvailability: eventState.registrationStatus === "open" && isFull
+      ? "full"
+      : eventState.registrationStatus,
+  };
+}
+
+function buildEventInfo(
+  settings: Record<string, any>,
+  eventStatus = "active",
+  capacitySnapshot?: EventCapacitySnapshot | null,
+) {
   const eventState = getEventState(settings);
   return `
 Current Event Details:
@@ -166,26 +207,38 @@ Current Event Details:
 - Description: ${settings.event_description || ""}
 - Travel: ${settings.event_travel || ""}
 - Registration Limit: ${settings.reg_limit || ""}
+- Active Registrations Right Now: ${capacitySnapshot?.activeCount ?? 0}
+- Cancelled Registrations Right Now: ${capacitySnapshot?.cancelledCount ?? 0}
+- Remaining Seats Right Now: ${capacitySnapshot?.remainingCount == null ? "unlimited" : capacitySnapshot.remainingCount}
+- Registration Capacity Status Right Now: ${capacitySnapshot?.capacityStatus || "available"}
 - Registration Period: ${eventState.startLabel} to ${eventState.endLabel}
 - Registration Status Right Now: ${eventState.registrationStatus}
+- Registration Availability Right Now: ${capacitySnapshot?.registrationAvailability || eventState.registrationStatus}
 - Event Lifecycle Right Now: ${eventState.eventLifecycle}
 `;
 }
 
-function getSystemInstruction(settings: Record<string, any>, eventStatus = "active", knowledgeContext = "") {
+function getSystemInstruction(
+  settings: Record<string, any>,
+  eventStatus = "active",
+  knowledgeContext = "",
+  capacitySnapshot?: EventCapacitySnapshot | null,
+) {
   const globalPrompt = String(settings.global_system_prompt || "").trim();
   const eventContext = String(settings.context || "").trim();
   return [
     globalPrompt,
     eventContext ? `Event Context:\n${eventContext}` : "",
     knowledgeContext,
-    buildEventInfo(settings, eventStatus),
+    buildEventInfo(settings, eventStatus, capacitySnapshot),
     "Never guess the current date or time. Use the Current System Time above as the source of truth.",
     "Respect the Event Status Right Now field.",
     "If event status is pending, explain that the event is still being prepared and registration has not launched yet.",
     "If event status is cancelled, clearly explain that the event has been cancelled.",
     "If event status is closed, clearly explain that the event has already ended.",
     "Respect the Registration Status Right Now field. If it is invalid, explain that the registration schedule is misconfigured. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
+    "Respect the Registration Availability Right Now field. If it is full, clearly explain that registration is currently unavailable because capacity is full.",
+    "Do not volunteer exact remaining seat counts unless the user asks, but never imply registration is still open when capacity is full.",
     "If the event lifecycle is past, explain that the event date has already passed.",
     "Treat multiple user messages sent close together as one bundled request. Reply once and merge overlapping questions into one concise answer.",
     "If recent history already has an assistant reply, do not greet again and do not restart the conversation from zero.",
@@ -1553,6 +1606,7 @@ async function requestOpenRouterChat(
   eventStatus = "active",
   knowledgeContext = "",
   usageContext?: LlmUsageContext,
+  eventId?: string,
 ): Promise<NormalizedChatResponse> {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is not configured in .env");
@@ -1563,6 +1617,7 @@ async function requestOpenRouterChat(
     : (typeof settings.global_llm_model === "string" && settings.global_llm_model.trim())
     ? settings.global_llm_model.trim()
     : DEFAULT_OPENROUTER_MODEL;
+  const capacitySnapshot = eventId ? await getEventCapacitySnapshot(eventId, settings) : null;
 
   const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -1572,7 +1627,7 @@ async function requestOpenRouterChat(
       messages: [
         {
           role: "system",
-          content: getSystemInstruction(settings, eventStatus, knowledgeContext),
+          content: getSystemInstruction(settings, eventStatus, knowledgeContext, capacitySnapshot),
         },
         ...normalizeHistoryForOpenRouter(history),
         {
@@ -1771,6 +1826,7 @@ async function generateBotReplyForSender(
       source: "channel_reply",
       metadata: { stage: "initial" },
     },
+    eventId,
   );
   let finalResponse = firstResponse;
   let ticketRegistrationIds: string[] = [];
@@ -1800,6 +1856,7 @@ async function generateBotReplyForSender(
         source: "channel_reply",
         metadata: { stage: "tool_followup", tool_count: firstResponse.functionCalls.length },
       },
+      eventId,
     );
   }
 
@@ -4092,6 +4149,7 @@ async function startServer() {
           source: "admin_test",
           metadata: { stage: hasToolResponses ? "tool_followup" : "initial" },
         },
+        eventId,
       );
       res.json(response);
     } catch (error) {
