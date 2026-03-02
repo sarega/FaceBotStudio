@@ -746,6 +746,7 @@ export default function App() {
   const [scannerError, setScannerError] = useState("");
   const [lastScannedValue, setLastScannedValue] = useState("");
   const [operationsMenuOpen, setOperationsMenuOpen] = useState(false);
+  const [knowledgeActionsOpen, setKnowledgeActionsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -757,6 +758,7 @@ export default function App() {
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
+  const knowledgeActionsRef = useRef<HTMLDivElement | null>(null);
   selectedEventIdRef.current = selectedEventId;
 
   const checkinAccessMode = Boolean(checkinAccessToken);
@@ -1192,6 +1194,7 @@ export default function App() {
 
   useEffect(() => {
     setOperationsMenuOpen(false);
+    setKnowledgeActionsOpen(false);
     setHelpOpen(false);
   }, [activeTab]);
 
@@ -1207,6 +1210,19 @@ export default function App() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [operationsMenuOpen]);
+
+  useEffect(() => {
+    if (!knowledgeActionsOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!knowledgeActionsRef.current?.contains(event.target as Node)) {
+        setKnowledgeActionsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [knowledgeActionsOpen]);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -3222,35 +3238,57 @@ export default function App() {
                           <h2 className="text-lg font-semibold">Event Context</h2>
                           <p className="text-sm text-slate-500">Per-event FAQ, source text, and response guidance for the selected workspace.</p>
                         </div>
-                        <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-3 lg:flex lg:flex-wrap lg:justify-end">
-                        <ActionButton
-                          onClick={() => void handleResetEventKnowledge(false)}
-                          disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
-                          tone="amber"
-                          className="w-full text-sm sm:w-auto"
-                        >
-                          {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
-                          Clear Knowledge Docs
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => void handleResetEventKnowledge(true)}
-                          disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
-                          tone="rose"
-                          className="w-full text-sm sm:w-auto"
-                        >
-                          {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
-                          Reset All Knowledge
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => void saveEventContext()}
-                          disabled={saving || !canManageKnowledge}
-                          tone="blue"
-                          active
-                          className="w-full text-sm sm:w-auto"
-                        >
-                          {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                          Save Event Context
-                        </ActionButton>
+                        <div className="flex w-full items-stretch gap-2 sm:w-auto lg:justify-end">
+                          <ActionButton
+                            onClick={() => void saveEventContext()}
+                            disabled={saving || !canManageKnowledge}
+                            tone="blue"
+                            active
+                            className="min-w-0 flex-1 text-sm sm:flex-none"
+                          >
+                            {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            Save Event Context
+                          </ActionButton>
+                          <div className="relative shrink-0" ref={knowledgeActionsRef}>
+                            <ActionButton
+                              onClick={() => setKnowledgeActionsOpen((open) => !open)}
+                              disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
+                              tone="rose"
+                              className="min-h-full min-w-[3rem] px-3 text-sm"
+                              aria-expanded={knowledgeActionsOpen}
+                              aria-haspopup="menu"
+                            >
+                              {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
+                              <span className="sr-only sm:not-sr-only">Danger</span>
+                              <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${knowledgeActionsOpen ? "rotate-180" : ""}`} />
+                            </ActionButton>
+                            {knowledgeActionsOpen && (
+                              <div className="absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                                <button
+                                  onClick={() => {
+                                    setKnowledgeActionsOpen(false);
+                                    void handleResetEventKnowledge(false);
+                                  }}
+                                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-amber-700 transition-colors hover:bg-amber-50"
+                                  role="menuitem"
+                                >
+                                  <AlertCircle className="h-4 w-4 shrink-0" />
+                                  <span className="font-medium">Clear Knowledge Docs</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setKnowledgeActionsOpen(false);
+                                    void handleResetEventKnowledge(true);
+                                  }}
+                                  className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-rose-700 transition-colors hover:bg-rose-50"
+                                  role="menuitem"
+                                >
+                                  <AlertCircle className="h-4 w-4 shrink-0" />
+                                  <span className="font-medium">Reset All Knowledge</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
