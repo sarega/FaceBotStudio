@@ -29,6 +29,14 @@
     overscroll-behavior-x: none;
     overscroll-behavior-y: none;
     touch-action: manipulation;
+    -webkit-touch-callout: none;
+  }
+
+  body,
+  #root,
+  .app-shell {
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   button,
@@ -48,13 +56,14 @@
     user-select: none;
   }
 
-  input,
-  textarea,
+  input:not([readonly]),
+  textarea:not([readonly]),
   select,
-  pre,
-  code {
+  option,
+  [contenteditable="true"] {
     -webkit-user-select: text;
     user-select: text;
+    -webkit-touch-callout: default;
   }
 
   html.theme-dark body {
