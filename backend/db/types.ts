@@ -219,6 +219,40 @@ export interface CreateCheckinSessionInput {
   token_hash: string;
 }
 
+export interface RecordLlmUsageInput {
+  event_id?: string | null;
+  actor_user_id?: string | null;
+  source: string;
+  provider: string;
+  model: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LlmUsageTotalsRow {
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  last_used_at: string | null;
+}
+
+export interface LlmUsageModelSummaryRow extends LlmUsageTotalsRow {
+  provider: string;
+  model: string;
+}
+
+export interface LlmUsageSummaryRow {
+  overall: LlmUsageTotalsRow;
+  selected_event: LlmUsageTotalsRow;
+  overall_models: LlmUsageModelSummaryRow[];
+  selected_event_models: LlmUsageModelSummaryRow[];
+}
+
 export interface AppDatabase {
   driver: "postgres" | "sqlite";
   initialize(): Promise<void>;
@@ -279,6 +313,8 @@ export interface AppDatabase {
   updateUserLastLogin(userId: string): Promise<void>;
   recordAuditLog(entry: AuditLogEntryInput): Promise<void>;
   listAuditLogs(limit: number): Promise<AuditLogRow[]>;
+  recordLlmUsage(entry: RecordLlmUsageInput): Promise<void>;
+  getLlmUsageSummary(eventId?: string): Promise<LlmUsageSummaryRow>;
   listCheckinSessions(eventId: string): Promise<CheckinSessionRow[]>;
   createCheckinSession(input: CreateCheckinSessionInput): Promise<CheckinSessionRow>;
   getCheckinSessionByTokenHash(tokenHash: string): Promise<CheckinSessionRow | undefined>;

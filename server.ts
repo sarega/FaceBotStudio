@@ -91,7 +91,21 @@ type NormalizedChatResponse = {
   }>;
   meta?: {
     model?: string;
+    provider?: string;
+    usage?: {
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      estimated_cost_usd: number;
+    };
   };
+};
+
+type LlmUsageContext = {
+  eventId?: string;
+  actorUserId?: string | null;
+  source: string;
+  metadata?: Record<string, unknown>;
 };
 
 type ToolExecutionBundle = {
@@ -1275,12 +1289,28 @@ async function cancelRegistration(id: unknown) {
   return appDb.cancelRegistration(id);
 }
 
+function normalizeOpenRouterUsage(payload: any) {
+  const usage = payload?.usage && typeof payload.usage === "object" ? payload.usage : {};
+  const promptTokens = Math.max(0, Number(usage?.prompt_tokens ?? usage?.input_tokens ?? 0));
+  const completionTokens = Math.max(0, Number(usage?.completion_tokens ?? usage?.output_tokens ?? 0));
+  const totalTokens = Math.max(0, Number(usage?.total_tokens ?? promptTokens + completionTokens));
+  const estimatedCostUsd = Math.max(0, Number(usage?.cost ?? payload?.cost ?? 0));
+
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+    estimated_cost_usd: estimatedCostUsd,
+  };
+}
+
 async function requestOpenRouterChat(
   message: string,
   history: ChatHistoryMessage[],
   settings: Record<string, any>,
   eventStatus = "active",
   knowledgeContext = "",
+  usageContext?: LlmUsageContext,
 ): Promise<NormalizedChatResponse> {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is not configured in .env");
@@ -1352,6 +1382,7 @@ async function requestOpenRouterChat(
   if (!upstream.ok) {
     throw new Error(payload?.error?.message || "OpenRouter chat request failed");
   }
+  const usage = normalizeOpenRouterUsage(payload);
 
   const assistantMessage = payload?.choices?.[0]?.message || {};
   const assistantText = extractAssistantText(assistantMessage.content);
@@ -1380,6 +1411,29 @@ async function requestOpenRouterChat(
     parts.push({ text: "" });
   }
 
+  if (usageContext) {
+    try {
+      await appDb.recordLlmUsage({
+        event_id: usageContext.eventId || null,
+        actor_user_id: usageContext.actorUserId || null,
+        source: usageContext.source,
+        provider: "openrouter",
+        model: String(payload?.model || model),
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        estimated_cost_usd: usage.estimated_cost_usd,
+        metadata: {
+          history_length: history.length,
+          has_knowledge_context: Boolean(String(knowledgeContext || "").trim()),
+          ...usageContext.metadata,
+        },
+      });
+    } catch (error) {
+      console.warn("Failed to record LLM usage:", error);
+    }
+  }
+
   return {
     candidates: [
       {
@@ -1389,6 +1443,8 @@ async function requestOpenRouterChat(
     functionCalls,
     meta: {
       model: payload?.model || model,
+      provider: "openrouter",
+      usage,
     },
   };
 }
@@ -1462,7 +1518,18 @@ async function generateBotReplyForSender(
   const event = await appDb.getEventById(eventId);
   const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId);
 
-  const firstResponse = await requestOpenRouterChat(incomingText, history, settings, event?.effective_status || "active", knowledgeContext);
+  const firstResponse = await requestOpenRouterChat(
+    incomingText,
+    history,
+    settings,
+    event?.effective_status || "active",
+    knowledgeContext,
+    {
+      eventId,
+      source: "channel_reply",
+      metadata: { stage: "initial" },
+    },
+  );
   let finalResponse = firstResponse;
   let ticketRegistrationIds: string[] = [];
 
@@ -1486,6 +1553,11 @@ async function generateBotReplyForSender(
       settings,
       event?.effective_status || "active",
       knowledgeContext,
+      {
+        eventId,
+        source: "channel_reply",
+        metadata: { stage: "tool_followup", tool_count: firstResponse.functionCalls.length },
+      },
     );
   }
 
@@ -3685,7 +3757,18 @@ async function startServer() {
     }
   });
 
-  app.post("/api/llm/chat", requireRoles(["owner", "admin", "operator"]), async (req, res) => {
+  app.get("/api/llm/usage-summary", requireRoles(["owner", "admin"]), async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const summary = await appDb.getLlmUsageSummary(eventId);
+      res.json(summary);
+    } catch (error) {
+      console.error("LLM usage summary error:", error);
+      res.status(500).json({ error: "Failed to fetch LLM usage summary" });
+    }
+  });
+
+  app.post("/api/llm/chat", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
       const body = req.body || {};
       const message = typeof body.message === "string" ? body.message : "";
@@ -3698,7 +3781,22 @@ async function startServer() {
       const chunks = await getEventDocumentChunks(eventId);
       const knowledgeContext = buildKnowledgeContext(documents, chunks, message);
       const event = await appDb.getEventById(eventId);
-      const response = await requestOpenRouterChat(message, history, settings, event?.effective_status || "active", knowledgeContext);
+      const hasToolResponses = history.some((entry) =>
+        Array.isArray(entry?.parts) && entry.parts.some((part) => Boolean(part?.functionResponse)),
+      );
+      const response = await requestOpenRouterChat(
+        message,
+        history,
+        settings,
+        event?.effective_status || "active",
+        knowledgeContext,
+        {
+          eventId,
+          actorUserId: req.auth?.user.id || null,
+          source: "admin_test",
+          metadata: { stage: hasToolResponses ? "tool_followup" : "initial" },
+        },
+      );
       res.json(response);
     } catch (error) {
       console.error("OpenRouter chat error:", error);

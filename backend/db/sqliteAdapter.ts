@@ -25,6 +25,10 @@ import type {
   ManualEventStatus,
   MessageRow,
   MessageType,
+  LlmUsageModelSummaryRow,
+  LlmUsageSummaryRow,
+  LlmUsageTotalsRow,
+  RecordLlmUsageInput,
   RegistrationInput,
   RegistrationResult,
   RegistrationRow,
@@ -65,6 +69,37 @@ function parseAuditMetadata(value: unknown) {
   } catch {
     return {};
   }
+}
+
+function emptyLlmUsageTotals(): LlmUsageTotalsRow {
+  return {
+    request_count: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    estimated_cost_usd: 0,
+    last_used_at: null,
+  };
+}
+
+function mapLlmUsageTotalsRow(row?: Record<string, unknown>) {
+  if (!row) return emptyLlmUsageTotals();
+  return {
+    request_count: Number(row.request_count || 0),
+    prompt_tokens: Number(row.prompt_tokens || 0),
+    completion_tokens: Number(row.completion_tokens || 0),
+    total_tokens: Number(row.total_tokens || 0),
+    estimated_cost_usd: Number(row.estimated_cost_usd || 0),
+    last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
+  } satisfies LlmUsageTotalsRow;
+}
+
+function mapLlmUsageModelSummaryRow(row: Record<string, unknown>) {
+  return {
+    provider: String(row.provider || "openrouter"),
+    model: String(row.model || ""),
+    ...mapLlmUsageTotalsRow(row),
+  } satisfies LlmUsageModelSummaryRow;
 }
 
 function mapEventBaseRow(row: Record<string, unknown>) {
@@ -254,6 +289,22 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
       );
+      CREATE TABLE IF NOT EXISTS llm_usage_events (
+        id TEXT PRIMARY KEY,
+        event_id TEXT,
+        actor_user_id TEXT,
+        source TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_tokens INTEGER NOT NULL DEFAULT 0,
+        completion_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        estimated_cost_usd REAL NOT NULL DEFAULT 0,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL,
+        FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -324,6 +375,9 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions (token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
       CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_event_created_at ON llm_usage_events (event_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_created_at ON llm_usage_events (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_llm_usage_events_model ON llm_usage_events (provider, model);
       CREATE INDEX IF NOT EXISTS idx_event_settings_event_id ON event_settings (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_event_id ON facebook_pages (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_page_id ON facebook_pages (page_id);
@@ -1208,6 +1262,97 @@ export class SqliteAppDatabase implements AppDatabase {
       metadata: parseAuditMetadata(row.metadata),
       created_at: String(row.created_at),
     } satisfies AuditLogRow));
+  }
+
+  async recordLlmUsage(entry: RecordLlmUsageInput) {
+    this.db.prepare(
+      `INSERT INTO llm_usage_events (
+        id, event_id, actor_user_id, source, provider, model,
+        prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, metadata
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      generateEntityId("llm"),
+      entry.event_id || null,
+      entry.actor_user_id || null,
+      String(entry.source || "unknown"),
+      String(entry.provider || "openrouter"),
+      String(entry.model || ""),
+      Math.max(0, Number(entry.prompt_tokens || 0)),
+      Math.max(0, Number(entry.completion_tokens || 0)),
+      Math.max(0, Number(entry.total_tokens || 0)),
+      Math.max(0, Number(entry.estimated_cost_usd || 0)),
+      JSON.stringify(entry.metadata || {}),
+    );
+  }
+
+  async getLlmUsageSummary(eventId?: string) {
+    const overallRow = this.db.prepare(
+      `SELECT
+        COUNT(*) AS request_count,
+        COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+        MAX(created_at) AS last_used_at
+       FROM llm_usage_events`,
+    ).get() as Record<string, unknown> | undefined;
+
+    const selectedEventRow = eventId
+      ? this.db.prepare(
+          `SELECT
+            COUNT(*) AS request_count,
+            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens,
+            COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+            MAX(created_at) AS last_used_at
+           FROM llm_usage_events
+           WHERE event_id = ?`,
+        ).get(String(eventId || "").trim()) as Record<string, unknown> | undefined
+      : undefined;
+
+    const overallModels = this.db.prepare(
+      `SELECT
+        provider,
+        model,
+        COUNT(*) AS request_count,
+        COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+        MAX(created_at) AS last_used_at
+       FROM llm_usage_events
+       GROUP BY provider, model
+       ORDER BY total_tokens DESC, estimated_cost_usd DESC, request_count DESC
+       LIMIT 5`,
+    ).all() as Array<Record<string, unknown>>;
+
+    const selectedEventModels = eventId
+      ? this.db.prepare(
+          `SELECT
+            provider,
+            model,
+            COUNT(*) AS request_count,
+            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens,
+            COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+            MAX(created_at) AS last_used_at
+           FROM llm_usage_events
+           WHERE event_id = ?
+           GROUP BY provider, model
+           ORDER BY total_tokens DESC, estimated_cost_usd DESC, request_count DESC
+           LIMIT 5`,
+        ).all(String(eventId || "").trim()) as Array<Record<string, unknown>>
+      : [];
+
+    return {
+      overall: mapLlmUsageTotalsRow(overallRow),
+      selected_event: mapLlmUsageTotalsRow(selectedEventRow),
+      overall_models: overallModels.map((row) => mapLlmUsageModelSummaryRow(row)),
+      selected_event_models: selectedEventModels.map((row) => mapLlmUsageModelSummaryRow(row)),
+    } satisfies LlmUsageSummaryRow;
   }
 
   async listCheckinSessions(eventId: string) {

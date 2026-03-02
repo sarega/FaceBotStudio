@@ -236,3 +236,24 @@ export interface Settings {
   reg_start: string;
   reg_end: string;
 }
+
+export interface LlmUsageTotals {
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  last_used_at: string | null;
+}
+
+export interface LlmUsageModelSummary extends LlmUsageTotals {
+  provider: string;
+  model: string;
+}
+
+export interface LlmUsageSummary {
+  overall: LlmUsageTotals;
+  selected_event: LlmUsageTotals;
+  overall_models: LlmUsageModelSummary[];
+  selected_event_models: LlmUsageModelSummary[];
+}

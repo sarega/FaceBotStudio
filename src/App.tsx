@@ -39,7 +39,7 @@ import {
 import { getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
 
 interface Registration {
   id: string;
@@ -611,10 +611,12 @@ function InlineActionsMenu({
   label,
   tone = "neutral",
   children,
+  className = "",
 }: {
   label: string;
   tone?: ActionTone;
   children: ReactNode;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -643,11 +645,11 @@ function InlineActionsMenu({
   }, [open]);
 
   return (
-    <div className="relative shrink-0" ref={menuRef}>
+    <div className={`relative shrink-0 ${className}`.trim()} ref={menuRef}>
       <ActionButton
         onClick={() => setOpen((current) => !current)}
         tone={tone}
-        className="min-w-[3.75rem] px-3 text-sm"
+        className={`min-w-[3.75rem] px-3 text-sm ${className.includes("w-full") ? "w-full justify-center" : ""}`.trim()}
         aria-expanded={open}
         aria-haspopup="menu"
       >
@@ -862,6 +864,20 @@ function getSearchTargetDomId(kind: GlobalSearchResultKind, id: string) {
   return `search-target-${kind}-${id}`;
 }
 
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("en", {
+    notation: value >= 1000 ? "compact" : "standard",
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+  }).format(Math.max(0, Number(value || 0)));
+}
+
+function formatUsdCost(value: number) {
+  const numeric = Math.max(0, Number(value || 0));
+  if (numeric === 0) return "$0.00";
+  if (numeric < 0.01) return `$${numeric.toFixed(4)}`;
+  return `$${numeric.toFixed(2)}`;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -954,6 +970,9 @@ export default function App() {
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
   const [llmModelsError, setLlmModelsError] = useState("");
+  const [llmUsageSummary, setLlmUsageSummary] = useState<LlmUsageSummary | null>(null);
+  const [llmUsageLoading, setLlmUsageLoading] = useState(false);
+  const [llmUsageError, setLlmUsageError] = useState("");
   const [scannerActive, setScannerActive] = useState(false);
   const [scannerStarting, setScannerStarting] = useState(false);
   const [scannerError, setScannerError] = useState("");
@@ -1007,6 +1026,10 @@ export default function App() {
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const latestCheckinRegistration = checkinLatestResult || selectedRegistration;
   const selectedDocumentForChunks = documents.find((document) => document.id === selectedDocumentForChunksId) || null;
+  const activeLlmModel = settings.llm_model?.trim() || settings.global_llm_model?.trim() || "google/gemini-3-flash-preview";
+  const selectedEventUsage = llmUsageSummary?.selected_event || null;
+  const overallLlmUsage = llmUsageSummary?.overall || null;
+  const selectedEventTopModel = llmUsageSummary?.selected_event_models?.[0] || null;
   const registeredCount = registrations.filter((reg) => reg.status === "registered").length;
   const cancelledCount = registrations.filter((reg) => reg.status === "cancelled").length;
   const checkedInCount = registrations.filter((reg) => reg.status === "checked-in").length;
@@ -1448,6 +1471,7 @@ export default function App() {
           fetchRegistrations(selectedEventId),
           fetchDocuments(selectedEventId),
           canRunTest ? fetchLlmModels() : Promise.resolve(),
+          canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
           canManageCheckinAccess ? fetchCheckinSessions(selectedEventId) : Promise.resolve([]),
         ]);
       } finally {
@@ -1460,12 +1484,13 @@ export default function App() {
         canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
         fetchRegistrations(selectedEventId),
         fetchDocuments(selectedEventId),
+        canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
         canManageCheckinAccess ? fetchCheckinSessions(selectedEventId) : Promise.resolve([]),
       ]);
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canManageCheckinAccess]);
+  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canManageCheckinAccess, canEditSettings]);
 
   useEffect(() => {
     setEditingEventName(selectedEvent?.name || "");
@@ -1691,6 +1716,33 @@ export default function App() {
       setLlmModelsError(err instanceof Error ? err.message : "Failed to fetch LLM models");
     } finally {
       setLlmModelsLoading(false);
+    }
+  };
+
+  const fetchLlmUsageSummary = async (eventId = selectedEventId) => {
+    if (!canEditSettings) {
+      setLlmUsageSummary(null);
+      setLlmUsageError("");
+      return null;
+    }
+
+    setLlmUsageLoading(true);
+    setLlmUsageError("");
+    try {
+      const res = await apiFetch(`/api/llm/usage-summary?event_id=${encodeURIComponent(eventId || "")}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to fetch LLM usage summary");
+      }
+      const summary = data as LlmUsageSummary;
+      setLlmUsageSummary(summary);
+      return summary;
+    } catch (err) {
+      console.error("Failed to fetch LLM usage summary", err);
+      setLlmUsageError(err instanceof Error ? err.message : "Failed to fetch LLM usage summary");
+      return null;
+    } finally {
+      setLlmUsageLoading(false);
     }
   };
 
@@ -2508,6 +2560,9 @@ export default function App() {
       console.error("LLM error", err);
       setTestMessages(prev => [...prev, { role: "model", parts: [{ text: "Error: Failed to get response from OpenRouter." }], timestamp: new Date().toISOString() }]);
     } finally {
+      if (canEditSettings) {
+        void fetchLlmUsageSummary(selectedEventId);
+      }
       setIsTyping(false);
     }
   };
@@ -3341,7 +3396,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-3 py-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-6 lg:px-6 lg:py-8">
+      <main className={`max-w-7xl mx-auto px-3 py-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-6 lg:px-6 lg:py-8 ${canEditSettings ? "lg:pb-28" : ""}`}>
         <AnimatePresence mode="wait">
           {activeTab === "event" && (
             <motion.div
@@ -4403,6 +4458,115 @@ export default function App() {
                     </div>
                   </div>
 
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                    <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Activity className="w-5 h-5 text-blue-600" />
+                          LLM Usage
+                        </h3>
+                        <p className="text-sm text-slate-500">Track token burn and estimated spend per event before turning this into credits.</p>
+                      </div>
+                      <button
+                        onClick={() => void fetchLlmUsageSummary(selectedEventId)}
+                        disabled={llmUsageLoading}
+                        className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                        title="Refresh LLM usage"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${llmUsageLoading ? "animate-spin" : ""}`} />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Gateway</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">OpenRouter API</p>
+                        <p className="mt-1 text-[11px] text-slate-500">Central billing point for all event chats.</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Active Model</p>
+                        <p className="mt-1 truncate text-sm font-semibold text-slate-900">{activeLlmModel}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">Current workspace resolves to this model.</p>
+                      </div>
+                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Selected Event</p>
+                        <p className="mt-1 text-sm font-semibold text-blue-900">
+                          {formatCompactNumber(selectedEventUsage?.total_tokens || 0)} tokens
+                        </p>
+                        <p className="mt-1 text-[11px] text-blue-700">
+                          {formatUsdCost(selectedEventUsage?.estimated_cost_usd || 0)} across {formatCompactNumber(selectedEventUsage?.request_count || 0)} requests
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">All Workspaces</p>
+                        <p className="mt-1 text-sm font-semibold text-emerald-900">
+                          {formatCompactNumber(overallLlmUsage?.total_tokens || 0)} tokens
+                        </p>
+                        <p className="mt-1 text-[11px] text-emerald-700">
+                          {formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0)} across {formatCompactNumber(overallLlmUsage?.request_count || 0)} requests
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Top Models In Event</p>
+                          <StatusBadge tone="neutral">{llmUsageSummary?.selected_event_models.length || 0}</StatusBadge>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {(llmUsageSummary?.selected_event_models.length || 0) === 0 ? (
+                            <p className="text-xs text-slate-500">No usage captured for this event yet.</p>
+                          ) : (
+                            llmUsageSummary?.selected_event_models.map((item) => (
+                              <div key={`event-model-${item.provider}-${item.model}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium text-slate-900">{item.model}</p>
+                                  <p className="text-[11px] text-slate-500">{formatCompactNumber(item.request_count)} requests</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs font-semibold text-slate-900">{formatCompactNumber(item.total_tokens)} tk</p>
+                                  <p className="text-[11px] text-slate-500">{formatUsdCost(item.estimated_cost_usd)}</p>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Top Models Overall</p>
+                          <StatusBadge tone="neutral">{llmUsageSummary?.overall_models.length || 0}</StatusBadge>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {(llmUsageSummary?.overall_models.length || 0) === 0 ? (
+                            <p className="text-xs text-slate-500">No global usage captured yet.</p>
+                          ) : (
+                            llmUsageSummary?.overall_models.map((item) => (
+                              <div key={`all-model-${item.provider}-${item.model}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium text-slate-900">{item.model}</p>
+                                  <p className="text-[11px] text-slate-500">{formatCompactNumber(item.request_count)} requests</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs font-semibold text-slate-900">{formatCompactNumber(item.total_tokens)} tk</p>
+                                  <p className="text-[11px] text-slate-500">{formatUsdCost(item.estimated_cost_usd)}</p>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {llmUsageError && <p className="mt-3 text-xs text-rose-600">{llmUsageError}</p>}
+                    {!llmUsageError && (
+                      <p className="mt-3 text-xs text-slate-500">
+                        Usage is captured from the OpenRouter response payload at request time, so this can become the ledger for credit deduction later.
+                      </p>
+                    )}
+                  </div>
+
                 </div>
               </div>
             </motion.div>
@@ -4674,55 +4838,29 @@ export default function App() {
                           <Activity className="w-4 h-4 text-blue-600" />
                           Event Stats
                         </h3>
-                        <p className="text-xs text-slate-500">Live totals for the selected event.</p>
-                      </div>
-                      <StatusBadge tone="neutral">
-                        {registrations.length} total
-                      </StatusBadge>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-lg font-bold text-blue-700">{registeredCount}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Registered</p>
-                          </div>
-                          <span className="rounded-lg bg-slate-100 p-2 text-blue-600">
-                            <UserPlus className="w-4 h-4" />
-                          </span>
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-lg font-bold text-slate-700">{cancelledCount}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Cancelled</p>
-                          </div>
-                          <span className="rounded-lg bg-slate-100 p-2 text-slate-500">
-                            <AlertCircle className="w-4 h-4" />
-                          </span>
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-lg font-bold text-emerald-700">{checkedInCount}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Checked In</p>
-                          </div>
-                          <span className="rounded-lg bg-slate-100 p-2 text-emerald-600">
-                            <CheckCircle2 className="w-4 h-4" />
-                          </span>
-                        </div>
+                        <p className="text-xs text-slate-500">Glanceable live totals for this event.</p>
                       </div>
                     </div>
-                    <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                      <div className="flex items-center gap-2 text-xs text-slate-600">
-                        <Users className="w-3.5 h-3.5 text-slate-500" />
-                        <span className="font-medium">Check-in rate</span>
+                    <div className="grid grid-cols-2 gap-2 xl:grid-cols-5">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total</p>
+                        <p className="mt-1 text-base font-bold text-slate-900">{registrations.length}</p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-bold text-slate-900">{checkInRate}%</p>
-                        <p className="text-[10px] text-slate-500">of active attendees</p>
+                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Registered</p>
+                        <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
+                      </div>
+                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">Checked In</p>
+                        <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Cancelled</p>
+                        <p className="mt-1 text-base font-bold text-slate-700">{cancelledCount}</p>
+                      </div>
+                      <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-violet-600">Check-in Rate</p>
+                        <p className="mt-1 text-base font-bold text-violet-700">{checkInRate}%</p>
                       </div>
                     </div>
                   </div>
@@ -5539,76 +5677,76 @@ export default function App() {
                               isSearchFocused("channel", channel.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
                             }`}
                           >
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                               <button
                                 onClick={() => toggleChannelDetails(channel.id)}
-                                className="min-w-0 flex-1 text-left"
+                                className="min-w-0 text-left"
                                 aria-expanded={channelDetailsOpenIds.includes(channel.id)}
                               >
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-semibold">{channel.display_name}</p>
+                                <p className="text-sm font-semibold text-slate-900">{channel.display_name}</p>
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
                                   <StatusBadge tone="neutral">
                                     {channel.platform_label || channel.platform}
                                   </StatusBadge>
                                   <StatusBadge tone={getConnectionStatusTone(channel.connection_status)}>
                                     {channel.connection_status || "incomplete"}
                                   </StatusBadge>
+                                  <StatusBadge tone={getTokenStatusTone(channel)}>
+                                    {channel.platform === "web_chat"
+                                      ? "no token needed"
+                                      : channel.has_access_token
+                                      ? "saved token"
+                                      : channel.platform === "facebook"
+                                      ? "env fallback"
+                                      : "no token"}
+                                  </StatusBadge>
+                                  <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
+                                    {channel.is_active ? "active" : "inactive"}
+                                  </StatusBadge>
+                                  {selectedEventChannelWritesLocked && !channel.is_active && <StatusBadge tone="neutral">locked</StatusBadge>}
                                 </div>
-                                <p className="text-xs font-mono text-slate-500">{channel.external_id}</p>
+                                <p className="mt-2 text-xs font-mono text-slate-500">{channel.external_id}</p>
                               </button>
-                              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                                <StatusBadge tone={getTokenStatusTone(channel)}>
-                                  {channel.platform === "web_chat"
-                                    ? "no token needed"
-                                    : channel.has_access_token
-                                    ? "saved token"
-                                    : channel.platform === "facebook"
-                                    ? "env fallback"
-                                    : "no token"}
-                                </StatusBadge>
-                                <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
-                                  {channel.is_active ? "active" : "inactive"}
-                                </StatusBadge>
+                              <div className="flex flex-wrap items-center gap-2 lg:flex-col lg:items-stretch">
+                                <ActionButton
+                                  onClick={() => loadChannelIntoForm(channel)}
+                                  tone="blue"
+                                  className="px-3 text-sm lg:w-full lg:justify-center"
+                                >
+                                  <PencilLine className="h-3.5 w-3.5" />
+                                  Edit
+                                </ActionButton>
+                                <InlineActionsMenu
+                                  label="Actions"
+                                  tone={channel.is_active ? "amber" : "neutral"}
+                                  className="lg:w-full"
+                                >
+                                  <MenuActionItem
+                                    onClick={() => toggleChannelDetails(channel.id)}
+                                    tone="neutral"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    <span className="font-medium">
+                                      {channelDetailsOpenIds.includes(channel.id) ? "Hide Details" : "Show Details"}
+                                    </span>
+                                  </MenuActionItem>
+                                  <MenuActionItem
+                                    onClick={() => void handleToggleChannel(channel)}
+                                    disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
+                                    tone={selectedEventChannelWritesLocked && !channel.is_active ? "neutral" : channel.is_active ? "amber" : "emerald"}
+                                    className="mt-1"
+                                  >
+                                    <Power className="h-3.5 w-3.5" />
+                                    <span className="font-medium">
+                                      {selectedEventChannelWritesLocked && !channel.is_active
+                                        ? "Locked by Event Status"
+                                        : channel.is_active
+                                        ? "Disable Channel"
+                                        : "Enable Channel"}
+                                    </span>
+                                  </MenuActionItem>
+                                </InlineActionsMenu>
                               </div>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <ActionButton
-                                onClick={() => loadChannelIntoForm(channel)}
-                                tone="blue"
-                                className="px-3 text-sm"
-                              >
-                                <PencilLine className="h-3.5 w-3.5" />
-                                Edit
-                              </ActionButton>
-                              <InlineActionsMenu
-                                label="Actions"
-                                tone={channel.is_active ? "amber" : "neutral"}
-                              >
-                                <MenuActionItem
-                                  onClick={() => toggleChannelDetails(channel.id)}
-                                  tone="neutral"
-                                >
-                                  <Eye className="h-3.5 w-3.5" />
-                                  <span className="font-medium">
-                                    {channelDetailsOpenIds.includes(channel.id) ? "Hide Details" : "Show Details"}
-                                  </span>
-                                </MenuActionItem>
-                                <MenuActionItem
-                                  onClick={() => void handleToggleChannel(channel)}
-                                  disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
-                                  tone={selectedEventChannelWritesLocked && !channel.is_active ? "neutral" : channel.is_active ? "amber" : "emerald"}
-                                  className="mt-1"
-                                >
-                                  <Power className="h-3.5 w-3.5" />
-                                  <span className="font-medium">
-                                    {selectedEventChannelWritesLocked && !channel.is_active
-                                      ? "Locked by Event Status"
-                                      : channel.is_active
-                                      ? "Disable Channel"
-                                      : "Enable Channel"}
-                                  </span>
-                                </MenuActionItem>
-                              </InlineActionsMenu>
                             </div>
                             {channel.missing_requirements && channel.missing_requirements.length > 0 && (
                               <p className="text-xs text-amber-700">
@@ -5620,6 +5758,16 @@ export default function App() {
                                 {channel.platform_description && (
                                   <p className="text-xs text-slate-500">{channel.platform_description}</p>
                                 )}
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">External ID</p>
+                                    <p className="mt-1 break-all text-[11px] text-slate-700">{channel.external_id}</p>
+                                  </div>
+                                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Updated</p>
+                                    <p className="mt-1 text-[11px] text-slate-700">{new Date(channel.updated_at).toLocaleString()}</p>
+                                  </div>
+                                </div>
                                 {channel.config_summary && channel.config_summary.length > 0 && (
                                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                     {channel.config_summary.map((item) => (
@@ -6005,6 +6153,38 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      {canEditSettings && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 hidden lg:block">
+          <div className="mx-auto flex max-w-7xl justify-end px-6">
+            <div className="pointer-events-auto flex min-w-[34rem] items-center gap-3 rounded-2xl border border-slate-200 bg-white/92 px-4 py-3 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
+              <StatusBadge tone={selectedEvent?.effective_status === "active" ? "emerald" : selectedEvent?.effective_status === "pending" ? "amber" : selectedEvent?.effective_status === "cancelled" ? "rose" : "neutral"}>
+                {selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No Event"}
+              </StatusBadge>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-slate-900">
+                  {selectedEvent?.name || "No selected event"}
+                </p>
+                <p className="truncate text-[11px] text-slate-500">
+                  OpenRouter • {activeLlmModel}
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Event Usage</p>
+                <p className="mt-1 text-xs font-semibold text-slate-900">
+                  {formatCompactNumber(selectedEventUsage?.total_tokens || 0)} tk
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total Cost</p>
+                <p className="mt-1 text-xs font-semibold text-slate-900">
+                  {formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <AnimatePresence>
         {globalSearchOpen && (

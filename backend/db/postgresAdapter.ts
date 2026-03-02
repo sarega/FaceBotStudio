@@ -28,6 +28,10 @@ import type {
   ManualEventStatus,
   MessageRow,
   MessageType,
+  LlmUsageModelSummaryRow,
+  LlmUsageSummaryRow,
+  LlmUsageTotalsRow,
+  RecordLlmUsageInput,
   RegistrationInput,
   RegistrationResult,
   RegistrationRow,
@@ -62,6 +66,37 @@ function slugifyText(value: string) {
 
 function parseAuditMetadata(value: unknown) {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function emptyLlmUsageTotals(): LlmUsageTotalsRow {
+  return {
+    request_count: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    estimated_cost_usd: 0,
+    last_used_at: null,
+  };
+}
+
+function mapLlmUsageTotalsRow(row?: Record<string, unknown>) {
+  if (!row) return emptyLlmUsageTotals();
+  return {
+    request_count: Number(row.request_count || 0),
+    prompt_tokens: Number(row.prompt_tokens || 0),
+    completion_tokens: Number(row.completion_tokens || 0),
+    total_tokens: Number(row.total_tokens || 0),
+    estimated_cost_usd: Number(row.estimated_cost_usd || 0),
+    last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
+  } satisfies LlmUsageTotalsRow;
+}
+
+function mapLlmUsageModelSummaryRow(row: Record<string, unknown>) {
+  return {
+    provider: String(row.provider || "openrouter"),
+    model: String(row.model || ""),
+    ...mapLlmUsageTotalsRow(row),
+  } satisfies LlmUsageModelSummaryRow;
 }
 
 function mapEventBaseRow(row: Record<string, unknown>) {
@@ -1117,6 +1152,100 @@ export class PostgresAppDatabase implements AppDatabase {
       metadata: parseAuditMetadata(row.metadata),
       created_at: String(row.created_at),
     } satisfies AuditLogRow));
+  }
+
+  async recordLlmUsage(entry: RecordLlmUsageInput) {
+    await this.pool.query(
+      `INSERT INTO llm_usage_events (
+        id, event_id, actor_user_id, source, provider, model,
+        prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
+      [
+        generateEntityId("llm"),
+        entry.event_id || null,
+        entry.actor_user_id || null,
+        String(entry.source || "unknown"),
+        String(entry.provider || "openrouter"),
+        String(entry.model || ""),
+        Math.max(0, Number(entry.prompt_tokens || 0)),
+        Math.max(0, Number(entry.completion_tokens || 0)),
+        Math.max(0, Number(entry.total_tokens || 0)),
+        Math.max(0, Number(entry.estimated_cost_usd || 0)),
+        JSON.stringify(entry.metadata || {}),
+      ],
+    );
+  }
+
+  async getLlmUsageSummary(eventId?: string) {
+    const overallResult = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+        COUNT(*) AS request_count,
+        COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+        MAX(created_at)::text AS last_used_at
+       FROM llm_usage_events`,
+    );
+
+    const selectedEventResult = eventId
+      ? await this.pool.query<Record<string, unknown>>(
+          `SELECT
+            COUNT(*) AS request_count,
+            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens,
+            COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+            MAX(created_at)::text AS last_used_at
+           FROM llm_usage_events
+           WHERE event_id = $1`,
+          [String(eventId || "").trim()],
+        )
+      : null;
+
+    const overallModelsResult = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+        provider,
+        model,
+        COUNT(*) AS request_count,
+        COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+        MAX(created_at)::text AS last_used_at
+       FROM llm_usage_events
+       GROUP BY provider, model
+       ORDER BY total_tokens DESC, estimated_cost_usd DESC, request_count DESC
+       LIMIT 5`,
+    );
+
+    const selectedEventModelsResult = eventId
+      ? await this.pool.query<Record<string, unknown>>(
+          `SELECT
+            provider,
+            model,
+            COUNT(*) AS request_count,
+            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens,
+            COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+            MAX(created_at)::text AS last_used_at
+           FROM llm_usage_events
+           WHERE event_id = $1
+           GROUP BY provider, model
+           ORDER BY total_tokens DESC, estimated_cost_usd DESC, request_count DESC
+           LIMIT 5`,
+          [String(eventId || "").trim()],
+        )
+      : null;
+
+    return {
+      overall: mapLlmUsageTotalsRow(overallResult.rows[0]),
+      selected_event: mapLlmUsageTotalsRow(selectedEventResult?.rows[0]),
+      overall_models: overallModelsResult.rows.map((row) => mapLlmUsageModelSummaryRow(row)),
+      selected_event_models: (selectedEventModelsResult?.rows || []).map((row) => mapLlmUsageModelSummaryRow(row)),
+    } satisfies LlmUsageSummaryRow;
   }
 
   async listCheckinSessions(eventId: string) {
