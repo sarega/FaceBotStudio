@@ -549,6 +549,61 @@ function ActionButton({
   );
 }
 
+function HelpPopover({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!popoverRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0" ref={popoverRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 transition-colors hover:bg-slate-50"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={label}
+      >
+        <CircleHelp className="h-3.5 w-3.5" />
+        <span>Notes</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CopyField({
   label,
   value,
@@ -563,8 +618,13 @@ function CopyField({
   copied?: boolean;
 }) {
   return (
-    <div>
-      <label className="block text-xs font-bold uppercase tracking-[0.18em] text-slate-500 mb-1">{label}</label>
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <label className="block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">{label}</label>
+        {help ? (
+          <HelpPopover label={`Open setup note for ${label}`}>{help}</HelpPopover>
+        ) : null}
+      </div>
       <div className="flex items-stretch gap-2">
         <input
           readOnly
@@ -579,7 +639,6 @@ function CopyField({
           {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
         </button>
       </div>
-      {help ? <p className="mt-1 text-xs text-slate-500">{help}</p> : null}
     </div>
   );
 }
@@ -2419,7 +2478,7 @@ export default function App() {
   if (authStatus === "checking") {
     if (checkinAccessMode) {
       return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="min-h-dvh bg-slate-50 flex items-center justify-center">
           <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
         </div>
       );
@@ -2429,7 +2488,7 @@ export default function App() {
   if (checkinAccessMode) {
     if (checkinAccessLoading) {
       return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="min-h-dvh bg-slate-50 flex items-center justify-center">
           <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
         </div>
       );
@@ -2437,7 +2496,7 @@ export default function App() {
 
     if (!checkinAccessSession) {
       return (
-        <div className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center p-6">
+        <div className="min-h-dvh bg-slate-50 text-slate-900 flex items-center justify-center p-6">
           <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-8 shadow-sm space-y-4">
             <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
               <AlertCircle className="w-7 h-7" />
@@ -2454,30 +2513,35 @@ export default function App() {
     }
 
     return (
-      <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-        <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center">
+      <div className="min-h-dvh overflow-x-hidden bg-slate-50 text-slate-900 font-sans">
+        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
+          <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 pb-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white">
                   <QrCode className="w-5 h-5" />
                 </span>
                 <div className="min-w-0">
-                  <h1 className="text-lg font-bold truncate">{checkinAccessSession.event_name}</h1>
-                  <p className="text-xs text-slate-500 truncate">
+                  <h1 className="truncate text-lg font-bold">{checkinAccessSession.event_name}</h1>
+                  <p className="truncate text-xs text-slate-500">
                     Check-in session: <span className="font-semibold text-slate-700">{checkinAccessSession.label}</span>
                   </p>
                 </div>
               </div>
             </div>
-            <div className="text-right shrink-0">
-              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Expires</p>
-              <p className="text-xs font-semibold">{new Date(checkinAccessSession.expires_at).toLocaleString()}</p>
+            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              <StatusBadge tone={checkinAccessSession.event_status === "active" ? "emerald" : checkinAccessSession.event_status === "pending" ? "amber" : "neutral"}>
+                {checkinAccessSession.event_status}
+              </StatusBadge>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Expires</p>
+                <p className="mt-1 text-xs font-semibold text-slate-900">{new Date(checkinAccessSession.expires_at).toLocaleString()}</p>
+              </div>
             </div>
           </div>
         </header>
 
-        <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+        <main className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:gap-6 sm:py-6">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4">
               <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Event Status</p>
@@ -2492,7 +2556,7 @@ export default function App() {
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-3 mb-4">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-lg font-semibold flex items-center gap-2">
                   <Camera className="w-5 h-5 text-blue-600" />
@@ -2500,13 +2564,13 @@ export default function App() {
                 </h2>
                 <p className="text-sm text-slate-500">Allow camera access, then scan attendee tickets continuously.</p>
               </div>
-              <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2">
+              <div className="flex w-full gap-2 sm:w-auto">
                 <ActionButton
                   onClick={startQrScanner}
                   disabled={!canUseQrScanner || scannerActive || scannerStarting}
                   tone="blue"
                   active
-                  className="w-full text-sm"
+                  className="min-w-0 flex-1 text-sm sm:w-auto sm:flex-none"
                 >
                   {scannerStarting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   Start Camera
@@ -2515,7 +2579,7 @@ export default function App() {
                   onClick={stopQrScanner}
                   disabled={!scannerActive && !scannerStarting}
                   tone="neutral"
-                  className="w-full text-sm"
+                  className="min-w-0 flex-1 text-sm sm:w-auto sm:flex-none"
                 >
                   <Square className="w-4 h-4" />
                   Stop
@@ -4989,9 +5053,11 @@ export default function App() {
                         placeholder={selectedChannelPlatformDefinition?.external_id_placeholder || "Channel external ID"}
                       />
                       {selectedChannelPlatformDefinition && (
-                        <p className="text-xs text-slate-500">
-                          {selectedChannelPlatformDefinition.external_id_label}
-                        </p>
+                        <div className="flex justify-end">
+                          <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.external_id_label}`}>
+                            {selectedChannelPlatformDefinition.external_id_label}
+                          </HelpPopover>
+                        </div>
                       )}
                       {selectedChannelPlatformDefinition?.access_token_label && (
                         <>
@@ -5002,14 +5068,27 @@ export default function App() {
                             placeholder={selectedChannelPlatformDefinition.access_token_label || "Channel access token"}
                           />
                           {selectedChannelPlatformDefinition.access_token_help && (
-                            <p className="text-xs text-slate-500">
-                              {selectedChannelPlatformDefinition.access_token_help}
-                            </p>
+                            <div className="flex justify-end">
+                              <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.access_token_label}`}>
+                                {selectedChannelPlatformDefinition.access_token_help}
+                              </HelpPopover>
+                            </div>
                           )}
                         </>
                       )}
                       {selectedChannelPlatformDefinition?.config_fields.map((field) => (
-                        <div key={`${newChannelPlatform}:${field.key}`} className="space-y-1">
+                        <div key={`${newChannelPlatform}:${field.key}`} className="space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
+                              {field.label}
+                              {field.required ? " Required" : ""}
+                            </p>
+                            {field.help ? (
+                              <HelpPopover label={`Open note for ${field.label}`}>
+                                {field.help}
+                              </HelpPopover>
+                            ) : null}
+                          </div>
                           <input
                             value={newChannelConfig[field.key] || ""}
                             onChange={(e) => setNewChannelConfig((prev) => ({ ...prev, [field.key]: e.target.value }))}
@@ -5017,9 +5096,6 @@ export default function App() {
                             className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                             placeholder={field.placeholder || field.label}
                           />
-                          <p className="text-xs text-slate-500">
-                            {field.label}{field.required ? " (required)" : ""}{field.help ? ` - ${field.help}` : ""}
-                          </p>
                         </div>
                       ))}
                       <ActionButton
