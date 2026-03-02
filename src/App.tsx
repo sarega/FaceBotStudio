@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { BrowserQRCodeReader, type IScannerControls } from "@zxing/browser";
 import { 
@@ -67,6 +67,8 @@ type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
 
 type AuthStatus = "checking" | "authenticated" | "unauthenticated";
+
+type GlobalSearchResultKind = "event" | "registration" | "channel" | "document" | "log";
 
 interface HelpContent {
   title: string;
@@ -843,6 +845,18 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
   } satisfies Settings;
 }
 
+function normalizeSearchQuery(value: string | null | undefined) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function matchesSearchQuery(query: string, values: Array<string | null | undefined>) {
+  if (!query) return true;
+  const haystack = values
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  return query.split(/\s+/).every((token) => haystack.includes(token));
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -923,6 +937,12 @@ export default function App() {
   const [statusUpdateLoading, setStatusUpdateLoading] = useState(false);
   const [statusUpdateMessage, setStatusUpdateMessage] = useState("");
   const [deleteRegistrationLoading, setDeleteRegistrationLoading] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [eventListQuery, setEventListQuery] = useState("");
+  const [channelListQuery, setChannelListQuery] = useState("");
+  const [registrationListQuery, setRegistrationListQuery] = useState("");
+  const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
   const [llmModelsError, setLlmModelsError] = useState("");
@@ -944,6 +964,7 @@ export default function App() {
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
   const knowledgeActionsRef = useRef<HTMLDivElement | null>(null);
+  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   selectedEventIdRef.current = selectedEventId;
 
   const checkinAccessMode = Boolean(checkinAccessToken);
@@ -967,6 +988,10 @@ export default function App() {
     if (authUser.role === "owner") return true;
     return user.role === "operator" || user.role === "checker" || user.role === "viewer";
   };
+  const deferredGlobalSearchQuery = useDeferredValue(normalizeSearchQuery(globalSearchQuery));
+  const deferredEventListQuery = useDeferredValue(normalizeSearchQuery(eventListQuery));
+  const deferredChannelListQuery = useDeferredValue(normalizeSearchQuery(channelListQuery));
+  const deferredRegistrationListQuery = useDeferredValue(normalizeSearchQuery(registrationListQuery));
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const latestCheckinRegistration = checkinLatestResult || selectedRegistration;
@@ -1023,6 +1048,15 @@ export default function App() {
   const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
   const closedEvents = events.filter((event) => event.effective_status === "closed");
   const cancelledEvents = events.filter((event) => event.effective_status === "cancelled");
+  const filteredWorkingEvents = workingEvents.filter((event) =>
+    matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+  );
+  const filteredClosedEvents = closedEvents.filter((event) =>
+    matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+  );
+  const filteredCancelledEvents = cancelledEvents.filter((event) =>
+    matchesSearchQuery(deferredEventListQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+  );
   const selectorEvents = (() => {
     const base = workingEvents.length > 0 ? [...workingEvents] : [...events];
     if (selectedEvent && !base.some((event) => event.id === selectedEvent.id)) {
@@ -1030,6 +1064,104 @@ export default function App() {
     }
     return base;
   })();
+  const eventStatusToggle = (() => {
+    if (!selectedEvent) {
+      return {
+        label: "LIVE!",
+        nextStatus: "active" as const,
+        tone: "emerald" as ActionTone,
+        disabled: true,
+      };
+    }
+    if (selectedEvent.status === "active") {
+      return {
+        label: "Back to Pending",
+        nextStatus: "pending" as const,
+        tone: "amber" as ActionTone,
+        disabled: selectedEvent.is_default || eventLoading,
+      };
+    }
+    if (selectedEvent.status === "cancelled") {
+      return {
+        label: "Restore Pending",
+        nextStatus: "pending" as const,
+        tone: "blue" as ActionTone,
+        disabled: selectedEvent.is_default || eventLoading,
+      };
+    }
+    return {
+      label: "LIVE!",
+      nextStatus: "active" as const,
+      tone: "emerald" as ActionTone,
+      disabled: eventLoading,
+    };
+  })();
+  const filteredSelectedEventChannels = selectedEventChannels.filter((channel) =>
+    matchesSearchQuery(deferredChannelListQuery, [
+      channel.display_name,
+      channel.external_id,
+      channel.platform_label,
+      channel.platform,
+      channel.connection_status,
+      channel.platform_description,
+      ...(channel.config_summary?.flatMap((item) => [item.label, item.value]) || []),
+    ]),
+  );
+  const filteredRegistrations = registrations.filter((reg) =>
+    matchesSearchQuery(deferredRegistrationListQuery, [
+      reg.id,
+      reg.first_name,
+      reg.last_name,
+      `${reg.first_name} ${reg.last_name}`,
+      reg.phone,
+      reg.email,
+      reg.status,
+    ]),
+  );
+  const globalEventResults = deferredGlobalSearchQuery
+    ? events.filter((event) =>
+        matchesSearchQuery(deferredGlobalSearchQuery, [event.name, event.slug, getEventStatusLabel(event.effective_status)]),
+      ).slice(0, 6)
+    : [];
+  const globalRegistrationResults = deferredGlobalSearchQuery
+    ? registrations.filter((reg) =>
+        matchesSearchQuery(deferredGlobalSearchQuery, [
+          reg.id,
+          reg.first_name,
+          reg.last_name,
+          `${reg.first_name} ${reg.last_name}`,
+          reg.phone,
+          reg.email,
+        ]),
+      ).slice(0, 8)
+    : [];
+  const globalChannelResults = deferredGlobalSearchQuery
+    ? channels.filter((channel) =>
+        matchesSearchQuery(deferredGlobalSearchQuery, [
+          channel.display_name,
+          channel.external_id,
+          channel.platform_label,
+          channel.platform,
+          channel.connection_status,
+          channel.platform_description,
+        ]),
+      ).slice(0, 8)
+    : [];
+  const globalDocumentResults = deferredGlobalSearchQuery
+    ? documents.filter((document) =>
+        matchesSearchQuery(deferredGlobalSearchQuery, [
+          document.title,
+          document.source_type,
+          document.source_url,
+          document.embedding_status,
+        ]),
+      ).slice(0, 6)
+    : [];
+  const globalLogResults = deferredGlobalSearchQuery
+    ? messages.filter((message) =>
+        matchesSearchQuery(deferredGlobalSearchQuery, [message.sender_id, message.text, message.type]),
+      ).slice(0, 6)
+    : [];
 
   const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const res = await fetch(input, init);
@@ -1380,6 +1512,7 @@ export default function App() {
   useEffect(() => {
     setOperationsMenuOpen(false);
     setKnowledgeActionsOpen(false);
+    setGlobalSearchOpen(false);
     setHelpOpen(false);
   }, [activeTab]);
 
@@ -1408,6 +1541,27 @@ export default function App() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [knowledgeActionsOpen]);
+
+  useEffect(() => {
+    if (!globalSearchOpen) return;
+
+    const focusInput = window.setTimeout(() => {
+      globalSearchInputRef.current?.focus();
+      globalSearchInputRef.current?.select();
+    }, 0);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setGlobalSearchOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusInput);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [globalSearchOpen]);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -2601,6 +2755,43 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const toggleChannelDetails = (channelId: string) => {
+    setChannelDetailsOpenIds((current) =>
+      current.includes(channelId) ? current.filter((id) => id !== channelId) : [...current, channelId],
+    );
+  };
+
+  const handleGlobalSearchSelect = (kind: GlobalSearchResultKind, id: string) => {
+    if (kind === "event") {
+      setSelectedEventId(id);
+      setActiveTab("event");
+    }
+    if (kind === "registration") {
+      setActiveTab("registrations");
+      setSelectedRegistrationId(id);
+    }
+    if (kind === "channel") {
+      const channel = channels.find((item) => item.id === id);
+      if (channel?.event_id) {
+        setSelectedEventId(channel.event_id);
+      }
+      if (channel) {
+        loadChannelIntoForm(channel);
+        setChannelDetailsOpenIds((current) => (current.includes(channel.id) ? current : [...current, channel.id]));
+      }
+      setActiveTab("settings");
+    }
+    if (kind === "document") {
+      setActiveTab("design");
+      setSelectedDocumentForChunksId(id);
+    }
+    if (kind === "log") {
+      setActiveTab("logs");
+    }
+    setGlobalSearchOpen(false);
+    setGlobalSearchQuery("");
+  };
+
   if (authStatus === "checking") {
     if (checkinAccessMode) {
       return (
@@ -2906,8 +3097,8 @@ export default function App() {
   return (
     <div className="app-shell min-h-dvh bg-slate-50 text-slate-900 font-sans">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
-        <div className="max-w-7xl mx-auto px-3 py-3 sm:px-4 lg:px-6">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="max-w-7xl mx-auto px-3 py-2.5 sm:px-4 lg:px-6">
+          <div className="flex flex-wrap items-center gap-2.5">
             <div className="flex min-w-0 flex-1 items-center gap-3 lg:max-w-[22rem]">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.2)]">
                 <Bot className="h-5 w-5 text-white" />
@@ -2951,6 +3142,14 @@ export default function App() {
                 <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
               </div>
               <button
+                onClick={() => setGlobalSearchOpen(true)}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                aria-label="Open global search"
+              >
+                <Search className="h-4 w-4" />
+                <span className="hidden sm:inline">Search</span>
+              </button>
+              <button
                 onClick={handleLogout}
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
               >
@@ -2963,7 +3162,7 @@ export default function App() {
               <label htmlFor="event-selector" className="sr-only">
                 Active event
               </label>
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <CalendarRange className="h-4 w-4 shrink-0 text-slate-400" />
                 <select
                   id="event-selector"
@@ -2982,13 +3181,13 @@ export default function App() {
             </div>
           </div>
 
-          <div className="mt-3 flex items-center gap-2">
-            <div className="grid flex-1 grid-flow-col auto-cols-fr gap-2 rounded-2xl bg-slate-100/90 p-1.5 sm:flex sm:flex-wrap sm:gap-1.5">
+          <div className="mt-2 flex items-center gap-2">
+            <div className="grid flex-1 grid-flow-col auto-cols-fr gap-1.5 rounded-2xl bg-slate-100/90 p-1 sm:flex sm:flex-wrap sm:gap-1">
               {primaryTabs.map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl px-2 py-2.5 text-sm font-semibold transition-all sm:px-3 ${
+                  className={`flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-sm font-semibold transition-all sm:min-h-10 sm:px-3 ${
                     activeTab === tab.id
                       ? "bg-white text-blue-600 shadow-sm"
                       : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
@@ -3003,7 +3202,7 @@ export default function App() {
                 <div className="relative min-w-0" ref={operationsMenuRef}>
                   <button
                     onClick={() => setOperationsMenuOpen((open) => !open)}
-                    className={`flex min-h-11 w-full min-w-0 items-center justify-center gap-2 rounded-xl px-2 py-2.5 text-sm font-semibold transition-all sm:px-3 ${
+                    className={`flex min-h-9 w-full min-w-0 items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-sm font-semibold transition-all sm:min-h-10 sm:px-3 ${
                       isOperationsTab || operationsMenuOpen
                         ? "bg-white text-blue-600 shadow-sm"
                         : "text-slate-500 hover:bg-white/70 hover:text-slate-700"
@@ -3065,16 +3264,28 @@ export default function App() {
                         </h3>
                         <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
                       </div>
-                      <ActionButton
-                        onClick={() => void saveEventDetails()}
-                        disabled={saving}
-                        tone="blue"
-                        active
-                        className="w-full text-sm sm:w-auto sm:shrink-0"
-                      >
-                        {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        Save Event Setup
-                      </ActionButton>
+                      <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                        <ActionButton
+                          onClick={() => void saveEventDetails()}
+                          disabled={saving}
+                          tone="blue"
+                          active
+                          className="w-full text-sm sm:w-auto sm:shrink-0"
+                        >
+                          {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                          Save Event Setup
+                        </ActionButton>
+                        <ActionButton
+                          onClick={() => void handleUpdateEvent(eventStatusToggle.nextStatus)}
+                          disabled={eventStatusToggle.disabled}
+                          tone={eventStatusToggle.tone}
+                          active={eventStatusToggle.nextStatus === "active"}
+                          className="w-full text-sm sm:w-auto sm:shrink-0"
+                        >
+                          {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : eventStatusToggle.nextStatus === "active" ? <Power className="w-4 h-4" /> : <Activity className="w-4 h-4" />}
+                          {eventStatusToggle.label}
+                        </ActionButton>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -3260,8 +3471,18 @@ export default function App() {
                       </button>
                     </div>
 
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={eventListQuery}
+                        onChange={(e) => setEventListQuery(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Search events by name, slug, or status"
+                      />
+                    </div>
+
                     <div className="space-y-2">
-                      {workingEvents.map((event) => (
+                      {filteredWorkingEvents.map((event) => (
                         <button
                           key={event.id}
                           onClick={() => setSelectedEventId(event.id)}
@@ -3289,17 +3510,17 @@ export default function App() {
                           </div>
                         </button>
                       ))}
-                      {workingEvents.length === 0 && (
+                      {filteredWorkingEvents.length === 0 && (
                         <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                          No active or pending events yet.
+                          {deferredEventListQuery ? "No active or pending events match this search." : "No active or pending events yet."}
                         </div>
                       )}
                     </div>
 
-                    {closedEvents.length > 0 && (
+                    {filteredClosedEvents.length > 0 && (
                       <div className="border-t border-slate-100 pt-5 space-y-2">
                         <p className="text-sm font-semibold text-slate-700">Closed Events</p>
-                        {closedEvents.map((event) => (
+                        {filteredClosedEvents.map((event) => (
                           <button
                             key={event.id}
                             onClick={() => setSelectedEventId(event.id)}
@@ -3323,10 +3544,10 @@ export default function App() {
                       </div>
                     )}
 
-                    {cancelledEvents.length > 0 && (
+                    {filteredCancelledEvents.length > 0 && (
                       <div className="border-t border-slate-100 pt-5 space-y-2">
                         <p className="text-sm font-semibold text-slate-700">Cancelled Events</p>
-                        {cancelledEvents.map((event) => (
+                        {filteredCancelledEvents.map((event) => (
                           <button
                             key={event.id}
                             onClick={() => setSelectedEventId(event.id)}
@@ -3381,34 +3602,18 @@ export default function App() {
                         >
                           Save Event Name
                         </ActionButton>
-                        <InlineActionsMenu label="Status" tone="neutral">
-                          <MenuActionItem
-                            onClick={() => void handleUpdateEvent("pending")}
-                            disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "pending" || eventLoading}
-                            tone="amber"
-                          >
-                            <Activity className="h-3.5 w-3.5" />
-                            <span className="font-medium">Set Pending</span>
-                          </MenuActionItem>
-                          <MenuActionItem
-                            onClick={() => void handleUpdateEvent("active")}
-                            disabled={!selectedEvent || selectedEvent.status === "active" || eventLoading}
-                            tone="emerald"
-                            className="mt-1"
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            <span className="font-medium">Launch Event</span>
-                          </MenuActionItem>
-                          <MenuActionItem
-                            onClick={() => void handleUpdateEvent("cancelled")}
-                            disabled={!selectedEvent || selectedEvent.is_default || selectedEvent.status === "cancelled" || eventLoading}
-                            tone="rose"
-                            className="mt-1"
-                          >
-                            <AlertCircle className="h-3.5 w-3.5" />
-                            <span className="font-medium">Cancel Event</span>
-                          </MenuActionItem>
-                        </InlineActionsMenu>
+                        {!selectedEvent?.is_default && selectedEvent?.status !== "cancelled" && (
+                          <InlineActionsMenu label="Actions" tone="neutral">
+                            <MenuActionItem
+                              onClick={() => void handleUpdateEvent("cancelled")}
+                              disabled={!selectedEvent || eventLoading}
+                              tone="rose"
+                            >
+                              <AlertCircle className="h-3.5 w-3.5" />
+                              <span className="font-medium">Cancel Event</span>
+                            </MenuActionItem>
+                          </InlineActionsMenu>
+                        )}
                       </div>
                       {selectedEvent?.effective_status === "closed" && (
                         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
@@ -4179,59 +4384,63 @@ export default function App() {
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                     <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
                       <div>
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="mb-1 flex items-center gap-2">
                           <h2 className="text-lg font-semibold">Registered Attendees</h2>
-                          <StatusBadge tone="blue" className="rounded-md">
-                            {settings.event_name || "Untitled Event"}
-                          </StatusBadge>
+                          <StatusBadge tone="neutral">{filteredRegistrations.length}</StatusBadge>
                         </div>
-                        <p className="text-sm text-slate-500">Manage, preview tickets, and export event registrations. Click a row to open the ticket panel.</p>
+                        <p className="text-sm text-slate-500">Search and open attendees fast. Ticket details stay in the side panel.</p>
                       </div>
-                      <a 
-                        href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}
-                        className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.neutral.idle} w-full text-sm sm:w-auto`}
-                      >
-                        <Download className="w-4 h-4" />
-                        Export CSV
-                      </a>
+                      <InlineActionsMenu label="Actions" tone="neutral">
+                        <MenuActionLink
+                          href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}
+                          tone="neutral"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          <span className="font-medium">Export CSV</span>
+                        </MenuActionLink>
+                      </InlineActionsMenu>
+                    </div>
+                    <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <input
+                          value={registrationListQuery}
+                          onChange={(e) => setRegistrationListQuery(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Search by name, registration ID, phone, or email"
+                        />
+                      </div>
                     </div>
                     <div className="space-y-3 p-4 md:hidden">
-                      {registrations.length === 0 ? (
+                      {filteredRegistrations.length === 0 ? (
                         <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                          No registrations yet.
+                          {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
                         </div>
                       ) : (
-                        registrations.map((reg) => (
+                        filteredRegistrations.map((reg) => (
                           <button
                             key={reg.id}
                             onClick={() => setSelectedRegistrationId(reg.id)}
-                            className={`w-full rounded-2xl border p-4 text-left transition-colors ${
+                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
                               selectedRegistrationId === reg.id
                                 ? "border-blue-200 bg-blue-50"
                                 : "border-slate-200 bg-white hover:bg-slate-50"
                             }`}
                           >
-                            <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
+                                <p className="truncate font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
                                 <p className="mt-1 font-mono text-xs font-bold text-blue-600">{reg.id}</p>
-                                <p className="mt-1 text-[11px] text-slate-500">{new Date(reg.timestamp).toLocaleString()}</p>
+                                <p className="mt-1 truncate text-[11px] text-slate-500">
+                                  {reg.phone || reg.email || "No contact info"}
+                                </p>
                               </div>
-                              <div className="flex flex-wrap justify-end gap-2">
+                              <div className="flex shrink-0 flex-wrap justify-end gap-2">
                                 <StatusBadge tone={getRegistrationStatusTone(reg.status)}>{reg.status}</StatusBadge>
                                 {selectedRegistrationId === reg.id && <StatusBadge tone="blue">selected</StatusBadge>}
                               </div>
                             </div>
-                            <div className="mt-3 grid gap-2 text-xs text-slate-600">
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Phone</p>
-                                <p className="mt-1">{reg.phone || "-"}</p>
-                              </div>
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Email</p>
-                                <p className="mt-1 break-all">{reg.email || "-"}</p>
-                              </div>
-                            </div>
+                            <p className="mt-2 text-[11px] text-slate-500">{new Date(reg.timestamp).toLocaleString()}</p>
                           </button>
                         ))
                       )}
@@ -4247,14 +4456,14 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {registrations.length === 0 ? (
+                          {filteredRegistrations.length === 0 ? (
                             <tr>
                               <td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">
-                                No registrations yet.
+                                {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
                               </td>
                             </tr>
                           ) : (
-                            registrations.map((reg) => (
+                            filteredRegistrations.map((reg) => (
                               <tr
                                 key={reg.id}
                                 onClick={() => setSelectedRegistrationId(reg.id)}
@@ -5088,23 +5297,40 @@ export default function App() {
                 <div className="space-y-6">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-5 sm:p-6">
                     <div>
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Link2 className="w-5 h-5 text-blue-600" />
-                        Channels
-                      </h3>
-                      <p className="text-sm text-slate-500">Map channel accounts to the selected event so inbound chat lands in the right workspace.</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Link2 className="w-5 h-5 text-blue-600" />
+                          Channels
+                        </h3>
+                        <StatusBadge tone="neutral">{filteredSelectedEventChannels.length}</StatusBadge>
+                      </div>
+                      <p className="text-sm text-slate-500">Compact channel list for the selected event. Open details only when needed.</p>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={channelListQuery}
+                        onChange={(e) => setChannelListQuery(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Search channels by name, platform, ID, or status"
+                      />
                     </div>
 
                     <div className="space-y-2">
-                      {selectedEventChannels.length === 0 ? (
+                      {filteredSelectedEventChannels.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                          No channels linked to this event yet.
+                          {deferredChannelListQuery ? "No channels match this search." : "No channels linked to this event yet."}
                         </div>
                       ) : (
-                        selectedEventChannels.map((channel) => (
+                        filteredSelectedEventChannels.map((channel) => (
                           <div key={channel.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                              <div className="min-w-0">
+                              <button
+                                onClick={() => toggleChannelDetails(channel.id)}
+                                className="min-w-0 flex-1 text-left"
+                                aria-expanded={channelDetailsOpenIds.includes(channel.id)}
+                              >
                                 <div className="flex flex-wrap items-center gap-2">
                                   <p className="text-sm font-semibold">{channel.display_name}</p>
                                   <StatusBadge tone="neutral">
@@ -5115,10 +5341,7 @@ export default function App() {
                                   </StatusBadge>
                                 </div>
                                 <p className="text-xs font-mono text-slate-500">{channel.external_id}</p>
-                                {channel.platform_description && (
-                                  <p className="mt-1 text-xs text-slate-500">{channel.platform_description}</p>
-                                )}
-                              </div>
+                              </button>
                               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                                 <StatusBadge tone={getTokenStatusTone(channel)}>
                                   {channel.platform === "web_chat"
@@ -5134,64 +5357,33 @@ export default function App() {
                                 </StatusBadge>
                               </div>
                             </div>
-                            {channel.missing_requirements && channel.missing_requirements.length > 0 && (
-                              <p className="text-xs text-amber-700">
-                                Missing: {channel.missing_requirements.join(", ")}
-                              </p>
-                            )}
-                            {channel.config_summary && channel.config_summary.length > 0 && (
-                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                {channel.config_summary.map((item) => (
-                                  <div key={`${channel.id}:${item.key}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
-                                    <p className="mt-1 break-all text-[11px] text-slate-700">{item.value}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            {channel.secret_config_fields_present && channel.secret_config_fields_present.length > 0 && (
-                              <p className="text-[11px] text-slate-500">
-                                Stored secret fields: {channel.secret_config_fields_present.join(", ")}
-                              </p>
-                            )}
-                            {channel.platform === "web_chat" && (
-                              <div className="rounded-xl border border-violet-100 bg-violet-50 p-3 space-y-2">
-                                <p className="text-xs font-semibold text-violet-800">Embed Snippet</p>
-                                <pre className="overflow-x-auto rounded-lg bg-white border border-violet-100 p-3 text-[11px] leading-relaxed text-slate-700">
-                                  <code>{buildWebChatEmbedSnippet(appUrl, channel.external_id)}</code>
-                                </pre>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <ActionButton
-                                    onClick={() => copyToClipboard(buildWebChatEmbedSnippet(appUrl, channel.external_id))}
-                                    tone="violet"
-                                  >
-                                    Copy Embed Snippet
-                                  </ActionButton>
-                                  <ActionButton
-                                    onClick={() => copyToClipboard(`${appUrl}/api/webchat/config/${encodeURIComponent(channel.external_id)}`)}
-                                    tone="neutral"
-                                  >
-                                    Copy Config URL
-                                  </ActionButton>
-                                </div>
-                              </div>
-                            )}
                             <div className="flex flex-wrap items-center gap-2">
                               <ActionButton
                                 onClick={() => loadChannelIntoForm(channel)}
                                 tone="blue"
+                                className="px-3 text-sm"
                               >
                                 <PencilLine className="h-3.5 w-3.5" />
-                                Edit Channel
+                                Edit
                               </ActionButton>
                               <InlineActionsMenu
-                                label="Manage Channel"
+                                label="Actions"
                                 tone={channel.is_active ? "amber" : "neutral"}
                               >
+                                <MenuActionItem
+                                  onClick={() => toggleChannelDetails(channel.id)}
+                                  tone="neutral"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                  <span className="font-medium">
+                                    {channelDetailsOpenIds.includes(channel.id) ? "Hide Details" : "Show Details"}
+                                  </span>
+                                </MenuActionItem>
                                 <MenuActionItem
                                   onClick={() => void handleToggleChannel(channel)}
                                   disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
                                   tone={selectedEventChannelWritesLocked && !channel.is_active ? "neutral" : channel.is_active ? "amber" : "emerald"}
+                                  className="mt-1"
                                 >
                                   <Power className="h-3.5 w-3.5" />
                                   <span className="font-medium">
@@ -5204,6 +5396,55 @@ export default function App() {
                                 </MenuActionItem>
                               </InlineActionsMenu>
                             </div>
+                            {channel.missing_requirements && channel.missing_requirements.length > 0 && (
+                              <p className="text-xs text-amber-700">
+                                Missing: {channel.missing_requirements.join(", ")}
+                              </p>
+                            )}
+                            {channelDetailsOpenIds.includes(channel.id) && (
+                              <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
+                                {channel.platform_description && (
+                                  <p className="text-xs text-slate-500">{channel.platform_description}</p>
+                                )}
+                                {channel.config_summary && channel.config_summary.length > 0 && (
+                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                    {channel.config_summary.map((item) => (
+                                      <div key={`${channel.id}:${item.key}`} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
+                                        <p className="mt-1 break-all text-[11px] text-slate-700">{item.value}</p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {channel.secret_config_fields_present && channel.secret_config_fields_present.length > 0 && (
+                                  <p className="text-[11px] text-slate-500">
+                                    Stored secret fields: {channel.secret_config_fields_present.join(", ")}
+                                  </p>
+                                )}
+                                {channel.platform === "web_chat" && (
+                                  <div className="rounded-xl border border-violet-100 bg-violet-50 p-3 space-y-2">
+                                    <p className="text-xs font-semibold text-violet-800">Embed Snippet</p>
+                                    <pre className="overflow-x-auto rounded-lg bg-white border border-violet-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                      <code>{buildWebChatEmbedSnippet(appUrl, channel.external_id)}</code>
+                                    </pre>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <ActionButton
+                                        onClick={() => copyToClipboard(buildWebChatEmbedSnippet(appUrl, channel.external_id))}
+                                        tone="violet"
+                                      >
+                                        Copy Embed Snippet
+                                      </ActionButton>
+                                      <ActionButton
+                                        onClick={() => copyToClipboard(`${appUrl}/api/webchat/config/${encodeURIComponent(channel.external_id)}`)}
+                                        tone="neutral"
+                                      >
+                                        Copy Config URL
+                                      </ActionButton>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))
                       )}
@@ -5550,6 +5791,186 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {globalSearchOpen && (
+          <motion.div
+            className="fixed inset-0 z-30 bg-slate-950/25 backdrop-blur-[2px]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setGlobalSearchOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {globalSearchOpen && (
+          <motion.aside
+            className="fixed inset-x-3 top-[calc(0.75rem+env(safe-area-inset-top))] z-40 max-h-[min(80dvh,42rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(42rem,calc(100vw-3rem))]"
+            initial={{ opacity: 0, y: -12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.98 }}
+            transition={{ duration: 0.18 }}
+          >
+            <div className="border-b border-slate-100 px-5 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Global Search</p>
+                  <div className="relative mt-3">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      ref={globalSearchInputRef}
+                      value={globalSearchQuery}
+                      onChange={(e) => setGlobalSearchQuery(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Search events, channels, attendees, documents, or logs"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => setGlobalSearchOpen(false)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
+                  aria-label="Close global search"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[calc(min(80dvh,42rem)-7.5rem)] space-y-4 overflow-y-auto px-5 py-4">
+              {!deferredGlobalSearchQuery ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  Start typing to search across events, current registrations, channels, documents, and logs.
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Events</p>
+                      <StatusBadge tone="neutral">{globalEventResults.length}</StatusBadge>
+                    </div>
+                    {globalEventResults.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No event matches.</div>
+                    ) : (
+                      globalEventResults.map((event) => (
+                        <button
+                          key={event.id}
+                          onClick={() => handleGlobalSearchSelect("event", event.id)}
+                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{event.name}</p>
+                            <p className="mt-1 truncate text-xs text-slate-500">{event.slug}</p>
+                          </div>
+                          <StatusBadge tone={event.effective_status === "active" ? "emerald" : event.effective_status === "pending" ? "amber" : event.effective_status === "cancelled" ? "rose" : "neutral"}>
+                            {getEventStatusLabel(event.effective_status)}
+                          </StatusBadge>
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Registrations</p>
+                      <StatusBadge tone="neutral">{globalRegistrationResults.length}</StatusBadge>
+                    </div>
+                    {globalRegistrationResults.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No attendee matches in the current event.</div>
+                    ) : (
+                      globalRegistrationResults.map((reg) => (
+                        <button
+                          key={reg.id}
+                          onClick={() => handleGlobalSearchSelect("registration", reg.id)}
+                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
+                            <p className="mt-1 truncate font-mono text-xs text-blue-600">{reg.id}</p>
+                          </div>
+                          <StatusBadge tone={getRegistrationStatusTone(reg.status)}>{reg.status}</StatusBadge>
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Channels</p>
+                      <StatusBadge tone="neutral">{globalChannelResults.length}</StatusBadge>
+                    </div>
+                    {globalChannelResults.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No channel matches.</div>
+                    ) : (
+                      globalChannelResults.map((channel) => (
+                        <button
+                          key={channel.id}
+                          onClick={() => handleGlobalSearchSelect("channel", channel.id)}
+                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{channel.display_name}</p>
+                            <p className="mt-1 truncate text-xs text-slate-500">{channel.platform_label || channel.platform} • {channel.external_id}</p>
+                          </div>
+                          <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>{channel.is_active ? "active" : "inactive"}</StatusBadge>
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Documents</p>
+                      <StatusBadge tone="neutral">{globalDocumentResults.length}</StatusBadge>
+                    </div>
+                    {globalDocumentResults.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No document matches in this workspace.</div>
+                    ) : (
+                      globalDocumentResults.map((document) => (
+                        <button
+                          key={document.id}
+                          onClick={() => handleGlobalSearchSelect("document", document.id)}
+                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{document.title}</p>
+                            <p className="mt-1 truncate text-xs text-slate-500">{document.source_type} • {document.chunk_count || 0} chunks</p>
+                          </div>
+                          <StatusBadge tone={document.is_active ? "emerald" : "neutral"}>{document.is_active ? "active" : "disabled"}</StatusBadge>
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Logs</p>
+                      <StatusBadge tone="neutral">{globalLogResults.length}</StatusBadge>
+                    </div>
+                    {globalLogResults.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No log matches in this workspace.</div>
+                    ) : (
+                      globalLogResults.map((message) => (
+                        <button
+                          key={message.id}
+                          onClick={() => handleGlobalSearchSelect("log", String(message.id))}
+                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">{message.type === "incoming" ? "Incoming Message" : "Outgoing Message"}</p>
+                            <p className="mt-1 truncate text-xs text-slate-500">{message.sender_id}</p>
+                          </div>
+                          <StatusBadge tone={message.type === "incoming" ? "emerald" : "blue"}>{message.type}</StatusBadge>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
       {helpContent && (
         <>
