@@ -1,6 +1,6 @@
 import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { BrowserQRCodeReader, type IScannerControls } from "@zxing/browser";
+import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import { 
   MessageSquare, 
   Settings as SettingsIcon, 
@@ -81,6 +81,15 @@ type WebhookConfigKey =
   | "telegram"
   | "webchat_config"
   | "webchat_message";
+
+let qrReaderCtorPromise: Promise<typeof import("@zxing/browser").BrowserQRCodeReader> | null = null;
+
+async function loadQrReaderCtor() {
+  if (!qrReaderCtorPromise) {
+    qrReaderCtorPromise = import("@zxing/browser").then((module) => module.BrowserQRCodeReader);
+  }
+  return qrReaderCtorPromise;
+}
 
 interface HelpContent {
   title: string;
@@ -2830,6 +2839,7 @@ export default function App() {
       }
 
       if (!qrReaderRef.current) {
+        const BrowserQRCodeReader = await loadQrReaderCtor();
         qrReaderRef.current = new BrowserQRCodeReader(undefined, {
           delayBetweenScanAttempts: 250,
           delayBetweenScanSuccess: 1200,
