@@ -69,6 +69,7 @@ type ActionTone = BadgeTone;
 type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
 type GlobalSearchResultKind = "event" | "registration" | "channel" | "document" | "log";
+type SearchFocusTarget = { kind: GlobalSearchResultKind; id: string } | null;
 
 interface HelpContent {
   title: string;
@@ -857,6 +858,10 @@ function matchesSearchQuery(query: string, values: Array<string | null | undefin
   return query.split(/\s+/).every((token) => haystack.includes(token));
 }
 
+function getSearchTargetDomId(kind: GlobalSearchResultKind, id: string) {
+  return `search-target-${kind}-${id}`;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -942,7 +947,10 @@ export default function App() {
   const [eventListQuery, setEventListQuery] = useState("");
   const [channelListQuery, setChannelListQuery] = useState("");
   const [registrationListQuery, setRegistrationListQuery] = useState("");
+  const [documentListQuery, setDocumentListQuery] = useState("");
+  const [logListQuery, setLogListQuery] = useState("");
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
+  const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
   const [llmModelsError, setLlmModelsError] = useState("");
@@ -965,6 +973,7 @@ export default function App() {
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
   const knowledgeActionsRef = useRef<HTMLDivElement | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchFocusTimeoutRef = useRef<number | null>(null);
   selectedEventIdRef.current = selectedEventId;
 
   const checkinAccessMode = Boolean(checkinAccessToken);
@@ -992,6 +1001,8 @@ export default function App() {
   const deferredEventListQuery = useDeferredValue(normalizeSearchQuery(eventListQuery));
   const deferredChannelListQuery = useDeferredValue(normalizeSearchQuery(channelListQuery));
   const deferredRegistrationListQuery = useDeferredValue(normalizeSearchQuery(registrationListQuery));
+  const deferredDocumentListQuery = useDeferredValue(normalizeSearchQuery(documentListQuery));
+  const deferredLogListQuery = useDeferredValue(normalizeSearchQuery(logListQuery));
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const latestCheckinRegistration = checkinLatestResult || selectedRegistration;
@@ -1005,6 +1016,10 @@ export default function App() {
     typeof window !== "undefined" &&
     typeof navigator !== "undefined" &&
     Boolean(navigator.mediaDevices?.getUserMedia);
+  const searchShortcutLabel =
+    typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+      ? "Cmd K"
+      : "Ctrl K";
   const isOperationsTab = activeTab === "registrations" || activeTab === "checkin" || activeTab === "logs";
   const primaryTabs = [
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
@@ -1116,6 +1131,25 @@ export default function App() {
       reg.phone,
       reg.email,
       reg.status,
+    ]),
+  );
+  const filteredDocuments = documents.filter((document) =>
+    matchesSearchQuery(deferredDocumentListQuery, [
+      document.title,
+      document.source_type,
+      document.source_url,
+      document.embedding_status,
+      document.content,
+      document.is_active ? "active" : "inactive",
+    ]),
+  );
+  const filteredMessages = messages.filter((message) =>
+    matchesSearchQuery(deferredLogListQuery, [
+      message.sender_id,
+      message.text,
+      message.type,
+      parseLineTraceMessage(message.text)?.status,
+      parseLineTraceMessage(message.text)?.detail,
     ]),
   );
   const globalEventResults = deferredGlobalSearchQuery
@@ -1562,6 +1596,29 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [globalSearchOpen]);
+
+  useEffect(() => {
+    if (checkinAccessMode) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") {
+        return;
+      }
+      event.preventDefault();
+      setGlobalSearchOpen(true);
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [checkinAccessMode]);
+
+  useEffect(() => {
+    return () => {
+      if (searchFocusTimeoutRef.current !== null) {
+        window.clearTimeout(searchFocusTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!helpOpen) return;
@@ -2755,6 +2812,31 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const focusSearchTarget = (kind: GlobalSearchResultKind, id: string) => {
+    if (searchFocusTimeoutRef.current !== null) {
+      window.clearTimeout(searchFocusTimeoutRef.current);
+    }
+    setSearchFocusTarget({ kind, id });
+    window.setTimeout(() => {
+      document.getElementById(getSearchTargetDomId(kind, id))?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+    }, 180);
+    searchFocusTimeoutRef.current = window.setTimeout(() => {
+      setSearchFocusTarget((current) => (current?.kind === kind && current.id === id ? null : current));
+      searchFocusTimeoutRef.current = null;
+    }, 2600);
+  };
+
+  const isSearchFocused = (kind: GlobalSearchResultKind, id: string) =>
+    searchFocusTarget?.kind === kind && searchFocusTarget.id === id;
+
+  const selectDocumentForChunks = (documentId: string) => {
+    setSelectedDocumentForChunksId(documentId);
+    focusSearchTarget("document", documentId);
+  };
+
   const toggleChannelDetails = (channelId: string) => {
     setChannelDetailsOpenIds((current) =>
       current.includes(channelId) ? current.filter((id) => id !== channelId) : [...current, channelId],
@@ -2763,12 +2845,18 @@ export default function App() {
 
   const handleGlobalSearchSelect = (kind: GlobalSearchResultKind, id: string) => {
     if (kind === "event") {
+      const event = events.find((item) => item.id === id);
+      setEventListQuery(event?.slug || event?.name || "");
       setSelectedEventId(id);
       setActiveTab("event");
+      focusSearchTarget("event", id);
     }
     if (kind === "registration") {
+      const registration = registrations.find((item) => item.id === id);
+      setRegistrationListQuery(registration?.id || "");
       setActiveTab("registrations");
       setSelectedRegistrationId(id);
+      focusSearchTarget("registration", id);
     }
     if (kind === "channel") {
       const channel = channels.find((item) => item.id === id);
@@ -2776,17 +2864,24 @@ export default function App() {
         setSelectedEventId(channel.event_id);
       }
       if (channel) {
+        setChannelListQuery(channel.external_id || channel.display_name || "");
         loadChannelIntoForm(channel);
         setChannelDetailsOpenIds((current) => (current.includes(channel.id) ? current : [...current, channel.id]));
       }
       setActiveTab("settings");
+      focusSearchTarget("channel", id);
     }
     if (kind === "document") {
+      const document = documents.find((item) => item.id === id);
+      setDocumentListQuery(document?.title || "");
       setActiveTab("design");
-      setSelectedDocumentForChunksId(id);
+      selectDocumentForChunks(id);
     }
     if (kind === "log") {
+      const message = messages.find((item) => String(item.id) === id);
+      setLogListQuery(message?.sender_id || message?.text || "");
       setActiveTab("logs");
+      focusSearchTarget("log", id);
     }
     setGlobalSearchOpen(false);
     setGlobalSearchQuery("");
@@ -3148,6 +3243,9 @@ export default function App() {
               >
                 <Search className="h-4 w-4" />
                 <span className="hidden sm:inline">Search</span>
+                <span className="hidden rounded-lg bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 lg:inline-flex">
+                  {searchShortcutLabel}
+                </span>
               </button>
               <button
                 onClick={handleLogout}
@@ -3476,21 +3574,31 @@ export default function App() {
                       <input
                         value={eventListQuery}
                         onChange={(e) => setEventListQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="Search events by name, slug, or status"
                       />
+                      {eventListQuery && (
+                        <button
+                          onClick={() => setEventListQuery("")}
+                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                          aria-label="Clear event search"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
 
                     <div className="space-y-2">
                       {filteredWorkingEvents.map((event) => (
                         <button
                           key={event.id}
+                          id={getSearchTargetDomId("event", event.id)}
                           onClick={() => setSelectedEventId(event.id)}
                           className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
                             selectedEventId === event.id
                               ? "border-blue-200 bg-blue-50"
                               : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                          }`}
+                          } ${isSearchFocused("event", event.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div>
@@ -3523,12 +3631,13 @@ export default function App() {
                         {filteredClosedEvents.map((event) => (
                           <button
                             key={event.id}
+                            id={getSearchTargetDomId("event", event.id)}
                             onClick={() => setSelectedEventId(event.id)}
                             className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
                               selectedEventId === event.id
                                 ? "border-slate-300 bg-slate-100"
                                 : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                            }`}
+                            } ${isSearchFocused("event", event.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>
@@ -3550,12 +3659,13 @@ export default function App() {
                         {filteredCancelledEvents.map((event) => (
                           <button
                             key={event.id}
+                            id={getSearchTargetDomId("event", event.id)}
                             onClick={() => setSelectedEventId(event.id)}
                             className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
                               selectedEventId === event.id
                                 ? "border-rose-200 bg-rose-50"
                                 : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-                            }`}
+                            } ${isSearchFocused("event", event.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>
@@ -3843,7 +3953,10 @@ export default function App() {
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-4 flex items-start justify-between gap-3">
                       <div>
-                        <h3 className="text-lg font-semibold">Attached Documents</h3>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold">Attached Documents</h3>
+                          <StatusBadge tone="neutral">{filteredDocuments.length}</StatusBadge>
+                        </div>
                         <p className="text-sm text-slate-500">Only active documents are used during retrieval.</p>
                       </div>
                       <button
@@ -3856,14 +3969,43 @@ export default function App() {
                       </button>
                     </div>
 
+                    <div className="mb-4 relative">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={documentListQuery}
+                        onChange={(e) => setDocumentListQuery(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Search documents by title, content, source, or status"
+                      />
+                      {documentListQuery && (
+                        <button
+                          onClick={() => setDocumentListQuery("")}
+                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                          aria-label="Clear document search"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+
                     <div className="space-y-3">
-                      {documents.length === 0 && (
+                      {filteredDocuments.length === 0 && (
                         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                          No documents attached to this event yet.
+                          {deferredDocumentListQuery ? "No documents match this search." : "No documents attached to this event yet."}
                         </div>
                       )}
-                      {documents.map((document) => (
-                        <div key={document.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+                      {filteredDocuments.map((document) => (
+                        <div
+                          key={document.id}
+                          id={getSearchTargetDomId("document", document.id)}
+                          className={`rounded-2xl border p-4 space-y-3 ${
+                            selectedDocumentForChunksId === document.id
+                              ? "border-blue-200 bg-blue-50/70"
+                              : "border-slate-200 bg-slate-50/80"
+                          } ${
+                            isSearchFocused("document", document.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
+                          }`}
+                        >
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
                               <p className="font-semibold text-slate-900 truncate">{document.title}</p>
@@ -3878,47 +4020,59 @@ export default function App() {
                                 <StatusBadge tone={getDocumentEmbeddingTone(document.embedding_status)}>
                                   embedding {document.embedding_status || "pending"}
                                 </StatusBadge>
+                                {selectedDocumentForChunksId === document.id && <StatusBadge tone="blue">selected</StatusBadge>}
                               </div>
                             </div>
                           </div>
-                          {document.source_url && (
-                            <a
-                              href={document.source_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                            >
-                              <ExternalLink className="w-3 h-3" />
-                              Open source URL
-                            </a>
-                          )}
                           <p className="text-sm text-slate-600 whitespace-pre-wrap">
-                            {document.content.length > 280 ? `${document.content.slice(0, 280)}...` : document.content}
+                            {document.content.length > 180 ? `${document.content.slice(0, 180)}...` : document.content}
                           </p>
                           <div className="flex flex-wrap items-center gap-2">
                             <ActionButton
                               onClick={() => loadDocumentIntoForm(document)}
                               tone="neutral"
+                              className="px-3"
                             >
                               <PencilLine className="h-3.5 w-3.5" />
                               Edit
                             </ActionButton>
-                            <ActionButton
-                              onClick={() => setSelectedDocumentForChunksId(document.id)}
-                              tone="blue"
-                              active={selectedDocumentForChunksId === document.id}
+                            <InlineActionsMenu
+                              label="Actions"
+                              tone={document.is_active ? "amber" : "neutral"}
                             >
-                              <Eye className="h-3.5 w-3.5" />
-                              View Chunks
-                            </ActionButton>
-                            <ActionButton
-                              onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
-                              disabled={documentsLoading}
-                              tone={document.is_active ? "amber" : "emerald"}
-                            >
-                              <Power className="h-3.5 w-3.5" />
-                              {document.is_active ? "Disable" : "Enable"}
-                            </ActionButton>
+                              <MenuActionItem
+                                onClick={() => selectDocumentForChunks(document.id)}
+                                tone={selectedDocumentForChunksId === document.id ? "blue" : "neutral"}
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                <span className="font-medium">
+                                  {selectedDocumentForChunksId === document.id ? "Viewing Chunks" : "View Chunks"}
+                                </span>
+                              </MenuActionItem>
+                              {document.source_url && (
+                                <MenuActionLink
+                                  href={document.source_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  tone="neutral"
+                                  className="mt-1"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                  <span className="font-medium">Open Source URL</span>
+                                </MenuActionLink>
+                              )}
+                              <MenuActionItem
+                                onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
+                                disabled={documentsLoading}
+                                tone={document.is_active ? "amber" : "emerald"}
+                                className="mt-1"
+                              >
+                                <Power className="h-3.5 w-3.5" />
+                                <span className="font-medium">
+                                  {document.is_active ? "Disable Document" : "Enable Document"}
+                                </span>
+                              </MenuActionItem>
+                            </InlineActionsMenu>
                           </div>
                         </div>
                       ))}
@@ -4406,9 +4560,18 @@ export default function App() {
                         <input
                           value={registrationListQuery}
                           onChange={(e) => setRegistrationListQuery(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                           placeholder="Search by name, registration ID, phone, or email"
                         />
+                        {registrationListQuery && (
+                          <button
+                            onClick={() => setRegistrationListQuery("")}
+                            className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                            aria-label="Clear registration search"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="space-y-3 p-4 md:hidden">
@@ -4420,12 +4583,13 @@ export default function App() {
                         filteredRegistrations.map((reg) => (
                           <button
                             key={reg.id}
+                            id={getSearchTargetDomId("registration", reg.id)}
                             onClick={() => setSelectedRegistrationId(reg.id)}
                             className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
                               selectedRegistrationId === reg.id
                                 ? "border-blue-200 bg-blue-50"
                                 : "border-slate-200 bg-white hover:bg-slate-50"
-                            }`}
+                            } ${isSearchFocused("registration", reg.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
@@ -4466,9 +4630,12 @@ export default function App() {
                             filteredRegistrations.map((reg) => (
                               <tr
                                 key={reg.id}
+                                id={getSearchTargetDomId("registration", reg.id)}
                                 onClick={() => setSelectedRegistrationId(reg.id)}
                                 className={`registration-row hover:bg-slate-50 transition-colors cursor-pointer ${
                                   selectedRegistrationId === reg.id ? "registration-row-selected bg-blue-50" : ""
+                                } ${
+                                  isSearchFocused("registration", reg.id) ? "bg-blue-50/80" : ""
                                 }`}
                               >
                                 <td className="px-6 py-4 font-mono text-xs font-bold text-blue-600">
@@ -5048,7 +5215,7 @@ export default function App() {
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
-                      <StatusBadge tone="neutral">{messages.length} items</StatusBadge>
+                      <StatusBadge tone="neutral">{filteredMessages.length} items</StatusBadge>
                     </div>
                     <p className="text-sm text-slate-500">Inbound messages plus delivery traces from active channels.</p>
                   </div>
@@ -5056,16 +5223,42 @@ export default function App() {
                     <RefreshCw className="w-4 h-4 text-slate-400" />
                   </button>
                 </div>
+                <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      value={logListQuery}
+                      onChange={(e) => setLogListQuery(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Search logs by sender, message, type, or trace detail"
+                    />
+                    {logListQuery && (
+                      <button
+                        onClick={() => setLogListQuery("")}
+                        className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                        aria-label="Clear log search"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
                 <div className="space-y-3 p-4 md:hidden">
-                  {messages.length === 0 ? (
+                  {filteredMessages.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                      No messages received yet.
+                      {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
                     </div>
                   ) : (
-                    messages.map((msg) => {
+                    filteredMessages.map((msg) => {
                       const lineTrace = parseLineTraceMessage(msg.text);
                       return (
-                        <div key={msg.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                        <div
+                          key={msg.id}
+                          id={getSearchTargetDomId("log", String(msg.id))}
+                          className={`rounded-2xl border border-slate-200 bg-white p-4 space-y-3 ${
+                            isSearchFocused("log", String(msg.id)) ? "ring-2 ring-blue-200 ring-offset-2" : ""
+                          }`}
+                        >
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="text-sm font-semibold text-slate-900">{lineTrace ? "Delivery Trace" : msg.type === "incoming" ? "Incoming Message" : "Outgoing Message"}</p>
@@ -5115,17 +5308,23 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {messages.length === 0 ? (
+                      {filteredMessages.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">
-                            No messages received yet.
+                            {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
                           </td>
                         </tr>
                       ) : (
-                        messages.map((msg) => {
+                        filteredMessages.map((msg) => {
                           const lineTrace = parseLineTraceMessage(msg.text);
                           return (
-                            <tr key={msg.id} className="hover:bg-slate-50/50 transition-colors">
+                            <tr
+                              key={msg.id}
+                              id={getSearchTargetDomId("log", String(msg.id))}
+                              className={`hover:bg-slate-50/50 transition-colors ${
+                                isSearchFocused("log", String(msg.id)) ? "bg-blue-50/80" : ""
+                              }`}
+                            >
                               <td className="px-6 py-4 whitespace-nowrap text-slate-500">
                                 {new Date(msg.timestamp).toLocaleString()}
                               </td>
@@ -5312,9 +5511,18 @@ export default function App() {
                       <input
                         value={channelListQuery}
                         onChange={(e) => setChannelListQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="Search channels by name, platform, ID, or status"
                       />
+                      {channelListQuery && (
+                        <button
+                          onClick={() => setChannelListQuery("")}
+                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                          aria-label="Clear channel search"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -5324,7 +5532,13 @@ export default function App() {
                         </div>
                       ) : (
                         filteredSelectedEventChannels.map((channel) => (
-                          <div key={channel.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                          <div
+                            key={channel.id}
+                            id={getSearchTargetDomId("channel", channel.id)}
+                            className={`rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3 ${
+                              isSearchFocused("channel", channel.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
+                            }`}
+                          >
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                               <button
                                 onClick={() => toggleChannelDetails(channel.id)}
@@ -5823,10 +6037,22 @@ export default function App() {
                       ref={globalSearchInputRef}
                       value={globalSearchQuery}
                       onChange={(e) => setGlobalSearchQuery(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="Search events, channels, attendees, documents, or logs"
                     />
+                    {globalSearchQuery && (
+                      <button
+                        onClick={() => setGlobalSearchQuery("")}
+                        className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                        aria-label="Clear global search"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Events and channels search across the workspace. Attendees, documents, and logs follow the active event.
+                  </p>
                 </div>
                 <button
                   onClick={() => setGlobalSearchOpen(false)}
