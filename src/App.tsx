@@ -549,6 +549,41 @@ function ActionButton({
   );
 }
 
+function CopyField({
+  label,
+  value,
+  onCopy,
+  help,
+  copied = false,
+}: {
+  label: string;
+  value: string;
+  onCopy: () => void;
+  help?: ReactNode;
+  copied?: boolean;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-bold uppercase tracking-[0.18em] text-slate-500 mb-1">{label}</label>
+      <div className="flex items-stretch gap-2">
+        <input
+          readOnly
+          value={value}
+          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-mono outline-none"
+        />
+        <button
+          onClick={onCopy}
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
+          aria-label={`Copy ${label}`}
+        >
+          {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
+        </button>
+      </div>
+      {help ? <p className="mt-1 text-xs text-slate-500">{help}</p> : null}
+    </div>
+  );
+}
+
 const INITIAL_SETTINGS: Settings = {
   context: "",
   llm_model: "",
@@ -2427,7 +2462,7 @@ export default function App() {
         </header>
 
         <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4">
               <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Event Status</p>
               <p className="mt-2 text-lg font-semibold text-blue-900 capitalize">{checkinAccessSession.event_status}</p>
@@ -2775,7 +2810,7 @@ export default function App() {
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {operationsMenuOpen && (
-                    <div className="absolute left-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl sm:left-auto sm:right-0">
+                    <div className="absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                       {operationsTabs.map((tab) => (
                         <button
                           key={tab.id}
@@ -3742,16 +3777,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
-                    <h3 className="font-semibold text-slate-900 mb-2">Retrieval behavior right now</h3>
-                    <div className="space-y-2">
-                      <p><span className="font-semibold">Global</span>: system prompt lives in <span className="font-semibold">Setup</span> and applies to every event.</p>
-                      <p><span className="font-semibold">Event</span>: context and documents stay attached to the selected event only.</p>
-                      <p><span className="font-semibold">Current</span>: the bot ranks active document chunks against the incoming message and injects the best matches into the prompt.</p>
-                      <p><span className="font-semibold">Current</span>: text-based file import already feeds the same chunk store after save.</p>
-                      <p><span className="font-semibold">Later</span>: replace simple chunk matching with embeddings/vector search without changing the event workspace model.</p>
-                    </div>
-                  </div>
                 </div>
               </div>
             </motion.div>
@@ -3765,7 +3790,7 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="flex min-h-[calc(100dvh-13rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-12rem)]"
             >
-              <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 p-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
                     <Bot className="text-blue-600 w-6 h-6" />
@@ -3778,12 +3803,13 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <button 
+                <ActionButton 
                   onClick={() => setTestMessages([])}
-                  className="text-xs text-slate-400 hover:text-slate-600 font-medium"
+                  tone="neutral"
+                  className="px-3 text-xs"
                 >
                   Clear Chat
-                </button>
+                </ActionButton>
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-2 bg-slate-50/30">
@@ -3855,13 +3881,15 @@ export default function App() {
                     placeholder="Type a message..."
                     className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                   />
-                  <button
+                  <ActionButton
                     onClick={handleTestSend}
                     disabled={!inputText.trim() || isTyping}
-                    className="bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-xl transition-all disabled:opacity-50"
+                    tone="blue"
+                    active
+                    className="px-3"
                   >
                     <Send className="w-5 h-5" />
-                  </button>
+                  </ActionButton>
                 </div>
               </div>
             </motion.div>
@@ -4661,6 +4689,11 @@ export default function App() {
                           AI Settings
                         </h3>
                         <p className="text-sm text-slate-500">Global prompt and model policy for the organization, with optional event-level override.</p>
+                        {llmModelsLoading && (
+                          <div className="mt-2">
+                            <StatusBadge tone="blue">syncing model list</StatusBadge>
+                          </div>
+                        )}
                       </div>
                       <ActionButton
                         onClick={() => void saveAiSettings()}
@@ -4976,193 +5009,79 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Bot className="w-5 h-5 text-blue-600" />
-                        Channel & Platform Notes
-                      </h3>
-                      <button
-                        onClick={fetchLlmModels}
-                        disabled={llmModelsLoading}
-                        className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
-                        title="Refresh model list"
-                      >
-                        <RefreshCw className={`w-4 h-4 text-slate-500 ${llmModelsLoading ? "animate-spin" : ""}`} />
-                      </button>
-                    </div>
-
-                    <div className="space-y-3">
-                      <p className="text-sm text-slate-600">
-                        One event can eventually map to multiple platforms such as Facebook, LINE OA, WhatsApp, and Telegram. This Setup page is now structured so channel credentials stay here while event content stays under the selected event workspace.
-                      </p>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
-                        <p><span className="font-semibold text-slate-800">Current</span>: Facebook Page routing with optional page-level access token.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: LINE OA webhook + reply groundwork is now wired in, using channel access token and channel secret from the selected event mapping.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: Instagram messaging now has its own webhook + outbound text/image path, routed by Instagram business account ID.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: WhatsApp Cloud API messaging now has webhook + outbound text/image handling, routed by phone number ID.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: Telegram bot messaging now has webhook + outbound text/image handling, routed by bot key in the webhook path.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: Web Chat groundwork is wired in through a public widget config endpoint and message endpoint, scoped to the selected event.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: platform-specific channel setup fields remain available for future channel extensions.</p>
-                        <p><span className="font-semibold text-slate-800">Next</span>: wire live adapters one platform at a time without moving event context out of the event workspace.</p>
-                        <p><span className="font-semibold text-slate-800">Current</span>: documents and knowledge stay attached to the event, not to individual pages, so one event can answer consistently across channels.</p>
-                      </div>
-                      <p className="text-xs text-slate-500">
-                        OpenRouter credentials stay server-side in <code>OPENROUTER_API_KEY</code>. Per-channel secrets should also remain server-side and never be embedded in the client.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                       <SettingsIcon className="w-5 h-5 text-blue-600" />
                       Webhook Configuration
                     </h3>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Facebook Callback URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            readOnly
-                            value={webhookUrl}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
-                          />
-                          <button 
-                            onClick={() => copyToClipboard(webhookUrl)}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-                          </button>
-                        </div>
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <CopyField
+                          label="Facebook Callback URL"
+                          value={webhookUrl}
+                          onCopy={() => copyToClipboard(webhookUrl)}
+                          copied={copied}
+                        />
+                        <CopyField
+                          label="LINE Callback URL"
+                          value={lineWebhookUrl}
+                          onCopy={() => copyToClipboard(lineWebhookUrl)}
+                          copied={copied}
+                          help={<>Save <code>Channel Access Token</code> as the channel token and keep <code>Channel Secret</code> in platform-specific config.</>}
+                        />
+                        <CopyField
+                          label="Instagram Callback URL"
+                          value={instagramWebhookUrl}
+                          onCopy={() => copyToClipboard(instagramWebhookUrl)}
+                          copied={copied}
+                          help="Use the Instagram business account ID as the external ID and save the linked Meta token as the access token."
+                        />
+                        <CopyField
+                          label="WhatsApp Callback URL"
+                          value={whatsappWebhookUrl}
+                          onCopy={() => copyToClipboard(whatsappWebhookUrl)}
+                          copied={copied}
+                          help={<>Use <code>Phone Number ID</code> as the external ID and keep <code>Business Account ID</code> in platform-specific config.</>}
+                        />
+                        <CopyField
+                          label="Telegram Callback URL"
+                          value={telegramWebhookUrl}
+                          onCopy={() => copyToClipboard(telegramWebhookUrl)}
+                          copied={copied}
+                          help={<>Replace <code>{"{botKey}"}</code> with the Telegram channel external ID.</>}
+                        />
+                        <CopyField
+                          label="Web Chat Config URL"
+                          value={webChatConfigUrl}
+                          onCopy={() => copyToClipboard(webChatConfigUrl)}
+                          copied={copied}
+                          help={<>Replace <code>{"{widgetKey}"}</code> with the Web Chat channel external ID.</>}
+                        />
+                        <CopyField
+                          label="Web Chat Message URL"
+                          value={webChatMessageUrl}
+                          onCopy={() => copyToClipboard(webChatMessageUrl)}
+                          copied={copied}
+                          help={<>POST <code>widget_key</code>, <code>sender_id</code>, and <code>text</code> from the site widget.</>}
+                        />
                       </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">LINE Callback URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            readOnly
-                            value={lineWebhookUrl}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
-                          />
-                          <button
-                            onClick={() => copyToClipboard(lineWebhookUrl)}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-                          </button>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          For LINE OA, save `Channel Access Token` as the channel access token, and put `Channel Secret` in the platform-specific config fields under Channels.
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Instagram Callback URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            readOnly
-                            value={instagramWebhookUrl}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
-                          />
-                          <button
-                            onClick={() => copyToClipboard(instagramWebhookUrl)}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-                          </button>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          For Instagram, use the Instagram business account ID as the channel external ID, save the page-linked Meta token as the access token, and point the webhook callback here.
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">WhatsApp Callback URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            readOnly
-                            value={whatsappWebhookUrl}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
-                          />
-                          <button
-                            onClick={() => copyToClipboard(whatsappWebhookUrl)}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-                          </button>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          For WhatsApp, use the `Phone Number ID` as the channel external ID, save the Cloud API token as the access token, and keep `Business Account ID` in the platform-specific config field.
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Telegram Callback URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            readOnly
-                            value={telegramWebhookUrl}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
-                          />
-                          <button
-                            onClick={() => copyToClipboard(telegramWebhookUrl)}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-                          </button>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Replace <code>{"{botKey}"}</code> with the Telegram channel external ID. Save the bot token as the access token and, if used, put the webhook secret in the platform-specific config field.
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Web Chat Config URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            readOnly
-                            value={webChatConfigUrl}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
-                          />
-                          <button
-                            onClick={() => copyToClipboard(webChatConfigUrl)}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-                          </button>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Replace <code>{"{widgetKey}"}</code> with the <code>Web Chat</code> channel external ID to load the public widget config.
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Web Chat Message URL</label>
-                        <div className="flex gap-2">
-                          <input
-                            readOnly
-                            value={webChatMessageUrl}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
-                          />
-                          <button
-                            onClick={() => copyToClipboard(webChatMessageUrl)}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-                          </button>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          POST `widget_key`, `sender_id`, and `text` to this endpoint from your embedded site widget.
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Verify Token</label>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-[0.18em] mb-2">Verify Token</label>
                         <div className="flex gap-2">
                           <input
                             value={settings.verify_token}
                             onChange={(e) => setSettings({ ...settings, verify_token: e.target.value })}
-                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none"
+                            className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
                           />
-                          <button 
+                          <ActionButton 
                             onClick={() => void saveWebhookSettings()}
-                            className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
+                            tone="blue"
+                            active
+                            className="px-3"
                           >
-                            <Save className="w-5 h-5 text-blue-600" />
-                          </button>
+                            <Save className="w-5 h-5" />
+                            Save
+                          </ActionButton>
                         </div>
                       </div>
                     </div>
