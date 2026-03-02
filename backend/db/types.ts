@@ -304,6 +304,7 @@ export interface AppDatabase {
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;
   setUserActive(userId: string, isActive: boolean): Promise<boolean>;
+  removeUser(userId: string): Promise<boolean>;
   createSession(userId: string, tokenHash: string, expiresAt: Date): Promise<void>;
   getSessionWithUser(tokenHash: string): Promise<AuthSessionRow | undefined>;
   touchSession(sessionId: string): Promise<void>;

@@ -39,6 +39,24 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  button,
+  label,
+  svg,
+  [role="button"],
+  [role="menuitem"] {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  select,
+  pre,
+  code {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
   html.theme-dark body {
     background: #020617;
     color: #e2e8f0;
@@ -265,6 +283,10 @@
   background-color: rgba(255, 255, 255, 0.94);
 }
 
+.app-overlay-surface {
+  background-color: rgba(255, 255, 255, 0.96);
+}
+
 html.theme-dark .app-header-surface {
   background-color: rgba(2, 6, 23, 0.92) !important;
   border-color: #1e293b !important;
@@ -277,6 +299,16 @@ html.theme-dark .app-toolbar-surface {
 html.theme-dark .app-floating-status {
   background-color: rgba(15, 23, 42, 0.96) !important;
   border-color: #334155 !important;
+}
+
+html.theme-dark .app-overlay-surface {
+  background-color: rgba(15, 23, 42, 0.98) !important;
+  border-color: #334155 !important;
+  box-shadow: 0 24px 64px rgba(2, 6, 23, 0.62) !important;
+}
+
+html.theme-dark .ring-offset-2 {
+  --tw-ring-offset-color: #020617 !important;
 }
 
 .chat-scroll::-webkit-scrollbar {

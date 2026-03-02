@@ -1159,6 +1159,13 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
+  async removeUser(userId: string) {
+    const result = this.db.prepare(
+      "DELETE FROM users WHERE id = ?",
+    ).run(String(userId || "").trim());
+    return result.changes > 0;
+  }
+
   async createSession(userId: string, tokenHash: string, expiresAt: Date) {
     this.db.prepare(
       `INSERT INTO sessions (id, user_id, token_hash, expires_at)

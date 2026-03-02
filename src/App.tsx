@@ -70,6 +70,14 @@ type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
 type GlobalSearchResultKind = "event" | "registration" | "channel" | "document" | "log";
 type SearchFocusTarget = { kind: GlobalSearchResultKind; id: string } | null;
+type WebhookConfigKey =
+  | "facebook"
+  | "line"
+  | "instagram"
+  | "whatsapp"
+  | "telegram"
+  | "webchat_config"
+  | "webchat_message";
 
 interface HelpContent {
   title: string;
@@ -599,7 +607,7 @@ function HelpPopover({
         <span>Notes</span>
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl">
+        <div className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl">
           {children}
         </div>
       )}
@@ -658,7 +666,7 @@ function InlineActionsMenu({
       </ActionButton>
       {open && (
         <div
-          className="absolute right-0 top-full z-20 mt-2 w-[min(16rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+          className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(16rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
           onClickCapture={(event) => {
             const target = event.target as HTMLElement | null;
             if (target?.closest('[role="menuitem"]')) {
@@ -939,6 +947,7 @@ export default function App() {
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [selectedWebhookConfigKey, setSelectedWebhookConfigKey] = useState<WebhookConfigKey>("facebook");
   const [searchId, setSearchId] = useState("");
   const [checkinAccessToken] = useState(INITIAL_CHECKIN_TOKEN);
   const [checkinAccessSession, setCheckinAccessSession] = useState<CheckinAccessSession | null>(null);
@@ -1019,6 +1028,7 @@ export default function App() {
     if (authUser.role === "owner") return true;
     return user.role === "operator" || user.role === "checker" || user.role === "viewer";
   };
+  const canDeleteTeamUser = (user: AuthUser) => canManageTargetAccess(user);
   const deferredGlobalSearchQuery = useDeferredValue(normalizeSearchQuery(globalSearchQuery));
   const deferredEventListQuery = useDeferredValue(normalizeSearchQuery(eventListQuery));
   const deferredChannelListQuery = useDeferredValue(normalizeSearchQuery(channelListQuery));
@@ -2894,6 +2904,34 @@ export default function App() {
     }
   };
 
+  const handleDeleteUser = async (user: AuthUser) => {
+    if (!canDeleteTeamUser(user)) return;
+
+    const confirmed = window.confirm(
+      `Delete ${user.display_name || user.username} permanently?\n\nThis will remove the account, revoke active sessions, and remove all workspace access. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setTeamLoading(true);
+    setTeamMessage("");
+    try {
+      const res = await apiFetch(`/api/auth/users/${encodeURIComponent(user.id)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to delete user");
+      }
+      setTeamMessage(`Deleted user ${user.username}`);
+      await fetchTeamUsers();
+      window.setTimeout(() => setTeamMessage(""), 2500);
+    } catch (err) {
+      setTeamMessage(err instanceof Error ? err.message : "Failed to delete user");
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -3276,12 +3314,70 @@ export default function App() {
   const telegramWebhookUrl = `${appUrl}/api/webhook/telegram/{botKey}`;
   const webChatConfigUrl = `${appUrl}/api/webchat/config/{widgetKey}`;
   const webChatMessageUrl = `${appUrl}/api/webchat/messages`;
+  const webhookConfigItems: Array<{
+    key: WebhookConfigKey;
+    shortLabel: string;
+    label: string;
+    value: string;
+    help?: ReactNode;
+  }> = [
+    {
+      key: "facebook",
+      shortLabel: "Facebook",
+      label: "Facebook Callback URL",
+      value: webhookUrl,
+    },
+    {
+      key: "line",
+      shortLabel: "LINE",
+      label: "LINE Callback URL",
+      value: lineWebhookUrl,
+      help: <>Save <code>Channel Access Token</code> as the channel token and keep <code>Channel Secret</code> in platform-specific config.</>,
+    },
+    {
+      key: "instagram",
+      shortLabel: "Instagram",
+      label: "Instagram Callback URL",
+      value: instagramWebhookUrl,
+      help: "Use the Instagram business account ID as the external ID and save the linked Meta token as the access token.",
+    },
+    {
+      key: "whatsapp",
+      shortLabel: "WhatsApp",
+      label: "WhatsApp Callback URL",
+      value: whatsappWebhookUrl,
+      help: <>Use <code>Phone Number ID</code> as the external ID and keep <code>Business Account ID</code> in platform-specific config.</>,
+    },
+    {
+      key: "telegram",
+      shortLabel: "Telegram",
+      label: "Telegram Callback URL",
+      value: telegramWebhookUrl,
+      help: <>Replace <code>{"{botKey}"}</code> with the Telegram channel external ID.</>,
+    },
+    {
+      key: "webchat_config",
+      shortLabel: "Web Chat Config",
+      label: "Web Chat Config URL",
+      value: webChatConfigUrl,
+      help: <>Replace <code>{"{widgetKey}"}</code> with the Web Chat channel external ID.</>,
+    },
+    {
+      key: "webchat_message",
+      shortLabel: "Web Chat Message",
+      label: "Web Chat Message URL",
+      value: webChatMessageUrl,
+      help: <>POST <code>widget_key</code>, <code>sender_id</code>, and <code>text</code> from the site widget.</>,
+    },
+  ];
+  const selectedWebhookConfigItem =
+    webhookConfigItems.find((item) => item.key === selectedWebhookConfigKey) || webhookConfigItems[0];
 
   return (
     <div className="app-shell min-h-dvh bg-slate-50 text-slate-900 font-sans">
       <header className="app-header-surface sticky top-0 z-20 border-b border-slate-200 bg-white backdrop-blur">
         <div className="max-w-7xl mx-auto px-3 py-2 sm:px-4 lg:px-6">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)_auto] lg:items-center">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)_minmax(0,1fr)] lg:items-center">
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.2)] sm:h-10 sm:w-10">
                 <Bot className="h-5 w-5 text-white" />
@@ -3301,7 +3397,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="col-start-2 row-start-1 relative justify-self-end self-start" ref={userMenuRef}>
+            <div className="col-start-2 row-start-1 relative justify-self-end self-start lg:col-start-3" ref={userMenuRef}>
               <button
                 onClick={() => setUserMenuOpen((open) => !open)}
                 className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:px-3"
@@ -3318,7 +3414,7 @@ export default function App() {
                 <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />
               </button>
               {userMenuOpen && (
-                <div className="absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+                <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
                     <p className="truncate text-sm font-semibold text-slate-900">{authUser?.display_name || authUser?.username}</p>
                     <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
@@ -3363,11 +3459,11 @@ export default function App() {
               )}
             </div>
 
-            <div className="col-span-2 row-start-2 lg:col-span-1 lg:col-start-2 lg:row-start-1 lg:flex lg:justify-center lg:px-5">
+            <div className="col-span-2 row-start-2 lg:col-span-1 lg:col-start-2 lg:row-start-1 lg:flex lg:justify-center">
               <label htmlFor="event-selector" className="sr-only">
                 Active event
               </label>
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-1.5 lg:w-full lg:max-w-[42rem]">
+              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-1.5 lg:w-[min(32rem,100%)]">
                 <CalendarRange className="h-4 w-4 shrink-0 text-slate-400" />
                 <select
                   id="event-selector"
@@ -3420,7 +3516,7 @@ export default function App() {
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {operationsMenuOpen && (
-                    <div className="absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                       {operationsTabs.map((tab) => (
                         <button
                           key={tab.id}
@@ -3564,7 +3660,8 @@ export default function App() {
                         <textarea
                           value={settings.event_description}
                           onChange={(e) => setSettings({ ...settings, event_description: e.target.value })}
-                          className="w-full h-20 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                          rows={6}
+                          className="w-full min-h-[9rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
                           placeholder="What is this event about?"
                         />
                       </div>
@@ -3574,7 +3671,8 @@ export default function App() {
                         <textarea
                           value={settings.event_travel}
                           onChange={(e) => setSettings({ ...settings, event_travel: e.target.value })}
-                          className="w-full h-16 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
+                          rows={5}
+                          className="w-full min-h-[7.5rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
                           placeholder="How to get there?"
                         />
                       </div>
@@ -3929,7 +4027,7 @@ export default function App() {
                               <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${knowledgeActionsOpen ? "rotate-180" : ""}`} />
                             </ActionButton>
                             {knowledgeActionsOpen && (
-                              <div className="absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                              <div className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                                 <button
                                   onClick={() => {
                                     setKnowledgeActionsOpen(false);
@@ -4544,41 +4642,41 @@ export default function App() {
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-4">
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Gateway</p>
-                        <p className="mt-1 text-sm font-semibold text-slate-900">OpenRouter API</p>
-                        <p className="mt-1 text-[11px] text-slate-500">Central billing point for all event chats.</p>
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Gateway</p>
+                        <p className="mt-1 break-words text-sm font-semibold leading-snug text-slate-900">OpenRouter API</p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Central billing point for all event chats.</p>
                       </div>
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Active Model</p>
-                        <p className="mt-1 truncate text-sm font-semibold text-slate-900">{activeLlmModel}</p>
-                        <p className="mt-1 text-[11px] text-slate-500">Current workspace resolves to this model.</p>
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Active Model</p>
+                        <p className="mt-1 break-all text-sm font-semibold leading-snug text-slate-900">{activeLlmModel}</p>
+                        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Current workspace resolves to this model.</p>
                       </div>
                       <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Selected Event</p>
-                        <p className="mt-1 text-sm font-semibold text-blue-900">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-blue-600">Selected Event</p>
+                        <p className="mt-1 text-sm font-semibold leading-snug text-blue-900">
                           {formatCompactNumber(selectedEventUsage?.total_tokens || 0)} tokens
                         </p>
-                        <p className="mt-1 text-[11px] text-blue-700">
+                        <p className="mt-1 text-[11px] leading-relaxed text-blue-700">
                           {formatUsdCost(selectedEventUsage?.estimated_cost_usd || 0)} across {formatCompactNumber(selectedEventUsage?.request_count || 0)} requests
                         </p>
                       </div>
                       <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">All Workspaces</p>
-                        <p className="mt-1 text-sm font-semibold text-emerald-900">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-600">All Workspaces</p>
+                        <p className="mt-1 text-sm font-semibold leading-snug text-emerald-900">
                           {formatCompactNumber(overallLlmUsage?.total_tokens || 0)} tokens
                         </p>
-                        <p className="mt-1 text-[11px] text-emerald-700">
+                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700">
                           {formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0)} across {formatCompactNumber(overallLlmUsage?.request_count || 0)} requests
                         </p>
                       </div>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    <div className="mt-4 grid grid-cols-1 gap-3 2xl:grid-cols-2">
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Top Models In Event</p>
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Top Models In Event</p>
                           <StatusBadge tone="neutral">{llmUsageSummary?.selected_event_models.length || 0}</StatusBadge>
                         </div>
                         <div className="mt-3 space-y-2">
@@ -4602,7 +4700,7 @@ export default function App() {
                       </div>
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Top Models Overall</p>
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Top Models Overall</p>
                           <StatusBadge tone="neutral">{llmUsageSummary?.overall_models.length || 0}</StatusBadge>
                         </div>
                         <div className="mt-3 space-y-2">
@@ -4645,7 +4743,7 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)]"
+              className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]"
             >
               <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-3 sm:p-4">
                 <div className="flex items-center gap-3">
@@ -4732,8 +4830,8 @@ export default function App() {
                 )}
               </div>
 
-              <div className="border-t border-slate-100 p-3 sm:p-4">
-                <div className="flex gap-2">
+              <div className="border-t border-slate-100 p-3 sm:p-4 lg:px-6 lg:pb-9 lg:pt-4">
+                <div className="flex gap-2 lg:pr-16">
                   <input
                     type="text"
                     value={inputText}
@@ -6024,55 +6122,54 @@ export default function App() {
                       Webhook Configuration
                     </h3>
                     <div className="space-y-4">
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <CopyField
-                          label="Facebook Callback URL"
-                          value={webhookUrl}
-                          onCopy={() => copyToClipboard(webhookUrl)}
-                          copied={copied}
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <label className="block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                              Webhook Endpoint
+                            </label>
+                            <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                              <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
+                              <select
+                                value={selectedWebhookConfigKey}
+                                onChange={(e) => setSelectedWebhookConfigKey(e.target.value as WebhookConfigKey)}
+                                className="min-w-0 w-full bg-transparent text-sm font-medium outline-none"
+                              >
+                                {webhookConfigItems.map((item) => (
+                                  <option key={item.key} value={item.key}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => copyToClipboard(selectedWebhookConfigItem.value)}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                            aria-label={`Copy ${selectedWebhookConfigItem.label}`}
+                          >
+                            {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4 text-slate-400" />}
+                            <span>Copy URL</span>
+                          </button>
+                        </div>
+                        <div className="mt-4">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Selected Endpoint</p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">{selectedWebhookConfigItem.label}</p>
+                        </div>
+                        <textarea
+                          readOnly
+                          value={selectedWebhookConfigItem.value}
+                          rows={4}
+                          className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-mono leading-relaxed outline-none"
                         />
-                        <CopyField
-                          label="LINE Callback URL"
-                          value={lineWebhookUrl}
-                          onCopy={() => copyToClipboard(lineWebhookUrl)}
-                          copied={copied}
-                          help={<>Save <code>Channel Access Token</code> as the channel token and keep <code>Channel Secret</code> in platform-specific config.</>}
-                        />
-                        <CopyField
-                          label="Instagram Callback URL"
-                          value={instagramWebhookUrl}
-                          onCopy={() => copyToClipboard(instagramWebhookUrl)}
-                          copied={copied}
-                          help="Use the Instagram business account ID as the external ID and save the linked Meta token as the access token."
-                        />
-                        <CopyField
-                          label="WhatsApp Callback URL"
-                          value={whatsappWebhookUrl}
-                          onCopy={() => copyToClipboard(whatsappWebhookUrl)}
-                          copied={copied}
-                          help={<>Use <code>Phone Number ID</code> as the external ID and keep <code>Business Account ID</code> in platform-specific config.</>}
-                        />
-                        <CopyField
-                          label="Telegram Callback URL"
-                          value={telegramWebhookUrl}
-                          onCopy={() => copyToClipboard(telegramWebhookUrl)}
-                          copied={copied}
-                          help={<>Replace <code>{"{botKey}"}</code> with the Telegram channel external ID.</>}
-                        />
-                        <CopyField
-                          label="Web Chat Config URL"
-                          value={webChatConfigUrl}
-                          onCopy={() => copyToClipboard(webChatConfigUrl)}
-                          copied={copied}
-                          help={<>Replace <code>{"{widgetKey}"}</code> with the Web Chat channel external ID.</>}
-                        />
-                        <CopyField
-                          label="Web Chat Message URL"
-                          value={webChatMessageUrl}
-                          onCopy={() => copyToClipboard(webChatMessageUrl)}
-                          copied={copied}
-                          help={<>POST <code>widget_key</code>, <code>sender_id</code>, and <code>text</code> from the site widget.</>}
-                        />
+                        {selectedWebhookConfigItem.help ? (
+                          <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-600">
+                            {selectedWebhookConfigItem.help}
+                          </div>
+                        ) : null}
+                        <p className="mt-3 text-xs text-slate-500">
+                          Select one endpoint at a time to keep the card readable. Copy always uses the full URL.
+                        </p>
                       </div>
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-[0.18em] mb-2">Verify Token</label>
@@ -6105,6 +6202,9 @@ export default function App() {
                             Team Access
                           </h3>
                           <p className="text-sm text-slate-500">Session-based admin access with roles stored in the database.</p>
+                          <p className="mt-2 text-xs text-amber-700">
+                            Delete removes the account permanently, revokes active sessions, and cannot be undone.
+                          </p>
                         </div>
                         <button
                           onClick={fetchTeamUsers}
@@ -6156,8 +6256,8 @@ export default function App() {
                                 <p className="text-xs text-slate-400">Role change is restricted for this account.</p>
                               )}
 
-                              {canManageTargetAccess(user) && (
-                                <div className="flex justify-end">
+                              {(canManageTargetAccess(user) || canDeleteTeamUser(user)) && (
+                                <div className="flex flex-wrap justify-end gap-2">
                                   <ActionButton
                                     onClick={() => handleUserAccessToggle(user.id, !user.is_active)}
                                     disabled={teamLoading}
@@ -6165,6 +6265,16 @@ export default function App() {
                                   >
                                     {user.is_active ? "Remove Access" : "Restore Access"}
                                   </ActionButton>
+                                  {canDeleteTeamUser(user) && (
+                                    <ActionButton
+                                      onClick={() => void handleDeleteUser(user)}
+                                      disabled={teamLoading}
+                                      tone="rose"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                      Delete Member
+                                    </ActionButton>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -6283,7 +6393,7 @@ export default function App() {
       <AnimatePresence>
         {globalSearchOpen && (
           <motion.aside
-            className="fixed inset-x-3 top-[calc(0.75rem+env(safe-area-inset-top))] z-40 max-h-[min(80dvh,42rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(42rem,calc(100vw-3rem))]"
+            className="app-overlay-surface fixed inset-x-3 top-[calc(0.75rem+env(safe-area-inset-top))] z-40 max-h-[min(80dvh,42rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(42rem,calc(100vw-3rem))]"
             initial={{ opacity: 0, y: -12, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.98 }}
@@ -6477,7 +6587,7 @@ export default function App() {
           <AnimatePresence>
             {helpOpen && (
               <motion.aside
-                className="fixed inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 max-h-[min(70dvh,34rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(30rem,calc(100vw-3rem))]"
+                className="app-overlay-surface fixed inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 max-h-[min(70dvh,34rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(30rem,calc(100vw-3rem))]"
                 initial={{ opacity: 0, y: 20, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 16, scale: 0.98 }}

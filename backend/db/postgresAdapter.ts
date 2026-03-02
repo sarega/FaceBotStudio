@@ -1043,6 +1043,14 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
+  async removeUser(userId: string) {
+    const result = await this.pool.query(
+      "DELETE FROM users WHERE id = $1",
+      [String(userId || "").trim()],
+    );
+    return result.rowCount > 0;
+  }
+
   async createSession(userId: string, tokenHash: string, expiresAt: Date) {
     await this.pool.query(
       `INSERT INTO sessions (id, user_id, token_hash, expires_at)

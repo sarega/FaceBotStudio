@@ -2834,6 +2834,37 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/auth/users/:id", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = String(req.params.id || "").trim();
+      if (!userId) {
+        return res.status(400).json({ error: "Invalid user" });
+      }
+
+      const targetUser = await appDb.getUserById(userId);
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "status")) {
+        return res.status(403).json({ error: "You cannot delete this user" });
+      }
+
+      const removed = await appDb.removeUser(userId);
+      if (!removed) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      await recordAudit(req, "auth.user_deleted", "user", userId, {
+        username: targetUser.username,
+        role: targetUser.role,
+      });
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Failed to delete user:", error);
+      return res.status(500).json({ error: "Failed to delete user" });
+    }
+  });
+
   app.get("/api/audit-logs", requireRoles(["owner", "admin"]), async (_req: AuthenticatedRequest, res) => {
     try {
       const logs = await appDb.listAuditLogs(100);
