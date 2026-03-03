@@ -666,6 +666,9 @@ export class SqliteAppDatabase implements AppDatabase {
     if (event.effective_status === "pending") {
       return { statusCode: 400, content: { error: "This event has not been launched yet" } };
     }
+    if (event.effective_status === "inactive") {
+      return { statusCode: 400, content: { error: "This event is currently inactive" } };
+    }
 
     const settings = await this.getSettingsMap(eventId);
     const countRow = this.db.prepare(
@@ -1735,7 +1738,18 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   private async ensureDefaultEvent() {
-    const defaultName = String((this.db.prepare("SELECT value FROM settings WHERE key = 'event_name'").get() as { value?: string } | undefined)?.value || DEFAULT_SETTINGS_ENTRIES.event_name);
+    const existingEventSettings = this.db.prepare(
+      "SELECT key, value FROM event_settings WHERE event_id = ?",
+    ).all(DEFAULT_EVENT_ID) as SettingRow[];
+    const legacyGlobalEventSettings = this.db.prepare(
+      `SELECT key, value FROM settings WHERE key IN (${EVENT_SETTING_KEYS.map(() => "?").join(", ")})`,
+    ).all(...EVENT_SETTING_KEYS) as SettingRow[];
+    const defaultName =
+      String(
+        existingEventSettings.find((row) => row.key === "event_name")?.value
+        || legacyGlobalEventSettings.find((row) => row.key === "event_name")?.value
+        || DEFAULT_SETTINGS_ENTRIES.event_name,
+      );
     this.db.prepare(
       `INSERT OR IGNORE INTO events (id, name, slug, status, is_default, is_active)
        VALUES (?, ?, ?, 'active', 1, 1)`,
@@ -1744,16 +1758,20 @@ export class SqliteAppDatabase implements AppDatabase {
       `UPDATE events SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
     ).run(defaultName, DEFAULT_EVENT_ID);
 
-    const templateSettings = this.db.prepare("SELECT key, value FROM settings").all() as SettingRow[];
+    const existingEventSettingsMap = Object.fromEntries(existingEventSettings.map((row) => [row.key, row.value])) as Record<string, string>;
+    const legacyGlobalSettingsMap = Object.fromEntries(legacyGlobalEventSettings.map((row) => [row.key, row.value])) as Record<string, string>;
     const insertEventSetting = this.db.prepare(
       `INSERT INTO event_settings (event_id, key, value)
        VALUES (?, ?, ?)
        ON CONFLICT(event_id, key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
     );
     for (const key of EVENT_SETTING_KEYS) {
-      const value = templateSettings.find((row) => row.key === key)?.value || DEFAULT_SETTINGS_ENTRIES[key];
+      const value = existingEventSettingsMap[key] || legacyGlobalSettingsMap[key] || DEFAULT_SETTINGS_ENTRIES[key];
       insertEventSetting.run(DEFAULT_EVENT_ID, key, value);
     }
+    this.db.prepare(
+      `DELETE FROM settings WHERE key IN (${EVENT_SETTING_KEYS.map(() => "?").join(", ")})`,
+    ).run(...EVENT_SETTING_KEYS);
 
     this.db.prepare("UPDATE registrations SET event_id = ? WHERE event_id IS NULL OR TRIM(event_id) = ''").run(DEFAULT_EVENT_ID);
     this.db.prepare("UPDATE messages SET event_id = ? WHERE event_id IS NULL OR TRIM(event_id) = ''").run(DEFAULT_EVENT_ID);

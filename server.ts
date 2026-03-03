@@ -244,6 +244,7 @@ function getSystemInstruction(
     "Never guess the current date or time. Use the Current System Time above as the source of truth.",
     "Respect the Event Status Right Now field.",
     "If event status is pending, explain that the event is still being prepared and registration has not launched yet.",
+    "If event status is inactive, explain that the event is currently inactive and registration is temporarily unavailable.",
     "If event status is cancelled, clearly explain that the event has been cancelled.",
     "If event status is closed, clearly explain that the event has already ended.",
     "Respect the Registration Status Right Now field. If it is invalid, explain that the registration schedule is misconfigured. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
@@ -3905,8 +3906,12 @@ async function startServer() {
       if (!event) {
         return res.status(404).json({ error: "Event not found" });
       }
-      if (event.effective_status === "closed" || event.effective_status === "cancelled") {
-        return res.status(400).json({ error: "Check-in access cannot be generated for closed or cancelled events" });
+      if (
+        event.effective_status === "closed"
+        || event.effective_status === "cancelled"
+        || event.effective_status === "inactive"
+      ) {
+        return res.status(400).json({ error: "Check-in access cannot be generated for inactive, closed, or cancelled events" });
       }
 
       const rawToken = createSessionToken();
@@ -4043,7 +4048,7 @@ async function startServer() {
       const eventId = String(req.params.id || "").trim();
       const name = typeof req.body?.name === "string" ? req.body.name : undefined;
       const status = typeof req.body?.status === "string" ? req.body.status : undefined;
-      const allowedStatuses = new Set(["pending", "active", "cancelled"]);
+      const allowedStatuses = new Set(["pending", "active", "inactive", "cancelled"]);
       if (!eventId) {
         return res.status(400).json({ error: "Event ID is required" });
       }

@@ -440,6 +440,9 @@ export class PostgresAppDatabase implements AppDatabase {
     if (event.effective_status === "pending") {
       return { statusCode: 400, content: { error: "This event has not been launched yet" } };
     }
+    if (event.effective_status === "inactive") {
+      return { statusCode: 400, content: { error: "This event is currently inactive" } };
+    }
 
     const settings = await this.getSettingsMap(eventId);
     const eventState = getEventState(settings);
@@ -1624,7 +1627,23 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   private async ensureDefaultEvent() {
-    const defaultName = String((await this.getSettingValue("event_name", DEFAULT_EVENT_ID)) || DEFAULT_SETTINGS_ENTRIES.event_name);
+    const existingEventSettingsResult = await this.pool.query<SettingRow>(
+      "SELECT key, value FROM event_settings WHERE event_id = $1",
+      [DEFAULT_EVENT_ID],
+    );
+    const legacyGlobalEventSettingsResult = await this.pool.query<SettingRow>(
+      `SELECT key, value FROM settings WHERE key = ANY($1::text[])`,
+      [EVENT_SETTING_KEYS],
+    );
+    const existingEventSettings = existingEventSettingsResult.rows;
+    const legacyGlobalEventSettings = legacyGlobalEventSettingsResult.rows;
+    const existingEventSettingsMap = Object.fromEntries(existingEventSettings.map((row) => [row.key, row.value])) as Record<string, string>;
+    const legacyGlobalSettingsMap = Object.fromEntries(legacyGlobalEventSettings.map((row) => [row.key, row.value])) as Record<string, string>;
+    const defaultName = String(
+      existingEventSettingsMap.event_name
+      || legacyGlobalSettingsMap.event_name
+      || DEFAULT_SETTINGS_ENTRIES.event_name,
+    );
     await this.pool.query(
       `INSERT INTO events (id, name, slug, status, is_default)
        VALUES ($1, $2, $3, 'active', TRUE)
@@ -1636,15 +1655,18 @@ export class PostgresAppDatabase implements AppDatabase {
       [defaultName, DEFAULT_EVENT_ID],
     );
 
-    const templateSettings = await this.getSettingsMap(DEFAULT_EVENT_ID);
     for (const key of EVENT_SETTING_KEYS) {
       await this.pool.query(
         `INSERT INTO event_settings (event_id, key, value)
          VALUES ($1, $2, $3)
          ON CONFLICT (event_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-        [DEFAULT_EVENT_ID, key, templateSettings[key] || DEFAULT_SETTINGS_ENTRIES[key]],
+        [DEFAULT_EVENT_ID, key, existingEventSettingsMap[key] || legacyGlobalSettingsMap[key] || DEFAULT_SETTINGS_ENTRIES[key]],
       );
     }
+    await this.pool.query(
+      `DELETE FROM settings WHERE key = ANY($1::text[])`,
+      [EVENT_SETTING_KEYS],
+    );
 
     await this.pool.query(
       "UPDATE registrations SET event_id = $1 WHERE event_id IS NULL OR BTRIM(event_id) = ''",

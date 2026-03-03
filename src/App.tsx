@@ -283,6 +283,38 @@ function normalizeDateTimeLocalValue(value: string | undefined) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function parseDateTimeLocalValue(value: string | undefined) {
+  const normalized = normalizeDateTimeLocalValue(value);
+  if (!normalized) return null;
+  const [datePart, timePart] = normalized.split("T");
+  if (!datePart || !timePart) return null;
+  const [year, month, day] = datePart.split("-").map((part) => Number.parseInt(part, 10));
+  const [hour, minute] = timePart.split(":").map((part) => Number.parseInt(part, 10));
+  if ([year, month, day, hour, minute].some((valuePart) => !Number.isFinite(valuePart))) return null;
+  return new Date(year, month - 1, day, hour, minute, 0, 0);
+}
+
+function formatDateTimeLocalValue(date: Date) {
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (input: number) => String(input).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function getDefaultEventEndDate(startValue: string | undefined) {
+  const startDate = parseDateTimeLocalValue(startValue);
+  if (!startDate) return "";
+  return formatDateTimeLocalValue(new Date(startDate.getTime() + 2 * 60 * 60 * 1000));
+}
+
+function getDefaultRegistrationCloseDate(startValue: string | undefined) {
+  const startDate = parseDateTimeLocalValue(startValue);
+  if (!startDate) return "";
+  const closeDate = new Date(startDate);
+  closeDate.setDate(closeDate.getDate() - 1);
+  closeDate.setHours(17, 0, 0, 0);
+  return formatDateTimeLocalValue(closeDate);
+}
+
 const DEFAULT_TIMEZONE = "Asia/Bangkok";
 
 function parseLineTraceMessage(text: string) {
@@ -557,6 +589,8 @@ function getEventStatusLabel(status: EventStatus) {
       return "pending";
     case "active":
       return "active";
+    case "inactive":
+      return "inactive";
     case "closed":
       return "closed";
     case "cancelled":
@@ -572,6 +606,8 @@ function getEventStatusTone(status: EventStatus): BadgeTone {
       return "emerald";
     case "pending":
       return "amber";
+    case "inactive":
+      return "neutral";
     case "cancelled":
       return "rose";
     default:
@@ -585,6 +621,8 @@ function getEventStatusBadgeClass(status: EventStatus) {
       return "bg-emerald-100 text-emerald-700";
     case "pending":
       return "bg-amber-100 text-amber-700";
+    case "inactive":
+      return "bg-slate-100 text-slate-700";
     case "closed":
       return "bg-slate-200 text-slate-600";
     case "cancelled":
@@ -674,6 +712,9 @@ function describeRegistrationAvailability(
   if (eventStatus === "pending") {
     return { label: "Pending", tone: "amber" as const, helper: "Launch the event before accepting registrations." };
   }
+  if (eventStatus === "inactive") {
+    return { label: "Inactive", tone: "neutral" as const, helper: "This event is currently inactive, so registrations stay paused." };
+  }
   if (windowStatus === "invalid") {
     return { label: "Schedule Error", tone: "rose" as const, helper: "Registration dates are misconfigured." };
   }
@@ -735,6 +776,13 @@ function describeEventOperatorGuard(
       body: "Channels may stay wired, but the bot should explain that registration has not launched yet.",
     };
   }
+  if (eventStatus === "inactive") {
+    return {
+      tone: "neutral" as const,
+      label: "Inactive",
+      body: "Channels may stay connected, but the bot should tell users the event is currently inactive and stop new registrations.",
+    };
+  }
   if (registrationAvailability === "full") {
     return {
       tone: "rose" as const,
@@ -786,6 +834,13 @@ function describeCheckinOperatorGuard(
       tone: "neutral" as const,
       label: "Past Event",
       body: "The event has already ended. Check-in is usually no longer needed except for audit review.",
+    };
+  }
+  if (eventStatus === "inactive") {
+    return {
+      tone: "neutral" as const,
+      label: "Inactive",
+      body: "This event is currently inactive. Keep check-in off until the event is live again.",
     };
   }
   if (registrationAvailability === "full") {
@@ -1653,7 +1708,13 @@ export default function App() {
   })();
   const selectedEventChannelWritesLocked =
     selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled";
+  const selectedEventCheckinLocked =
+    selectedEvent?.effective_status === "inactive"
+    || selectedEvent?.effective_status === "closed"
+    || selectedEvent?.effective_status === "cancelled";
   const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
+  const inactiveEvents = events.filter((event) => event.effective_status === "inactive");
+  const nonHistoricalEvents = [...workingEvents, ...inactiveEvents];
   const queryMatchedEvents = [...events]
     .sort((left, right) => {
       const byRecency = getEventWorkspaceTimestamp(right) - getEventWorkspaceTimestamp(left);
@@ -1672,6 +1733,7 @@ export default function App() {
     all: queryMatchedEvents.length,
     active: queryMatchedEvents.filter((event) => event.effective_status === "active").length,
     pending: queryMatchedEvents.filter((event) => event.effective_status === "pending").length,
+    inactive: queryMatchedEvents.filter((event) => event.effective_status === "inactive").length,
     closed: queryMatchedEvents.filter((event) => event.effective_status === "closed").length,
     cancelled: queryMatchedEvents.filter((event) => event.effective_status === "cancelled").length,
   };
@@ -1681,6 +1743,7 @@ export default function App() {
   const filteredWorkingEvents = filteredEventWorkspaceEvents.filter(
     (event) => event.effective_status === "active" || event.effective_status === "pending",
   );
+  const filteredInactiveEvents = filteredEventWorkspaceEvents.filter((event) => event.effective_status === "inactive");
   const filteredHistoricalEvents = filteredEventWorkspaceEvents.filter(
     (event) => event.effective_status === "closed" || event.effective_status === "cancelled",
   );
@@ -1705,6 +1768,7 @@ export default function App() {
     { id: "all", label: "All", count: eventWorkspaceCounts.all },
     { id: "active", label: "Live", count: eventWorkspaceCounts.active },
     { id: "pending", label: "Pending", count: eventWorkspaceCounts.pending },
+    { id: "inactive", label: "Inactive", count: eventWorkspaceCounts.inactive },
     { id: "closed", label: "Closed", count: eventWorkspaceCounts.closed },
     { id: "cancelled", label: "Cancelled", count: eventWorkspaceCounts.cancelled },
   ];
@@ -1720,8 +1784,9 @@ export default function App() {
       : eventWorkspaceFilter === "cancelled"
       ? "Recently Cancelled"
       : "Recent History";
+  const inactiveWorkspaceHeading = eventWorkspaceFilter === "inactive" ? "Inactive Workspaces" : "Inactive";
   const selectorEvents = (() => {
-    const base = workingEvents.length > 0 ? [...workingEvents] : [...events];
+    const base = nonHistoricalEvents.length > 0 ? [...nonHistoricalEvents] : [...events];
     if (selectedEvent && !base.some((event) => event.id === selectedEvent.id)) {
       base.unshift(selectedEvent);
     }
@@ -1736,20 +1801,52 @@ export default function App() {
         disabled: true,
       };
     }
+    if (selectedEvent.effective_status === "closed") {
+      if (selectedEvent.status === "inactive") {
+        return {
+          label: "Inactive",
+          nextStatus: "inactive" as const,
+          tone: "neutral" as ActionTone,
+          disabled: true,
+        };
+      }
+      if (selectedEvent.status === "cancelled") {
+        return {
+          label: "Restore Inactive",
+          nextStatus: "inactive" as const,
+          tone: "neutral" as ActionTone,
+          disabled: selectedEvent.is_default || eventLoading,
+        };
+      }
+      return {
+        label: "Set Inactive",
+        nextStatus: "inactive" as const,
+        tone: "neutral" as ActionTone,
+        disabled: eventLoading,
+      };
+    }
     if (selectedEvent.status === "active") {
       return {
-        label: "Back to Pending",
-        nextStatus: "pending" as const,
-        tone: "amber" as ActionTone,
-        disabled: selectedEvent.is_default || eventLoading,
+        label: "Set Inactive",
+        nextStatus: "inactive" as const,
+        tone: "neutral" as ActionTone,
+        disabled: eventLoading,
+      };
+    }
+    if (selectedEvent.status === "inactive") {
+      return {
+        label: "LIVE!",
+        nextStatus: "active" as const,
+        tone: "emerald" as ActionTone,
+        disabled: eventLoading,
       };
     }
     if (selectedEvent.status === "cancelled") {
       return {
-        label: "Restore Pending",
-        nextStatus: "pending" as const,
-        tone: "blue" as ActionTone,
-        disabled: selectedEvent.is_default || eventLoading,
+        label: "Restore Inactive",
+        nextStatus: "inactive" as const,
+        tone: "neutral" as ActionTone,
+        disabled: eventLoading,
       };
     }
     return {
@@ -2006,7 +2103,10 @@ export default function App() {
       }
       const rows = Array.isArray(data) ? (data as EventRecord[]) : [];
       setEvents(rows);
-      const firstWorking = rows.find((event) => event.effective_status === "active") || rows.find((event) => event.effective_status === "pending");
+      const firstWorking =
+        rows.find((event) => event.effective_status === "active")
+        || rows.find((event) => event.effective_status === "pending")
+        || rows.find((event) => event.effective_status === "inactive");
       setSelectedEventId((prev) => prev && rows.some((event) => event.id === prev) ? prev : firstWorking?.id || rows[0]?.id || "");
       return rows;
     } catch (err) {
@@ -2874,6 +2974,28 @@ export default function App() {
 
   const normalizedSettings = normalizeSettingsForSave(settings);
   const normalizedSavedSettings = normalizeSettingsForSave(savedSettings);
+  const handleEventDateChange = (nextEventDate: string) => {
+    setSettings((current) => {
+      const previousSuggestedEnd = getDefaultEventEndDate(current.event_date);
+      const previousSuggestedClose = getDefaultRegistrationCloseDate(current.event_date);
+      const nextSuggestedEnd = getDefaultEventEndDate(nextEventDate);
+      const nextSuggestedClose = getDefaultRegistrationCloseDate(nextEventDate);
+
+      const shouldAutofillEnd =
+        !normalizeDateTimeLocalValue(current.event_end_date)
+        || normalizeDateTimeLocalValue(current.event_end_date) === previousSuggestedEnd;
+      const shouldAutofillClose =
+        !normalizeDateTimeLocalValue(current.reg_end)
+        || normalizeDateTimeLocalValue(current.reg_end) === previousSuggestedClose;
+
+      return {
+        ...current,
+        event_date: nextEventDate,
+        event_end_date: shouldAutofillEnd ? nextSuggestedEnd : current.event_end_date,
+        reg_end: shouldAutofillClose ? nextSuggestedClose : current.reg_end,
+      };
+    });
+  };
   const areSettingsKeysDirty = (keys: ReadonlyArray<keyof Settings>) =>
     keys.some((key) => normalizedSettings[key] !== normalizedSavedSettings[key]);
   const eventDetailsDirty = areSettingsKeysDirty(EVENT_DETAIL_SETTINGS_KEYS);
@@ -3689,7 +3811,7 @@ export default function App() {
     successMessage = "Event updated",
     silent = false,
   }: {
-    status?: "pending" | "active" | "cancelled";
+    status?: "pending" | "active" | "inactive" | "cancelled";
     name?: string;
     successMessage?: string;
     silent?: boolean;
@@ -4083,8 +4205,8 @@ export default function App() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <StatusBadge tone={checkinAccessSession.event_status === "active" ? "emerald" : checkinAccessSession.event_status === "pending" ? "amber" : "neutral"}>
-                {checkinAccessSession.event_status}
+              <StatusBadge tone={getEventStatusTone(checkinAccessSession.event_status)}>
+                {getEventStatusLabel(checkinAccessSession.event_status)}
               </StatusBadge>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Expires</p>
@@ -4969,10 +5091,7 @@ export default function App() {
                   <h1 className="truncate text-[1.05rem] font-bold tracking-tight sm:text-2xl">FB Bot Studio</h1>
                   {selectedEvent && (
                     <>
-                      <StatusBadge
-                        tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}
-                        className="inline-flex"
-                      >
+                      <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)} className="inline-flex">
                         {getEventStatusLabel(selectedEvent.effective_status)}
                       </StatusBadge>
                       {selectedEvent.registration_availability === "full" && (
@@ -5217,11 +5336,15 @@ export default function App() {
                         </div>
                         <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
                         {selectedEvent && (
-                          <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1 md:flex-nowrap">
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.status)}>manual {selectedEvent.status}</StatusBadge>
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                              effective {selectedEvent.effective_status}
+                          <div className="mt-3 flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.status)}>
+                              mode {getEventStatusLabel(selectedEvent.status)}
                             </StatusBadge>
+                            {selectedEvent.effective_status !== selectedEvent.status && (
+                              <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                                now {getEventStatusLabel(selectedEvent.effective_status)}
+                              </StatusBadge>
+                            )}
                           </div>
                         )}
                       </div>
@@ -5246,16 +5369,29 @@ export default function App() {
                           {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : eventStatusToggle.nextStatus === "active" ? <Power className="w-4 h-4" /> : <Activity className="w-4 h-4" />}
                           {eventStatusToggle.label}
                         </ActionButton>
-                        {!selectedEvent?.is_default && selectedEvent?.status !== "cancelled" && (
+                        {!selectedEvent?.is_default && (
                           <InlineActionsMenu label="Event Actions" tone="neutral">
-                            <MenuActionItem
-                              onClick={() => void handleUpdateEvent({ status: "cancelled" })}
-                              disabled={!selectedEvent || eventLoading}
-                              tone="rose"
-                            >
-                              <AlertCircle className="h-3.5 w-3.5" />
-                              <span className="font-medium">Cancel Event</span>
-                            </MenuActionItem>
+                            {selectedEvent?.status !== "inactive" && (
+                              <MenuActionItem
+                                onClick={() => void handleUpdateEvent({ status: "inactive" })}
+                                disabled={!selectedEvent || eventLoading}
+                                tone="neutral"
+                              >
+                                <Power className="h-3.5 w-3.5" />
+                                <span className="font-medium">Set Inactive</span>
+                              </MenuActionItem>
+                            )}
+                            {selectedEvent?.status !== "cancelled" && (
+                              <MenuActionItem
+                                onClick={() => void handleUpdateEvent({ status: "cancelled" })}
+                                disabled={!selectedEvent || eventLoading}
+                                tone="rose"
+                                className="mt-1"
+                              >
+                                <AlertCircle className="h-3.5 w-3.5" />
+                                <span className="font-medium">Cancel Event</span>
+                              </MenuActionItem>
+                            )}
                           </InlineActionsMenu>
                         )}
                       </div>
@@ -5263,7 +5399,7 @@ export default function App() {
 
                     {selectedEvent?.effective_status === "closed" && (
                       <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-                        This event is closed automatically because its event window ended at {timingInfo.eventCloseLabel} compared with current system time ({timingInfo.nowLabel}).
+                        This event closed automatically when its event window ended at {timingInfo.eventCloseLabel}. Current system time is {timingInfo.nowLabel}. Use the mode controls above if you also want to mark the workspace inactive.
                       </div>
                     )}
 
@@ -5319,9 +5455,12 @@ export default function App() {
                         <input
                           type="datetime-local"
                           value={settings.event_date}
-                          onChange={(e) => setSettings({ ...settings, event_date: e.target.value })}
+                          onChange={(e) => handleEventDateChange(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         />
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          When you set a start time, Event Ends auto-fills to 2 hours later. You can adjust it.
+                        </p>
                       </div>
 
                       <div>
@@ -5332,6 +5471,9 @@ export default function App() {
                           onChange={(e) => setSettings({ ...settings, event_end_date: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         />
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Leave the suggested end time if this is a short session, or extend it if the event runs longer.
+                        </p>
                       </div>
 
                       <div className="md:col-span-2">
@@ -5373,7 +5515,7 @@ export default function App() {
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         {selectedEvent && (
-                          <StatusBadge tone={selectedEvent.effective_status === "active" ? "emerald" : selectedEvent.effective_status === "pending" ? "amber" : selectedEvent.effective_status === "cancelled" ? "rose" : "neutral"}>
+                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
                             {getEventStatusLabel(selectedEvent.effective_status)}
                           </StatusBadge>
                         )}
@@ -5417,6 +5559,9 @@ export default function App() {
                           onChange={(e) => setSettings({ ...settings, reg_end: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         />
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Auto-suggested to 17:00 on the day before the event so registration does not stay open into the event itself.
+                        </p>
                       </div>
                     </div>
                     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -5598,6 +5743,8 @@ export default function App() {
                         <span className="text-slate-300">•</span>
                         <span>{eventWorkspaceCounts.active + eventWorkspaceCounts.pending} active queue</span>
                         <span className="text-slate-300">•</span>
+                        <span>{eventWorkspaceCounts.inactive} inactive</span>
+                        <span className="text-slate-300">•</span>
                         <span>{eventWorkspaceCounts.closed + eventWorkspaceCounts.cancelled} in history</span>
                       </div>
                     </div>
@@ -5621,6 +5768,26 @@ export default function App() {
                               </div>
                               <div className="space-y-2">
                                 {filteredWorkingEvents.map((event) => (
+                                  <EventWorkspaceRow
+                                    key={event.id}
+                                    event={event}
+                                    selected={selectedEventId === event.id}
+                                    searchFocused={isSearchFocused("event", event.id)}
+                                    onSelect={() => handleSelectEvent(event.id)}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {filteredInactiveEvents.length > 0 && (
+                            <div className="space-y-2 border-t border-slate-100 pt-5">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-slate-700">{inactiveWorkspaceHeading}</p>
+                                <StatusBadge tone="neutral">{filteredInactiveEvents.length}</StatusBadge>
+                              </div>
+                              <div className="space-y-2">
+                                {filteredInactiveEvents.map((event) => (
                                   <EventWorkspaceRow
                                     key={event.id}
                                     event={event}
@@ -7304,7 +7471,7 @@ export default function App() {
                       </div>
                       <ActionButton
                         onClick={handleCreateCheckinSession}
-                        disabled={checkinSessionCreating || !selectedEventId || selectedEventChannelWritesLocked}
+                        disabled={checkinSessionCreating || !selectedEventId || selectedEventCheckinLocked}
                         tone="blue"
                         active
                         className="w-full text-sm sm:w-auto"
@@ -8235,7 +8402,7 @@ export default function App() {
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 hidden lg:block">
           <div className="mx-auto flex max-w-7xl justify-start px-6">
             <div className="app-floating-status pointer-events-auto flex w-fit max-w-[min(30rem,calc(100vw-8.5rem))] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
-              <StatusBadge tone={selectedEvent?.effective_status === "active" ? "emerald" : selectedEvent?.effective_status === "pending" ? "amber" : selectedEvent?.effective_status === "cancelled" ? "rose" : "neutral"}>
+              <StatusBadge tone={selectedEvent ? getEventStatusTone(selectedEvent.effective_status) : "neutral"}>
                 {selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No Event"}
               </StatusBadge>
               {hasAnyUnsavedSettings && <StatusBadge tone="amber">unsaved</StatusBadge>}
@@ -8352,7 +8519,7 @@ export default function App() {
                                 {getRegistrationAvailabilityLabel(event.registration_availability)}
                               </StatusBadge>
                             )}
-                            <StatusBadge tone={event.effective_status === "active" ? "emerald" : event.effective_status === "pending" ? "amber" : event.effective_status === "cancelled" ? "rose" : "neutral"}>
+                            <StatusBadge tone={getEventStatusTone(event.effective_status)}>
                               {getEventStatusLabel(event.effective_status)}
                             </StatusBadge>
                           </div>
