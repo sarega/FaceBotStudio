@@ -743,7 +743,7 @@ function getRegistrationAvailabilityLabel(status: RegistrationAvailabilityUiStat
     case "not_started":
       return "not open";
     case "closed":
-      return "closed";
+      return "reg closed";
     case "invalid":
       return "schedule error";
     default:
@@ -1273,6 +1273,11 @@ function EventWorkspaceRow({
   onSelect: () => void;
 }) {
   const lastUpdatedLabel = formatEventWorkspaceDateLabel(event.updated_at || event.created_at);
+  const showAvailabilityBadge =
+    event.registration_availability
+    && event.registration_availability !== "open"
+    && event.effective_status !== "closed"
+    && event.effective_status !== "cancelled";
 
   return (
     <button
@@ -1295,7 +1300,7 @@ function EventWorkspaceRow({
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end lg:pl-3">
           {event.is_default && <StatusBadge tone="neutral">default</StatusBadge>}
-          {event.registration_availability && event.registration_availability !== "open" && (
+          {showAvailabilityBadge && (
             <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
               {getRegistrationAvailabilityLabel(event.registration_availability)}
             </StatusBadge>
@@ -8514,7 +8519,7 @@ export default function App() {
                             <p className="mt-1 truncate text-xs text-slate-500">{event.slug}</p>
                           </div>
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                            {event.registration_availability && event.registration_availability !== "open" && (
+                            {event.registration_availability && event.registration_availability !== "open" && event.effective_status !== "closed" && event.effective_status !== "cancelled" && (
                               <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
                                 {getRegistrationAvailabilityLabel(event.registration_availability)}
                               </StatusBadge>
