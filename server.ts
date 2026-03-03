@@ -68,6 +68,7 @@ const RUN_EMBEDDED_WORKER = APP_RUNTIME === "all";
 const INBOUND_BURST_WINDOW_MS = Math.max(250, Number.parseInt(process.env.INBOUND_BURST_WINDOW_MS || "1400", 10) || 1400);
 const WEBCHAT_BURST_WINDOW_MS = Math.max(0, Number.parseInt(process.env.WEBCHAT_BURST_WINDOW_MS || "350", 10) || 350);
 const CONVERSATION_ROW_LIMIT = Math.max(12, Number.parseInt(process.env.CONVERSATION_ROW_LIMIT || "24", 10) || 24);
+const INBOUND_RESERVATION_TTL_MS = Math.max(5000, Number.parseInt(process.env.INBOUND_RESERVATION_TTL_MS || "30000", 10) || 30000);
 
 type ChatPart = {
   text?: string;
@@ -151,6 +152,7 @@ type RawBodyRequest = Request & {
 const inboundConversationTails = new Map<string, Promise<void>>();
 const inboundHandledMessageIds = new Map<string, number>();
 const inboundConversationActivity = new Map<string, number>();
+const inboundReservedMessageIds = new Map<string, { messageId: number; expiresAt: number }>();
 
 function parseRegistrationLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
@@ -328,10 +330,52 @@ function buildChatHistoryFromRows(rows: MessageRow[]) {
     }) satisfies ChatHistoryMessage);
 }
 
+function getReservedPendingMessageId(conversationKey: string, now = Date.now()) {
+  const reservation = inboundReservedMessageIds.get(conversationKey);
+  if (!reservation) return 0;
+  if (reservation.expiresAt <= now) {
+    inboundReservedMessageIds.delete(conversationKey);
+    return 0;
+  }
+  return reservation.messageId;
+}
+
+function reservePendingConversation(conversationKey: string, highestPendingMessageId: number, now = Date.now()) {
+  if (!Number.isFinite(highestPendingMessageId) || highestPendingMessageId <= 0) return;
+  const previousReserved = getReservedPendingMessageId(conversationKey, now);
+  inboundReservedMessageIds.set(conversationKey, {
+    messageId: Math.max(previousReserved, highestPendingMessageId),
+    expiresAt: now + INBOUND_RESERVATION_TTL_MS,
+  });
+  if (inboundReservedMessageIds.size > 4000) {
+    for (const [key, reservation] of inboundReservedMessageIds.entries()) {
+      if (reservation.expiresAt <= now) {
+        inboundReservedMessageIds.delete(key);
+      }
+    }
+    if (inboundReservedMessageIds.size > 4000) {
+      const keys = [...inboundReservedMessageIds.keys()].slice(0, 500);
+      for (const key of keys) {
+        inboundReservedMessageIds.delete(key);
+      }
+    }
+  }
+}
+
+function clearPendingConversationReservation(conversationKey: string, highestPendingMessageId?: number) {
+  const reservation = inboundReservedMessageIds.get(conversationKey);
+  if (!reservation) return;
+  if (typeof highestPendingMessageId === "number" && highestPendingMessageId > 0 && reservation.messageId > highestPendingMessageId) {
+    return;
+  }
+  inboundReservedMessageIds.delete(conversationKey);
+}
+
 function getPendingBoundaryMessageId(conversationKey: string, rows: MessageRow[]) {
   const handledMessageId = inboundHandledMessageIds.get(conversationKey);
-  if (typeof handledMessageId === "number") {
-    return handledMessageId;
+  const reservedMessageId = getReservedPendingMessageId(conversationKey);
+  if (typeof handledMessageId === "number" || reservedMessageId > 0) {
+    return Math.max(handledMessageId || 0, reservedMessageId);
   }
 
   return rows.find((row) => row.type === "outgoing")?.id || 0;
@@ -406,6 +450,7 @@ function markPendingConversationHandled(conversationKey: string, highestPendingM
   if (highestPendingMessageId > previous) {
     inboundHandledMessageIds.set(conversationKey, highestPendingMessageId);
   }
+  clearPendingConversationReservation(conversationKey, highestPendingMessageId);
   if (inboundHandledMessageIds.size > 4000) {
     const keys = [...inboundHandledMessageIds.keys()].slice(0, 500);
     for (const key of keys) {
@@ -442,6 +487,7 @@ async function prepareBundledConversationTurnForSender(
         continue;
       }
 
+      reservePendingConversation(conversationKey, pendingTurn.highestPendingMessageId);
       return {
         ...pendingTurn,
         conversationKey,
