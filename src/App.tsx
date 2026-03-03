@@ -1174,6 +1174,31 @@ function getBlankEventScopedSettings() {
   >;
 }
 
+const EVENT_DETAIL_SETTINGS_KEYS = [
+  "event_name",
+  "event_timezone",
+  "event_location",
+  "event_map_url",
+  "event_date",
+  "event_description",
+  "event_travel",
+  "confirmation_email_enabled",
+  "confirmation_email_subject",
+  "reg_limit",
+  "reg_start",
+  "reg_end",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+const EVENT_CONTEXT_SETTINGS_KEYS = ["context"] as const satisfies ReadonlyArray<keyof Settings>;
+
+const AI_SETTINGS_KEYS = [
+  "global_system_prompt",
+  "global_llm_model",
+  "llm_model",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+const WEBHOOK_SETTINGS_KEYS = ["verify_token"] as const satisfies ReadonlyArray<keyof Settings>;
+
 function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> | Record<string, unknown>) {
   return {
     context: typeof data.context === "string" ? data.context : "",
@@ -1246,6 +1271,7 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
+  const [savedSettings, setSavedSettings] = useState<Settings>(INITIAL_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
@@ -1353,6 +1379,7 @@ export default function App() {
   const scannerCooldownRef = useRef(false);
   const documentFileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedEventIdRef = useRef("");
+  const settingsRef = useRef(INITIAL_SETTINGS);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1362,6 +1389,7 @@ export default function App() {
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const searchFocusTimeoutRef = useRef<number | null>(null);
   selectedEventIdRef.current = selectedEventId;
+  settingsRef.current = settings;
 
   const checkinAccessMode = Boolean(checkinAccessToken);
   const role = authUser?.role;
@@ -1955,10 +1983,12 @@ export default function App() {
   }, [selectedEventId, deferredRegistrationListQuery]);
 
   useEffect(() => {
-    setSettings((prev) => ({
-      ...prev,
+    const nextSettings = {
+      ...settingsRef.current,
       ...getBlankEventScopedSettings(),
-    }));
+    };
+    setSettings(nextSettings);
+    setSavedSettings(nextSettings);
     setMessages([]);
     setRegistrations([]);
     setSelectedRegistrationId("");
@@ -2189,10 +2219,12 @@ export default function App() {
 
   const fetchSettings = async (eventId = selectedEventId) => {
     if (!eventId) {
-      setSettings((prev) => ({
-        ...prev,
+      const nextSettings = {
+        ...settingsRef.current,
         ...getBlankEventScopedSettings(),
-      }));
+      };
+      setSettings(nextSettings);
+      setSavedSettings(nextSettings);
       return;
     }
 
@@ -2203,7 +2235,9 @@ export default function App() {
       }
       const data = await res.json();
       if (selectedEventIdRef.current !== eventId) return;
-      setSettings((prev) => buildSettingsFromResponse(prev, data));
+      const nextSettings = buildSettingsFromResponse(settingsRef.current, data);
+      setSettings(nextSettings);
+      setSavedSettings(nextSettings);
     } catch (err) {
       console.error("Failed to fetch settings", err);
     }
@@ -2453,6 +2487,69 @@ export default function App() {
     reg_end: normalizeDateTimeLocalValue(source.reg_end),
   });
 
+  const normalizedSettings = normalizeSettingsForSave(settings);
+  const normalizedSavedSettings = normalizeSettingsForSave(savedSettings);
+  const areSettingsKeysDirty = (keys: ReadonlyArray<keyof Settings>) =>
+    keys.some((key) => normalizedSettings[key] !== normalizedSavedSettings[key]);
+  const eventDetailsDirty = areSettingsKeysDirty(EVENT_DETAIL_SETTINGS_KEYS);
+  const eventContextDirty = areSettingsKeysDirty(EVENT_CONTEXT_SETTINGS_KEYS);
+  const aiSettingsDirty = areSettingsKeysDirty(AI_SETTINGS_KEYS);
+  const webhookSettingsDirty = areSettingsKeysDirty(WEBHOOK_SETTINGS_KEYS);
+  const setupDirty = aiSettingsDirty || webhookSettingsDirty;
+  const hasAnyUnsavedSettings = eventDetailsDirty || eventContextDirty || setupDirty;
+
+  const confirmDiscardDirtyChanges = ({
+    nextTab,
+    nextEventId,
+  }: {
+    nextTab?: AppTab;
+    nextEventId?: string;
+  } = {}) => {
+    const dirtySections = new Set<string>();
+    const eventSwitching = typeof nextEventId === "string" && nextEventId !== selectedEventId;
+
+    if (eventSwitching) {
+      if (eventDetailsDirty) dirtySections.add("Event");
+      if (eventContextDirty) dirtySections.add("Context");
+      if (setupDirty) dirtySections.add("Setup");
+    } else if (nextTab && nextTab !== activeTab) {
+      if (activeTab === "event" && eventDetailsDirty) dirtySections.add("Event");
+      if (activeTab === "design" && eventContextDirty) dirtySections.add("Context");
+      if (activeTab === "settings" && setupDirty) dirtySections.add("Setup");
+    }
+
+    if (!dirtySections.size) return true;
+    return window.confirm(`You have unsaved ${Array.from(dirtySections).join(", ")} changes. Leave without saving?`);
+  };
+
+  const handleNavigateToTab = (nextTab: AppTab) => {
+    if (nextTab === activeTab) return true;
+    if (!confirmDiscardDirtyChanges({ nextTab })) return false;
+    setActiveTab(nextTab);
+    setSetupMenuOpen(false);
+    setOperationsMenuOpen(false);
+    return true;
+  };
+
+  const handleSelectEvent = (nextEventId: string) => {
+    if (!nextEventId || nextEventId === selectedEventId) return true;
+    if (!confirmDiscardDirtyChanges({ nextEventId })) return false;
+    setSelectedEventId(nextEventId);
+    return true;
+  };
+
+  useEffect(() => {
+    if (!hasAnyUnsavedSettings) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasAnyUnsavedSettings]);
+
   const saveSettingsSubset = async (keys: Array<keyof Settings>, successLabel: string) => {
     setSaving(true);
     setSettingsMessage("");
@@ -2469,6 +2566,10 @@ export default function App() {
         throw new Error(data?.error || "Failed to save settings");
       }
       setSettings(normalized);
+      setSavedSettings((prev) => ({
+        ...prev,
+        ...(Object.fromEntries(keys.map((key) => [key, normalized[key]])) as Partial<Settings>),
+      }));
       setSettingsMessage(successLabel);
       window.setTimeout(() => setSettingsMessage(""), 2500);
       return true;
@@ -3134,6 +3235,9 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    if (hasAnyUnsavedSettings && !window.confirm("You have unsaved changes. Logout without saving?")) {
+      return;
+    }
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
@@ -3488,6 +3592,7 @@ export default function App() {
   const handleGlobalSearchSelect = (kind: GlobalSearchResultKind, id: string) => {
     if (kind === "event") {
       const event = events.find((item) => item.id === id);
+      if (!confirmDiscardDirtyChanges({ nextTab: "event", nextEventId: id })) return;
       setEventListQuery(event?.slug || event?.name || "");
       setSelectedEventId(id);
       setActiveTab("event");
@@ -3495,6 +3600,7 @@ export default function App() {
     }
     if (kind === "registration") {
       const registration = registrations.find((item) => item.id === id);
+      if (!confirmDiscardDirtyChanges({ nextTab: "registrations" })) return;
       setRegistrationListQuery(registration?.id || "");
       setActiveTab("registrations");
       setSelectedRegistrationId(id);
@@ -3502,6 +3608,7 @@ export default function App() {
     }
     if (kind === "channel") {
       const channel = channels.find((item) => item.id === id);
+      if (!confirmDiscardDirtyChanges({ nextTab: "settings", nextEventId: channel?.event_id })) return;
       if (channel?.event_id) {
         setSelectedEventId(channel.event_id);
       }
@@ -3515,12 +3622,14 @@ export default function App() {
     }
     if (kind === "document") {
       const document = documents.find((item) => item.id === id);
+      if (!confirmDiscardDirtyChanges({ nextTab: "design" })) return;
       setDocumentListQuery(document?.title || "");
       setActiveTab("design");
       selectDocumentForChunks(id);
     }
     if (kind === "log") {
       const message = messages.find((item) => String(item.id) === id);
+      if (!confirmDiscardDirtyChanges({ nextTab: "logs" })) return;
       setLogListQuery(message?.sender_id || message?.text || "");
       setActiveTab("logs");
       focusSearchTarget("log", id);
@@ -4154,7 +4263,11 @@ export default function App() {
                 <select
                   id="event-selector"
                   value={selectedEventId}
-                  onChange={(e) => setSelectedEventId(e.target.value)}
+                  onChange={(e) => {
+                    if (!handleSelectEvent(e.target.value)) {
+                      e.currentTarget.value = selectedEventId;
+                    }
+                  }}
                   disabled={!selectorEvents.length || eventLoading}
                   className="min-w-0 w-full truncate bg-transparent text-sm font-medium outline-none disabled:opacity-60"
                 >
@@ -4173,7 +4286,7 @@ export default function App() {
               {primaryTabs.map((tab) => (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => handleNavigateToTab(tab.id)}
                   className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
                     activeTab === tab.id
                       ? "bg-white text-blue-600 shadow-sm"
@@ -4183,6 +4296,9 @@ export default function App() {
                 >
                   <tab.icon className="h-4 w-4 shrink-0" />
                   <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
+                  {((tab.id === "event" && eventDetailsDirty) || (tab.id === "design" && eventContextDirty)) && (
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
+                  )}
                 </button>
               ))}
               {setupTabs.length > 0 && selectedSetupTab && (
@@ -4199,6 +4315,7 @@ export default function App() {
                   >
                     <selectedSetupTab.icon className="h-4 w-4 shrink-0" />
                     <span className="sr-only sm:not-sr-only sm:truncate">Setup</span>
+                    {setupDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {setupMenuOpen && (
@@ -4207,8 +4324,7 @@ export default function App() {
                         <button
                           key={tab.id}
                           onClick={() => {
-                            setActiveTab(tab.id);
-                            setSetupMenuOpen(false);
+                            handleNavigateToTab(tab.id);
                           }}
                           className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
                             activeTab === tab.id
@@ -4219,6 +4335,7 @@ export default function App() {
                         >
                           <tab.icon className="h-4 w-4" />
                           <span className="font-medium">{tab.label}</span>
+                          {tab.id === "settings" && setupDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
                         </button>
                       ))}
                     </div>
@@ -4247,8 +4364,7 @@ export default function App() {
                         <button
                           key={tab.id}
                           onClick={() => {
-                            setActiveTab(tab.id);
-                            setOperationsMenuOpen(false);
+                            handleNavigateToTab(tab.id);
                           }}
                           className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
                             activeTab === tab.id
@@ -4300,10 +4416,13 @@ export default function App() {
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0 flex-1">
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Bot className="w-5 h-5 text-blue-600" />
-                          Event Information
-                        </h3>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <Bot className="w-5 h-5 text-blue-600" />
+                            Event Information
+                          </h3>
+                          {eventDetailsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                        </div>
                         <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
                         {selectedEvent && (
                           <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1 md:flex-nowrap">
@@ -4700,7 +4819,7 @@ export default function App() {
                                     event={event}
                                     selected={selectedEventId === event.id}
                                     searchFocused={isSearchFocused("event", event.id)}
-                                    onSelect={() => setSelectedEventId(event.id)}
+                                    onSelect={() => handleSelectEvent(event.id)}
                                   />
                                 ))}
                               </div>
@@ -4720,7 +4839,7 @@ export default function App() {
                                     event={event}
                                     selected={selectedEventId === event.id}
                                     searchFocused={isSearchFocused("event", event.id)}
-                                    onSelect={() => setSelectedEventId(event.id)}
+                                    onSelect={() => handleSelectEvent(event.id)}
                                   />
                                 ))}
                               </div>
@@ -4768,7 +4887,7 @@ export default function App() {
                                               event={event}
                                               selected={selectedEventId === event.id}
                                               searchFocused={isSearchFocused("event", event.id)}
-                                              onSelect={() => setSelectedEventId(event.id)}
+                                              onSelect={() => handleSelectEvent(event.id)}
                                             />
                                           ))}
                                         </div>
@@ -4805,6 +4924,7 @@ export default function App() {
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div className="flex items-center gap-2">
                           <h2 className="text-lg font-semibold">Event Context</h2>
+                          {eventContextDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
                           <HelpPopover label="Open note for Event Context">
                             Per-event FAQ, source text, and response guidance for the selected workspace.
                           </HelpPopover>
@@ -6329,7 +6449,7 @@ export default function App() {
                         </div>
                         {!checkinAccessMode && (
                           <ActionButton
-                            onClick={() => setActiveTab("registrations")}
+                            onClick={() => handleNavigateToTab("registrations")}
                             tone="neutral"
                             className="w-full text-sm"
                           >
@@ -6795,10 +6915,13 @@ export default function App() {
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Bot className="w-5 h-5 text-blue-600" />
-                          AI Settings
-                        </h3>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <Bot className="w-5 h-5 text-blue-600" />
+                            AI Settings
+                          </h3>
+                          {aiSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                        </div>
                         <p className="text-sm text-slate-500">Global prompt and model policy for the organization, with optional event-level override.</p>
                         {llmModelsLoading && (
                           <div className="mt-2">
@@ -7243,10 +7366,13 @@ export default function App() {
                   </div>
 
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
-                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                      <SettingsIcon className="w-5 h-5 text-blue-600" />
-                      Webhook Configuration
-                    </h3>
+                    <div className="mb-4 flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <SettingsIcon className="w-5 h-5 text-blue-600" />
+                        Webhook Configuration
+                      </h3>
+                      {webhookSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                    </div>
                     <div className="space-y-4">
                       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -7344,6 +7470,7 @@ export default function App() {
               <StatusBadge tone={selectedEvent?.effective_status === "active" ? "emerald" : selectedEvent?.effective_status === "pending" ? "amber" : selectedEvent?.effective_status === "cancelled" ? "rose" : "neutral"}>
                 {selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No Event"}
               </StatusBadge>
+              {hasAnyUnsavedSettings && <StatusBadge tone="amber">unsaved</StatusBadge>}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-semibold text-slate-900">
                   {selectedEvent?.name || "No selected event"}
