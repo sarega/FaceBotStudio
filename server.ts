@@ -1300,6 +1300,26 @@ function verifyLineWebhookSignature(rawBody: Buffer | undefined, providedSignatu
   return timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
 }
 
+function maskLineDebugValue(value: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+}
+
+async function buildLineWebhookDebugContext() {
+  const channels = await appDb.listChannelAccounts("line_oa");
+  return channels.slice(0, 8).map((channel) => ({
+    id: channel.id,
+    external_id: maskLineDebugValue(channel.external_id),
+    display_name: channel.display_name,
+    event_id: channel.event_id,
+    is_active: channel.is_active,
+    has_access_token: Boolean(channel.access_token),
+    has_channel_secret: Boolean(String(safeParseChannelConfig(channel.config_json).channel_secret || "").trim()),
+  }));
+}
+
 function buildWebChatPublicConfig(widgetKey: string, settings: Record<string, string>, config: Record<string, string>) {
   return {
     widget_key: widgetKey,
@@ -5051,25 +5071,60 @@ async function startServer() {
   app.post("/api/webhook/line", lineWebhookRateLimit, async (req: RawBodyRequest, res) => {
     try {
       const destination = String(req.body?.destination || "").trim();
+      const bodyKeys = req.body && typeof req.body === "object"
+        ? Object.keys(req.body as Record<string, unknown>)
+        : [];
       if (!destination) {
+        console.warn("Rejected LINE webhook because destination is missing", {
+          body_keys: bodyKeys,
+          raw_body_length: req.rawBody?.length || 0,
+        });
         return res.sendStatus(404);
       }
 
       const channel = await getLineChannel(destination);
       if (!channel) {
+        console.warn("Rejected LINE webhook because destination did not match an active LINE channel", {
+          destination: maskLineDebugValue(destination),
+          body_keys: bodyKeys,
+          raw_body_length: req.rawBody?.length || 0,
+          saved_line_channels: await buildLineWebhookDebugContext(),
+        });
         return res.sendStatus(404);
       }
 
       const signature = typeof req.headers["x-line-signature"] === "string" ? req.headers["x-line-signature"] : "";
       const channelSecret = await getLineChannelSecret(destination);
       if (!verifyLineWebhookSignature(req.rawBody, signature, channelSecret)) {
-        console.warn("Rejected LINE webhook due to invalid signature");
+        console.warn("Rejected LINE webhook due to invalid signature", {
+          destination: maskLineDebugValue(destination),
+          signature_present: Boolean(signature),
+          raw_body_length: req.rawBody?.length || 0,
+          channel_secret_configured: Boolean(channelSecret),
+          channel_id: channel.id,
+        });
         return res.sendStatus(401);
       }
 
       res.status(200).json({ status: "ok" });
 
       const events = Array.isArray(req.body?.events) ? req.body.events : [];
+      if (events.length === 0) {
+        console.info("Accepted LINE webhook verification request", {
+          destination: maskLineDebugValue(destination),
+          channel_id: channel.id,
+          event_id: channel.event_id,
+          body_keys: bodyKeys,
+        });
+      } else {
+        console.info("Accepted LINE webhook request", {
+          destination: maskLineDebugValue(destination),
+          channel_id: channel.id,
+          event_id: channel.event_id,
+          event_count: events.length,
+          event_types: events.slice(0, 5).map((event) => String(event?.type || "").trim() || "unknown"),
+        });
+      }
       void (async () => {
         for (const webhookEvent of events) {
           try {
