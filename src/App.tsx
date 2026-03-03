@@ -295,6 +295,94 @@ function parseLineTraceMessage(text: string) {
   };
 }
 
+function parseInternalLogMarker(text: string) {
+  const match = String(text || "").match(/^\[([a-z-]+)\]\s*(.*)$/i);
+  if (!match) return null;
+
+  const marker = match[1].toLowerCase();
+  const detail = match[2] || "";
+  const markerMap: Record<string, { label: string; tone: BadgeTone; actor: "manual" | "bot"; summarize: (value: string) => string }> = {
+    "manual-reply": {
+      label: "manual reply",
+      tone: "violet",
+      actor: "manual",
+      summarize: (value) => value,
+    },
+    "manual-ticket-summary": {
+      label: "manual ticket summary",
+      tone: "violet",
+      actor: "manual",
+      summarize: (value) => `Resent ticket summary for ${value || "registration"}`,
+    },
+    "manual-ticket-image-png": {
+      label: "manual ticket image",
+      tone: "violet",
+      actor: "manual",
+      summarize: (value) => `Resent PNG ticket image for ${value || "registration"}`,
+    },
+    "manual-ticket-image-svg": {
+      label: "manual ticket image",
+      tone: "violet",
+      actor: "manual",
+      summarize: (value) => `Resent SVG ticket image for ${value || "registration"}`,
+    },
+    "manual-ticket-link": {
+      label: "manual ticket link",
+      tone: "violet",
+      actor: "manual",
+      summarize: (value) => `Resent ticket link for ${value || "registration"}`,
+    },
+    "manual-map-link": {
+      label: "manual map link",
+      tone: "violet",
+      actor: "manual",
+      summarize: (value) => value ? `Sent map link: ${value}` : "Sent map link",
+    },
+    "ticket-summary": {
+      label: "bot ticket summary",
+      tone: "blue",
+      actor: "bot",
+      summarize: (value) => `Bot sent ticket summary for ${value || "registration"}`,
+    },
+    "ticket-image-png": {
+      label: "bot ticket image",
+      tone: "blue",
+      actor: "bot",
+      summarize: (value) => `Bot sent PNG ticket image for ${value || "registration"}`,
+    },
+    "ticket-image-svg": {
+      label: "bot ticket image",
+      tone: "blue",
+      actor: "bot",
+      summarize: (value) => `Bot sent SVG ticket image for ${value || "registration"}`,
+    },
+    "ticket-link": {
+      label: "bot ticket link",
+      tone: "blue",
+      actor: "bot",
+      summarize: (value) => `Bot sent ticket link for ${value || "registration"}`,
+    },
+    "map-link": {
+      label: "bot map link",
+      tone: "blue",
+      actor: "bot",
+      summarize: (value) => value ? `Bot sent map link: ${value}` : "Bot sent map link",
+    },
+  };
+
+  const config = markerMap[marker];
+  if (!config) return null;
+
+  return {
+    marker,
+    label: config.label,
+    tone: config.tone,
+    actor: config.actor,
+    detail,
+    summary: config.summarize(detail),
+  };
+}
+
 function formatTraceStatusLabel(status: string) {
   return status
     .split("-")
@@ -1417,6 +1505,7 @@ export default function App() {
   });
   const [logRegistrationAction, setLogRegistrationAction] = useState<"" | "create_ticket">("");
   const [logRegistrationMessage, setLogRegistrationMessage] = useState("");
+  const [logToolsOpen, setLogToolsOpen] = useState(false);
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
@@ -1734,6 +1823,7 @@ export default function App() {
         && channel.external_id === selectedLogMessage.page_id,
       ) || null
     : null;
+  const selectedLogAuditMarker = selectedLogMessage ? parseInternalLogMarker(selectedLogMessage.text) : null;
   const manualOverrideUnavailableReason =
     !selectedLogMessage
       ? "Select a sender thread first."
@@ -2313,6 +2403,7 @@ export default function App() {
     setManualOverrideText("");
     setManualOverrideMessage("");
     setLogRegistrationMessage("");
+    setLogToolsOpen(false);
     setManualOverrideRegistrationId((current) =>
       selectedSenderRegistrations.some((registration) => registration.id === current)
         ? current
@@ -4505,20 +4596,27 @@ export default function App() {
             {selectedSenderRegistrations.length > 0 ? (
               <div className="mt-3 space-y-2">
                 {selectedSenderRegistrations.map((registration) => (
-                  <button
+                  <div
                     key={registration.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setManualOverrideRegistrationId(registration.id)}
-                    className={`grid w-full gap-2 rounded-2xl border px-3 py-3 text-left transition-colors md:grid-cols-[minmax(0,1fr)_auto] ${
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setManualOverrideRegistrationId(registration.id);
+                      }
+                    }}
+                    className={`grid w-full cursor-pointer gap-2 rounded-2xl border px-3 py-3 text-left transition-colors md:grid-cols-[minmax(0,1fr)_auto] ${
                       manualOverrideRegistrationId === registration.id
                         ? "border-blue-200 bg-blue-50"
                         : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
                     }`}
                   >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-mono text-xs font-semibold text-blue-600">{registration.id}</p>
-                        <StatusBadge tone={getRegistrationStatusTone(registration.status)}>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-mono text-xs font-semibold text-blue-600">{registration.id}</p>
+                          <StatusBadge tone={getRegistrationStatusTone(registration.status)}>
                           {registration.status}
                         </StatusBadge>
                       </div>
@@ -4529,11 +4627,51 @@ export default function App() {
                         {registration.phone || "-"}
                         {registration.email ? ` • ${registration.email}` : ""}
                       </p>
+                      </div>
+                    <div className="flex flex-col items-start gap-2 md:items-end">
+                      <p className="text-[11px] text-slate-500 md:text-right">
+                        {new Date(registration.timestamp).toLocaleString()}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <ActionButton
+                          tone="neutral"
+                          className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            copyToClipboard(registration.id);
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          Copy ID
+                        </ActionButton>
+                        <a
+                          href={`/api/tickets/${encodeURIComponent(registration.id)}.png`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                          className="inline-flex min-h-8 items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          Open Ticket
+                        </a>
+                        {canChangeRegistrationStatus && registration.status !== "cancelled" && (
+                          <ActionButton
+                            tone="rose"
+                            className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              const confirmed = window.confirm(`Cancel registration ${registration.id}?`);
+                              if (!confirmed) return;
+                              void updateRegistrationStatus(registration.id, "cancelled");
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Cancel
+                          </ActionButton>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-[11px] text-slate-500 md:text-right">
-                      {new Date(registration.timestamp).toLocaleString()}
-                    </p>
-                  </button>
+                  </div>
                 ))}
               </div>
             ) : (
@@ -4711,9 +4849,21 @@ export default function App() {
               {selectedSenderThread.length} message{selectedSenderThread.length === 1 ? "" : "s"} in the current event log
             </p>
           </div>
-          <StatusBadge tone={parseLineTraceMessage(selectedLogMessage.text) ? "amber" : selectedLogMessage.type === "incoming" ? "emerald" : "blue"}>
-            {parseLineTraceMessage(selectedLogMessage.text) ? "trace" : selectedLogMessage.type}
-          </StatusBadge>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <StatusBadge tone={parseLineTraceMessage(selectedLogMessage.text) ? "amber" : selectedLogAuditMarker ? selectedLogAuditMarker.tone : selectedLogMessage.type === "incoming" ? "emerald" : "blue"}>
+              {parseLineTraceMessage(selectedLogMessage.text) ? "trace" : selectedLogAuditMarker ? selectedLogAuditMarker.label : selectedLogMessage.type}
+            </StatusBadge>
+            {canSendManualOverride && (
+              <ActionButton
+                tone={logToolsOpen ? "amber" : "neutral"}
+                className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
+                onClick={() => setLogToolsOpen((open) => !open)}
+              >
+                <PencilLine className="h-3.5 w-3.5" />
+                {logToolsOpen ? "Hide Tools" : "Manual Tools"}
+              </ActionButton>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -4734,20 +4884,34 @@ export default function App() {
                 </div>
               );
             }
+            if (selectedLogAuditMarker && selectedLogAuditMarker.marker !== "manual-reply") {
+              return (
+                <div className="mt-3 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.actor}</StatusBadge>
+                    <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.label}</StatusBadge>
+                  </div>
+                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                    {selectedLogAuditMarker.summary}
+                  </p>
+                </div>
+              );
+            }
             return (
               <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                {selectedLogMessage.text}
+                {selectedLogAuditMarker?.detail || selectedLogMessage.text}
               </p>
             );
           })()}
         </div>
 
-        {logManualOverridePanel}
+        {logToolsOpen && logManualOverridePanel}
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
         {selectedSenderThread.map((threadMessage) => {
           const lineTrace = parseLineTraceMessage(threadMessage.text);
+          const auditMarker = lineTrace ? null : parseInternalLogMarker(threadMessage.text);
           const isCurrentMessage = threadMessage.id === selectedLogMessage.id;
           return (
             <div
@@ -4757,6 +4921,8 @@ export default function App() {
                   ? "border-blue-200 bg-blue-50"
                   : lineTrace
                   ? "border-amber-100 bg-amber-50"
+                  : auditMarker
+                  ? "border-violet-100 bg-violet-50"
                   : threadMessage.type === "incoming"
                   ? "border-emerald-100 bg-emerald-50"
                   : "border-slate-200 bg-white"
@@ -4765,15 +4931,22 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                  <StatusBadge tone={lineTrace ? "amber" : threadMessage.type === "incoming" ? "emerald" : "blue"}>
-                    {lineTrace ? "trace" : threadMessage.type}
+                  {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
+                  <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : threadMessage.type === "incoming" ? "emerald" : "blue"}>
+                    {lineTrace ? "trace" : auditMarker ? auditMarker.label : threadMessage.type}
                   </StatusBadge>
                   {isCurrentMessage && <StatusBadge tone="blue">selected</StatusBadge>}
                 </div>
                 <p className="text-[11px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
               </div>
               <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                {lineTrace ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status) : threadMessage.text}
+                {lineTrace
+                  ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
+                  : auditMarker
+                  ? auditMarker.marker === "manual-reply"
+                    ? auditMarker.detail
+                    : auditMarker.summary
+                  : threadMessage.text}
               </p>
             </div>
           );
@@ -7229,56 +7402,60 @@ export default function App() {
               className="space-y-6"
             >
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="flex items-center justify-between border-b border-slate-100 p-5 sm:p-6">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
-                      <StatusBadge tone="neutral">{filteredMessages.length} items</StatusBadge>
-                      {selectedEvent && (
-                        <>
+                <div className="border-b border-slate-100 p-5 sm:p-6">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
+                        <StatusBadge tone="neutral">{filteredMessages.length} items</StatusBadge>
+                        {selectedEvent && (
                           <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
                             {getEventStatusLabel(selectedEvent.effective_status)}
                           </StatusBadge>
-                          {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
-                            <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
-                              {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                            </StatusBadge>
-                          )}
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {selectedEvent && (
+                        <>
+                          <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
+                          <HelpPopover label="Open reply guard details">
+                            {eventOperatorGuard.body}
+                          </HelpPopover>
                         </>
                       )}
-                    </div>
-                    <p className="text-sm text-slate-500">Inbound messages plus delivery traces from active channels.</p>
-                  </div>
-                  <button onClick={() => void fetchMessages(selectedEventId)} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
-                    <RefreshCw className="w-4 h-4 text-slate-400" />
-                  </button>
-                </div>
-                <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
-                  <CompactGuardBar
-                    title="Reply Guard"
-                    tone={eventOperatorGuard.tone}
-                    label={eventOperatorGuard.label}
-                    body={eventOperatorGuard.body}
-                  />
-                </div>
-                <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                      value={logListQuery}
-                      onChange={(e) => setLogListQuery(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Search logs by sender, message, type, or trace detail"
-                    />
-                    {logListQuery && (
-                      <button
-                        onClick={() => setLogListQuery("")}
-                        className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                        aria-label="Clear log search"
-                      >
-                        <X className="h-3.5 w-3.5" />
+                      <button onClick={() => void fetchMessages(selectedEventId)} className="rounded-lg p-2 transition-colors hover:bg-slate-100">
+                        <RefreshCw className="h-4 w-4 text-slate-400" />
                       </button>
-                    )}
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center">
+                    <div className="relative min-w-0 flex-1">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={logListQuery}
+                        onChange={(e) => setLogListQuery(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Search logs by sender, message, type, or trace detail"
+                      />
+                      {logListQuery && (
+                        <button
+                          onClick={() => setLogListQuery("")}
+                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                          aria-label="Clear log search"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                      {selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open" && (
+                        <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
+                          {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                        </StatusBadge>
+                      )}
+                      <span>sender threads and delivery traces</span>
+                    </div>
                   </div>
                 </div>
                 <div className="space-y-3 p-4 md:hidden">
@@ -7289,6 +7466,7 @@ export default function App() {
                   ) : (
                     filteredMessages.map((msg) => {
                       const lineTrace = parseLineTraceMessage(msg.text);
+                      const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
                       return (
                         <div
                           key={msg.id}
@@ -7299,12 +7477,21 @@ export default function App() {
                         >
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-sm font-semibold text-slate-900">{lineTrace ? "Delivery Trace" : msg.type === "incoming" ? "Incoming Message" : "Outgoing Message"}</p>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {lineTrace
+                                  ? "Delivery Trace"
+                                  : auditMarker
+                                  ? formatTraceStatusLabel(auditMarker.label)
+                                  : msg.type === "incoming"
+                                  ? "Incoming Message"
+                                  : "Outgoing Message"}
+                              </p>
                             </div>
                             <div className="flex flex-wrap gap-2">
                               {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                              <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
-                                {lineTrace ? "trace" : msg.type}
+                              {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
+                              <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
+                                {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                               </StatusBadge>
                             </div>
                           </div>
@@ -7323,6 +7510,13 @@ export default function App() {
                               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-700">Trace Status</p>
                               <p className="mt-1 text-sm font-semibold text-slate-900">{formatTraceStatusLabel(lineTrace.status)}</p>
                               <p className="mt-2 text-sm break-words text-slate-700">{lineTrace.detail || "-"}</p>
+                            </div>
+                          ) : auditMarker ? (
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Audit</p>
+                              <p className="mt-2 text-sm break-words text-slate-700">
+                                {auditMarker.marker === "manual-reply" ? auditMarker.detail : auditMarker.summary}
+                              </p>
                             </div>
                           ) : (
                             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
@@ -7355,6 +7549,7 @@ export default function App() {
                       ) : (
                         filteredMessages.map((msg) => {
                           const lineTrace = parseLineTraceMessage(msg.text);
+                          const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
                           return (
                             <tr
                               key={msg.id}
@@ -7384,13 +7579,23 @@ export default function App() {
                                       {lineTrace.detail || "-"}
                                     </p>
                                   </div>
+                                ) : auditMarker ? (
+                                  <div className="space-y-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>
+                                      <StatusBadge tone={auditMarker.tone}>{auditMarker.label}</StatusBadge>
+                                    </div>
+                                    <p className="text-sm text-slate-700 break-words">
+                                      {auditMarker.marker === "manual-reply" ? auditMarker.detail : auditMarker.summary}
+                                    </p>
+                                  </div>
                                 ) : (
                                   <span className="truncate block">{msg.text}</span>
                                 )}
                               </td>
                               <td className="px-6 py-4">
-                                <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
-                                  {lineTrace ? "trace" : msg.type}
+                                <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
+                                  {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                                 </StatusBadge>
                               </td>
                             </tr>
@@ -7413,6 +7618,7 @@ export default function App() {
                       <div className="max-h-[38rem] overflow-y-auto">
                         {filteredMessages.map((msg) => {
                           const lineTrace = parseLineTraceMessage(msg.text);
+                          const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
                           const isSelected = selectedLogMessageId === msg.id;
                           return (
                             <button
@@ -7430,13 +7636,20 @@ export default function App() {
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2">
                                   {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                                  <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
-                                    {lineTrace ? "trace" : msg.type}
+                                  {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
+                                  <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
+                                    {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                                   </StatusBadge>
                                   <p className="truncate text-[11px] font-mono text-blue-600">{msg.sender_id}</p>
                                 </div>
                                 <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-slate-700">
-                                  {lineTrace ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status) : msg.text}
+                                  {lineTrace
+                                    ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
+                                    : auditMarker
+                                    ? auditMarker.marker === "manual-reply"
+                                      ? auditMarker.detail
+                                      : auditMarker.summary
+                                    : msg.text}
                                 </p>
                               </div>
                               <p className="shrink-0 whitespace-nowrap text-[11px] text-slate-500">

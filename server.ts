@@ -1202,7 +1202,7 @@ async function sendManualOutboundText(target: ManualOutboundTarget, text: string
     throw new Error("Manual reply text is required");
   }
   await sendTextToOutboundTarget(target, trimmed);
-  await saveMessage(target.senderId, trimmed, "outgoing", target.eventId, target.externalId);
+  await saveMessage(target.senderId, `[manual-reply] ${trimmed}`, "outgoing", target.eventId, target.externalId);
   return {
     steps: ["text"],
   };
@@ -2169,14 +2169,52 @@ function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>,
 </svg>`;
 }
 
+function normalizeMessageTextForHistory(text: string) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  if (/^\[line:[a-z-]+\]/i.test(raw)) {
+    return "";
+  }
+  const markerMatch = raw.match(/^\[([a-z-]+)\]\s*(.*)$/i);
+  if (!markerMatch) {
+    return raw;
+  }
+
+  const marker = markerMatch[1].toLowerCase();
+  const detail = String(markerMatch[2] || "").trim();
+  if (marker === "manual-reply") {
+    return detail;
+  }
+  if (
+    marker === "ticket-summary"
+    || marker === "ticket-image-png"
+    || marker === "ticket-image-svg"
+    || marker === "ticket-link"
+    || marker === "map-link"
+    || marker === "manual-ticket-summary"
+    || marker === "manual-ticket-image-png"
+    || marker === "manual-ticket-image-svg"
+    || marker === "manual-ticket-link"
+    || marker === "manual-map-link"
+  ) {
+    return "";
+  }
+  return raw;
+}
+
 async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?: string): Promise<ChatHistoryMessage[]> {
   const rows = await appDb.getMessageHistoryRows(senderId, limit, eventId);
 
   return rows
     .reverse()
     .map((row) => ({
-      role: row.type === "incoming" ? "user" : "model",
-      parts: [{ text: row.text || "" }],
+      role: (row.type === "incoming" ? "user" : "model") as ChatHistoryMessage["role"],
+      text: normalizeMessageTextForHistory(row.text || ""),
+    }))
+    .filter((row) => row.text)
+    .map((row) => ({
+      role: row.role,
+      parts: [{ text: row.text }],
     }));
 }
 
