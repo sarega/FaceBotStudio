@@ -50,11 +50,11 @@ export const CHANNEL_PLATFORM_DEFINITIONS: Record<ChannelPlatform, ChannelPlatfo
     id: "line_oa",
     label: "LINE OA",
     description: "LINE Official Account messaging.",
-    external_id_label: "Channel ID / OA ID",
-    external_id_placeholder: "LINE channel or OA identifier",
+    external_id_label: "Bot User ID (U...)",
+    external_id_placeholder: "Resolved automatically from the LINE access token",
     access_token_label: "Channel Access Token",
     access_token_required: true,
-    access_token_help: "Use the long-lived Messaging API channel access token.",
+    access_token_help: "Use the long-lived Messaging API channel access token. The server resolves the LINE bot user ID from this token on save.",
     config_fields: [
       {
         key: "channel_secret",
@@ -67,6 +67,7 @@ export const CHANNEL_PLATFORM_DEFINITIONS: Record<ChannelPlatform, ChannelPlatfo
     live_messaging_ready: true,
     notes: [
       "Webhook verification and outbound reply groundwork are wired in this phase.",
+      "The setup flow resolves the bot user ID (U...) from the access token automatically.",
       "Keep both access token and channel secret server-side.",
     ],
   },

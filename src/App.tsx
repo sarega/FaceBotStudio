@@ -1712,6 +1712,7 @@ export default function App() {
   const selectedChannelPlatformDefinition = channelPlatformDefinitions.find((definition) => definition.id === newChannelPlatform) || null;
   const editingChannel = channels.find((channel) => `${channel.platform}:${channel.external_id}` === editingChannelKey) || null;
   const editingChannelKeepsCredentials = Boolean(editingChannel && editingChannel.platform === newChannelPlatform);
+  const lineChannelIdAutoResolved = newChannelPlatform === "line_oa";
   const channelFormMissingRequirements = (() => {
     if (!selectedChannelPlatformDefinition) return [];
     const missing: string[] = [];
@@ -3946,7 +3947,7 @@ export default function App() {
     const externalId = newPageId.trim();
     const displayName = newPageName.trim();
     const accessToken = newPageAccessToken.trim();
-    if (!externalId) {
+    if (!lineChannelIdAutoResolved && !externalId) {
       setEventMessage(selectedChannelPlatformDefinition?.external_id_label || "Channel external ID is required");
       return;
     }
@@ -8215,6 +8216,9 @@ export default function App() {
                           const platform = e.target.value as ChannelPlatform;
                           setNewChannelPlatform(platform);
                           setNewChannelConfig({});
+                          if (platform === "line_oa") {
+                            setNewPageId("");
+                          }
                         }}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
                       >
@@ -8245,9 +8249,15 @@ export default function App() {
                       <input
                         value={newPageId}
                         onChange={(e) => setNewPageId(e.target.value)}
+                        disabled={lineChannelIdAutoResolved}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
                         placeholder={selectedChannelPlatformDefinition?.external_id_placeholder || "Channel external ID"}
                       />
+                      {lineChannelIdAutoResolved && (
+                        <p className="text-xs text-slate-500">
+                          LINE Bot User ID (`U...`) is resolved automatically from the saved access token when you save this channel.
+                        </p>
+                      )}
                       {selectedChannelPlatformDefinition && (
                         <div className="flex justify-end">
                           <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.external_id_label}`}>
@@ -8296,7 +8306,13 @@ export default function App() {
                       ))}
                       <ActionButton
                         onClick={() => void handleSaveChannel()}
-                        disabled={!selectedEventId || !newPageId.trim() || eventLoading || selectedEventChannelWritesLocked || channelFormMissingRequirements.length > 0}
+                        disabled={
+                          !selectedEventId
+                          || (!lineChannelIdAutoResolved && !newPageId.trim())
+                          || eventLoading
+                          || selectedEventChannelWritesLocked
+                          || channelFormMissingRequirements.length > 0
+                        }
                         tone="blue"
                         active
                         className="w-full text-sm"

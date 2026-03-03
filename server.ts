@@ -1307,6 +1307,43 @@ function maskLineDebugValue(value: string) {
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
+type LineBotProfile = {
+  userId: string;
+  basicId: string;
+  displayName: string;
+};
+
+async function fetchLineBotProfile(accessToken: string): Promise<LineBotProfile> {
+  const trimmedToken = String(accessToken || "").trim();
+  if (!trimmedToken) {
+    throw new Error("LINE channel access token is not configured");
+  }
+
+  const response = await fetch("https://api.line.me/v2/bot/info", {
+    headers: {
+      Authorization: `Bearer ${trimmedToken}`,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof payload?.message === "string" && payload.message.trim()
+      ? payload.message.trim()
+      : `LINE bot info lookup failed with status ${response.status}`;
+    throw new Error(detail);
+  }
+
+  const userId = String(payload?.userId || "").trim();
+  if (!userId) {
+    throw new Error("LINE bot info lookup returned no userId");
+  }
+
+  return {
+    userId,
+    basicId: String(payload?.basicId || "").trim(),
+    displayName: String(payload?.displayName || "").trim(),
+  };
+}
+
 async function buildLineWebhookDebugContext() {
   const channels = await appDb.listChannelAccounts("line_oa");
   return channels.slice(0, 8).map((channel) => ({
@@ -4197,7 +4234,7 @@ async function startServer() {
   app.post("/api/channels", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const platform = String(req.body?.platform || "facebook").trim() as ChannelPlatform;
-      const externalId = String(req.body?.external_id || "").trim();
+      const requestedExternalId = String(req.body?.external_id || "").trim();
       const displayName = String(req.body?.display_name || "").trim();
       const eventId = String(req.body?.event_id || "").trim();
       const accessToken = String(req.body?.access_token || "").trim();
@@ -4213,7 +4250,7 @@ async function startServer() {
       if (originalPlatformRaw && !ALLOWED_CHANNEL_PLATFORMS.includes(originalPlatformRaw as ChannelPlatform)) {
         return res.status(400).json({ error: "Invalid original channel platform" });
       }
-      if (!externalId || !eventId) {
+      if (!eventId) {
         return res.status(400).json({ error: "external_id and event_id are required" });
       }
 
@@ -4230,29 +4267,51 @@ async function startServer() {
         return res.status(404).json({ error: "Original channel not found" });
       }
 
+      const initialCredentialSource =
+        originalChannel && originalChannel.platform === platform
+          ? originalChannel
+          : undefined;
+      const nextConfig = sanitizeChannelConfig(platform, req.body?.config);
+      const provisionalAccessToken = accessToken || String(initialCredentialSource?.access_token || "").trim();
+      let resolvedExternalId = requestedExternalId;
+      let resolvedDisplayName = displayName || requestedExternalId;
+      let lineBotProfile: LineBotProfile | null = null;
+
+      if (platform === "line_oa" && provisionalAccessToken) {
+        try {
+          lineBotProfile = await fetchLineBotProfile(provisionalAccessToken);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          return res.status(400).json({ error: `Failed to resolve LINE bot user ID from the access token: ${detail}` });
+        }
+        resolvedExternalId = lineBotProfile.userId;
+        resolvedDisplayName = displayName || lineBotProfile.displayName || lineBotProfile.basicId || lineBotProfile.userId;
+      }
+
+      if (!resolvedExternalId) {
+        return res.status(400).json({ error: "external_id and event_id are required" });
+      }
+
       const isSameIdentityAsOriginal =
         Boolean(originalChannel)
         && originalChannel?.platform === platform
-        && originalChannel?.external_id === externalId;
+        && originalChannel?.external_id === resolvedExternalId;
       const existingChannel = isSameIdentityAsOriginal
         ? originalChannel
-        : await appDb.getChannelAccount(platform, externalId);
+        : await appDb.getChannelAccount(platform, resolvedExternalId);
       if (existingChannel && originalChannel && existingChannel.id !== originalChannel.id) {
         return res.status(409).json({ error: "A channel with this platform and external ID already exists" });
       }
 
       const credentialSource =
-        originalChannel && originalChannel.platform === platform
-          ? originalChannel
-          : existingChannel && existingChannel.platform === platform
-            ? existingChannel
-            : undefined;
-      const nextConfig = sanitizeChannelConfig(platform, req.body?.config);
+        initialCredentialSource
+        || (existingChannel && existingChannel.platform === platform ? existingChannel : undefined);
       const mergedConfig = {
         ...(credentialSource ? safeParseChannelConfig(credentialSource.config_json) : {}),
         ...nextConfig,
       };
       const effectiveAccessToken = accessToken || String(credentialSource?.access_token || "").trim();
+
       const effectiveHasAccessToken = Boolean(effectiveAccessToken || (platform === "facebook" && process.env.PAGE_ACCESS_TOKEN));
       const missingRequirements = getChannelMissingRequirements(platform, {
         hasAccessToken: effectiveHasAccessToken,
@@ -4262,7 +4321,7 @@ async function startServer() {
         Boolean(originalChannel || existingChannel) &&
         (originalChannel || existingChannel)?.event_id === eventId &&
         (originalChannel || existingChannel)?.platform === platform &&
-        (originalChannel || existingChannel)?.external_id === externalId &&
+        (originalChannel || existingChannel)?.external_id === resolvedExternalId &&
         isActive === false;
 
       if ((event.effective_status === "closed" || event.effective_status === "cancelled") && !isDisableOnlyUpdate) {
@@ -4280,8 +4339,8 @@ async function startServer() {
 
       const channelInput = {
         platform,
-        external_id: externalId,
-        display_name: displayName || externalId,
+        external_id: resolvedExternalId,
+        display_name: resolvedDisplayName || resolvedExternalId,
         event_id: eventId,
         access_token: effectiveAccessToken,
         config_json: JSON.stringify(mergedConfig),
@@ -4300,6 +4359,12 @@ async function startServer() {
           ? {
               original_platform: originalChannel.platform,
               original_external_id: originalChannel.external_id,
+            }
+          : {}),
+        ...(lineBotProfile
+          ? {
+              line_basic_id: lineBotProfile.basicId || null,
+              line_display_name: lineBotProfile.displayName || null,
             }
           : {}),
       });
