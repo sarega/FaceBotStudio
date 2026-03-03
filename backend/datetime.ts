@@ -81,6 +81,42 @@ export function formatInTimeZone(date: Date, timeZone: string) {
   }).format(date);
 }
 
+function formatDatePartsInTimeZone(date: Date, timeZone: string) {
+  const formatted = new Intl.DateTimeFormat("en-GB", {
+    timeZone: normalizeTimeZone(timeZone),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const pick = (type: string) => formatted.find((part) => part.type === type)?.value || "";
+  return {
+    date: `${pick("day")}/${pick("month")}/${pick("year")}`,
+    time: `${pick("hour")}:${pick("minute")}`,
+  };
+}
+
+export function formatStoredDateRangeForDisplay(startValue: string, endValue: string, timeZone: string) {
+  const startInstant = zonedDateTimeToUtc(startValue, timeZone);
+  const endInstant = zonedDateTimeToUtc(endValue, timeZone);
+
+  if (startInstant && endInstant) {
+    const startParts = formatDatePartsInTimeZone(startInstant, timeZone);
+    const endParts = formatDatePartsInTimeZone(endInstant, timeZone);
+    if (startParts.date === endParts.date) {
+      return `${startParts.date}, ${startParts.time} -> ${endParts.time}`;
+    }
+    return `${formatInTimeZone(startInstant, timeZone)} -> ${formatInTimeZone(endInstant, timeZone)}`;
+  }
+
+  if (startInstant) return formatInTimeZone(startInstant, timeZone);
+  if (endInstant) return formatInTimeZone(endInstant, timeZone);
+  return startValue || endValue || "-";
+}
+
 export function getEventState(settings: Record<string, string>, now = new Date()) {
   const timeZone = normalizeTimeZone(settings.event_timezone);
   const start = zonedDateTimeToUtc(settings.reg_start || "", timeZone);
@@ -96,10 +132,18 @@ export function getEventState(settings: Record<string, string>, now = new Date()
   }
 
   const eventDate = zonedDateTimeToUtc(settings.event_date || "", timeZone);
+  const eventEndDate = zonedDateTimeToUtc(settings.event_end_date || "", timeZone);
+  const eventCloseDate = eventEndDate || eventDate;
+  const eventScheduleStatus =
+    eventDate && eventEndDate && eventEndDate.getTime() < eventDate.getTime() ? "invalid" : "valid";
   let eventLifecycle = "unscheduled";
-  if (eventDate) {
-    if (now.getTime() < eventDate.getTime()) {
+  if (eventDate || eventEndDate) {
+    const lifecycleStart = eventDate || eventEndDate;
+    const lifecycleEnd = eventCloseDate;
+    if (lifecycleStart && now.getTime() < lifecycleStart.getTime()) {
       eventLifecycle = "upcoming";
+    } else if (eventDate && eventEndDate && lifecycleEnd && now.getTime() <= lifecycleEnd.getTime()) {
+      eventLifecycle = "ongoing";
     } else {
       eventLifecycle = "past";
     }
@@ -111,12 +155,17 @@ export function getEventState(settings: Record<string, string>, now = new Date()
     start,
     end,
     eventDate,
+    eventEndDate,
+    eventCloseDate,
+    eventScheduleStatus,
     registrationStatus,
     eventLifecycle,
     nowLabel: formatInTimeZone(now, timeZone),
     startLabel: start ? formatInTimeZone(start, timeZone) : "-",
     endLabel: end ? formatInTimeZone(end, timeZone) : "-",
-    eventDateLabel: eventDate ? formatInTimeZone(eventDate, timeZone) : settings.event_date || "-",
+    eventDateLabel: formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", timeZone),
+    eventEndDateLabel: eventEndDate ? formatInTimeZone(eventEndDate, timeZone) : settings.event_end_date || "-",
+    eventCloseLabel: eventCloseDate ? formatInTimeZone(eventCloseDate, timeZone) : settings.event_end_date || settings.event_date || "-",
   };
 }
 
@@ -131,7 +180,9 @@ export function getEffectiveEventStatus(
   }
 
   const eventState = getEventState(settings, now);
-  if (eventState.eventDate && now.getTime() >= eventState.eventDate.getTime()) {
+  const effectiveCloseDate =
+    eventState.eventScheduleStatus === "invalid" ? eventState.eventDate : eventState.eventCloseDate;
+  if (effectiveCloseDate && now.getTime() >= effectiveCloseDate.getTime()) {
     return "closed";
   }
 

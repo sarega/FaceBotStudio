@@ -11,7 +11,7 @@ interface TicketProps {
   timestamp: string;
   eventName: string;
   eventLocation: string;
-  eventDate: string;
+  eventDateLabel: string;
   eventMapUrl?: string;
 }
 
@@ -24,7 +24,7 @@ export function Ticket({
   timestamp,
   eventName,
   eventLocation,
-  eventDate,
+  eventDateLabel,
   eventMapUrl
 }: TicketProps) {
   const [qrCodeUrl, setQrCodeUrl] = useState<string>("");
@@ -73,8 +73,8 @@ export function Ticket({
               <p className="text-slate-600 text-xs leading-tight">{eventLocation}</p>
             </div>
             <div>
-              <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Event Date</p>
-              <p className="text-slate-600 text-xs">{new Date(eventDate).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</p>
+              <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Event Window</p>
+              <p className="text-slate-600 text-xs leading-tight">{eventDateLabel || "-"}</p>
             </div>
           </div>
         </div>

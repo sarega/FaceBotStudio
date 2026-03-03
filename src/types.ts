@@ -46,6 +46,7 @@ export interface CheckinAccessSession {
   event_location: string;
   event_timezone: string;
   event_date: string;
+  event_end_date?: string;
   event_status: EventStatus;
   expires_at: string;
   last_used_at: string | null;
@@ -242,6 +243,7 @@ export interface Settings {
   event_location: string;
   event_map_url: string;
   event_date: string;
+  event_end_date: string;
   event_description: string;
   event_travel: string;
   confirmation_email_enabled: string;

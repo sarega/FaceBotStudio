@@ -43,7 +43,7 @@ import {
   verifyPassword,
   type UserRole,
 } from "./backend/auth";
-import { formatStoredDateForDisplay, getEventState, normalizeTimeZone, type RegistrationWindowState } from "./backend/datetime";
+import { formatStoredDateRangeForDisplay, getEventState, normalizeTimeZone, type RegistrationWindowState } from "./backend/datetime";
 import {
   createAppDatabase,
   type AuthUserRow,
@@ -117,6 +117,13 @@ type LlmUsageContext = {
 type ToolExecutionBundle = {
   messages: ChatHistoryMessage[];
   ticketRegistrationIds: string[];
+};
+
+type ManualOutboundTarget = {
+  platform: ChannelPlatform;
+  eventId: string;
+  senderId: string;
+  externalId: string;
 };
 
 type PendingConversationTurn = {
@@ -206,7 +213,7 @@ Current Event Details:
 - Event Status Right Now: ${eventStatus}
 - Time Zone: ${eventState.timeZone}
 - Current System Time: ${eventState.nowLabel}
-- Date: ${formatStoredDateForDisplay(settings.event_date || "", eventState.timeZone)}
+- Event Window: ${formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", eventState.timeZone)}
 - Description: ${settings.event_description || ""}
 - Travel: ${settings.event_travel || ""}
 - Registration Limit: ${settings.reg_limit || ""}
@@ -242,7 +249,7 @@ function getSystemInstruction(
     "Respect the Registration Status Right Now field. If it is invalid, explain that the registration schedule is misconfigured. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
     "Respect the Registration Availability Right Now field. If it is full, clearly explain that registration is currently unavailable because capacity is full.",
     "Do not volunteer exact remaining seat counts unless the user asks, but never imply registration is still open when capacity is full.",
-    "If the event lifecycle is past, explain that the event date has already passed.",
+    "If the event lifecycle is past, explain that the event has already ended.",
     "Read the recent conversation history before replying and continue naturally from the current chat.",
     "Only greet on the first assistant reply of a conversation or after a long idle gap. Do not greet on every reply.",
     "If the user sent several back-to-back messages before your turn, answer them in one natural reply without restarting from the beginning.",
@@ -915,6 +922,7 @@ async function buildCheckinSessionAccessPayload(session: Awaited<ReturnType<type
     event_location: settings.event_location || "",
     event_timezone: settings.event_timezone || "Asia/Bangkok",
     event_date: settings.event_date || "",
+    event_end_date: settings.event_end_date || "",
     event_status: event.effective_status,
     expires_at: session.expires_at,
     last_used_at: session.last_used_at,
@@ -1071,6 +1079,191 @@ async function getTelegramWebhookSecret(botKey?: string) {
   return String(config.webhook_secret || "").trim();
 }
 
+async function resolveManualOutboundTarget(
+  eventId: string,
+  senderId: string,
+  externalId: string,
+  platformHint?: string,
+): Promise<ManualOutboundTarget> {
+  const normalizedEventId = String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+  const normalizedSenderId = String(senderId || "").trim();
+  const normalizedExternalId = String(externalId || "").trim();
+  const normalizedPlatformHint = String(platformHint || "").trim() as ChannelPlatform | "";
+
+  if (!normalizedSenderId) {
+    throw new Error("Sender ID is required");
+  }
+  if (!normalizedExternalId) {
+    throw new Error("Channel destination is required");
+  }
+
+  const tryResolveChannel = async (platform: ChannelPlatform) => {
+    if (platform === "facebook") {
+      const facebookChannel = await appDb.getChannelAccount("facebook", normalizedExternalId);
+      if (facebookChannel && facebookChannel.is_active !== false && facebookChannel.event_id === normalizedEventId) {
+        return {
+          platform: "facebook" as const,
+          eventId: normalizedEventId,
+          senderId: normalizedSenderId,
+          externalId: normalizedExternalId,
+        };
+      }
+      const facebookPage = await appDb.getFacebookPageByPageId(normalizedExternalId);
+      if (facebookPage && facebookPage.is_active && facebookPage.event_id === normalizedEventId) {
+        return {
+          platform: "facebook" as const,
+          eventId: normalizedEventId,
+          senderId: normalizedSenderId,
+          externalId: normalizedExternalId,
+        };
+      }
+      return null;
+    }
+
+    const channel = await appDb.getChannelAccount(platform, normalizedExternalId);
+    if (!channel || channel.is_active === false || channel.event_id !== normalizedEventId) {
+      return null;
+    }
+    return {
+      platform,
+      eventId: normalizedEventId,
+      senderId: normalizedSenderId,
+      externalId: normalizedExternalId,
+    } satisfies ManualOutboundTarget;
+  };
+
+  if (normalizedPlatformHint) {
+    if (!ALLOWED_CHANNEL_PLATFORMS.includes(normalizedPlatformHint)) {
+      throw new Error("Invalid channel platform");
+    }
+    const hintedTarget = await tryResolveChannel(normalizedPlatformHint);
+    if (hintedTarget) return hintedTarget;
+  }
+
+  for (const platform of ALLOWED_CHANNEL_PLATFORMS) {
+    const target = await tryResolveChannel(platform);
+    if (target) return target;
+  }
+
+  throw new Error("Selected log row is not linked to an active channel for this event");
+}
+
+async function sendTextToOutboundTarget(target: ManualOutboundTarget, text: string) {
+  switch (target.platform) {
+    case "facebook":
+      await sendFacebookTextMessage(target.senderId, text, target.externalId);
+      return;
+    case "line_oa":
+      await sendLinePushTextMessage(target.senderId, text, target.externalId);
+      return;
+    case "instagram":
+      await sendInstagramTextMessage(target.senderId, text, target.externalId);
+      return;
+    case "whatsapp":
+      await sendWhatsAppTextMessage(target.senderId, text, target.externalId);
+      return;
+    case "telegram":
+      await sendTelegramTextMessage(target.senderId, text, target.externalId);
+      return;
+    case "web_chat":
+      throw new Error("Manual push is not supported for web chat");
+    default:
+      throw new Error("Unsupported channel platform");
+  }
+}
+
+async function sendImageToOutboundTarget(target: ManualOutboundTarget, imageUrl: string) {
+  switch (target.platform) {
+    case "facebook":
+      await sendFacebookImageMessage(target.senderId, imageUrl, target.externalId);
+      return;
+    case "line_oa":
+      await sendLinePushImageMessage(target.senderId, imageUrl, target.externalId);
+      return;
+    case "instagram":
+      await sendInstagramImageMessage(target.senderId, imageUrl, target.externalId);
+      return;
+    case "whatsapp":
+      await sendWhatsAppImageMessage(target.senderId, imageUrl, target.externalId);
+      return;
+    case "telegram":
+      await sendTelegramImageMessage(target.senderId, imageUrl, target.externalId);
+      return;
+    case "web_chat":
+      throw new Error("Manual push is not supported for web chat");
+    default:
+      throw new Error("Unsupported channel platform");
+  }
+}
+
+async function sendManualOutboundText(target: ManualOutboundTarget, text: string) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    throw new Error("Manual reply text is required");
+  }
+  await sendTextToOutboundTarget(target, trimmed);
+  await saveMessage(target.senderId, trimmed, "outgoing", target.eventId, target.externalId);
+  return {
+    steps: ["text"],
+  };
+}
+
+async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarget, registrationId: string) {
+  const normalizedRegistrationId = String(registrationId || "").trim().toUpperCase();
+  if (!normalizedRegistrationId) {
+    throw new Error("Registration ID is required");
+  }
+
+  const registration = await getRegistrationById(normalizedRegistrationId);
+  if (!registration) {
+    throw new Error("Registration not found");
+  }
+
+  const registrationEventId = String(registration.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+  if (registrationEventId !== target.eventId) {
+    throw new Error("Registration does not belong to the selected event");
+  }
+
+  const settings = await getSettingsMap(target.eventId);
+  const steps: string[] = [];
+  const ticketSummaryText = buildTicketSummaryText(registration, settings);
+  await sendTextToOutboundTarget(target, ticketSummaryText);
+  await saveMessage(target.senderId, `[manual-ticket-summary] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
+  steps.push("summary");
+
+  const ticketPngUrl = buildTicketImageUrl(normalizedRegistrationId, "png");
+  const ticketSvgUrl = buildTicketImageUrl(normalizedRegistrationId, "svg");
+  const ticketFallbackUrl = ticketPngUrl || ticketSvgUrl;
+
+  if (ticketPngUrl) {
+    try {
+      await sendImageToOutboundTarget(target, ticketPngUrl);
+      await saveMessage(target.senderId, `[manual-ticket-image-png] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
+      steps.push("image");
+    } catch (error) {
+      console.error("Failed to send manual ticket image:", error);
+    }
+  }
+
+  if (!steps.includes("image") && ticketFallbackUrl) {
+    await sendTextToOutboundTarget(target, `ตั๋วของคุณ: ${ticketFallbackUrl}`);
+    await saveMessage(target.senderId, `[manual-ticket-link] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
+    steps.push("link");
+  }
+
+  if ((steps.includes("image") || steps.includes("link")) && String(settings.event_map_url || "").trim()) {
+    const mapUrl = String(settings.event_map_url || "").trim();
+    await sendTextToOutboundTarget(target, `แผนที่สถานที่: ${mapUrl}`);
+    await saveMessage(target.senderId, `[manual-map-link] ${mapUrl}`, "outgoing", target.eventId, target.externalId);
+    steps.push("map");
+  }
+
+  return {
+    registration_id: normalizedRegistrationId,
+    steps,
+  };
+}
+
 async function getWebChatChannel(widgetKey?: string) {
   if (!widgetKey) return null;
   const channel = await appDb.getChannelAccount("web_chat", widgetKey);
@@ -1191,8 +1384,8 @@ async function recordAudit(
   });
 }
 
-function formatTicketDate(value: string, timeZone?: string) {
-  return formatStoredDateForDisplay(value, normalizeTimeZone(timeZone));
+function formatTicketDate(startValue: string, endValue = "", timeZone?: string) {
+  return formatStoredDateRangeForDisplay(startValue, endValue, normalizeTimeZone(timeZone));
 }
 
 function tokenizeForDocumentMatch(value: string) {
@@ -1470,7 +1663,7 @@ function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<st
   const attendeeName = escapeXml(`${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-");
   const registrationId = escapeXml(reg.id);
   const location = escapeXml(String(settings.event_location || "-").trim() || "-");
-  const eventDate = escapeXml(formatTicketDate(settings.event_date || "", timeZone));
+  const eventDate = escapeXml(formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone));
   const qrSrc = escapeXml(qrDataUrl);
 
   return `<!doctype html>
@@ -1705,7 +1898,7 @@ async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: R
 function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, string>) {
   const timeZone = normalizeTimeZone(settings.event_timezone);
   const fullName = `${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-";
-  const eventDate = formatTicketDate(settings.event_date || "", timeZone);
+  const eventDate = formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone);
   const location = String(settings.event_location || "-").trim() || "-";
 
   return [
@@ -1734,7 +1927,7 @@ function renderRegistrationConfirmationSubject(
 ) {
   const fullName = `${registration.first_name || ""} ${registration.last_name || ""}`.trim();
   const eventName = String(settings.event_name || "Event").trim() || "Event";
-  const eventDate = formatTicketDate(settings.event_date || "", normalizeTimeZone(settings.event_timezone));
+  const eventDate = formatTicketDate(settings.event_date || "", settings.event_end_date || "", normalizeTimeZone(settings.event_timezone));
   const source = String(template || "").trim() || "Your registration for {{event_name}}";
 
   return source
@@ -1753,7 +1946,7 @@ function buildRegistrationConfirmationEmailContent(
   const eventName = String(settings.event_name || "Event").trim() || "Event";
   const fullName = `${registration.first_name || ""} ${registration.last_name || ""}`.trim() || "-";
   const timeZone = normalizeTimeZone(settings.event_timezone);
-  const eventDate = formatTicketDate(settings.event_date || "", timeZone);
+  const eventDate = formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone);
   const location = String(settings.event_location || "-").trim() || "-";
   const mapUrl = String(settings.event_map_url || "").trim();
   const travel = String(settings.event_travel || "").trim();
@@ -1898,7 +2091,11 @@ function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>,
   const timeZone = normalizeTimeZone(settings.event_timezone);
   const eventNameLines = wrapTextLines(settings.event_name || "Event Ticket", 18, 2).map(escapeXml);
   const locationLines = wrapTextLines(settings.event_location || "-", 18, 2).map(escapeXml);
-  const eventDateLines = wrapTextLines(formatTicketDate(settings.event_date || "", timeZone), 18, 2).map(escapeXml);
+  const eventDateLines = wrapTextLines(
+    formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone),
+    18,
+    2,
+  ).map(escapeXml);
   const attendeeName = escapeXml(truncateText(`${reg.first_name} ${reg.last_name}`.trim(), 16));
   const registrationId = escapeXml(reg.id);
 
@@ -4241,6 +4438,9 @@ async function startServer() {
       if (timingState.registrationStatus === "invalid") {
         return res.status(400).json({ error: "Close date must be later than or equal to open date" });
       }
+      if (timingState.eventScheduleStatus === "invalid") {
+        return res.status(400).json({ error: "Event end time must be later than or equal to the event start time" });
+      }
       await appDb.upsertSettings(body, eventId);
       await recordAudit(req, "settings.updated", "settings", eventId, {
         keys: Object.keys(body),
@@ -4529,6 +4729,75 @@ async function startServer() {
       res.json(messages);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch messages" });
+    }
+  });
+
+  app.post("/api/messages/manual-send", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const mode = String(req.body?.mode || "").trim();
+      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+      const senderId = String(req.body?.sender_id || "").trim();
+      const pageId = String(req.body?.page_id || "").trim();
+      const platform = String(req.body?.platform || "").trim();
+      const text = String(req.body?.text || "").trim();
+      const registrationId = String(req.body?.registration_id || "").trim().toUpperCase();
+
+      if (mode !== "text" && mode !== "ticket") {
+        return res.status(400).json({ error: "Invalid manual send mode" });
+      }
+      if (!senderId || !pageId || !eventId) {
+        return res.status(400).json({ error: "event_id, sender_id, and page_id are required" });
+      }
+      if (mode === "text" && !text) {
+        return res.status(400).json({ error: "Manual reply text is required" });
+      }
+      if (mode === "ticket" && !registrationId) {
+        return res.status(400).json({ error: "Registration ID is required to resend a ticket" });
+      }
+
+      const target = await resolveManualOutboundTarget(eventId, senderId, pageId, platform);
+      const result =
+        mode === "text"
+          ? await sendManualOutboundText(target, text)
+          : await resendTicketArtifactsToOutboundTarget(target, registrationId);
+
+      await recordAudit(
+        req,
+        mode === "text" ? "message.manual_sent" : "registration.ticket_resent_manual",
+        mode === "text" ? "message" : "registration",
+        mode === "text" ? senderId : registrationId,
+        {
+          event_id: eventId,
+          sender_id: senderId,
+          page_id: pageId,
+          platform: target.platform,
+          ...(mode === "text" ? { text_preview: text.slice(0, 180) } : { registration_id: registrationId }),
+          ...result,
+        },
+      );
+
+      return res.json({
+        status: "ok",
+        mode,
+        platform: target.platform,
+        ...result,
+      });
+    } catch (error) {
+      console.error("Failed to send manual override message:", error);
+      const message = error instanceof Error ? error.message : "Failed to send manual override message";
+      const lower = message.toLowerCase();
+      const statusCode =
+        lower.includes("required")
+        || lower.includes("invalid")
+        || lower.includes("not supported")
+        || lower.includes("not linked")
+        || lower.includes("not found")
+        || lower.includes("does not belong")
+          ? 400
+          : 500;
+      return res.status(statusCode).json({
+        error: message,
+      });
     }
   });
 

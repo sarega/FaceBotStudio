@@ -115,7 +115,7 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       },
       {
         label: "Lifecycle",
-        body: "Manual status still matters, but the effective status can auto-close once the event date is already in the past.",
+        body: "Manual status still matters, but the effective status can auto-close once the event end time is already in the past, or the start time if no end is set.",
       },
     ],
   },
@@ -371,12 +371,52 @@ function formatInTimeZoneForUi(date: Date, timeZone: string) {
   }).format(date);
 }
 
+function formatDatePartsInTimeZoneForUi(date: Date, timeZone: string) {
+  const formatted = new Intl.DateTimeFormat("en-GB", {
+    timeZone: normalizeTimeZoneForUi(timeZone),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const pick = (type: string) => formatted.find((part) => part.type === type)?.value || "";
+  return {
+    date: `${pick("day")}/${pick("month")}/${pick("year")}`,
+    time: `${pick("hour")}:${pick("minute")}`,
+  };
+}
+
+function formatEventDateRangeForUi(startValue: string, endValue: string, timeZone: string) {
+  const startInstant = zonedDateTimeToUtcForUi(startValue, timeZone);
+  const endInstant = zonedDateTimeToUtcForUi(endValue, timeZone);
+
+  if (startInstant && endInstant) {
+    const startParts = formatDatePartsInTimeZoneForUi(startInstant, timeZone);
+    const endParts = formatDatePartsInTimeZoneForUi(endInstant, timeZone);
+    if (startParts.date === endParts.date) {
+      return `${startParts.date}, ${startParts.time} -> ${endParts.time}`;
+    }
+    return `${formatInTimeZoneForUi(startInstant, timeZone)} -> ${formatInTimeZoneForUi(endInstant, timeZone)}`;
+  }
+
+  if (startInstant) return formatInTimeZoneForUi(startInstant, timeZone);
+  if (endInstant) return formatInTimeZoneForUi(endInstant, timeZone);
+  return startValue || endValue || "-";
+}
+
 function describeEventTiming(settings: Settings) {
   const timeZone = normalizeTimeZoneForUi(settings.event_timezone);
   const now = new Date();
   const start = zonedDateTimeToUtcForUi(settings.reg_start || "", timeZone);
   const end = zonedDateTimeToUtcForUi(settings.reg_end || "", timeZone);
   const eventDate = zonedDateTimeToUtcForUi(settings.event_date || "", timeZone);
+  const eventEndDate = zonedDateTimeToUtcForUi(settings.event_end_date || "", timeZone);
+  const eventCloseDate = eventEndDate || eventDate;
+  const eventScheduleStatus =
+    eventDate && eventEndDate && eventEndDate.getTime() < eventDate.getTime() ? "invalid" : "valid";
 
   let registrationStatus: RegistrationWindowUiState = "open";
   if (start && end && end.getTime() < start.getTime()) {
@@ -387,10 +427,12 @@ function describeEventTiming(settings: Settings) {
     registrationStatus = "closed";
   }
 
-  const eventLifecycle = !eventDate
+  const eventLifecycle = !(eventDate || eventEndDate)
     ? "unscheduled"
-    : now.getTime() < eventDate.getTime()
+    : eventDate && now.getTime() < eventDate.getTime()
     ? "upcoming"
+    : eventDate && eventEndDate && eventCloseDate && now.getTime() <= eventCloseDate.getTime()
+    ? "ongoing"
     : "past";
 
   return {
@@ -400,9 +442,14 @@ function describeEventTiming(settings: Settings) {
     start,
     end,
     eventDate,
+    eventEndDate,
+    eventCloseDate,
+    eventScheduleStatus,
     startLabel: start ? formatInTimeZoneForUi(start, timeZone) : "-",
     endLabel: end ? formatInTimeZoneForUi(end, timeZone) : "-",
-    eventDateLabel: eventDate ? formatInTimeZoneForUi(eventDate, timeZone) : "-",
+    eventDateLabel: formatEventDateRangeForUi(settings.event_date || "", settings.event_end_date || "", timeZone),
+    eventEndDateLabel: eventEndDate ? formatInTimeZoneForUi(eventEndDate, timeZone) : settings.event_end_date || "-",
+    eventCloseLabel: eventCloseDate ? formatInTimeZoneForUi(eventCloseDate, timeZone) : settings.event_end_date || settings.event_date || "-",
     eventLifecycle,
     registrationStatus,
     registrationLabel:
@@ -534,7 +581,7 @@ function describeRegistrationAvailability(
     return { label: "Cancelled", tone: "rose" as const, helper: "This event was cancelled." };
   }
   if (eventStatus === "closed") {
-    return { label: "Ended", tone: "neutral" as const, helper: "The event date has already passed." };
+    return { label: "Ended", tone: "neutral" as const, helper: "The event has already ended." };
   }
   if (eventStatus === "pending") {
     return { label: "Pending", tone: "amber" as const, helper: "Launch the event before accepting registrations." };
@@ -590,7 +637,7 @@ function describeEventOperatorGuard(
     return {
       tone: "neutral" as const,
       label: "Event Ended",
-      body: "The event date has passed. Logs may still arrive, but new registration attempts should be declined.",
+      body: "The event has already ended. Logs may still arrive, but new registration attempts should be declined.",
     };
   }
   if (eventStatus === "pending") {
@@ -650,7 +697,7 @@ function describeCheckinOperatorGuard(
     return {
       tone: "neutral" as const,
       label: "Past Event",
-      body: "The event date has passed. Check-in is usually no longer needed except for audit review.",
+      body: "The event has already ended. Check-in is usually no longer needed except for audit review.",
     };
   }
   if (registrationAvailability === "full") {
@@ -1130,6 +1177,7 @@ const INITIAL_SETTINGS: Settings = {
   event_location: "",
   event_map_url: "",
   event_date: "",
+  event_end_date: "",
   event_description: "",
   event_travel: "",
   confirmation_email_enabled: "0",
@@ -1148,6 +1196,7 @@ function getBlankEventScopedSettings() {
     event_location: "",
     event_map_url: "",
     event_date: "",
+    event_end_date: "",
     event_description: "",
     event_travel: "",
     confirmation_email_enabled: "0",
@@ -1164,6 +1213,7 @@ function getBlankEventScopedSettings() {
     | "event_location"
     | "event_map_url"
     | "event_date"
+    | "event_end_date"
     | "event_description"
     | "event_travel"
     | "confirmation_email_enabled"
@@ -1180,6 +1230,7 @@ const EVENT_DETAIL_SETTINGS_KEYS = [
   "event_location",
   "event_map_url",
   "event_date",
+  "event_end_date",
   "event_description",
   "event_travel",
   "confirmation_email_enabled",
@@ -1215,6 +1266,7 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
     event_location: typeof data.event_location === "string" ? data.event_location : "",
     event_map_url: typeof data.event_map_url === "string" ? data.event_map_url : "",
     event_date: normalizeDateTimeLocalValue(typeof data.event_date === "string" ? data.event_date : ""),
+    event_end_date: normalizeDateTimeLocalValue(typeof data.event_end_date === "string" ? data.event_end_date : ""),
     event_description: typeof data.event_description === "string" ? data.event_description : "",
     event_travel: typeof data.event_travel === "string" ? data.event_travel : "",
     confirmation_email_enabled:
@@ -1353,6 +1405,10 @@ export default function App() {
   const [documentListQuery, setDocumentListQuery] = useState("");
   const [logListQuery, setLogListQuery] = useState("");
   const [selectedLogMessageId, setSelectedLogMessageId] = useState<number | null>(null);
+  const [manualOverrideText, setManualOverrideText] = useState("");
+  const [manualOverrideRegistrationId, setManualOverrideRegistrationId] = useState("");
+  const [manualOverrideAction, setManualOverrideAction] = useState<"" | "text" | "ticket">("");
+  const [manualOverrideMessage, setManualOverrideMessage] = useState("");
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
@@ -1402,6 +1458,7 @@ export default function App() {
   const canManageUsers = role === "owner" || role === "admin";
   const canChangeRoles = role === "owner" || role === "admin";
   const canManageCheckinAccess = role === "owner" || role === "admin" || role === "operator";
+  const canSendManualOverride = role === "owner" || role === "admin" || role === "operator";
   const canManageTargetRole = (user: AuthUser) => {
     if (!authUser || user.id === authUser.id || !canChangeRoles) return false;
     if (authUser.role === "owner") return user.role !== "owner";
@@ -1657,6 +1714,28 @@ export default function App() {
         .filter((message) => message.sender_id === selectedLogMessage.sender_id)
         .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
     : [];
+  const selectedSenderRegistrations = selectedLogMessage
+    ? [...registrations]
+        .filter((registration) => registration.sender_id === selectedLogMessage.sender_id)
+        .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime())
+    : [];
+  const selectedSenderRegistrationKey = selectedSenderRegistrations.map((registration) => registration.id).join("|");
+  const selectedLogChannel = selectedLogMessage?.page_id
+    ? channels.find((channel) =>
+        channel.event_id === (selectedLogMessage.event_id || selectedEventId)
+        && channel.external_id === selectedLogMessage.page_id,
+      ) || null
+    : null;
+  const manualOverrideUnavailableReason =
+    !selectedLogMessage
+      ? "Select a sender thread first."
+      : !selectedLogMessage.event_id
+      ? "This log row does not include an event context."
+      : !selectedLogMessage.page_id
+      ? "This log row does not include a channel destination."
+      : selectedLogChannel?.platform === "web_chat"
+      ? "Manual push is not supported for web chat."
+      : "";
   const globalEventResults = deferredGlobalSearchQuery
     ? events.filter((event) =>
         matchesSearchQuery(deferredGlobalSearchQuery, [
@@ -2196,6 +2275,16 @@ export default function App() {
   }, [filteredMessages, selectedLogMessageId]);
 
   useEffect(() => {
+    setManualOverrideText("");
+    setManualOverrideMessage("");
+    setManualOverrideRegistrationId((current) =>
+      selectedSenderRegistrations.some((registration) => registration.id === current)
+        ? current
+        : selectedSenderRegistrations[0]?.id || "",
+    );
+  }, [selectedLogMessage?.id, selectedSenderRegistrationKey]);
+
+  useEffect(() => {
     const allowedTabs = [
       ...(canEditSettings ? ["event"] : []),
       ...(canEditSettings ? ["design"] : []),
@@ -2480,9 +2569,79 @@ export default function App() {
     }
   };
 
+  const sendManualOverride = async (mode: "text" | "ticket") => {
+    if (!selectedLogMessage) {
+      setManualOverrideMessage("Select a log row first");
+      return false;
+    }
+    if (manualOverrideUnavailableReason) {
+      setManualOverrideMessage(manualOverrideUnavailableReason);
+      return false;
+    }
+
+    const eventId = String(selectedLogMessage.event_id || selectedEventId).trim();
+    const pageId = String(selectedLogMessage.page_id || "").trim();
+    const senderId = String(selectedLogMessage.sender_id || "").trim();
+    const text = manualOverrideText.trim();
+    const registrationId = manualOverrideRegistrationId.trim().toUpperCase();
+
+    if (!eventId || !pageId || !senderId) {
+      setManualOverrideMessage("This sender thread is missing event or channel information");
+      return false;
+    }
+    if (mode === "text" && !text) {
+      setManualOverrideMessage("Enter a manual reply before sending");
+      return false;
+    }
+    if (mode === "ticket" && !registrationId) {
+      setManualOverrideMessage("Select a registration before resending the ticket");
+      return false;
+    }
+
+    setManualOverrideAction(mode);
+    setManualOverrideMessage("");
+    try {
+      const res = await apiFetch("/api/messages/manual-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          event_id: eventId,
+          sender_id: senderId,
+          page_id: pageId,
+          platform: selectedLogChannel?.platform || undefined,
+          text,
+          registration_id: registrationId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as any)?.error || "Failed to send manual override");
+      }
+      setSelectedLogMessageId(null);
+      if (mode === "text") {
+        setManualOverrideText("");
+      }
+      await fetchMessages(eventId);
+      setManualOverrideMessage(
+        mode === "text"
+          ? "Manual reply sent to the live chat"
+          : "Ticket resent to the selected sender",
+      );
+      return true;
+    } catch (err) {
+      console.error("Failed to send manual override", err);
+      setManualOverrideMessage(err instanceof Error ? err.message : "Failed to send manual override");
+      return false;
+    } finally {
+      setManualOverrideAction("");
+    }
+  };
+
   const normalizeSettingsForSave = (source: Settings): Settings => ({
     ...source,
     event_date: normalizeDateTimeLocalValue(source.event_date),
+    event_end_date: normalizeDateTimeLocalValue(source.event_end_date),
     reg_start: normalizeDateTimeLocalValue(source.reg_start),
     reg_end: normalizeDateTimeLocalValue(source.reg_end),
   });
@@ -2587,6 +2746,10 @@ export default function App() {
       setSettingsMessage("Close Date must be later than or equal to Open Date");
       return;
     }
+    if (timingInfo.eventScheduleStatus === "invalid") {
+      setSettingsMessage("Event end time must be later than or equal to the event start time");
+      return;
+    }
 
     const saved = await saveSettingsSubset([
       "event_name",
@@ -2594,6 +2757,7 @@ export default function App() {
       "event_location",
       "event_map_url",
       "event_date",
+      "event_end_date",
       "event_description",
       "event_travel",
       "confirmation_email_enabled",
@@ -4471,7 +4635,7 @@ export default function App() {
 
                     {selectedEvent?.effective_status === "closed" && (
                       <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-                        This event is closed automatically because its event date ({timingInfo.eventDateLabel}) is already in the past compared with current system time ({timingInfo.nowLabel}).
+                        This event is closed automatically because its event window ended at {timingInfo.eventCloseLabel} compared with current system time ({timingInfo.nowLabel}).
                       </div>
                     )}
 
@@ -4523,11 +4687,21 @@ export default function App() {
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Date & Time</label>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Starts</label>
                         <input
                           type="datetime-local"
                           value={settings.event_date}
                           onChange={(e) => setSettings({ ...settings, event_date: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Ends (Optional)</label>
+                        <input
+                          type="datetime-local"
+                          value={settings.event_end_date}
+                          onChange={(e) => setSettings({ ...settings, event_end_date: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
@@ -4565,7 +4739,7 @@ export default function App() {
                         </h3>
                         <div className="sm:hidden">
                           <HelpPopover label="Open note for Registration Rules">
-                            Registration availability depends on the event time zone, the open and close range, and the event date itself.
+                            Registration availability depends on the event time zone, the open and close range, and the event window. If you add an optional end time, the event closes only after that end time.
                           </HelpPopover>
                         </div>
                       </div>
@@ -4583,7 +4757,7 @@ export default function App() {
                         )}
                         <div className="hidden sm:block">
                           <HelpPopover label="Open note for Registration Rules">
-                            Registration availability depends on the event time zone, the open and close range, and the event date itself.
+                            Registration availability depends on the event time zone, the open and close range, and the event window. If you add an optional end time, the event closes only after that end time.
                           </HelpPopover>
                         </div>
                       </div>
@@ -4624,7 +4798,7 @@ export default function App() {
                         <p className="mt-1 text-[11px] text-slate-500">{timingInfo.timeZone}</p>
                       </div>
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Event Date</p>
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Event Window</p>
                         <p className="mt-1 text-xs text-slate-700">{timingInfo.eventDateLabel}</p>
                       </div>
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
@@ -4676,6 +4850,11 @@ export default function App() {
                     {timingInfo.registrationStatus === "invalid" && (
                       <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
                         Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
+                      </div>
+                    )}
+                    {timingInfo.eventScheduleStatus === "invalid" && (
+                      <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
+                        Event end time is earlier than Event start time. Fix the event window first so the schedule is clear across chat, tickets, and email.
                       </div>
                     )}
                     {registrationCapacity.isFull && (
@@ -5801,7 +5980,7 @@ export default function App() {
                           timestamp={reg.timestamp}
                           eventName={settings.event_name}
                           eventLocation={settings.event_location}
-                          eventDate={settings.event_date}
+                          eventDateLabel={timingInfo.eventDateLabel}
                           eventMapUrl={settings.event_map_url}
                         />
                       </motion.div>
@@ -6119,7 +6298,7 @@ export default function App() {
                             timestamp={selectedRegistration.timestamp}
                             eventName={settings.event_name}
                             eventLocation={settings.event_location}
-                            eventDate={settings.event_date}
+                            eventDateLabel={timingInfo.eventDateLabel}
                             eventMapUrl={settings.event_map_url}
                           />
                         </div>
@@ -6858,6 +7037,117 @@ export default function App() {
                               );
                             })()}
                           </div>
+
+                          {canSendManualOverride && (
+                            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Manual Override</p>
+                                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                                    Send a human reply or resend a ticket directly to this sender without waiting for the bot.
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {selectedLogChannel && (
+                                    <StatusBadge tone="neutral">{selectedLogChannel.platform_label || selectedLogChannel.platform}</StatusBadge>
+                                  )}
+                                  {manualOverrideUnavailableReason ? (
+                                    <StatusBadge tone="amber">unavailable</StatusBadge>
+                                  ) : (
+                                    <StatusBadge tone="emerald">ready</StatusBadge>
+                                  )}
+                                </div>
+                              </div>
+
+                              {manualOverrideUnavailableReason ? (
+                                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                                  {manualOverrideUnavailableReason}
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="mt-4 space-y-2">
+                                    <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                                      Manual Reply
+                                    </label>
+                                    <textarea
+                                      value={manualOverrideText}
+                                      onChange={(event) => setManualOverrideText(event.target.value)}
+                                      placeholder="Type the operator reply that should be sent to this chat."
+                                      rows={4}
+                                      className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm leading-relaxed text-slate-700 outline-none transition focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    <div className="flex justify-end">
+                                      <ActionButton
+                                        tone="blue"
+                                        active
+                                        onClick={() => void sendManualOverride("text")}
+                                        disabled={manualOverrideAction !== "" || !manualOverrideText.trim()}
+                                      >
+                                        <Send className="h-4 w-4" />
+                                        {manualOverrideAction === "text" ? "Sending..." : "Send Reply"}
+                                      </ActionButton>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                      <div>
+                                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Resend Ticket</p>
+                                        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                                          Use this after a registration already exists for the sender.
+                                        </p>
+                                      </div>
+                                      <StatusBadge tone="neutral">
+                                        {selectedSenderRegistrations.length} registration{selectedSenderRegistrations.length === 1 ? "" : "s"}
+                                      </StatusBadge>
+                                    </div>
+                                    {selectedSenderRegistrations.length > 0 ? (
+                                      <div className="mt-3 flex flex-col gap-3 lg:flex-row">
+                                        <select
+                                          value={manualOverrideRegistrationId}
+                                          onChange={(event) => setManualOverrideRegistrationId(event.target.value)}
+                                          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        >
+                                          {selectedSenderRegistrations.map((registration) => (
+                                            <option key={registration.id} value={registration.id}>
+                                              {registration.id} · {registration.first_name} {registration.last_name} · {registration.status}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <ActionButton
+                                          tone="neutral"
+                                          onClick={() => void sendManualOverride("ticket")}
+                                          disabled={manualOverrideAction !== "" || !manualOverrideRegistrationId}
+                                        >
+                                          <RefreshCw className="h-4 w-4" />
+                                          {manualOverrideAction === "ticket" ? "Resending..." : "Resend Ticket"}
+                                        </ActionButton>
+                                      </div>
+                                    ) : (
+                                      <div className="mt-3 rounded-xl border border-dashed border-slate-200 px-3 py-3 text-xs leading-relaxed text-slate-500">
+                                        No registration for this sender is in the current event list yet. Create it in Registrations first, then resend the ticket here.
+                                      </div>
+                                    )}
+                                  </div>
+                                </>
+                              )}
+
+                              {manualOverrideMessage && (
+                                <p
+                                  className={`mt-4 text-xs ${
+                                    manualOverrideMessage.toLowerCase().includes("failed")
+                                      || manualOverrideMessage.toLowerCase().includes("error")
+                                      || manualOverrideMessage.toLowerCase().includes("required")
+                                      || manualOverrideMessage.toLowerCase().includes("not")
+                                      ? "text-rose-600"
+                                      : "text-emerald-600"
+                                  }`}
+                                >
+                                  {manualOverrideMessage}
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
