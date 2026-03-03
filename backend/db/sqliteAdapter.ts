@@ -13,6 +13,7 @@ import type {
   ChannelAccountRow,
   ChannelPlatform,
   CheckinSessionRow,
+  CreateRegistrationEmailDeliveryInput,
   CreateEventInput,
   CreateCheckinSessionInput,
   EventDocumentChunkEmbeddingRow,
@@ -32,6 +33,7 @@ import type {
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
+  RegistrationEmailDeliveryRow,
   RegistrationResult,
   RegistrationRow,
   RegistrationStatus,
@@ -121,6 +123,24 @@ function mapLlmUsageModelSummaryRow(row: Record<string, unknown>) {
     model: String(row.model || ""),
     ...mapLlmUsageTotalsRow(row),
   } satisfies LlmUsageModelSummaryRow;
+}
+
+function mapRegistrationEmailDeliveryRow(row?: Record<string, unknown>) {
+  if (!row) return null;
+  return {
+    id: String(row.id || ""),
+    registration_id: String(row.registration_id || ""),
+    event_id: String(row.event_id || ""),
+    recipient_email: String(row.recipient_email || ""),
+    kind: String(row.kind || ""),
+    provider: typeof row.provider === "string" && row.provider ? row.provider : null,
+    status: String(row.status || "queued") as RegistrationEmailDeliveryRow["status"],
+    subject: String(row.subject || ""),
+    error_message: typeof row.error_message === "string" && row.error_message ? row.error_message : null,
+    queued_at: String(row.queued_at || ""),
+    sent_at: typeof row.sent_at === "string" && row.sent_at ? row.sent_at : null,
+    updated_at: String(row.updated_at || row.queued_at || ""),
+  } satisfies RegistrationEmailDeliveryRow;
 }
 
 function mapEventBaseRow(row: Record<string, unknown>) {
@@ -260,6 +280,23 @@ export class SqliteAppDatabase implements AppDatabase {
         email TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         status TEXT DEFAULT 'registered'
+      );
+      CREATE TABLE IF NOT EXISTS registration_email_deliveries (
+        id TEXT PRIMARY KEY,
+        registration_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        recipient_email TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        provider TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        subject TEXT NOT NULL DEFAULT '',
+        error_message TEXT,
+        queued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        sent_at DATETIME,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (registration_id, kind),
+        FOREIGN KEY (registration_id) REFERENCES registrations(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS organizations (
         id TEXT PRIMARY KEY,
@@ -408,6 +445,8 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_event_created_at ON llm_usage_events (event_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_created_at ON llm_usage_events (created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_model ON llm_usage_events (provider, model);
+      CREATE INDEX IF NOT EXISTS idx_registration_email_deliveries_event_status
+        ON registration_email_deliveries (event_id, status, queued_at DESC);
       CREATE INDEX IF NOT EXISTS idx_event_settings_event_id ON event_settings (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_event_id ON facebook_pages (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_page_id ON facebook_pages (page_id);
@@ -663,6 +702,61 @@ export class SqliteAppDatabase implements AppDatabase {
     }
 
     return { statusCode: 500, content: { error: "Failed to generate unique registration ID" } };
+  }
+
+  async createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput) {
+    const registrationId = String(input.registration_id || "").trim().toUpperCase();
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const recipientEmail = String(input.recipient_email || "").trim();
+    const kind = String(input.kind || "").trim() || "confirmation";
+    const subject = String(input.subject || "").trim();
+    const provider = input.provider == null ? null : String(input.provider).trim() || null;
+    if (!registrationId || !recipientEmail || !subject) return null;
+
+    const id = generateEntityId("eml");
+    const result = this.db.prepare(
+      `INSERT OR IGNORE INTO registration_email_deliveries (
+        id, registration_id, event_id, recipient_email, kind, provider, status, subject
+      ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`,
+    ).run(id, registrationId, eventId, recipientEmail, kind, provider, subject);
+    if (!result.changes) {
+      return null;
+    }
+
+    const row = this.db.prepare(
+      `SELECT id, registration_id, event_id, recipient_email, kind, provider, status, subject, error_message, queued_at, sent_at, updated_at
+       FROM registration_email_deliveries
+       WHERE id = ?`,
+    ).get(id) as Record<string, unknown> | undefined;
+
+    return mapRegistrationEmailDeliveryRow(row);
+  }
+
+  async markRegistrationEmailDeliverySent(id: string, provider?: string | null) {
+    this.db.prepare(
+      `UPDATE registration_email_deliveries
+       SET status = 'sent',
+           provider = COALESCE(?, provider),
+           error_message = NULL,
+           sent_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(provider == null ? null : String(provider).trim() || null, String(id || "").trim());
+  }
+
+  async markRegistrationEmailDeliveryFailed(id: string, errorMessage: string, provider?: string | null) {
+    this.db.prepare(
+      `UPDATE registration_email_deliveries
+       SET status = 'failed',
+           provider = COALESCE(?, provider),
+           error_message = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(
+      provider == null ? null : String(provider).trim() || null,
+      String(errorMessage || "").trim().slice(0, 1000),
+      String(id || "").trim(),
+    );
   }
 
   async cancelRegistration(id: unknown): Promise<RegistrationResult> {

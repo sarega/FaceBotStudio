@@ -16,6 +16,7 @@ import type {
   ChannelAccountRow,
   ChannelPlatform,
   CheckinSessionRow,
+  CreateRegistrationEmailDeliveryInput,
   CreateEventInput,
   CreateCheckinSessionInput,
   EventDocumentChunkEmbeddingRow,
@@ -35,6 +36,7 @@ import type {
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
+  RegistrationEmailDeliveryRow,
   RegistrationResult,
   RegistrationRow,
   RegistrationStatus,
@@ -118,6 +120,24 @@ function mapLlmUsageModelSummaryRow(row: Record<string, unknown>) {
     model: String(row.model || ""),
     ...mapLlmUsageTotalsRow(row),
   } satisfies LlmUsageModelSummaryRow;
+}
+
+function mapRegistrationEmailDeliveryRow(row?: Record<string, unknown>) {
+  if (!row) return null;
+  return {
+    id: String(row.id || ""),
+    registration_id: String(row.registration_id || ""),
+    event_id: String(row.event_id || ""),
+    recipient_email: String(row.recipient_email || ""),
+    kind: String(row.kind || ""),
+    provider: typeof row.provider === "string" && row.provider ? row.provider : null,
+    status: String(row.status || "queued") as RegistrationEmailDeliveryRow["status"],
+    subject: String(row.subject || ""),
+    error_message: typeof row.error_message === "string" && row.error_message ? row.error_message : null,
+    queued_at: String(row.queued_at || ""),
+    sent_at: typeof row.sent_at === "string" && row.sent_at ? row.sent_at : null,
+    updated_at: String(row.updated_at || row.queued_at || ""),
+  } satisfies RegistrationEmailDeliveryRow;
 }
 
 function mapEventBaseRow(row: Record<string, unknown>) {
@@ -471,6 +491,56 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     return { statusCode: 500, content: { error: "Failed to generate unique registration ID" } };
+  }
+
+  async createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput) {
+    const registrationId = String(input.registration_id || "").trim().toUpperCase();
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const recipientEmail = String(input.recipient_email || "").trim();
+    const kind = String(input.kind || "").trim() || "confirmation";
+    const subject = String(input.subject || "").trim();
+    const provider = input.provider == null ? null : String(input.provider).trim() || null;
+    if (!registrationId || !recipientEmail || !subject) return null;
+
+    const result = await this.pool.query<Record<string, unknown>>(
+      `INSERT INTO registration_email_deliveries (
+        id, registration_id, event_id, recipient_email, kind, provider, status, subject
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7)
+      ON CONFLICT (registration_id, kind) DO NOTHING
+      RETURNING id, registration_id, event_id, recipient_email, kind, provider, status, subject, error_message, queued_at::text, sent_at::text, updated_at::text`,
+      [generateEntityId("eml"), registrationId, eventId, recipientEmail, kind, provider, subject],
+    );
+
+    return mapRegistrationEmailDeliveryRow(result.rows[0]);
+  }
+
+  async markRegistrationEmailDeliverySent(id: string, provider?: string | null) {
+    await this.pool.query(
+      `UPDATE registration_email_deliveries
+       SET status = 'sent',
+           provider = COALESCE($1, provider),
+           error_message = NULL,
+           sent_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [provider == null ? null : String(provider).trim() || null, String(id || "").trim()],
+    );
+  }
+
+  async markRegistrationEmailDeliveryFailed(id: string, errorMessage: string, provider?: string | null) {
+    await this.pool.query(
+      `UPDATE registration_email_deliveries
+       SET status = 'failed',
+           provider = COALESCE($1, provider),
+           error_message = $2,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [
+        provider == null ? null : String(provider).trim() || null,
+        String(errorMessage || "").trim().slice(0, 1000),
+        String(id || "").trim(),
+      ],
+    );
   }
 
   async cancelRegistration(id: unknown): Promise<RegistrationResult> {

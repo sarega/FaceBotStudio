@@ -64,7 +64,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "design" | "test" | "logs" | "settings" | "registrations" | "checkin";
+type AppTab = "event" | "design" | "test" | "logs" | "settings" | "team" | "registrations" | "checkin";
 type EventWorkspaceFilter = "all" | EventStatus;
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
@@ -170,6 +170,24 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       {
         label: "Model overrides",
         body: "Only set an event-level model override when one event truly needs different behavior. Otherwise keep the global default simple.",
+      },
+    ],
+  },
+  team: {
+    title: "Team Access Help",
+    summary: "Manage who can access the workspace, which role they have, and whether their account should remain active.",
+    points: [
+      {
+        label: "Roles",
+        body: "Use the lightest role that still fits the teammate's job. Owner and admin accounts should stay limited.",
+      },
+      {
+        label: "Access control",
+        body: "Disable access when someone should stop using the workspace but you still want to keep the account. Delete only when the account should be removed permanently.",
+      },
+      {
+        label: "Onboarding",
+        body: "Create new teammates here with a username, display name, password, and role so they can sign in immediately.",
       },
     ],
   },
@@ -837,19 +855,51 @@ function HelpPopover({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500 transition-colors hover:bg-slate-50"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={label}
       >
         <CircleHelp className="h-3.5 w-3.5" />
-        <span>Notes</span>
       </button>
       {open && (
         <div className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl">
           {children}
         </div>
       )}
+    </div>
+  );
+}
+
+function CompactGuardBar({
+  title,
+  tone,
+  label,
+  body,
+}: {
+  title: string;
+  tone: BadgeTone;
+  label: string;
+  body: ReactNode;
+}) {
+  const surfaceClasses =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50"
+      : tone === "amber"
+      ? "border-amber-200 bg-amber-50"
+      : tone === "rose"
+      ? "border-rose-200 bg-rose-50"
+      : "border-slate-200 bg-slate-50";
+
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${surfaceClasses}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-600">{title}</p>
+        <StatusBadge tone={tone}>{label}</StatusBadge>
+        <p className="basis-full text-[11px] leading-relaxed text-slate-600 sm:basis-auto sm:flex-1">
+          {body}
+        </p>
+      </div>
     </div>
   );
 }
@@ -1044,16 +1094,16 @@ function EventWorkspaceRow({
           : "border-slate-200 bg-slate-50 hover:bg-slate-100"
       } ${searchFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-slate-900">{event.name}</p>
+          <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900">{event.name}</p>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
             <span className="font-mono">{event.slug}</span>
             <span className="text-slate-300">•</span>
             <span>Updated {lastUpdatedLabel}</span>
           </div>
         </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:max-w-[48%] sm:justify-end">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end lg:pl-3">
           {event.is_default && <StatusBadge tone="neutral">default</StatusBadge>}
           {event.registration_availability && event.registration_availability !== "open" && (
             <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
@@ -1082,6 +1132,8 @@ const INITIAL_SETTINGS: Settings = {
   event_date: "",
   event_description: "",
   event_travel: "",
+  confirmation_email_enabled: "0",
+  confirmation_email_subject: "Your registration for {{event_name}}",
   reg_limit: "200",
   reg_start: "",
   reg_end: "",
@@ -1098,6 +1150,8 @@ function getBlankEventScopedSettings() {
     event_date: "",
     event_description: "",
     event_travel: "",
+    confirmation_email_enabled: "0",
+    confirmation_email_subject: "Your registration for {{event_name}}",
     reg_limit: "200",
     reg_start: "",
     reg_end: "",
@@ -1112,6 +1166,8 @@ function getBlankEventScopedSettings() {
     | "event_date"
     | "event_description"
     | "event_travel"
+    | "confirmation_email_enabled"
+    | "confirmation_email_subject"
     | "reg_limit"
     | "reg_start"
     | "reg_end"
@@ -1136,6 +1192,14 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
     event_date: normalizeDateTimeLocalValue(typeof data.event_date === "string" ? data.event_date : ""),
     event_description: typeof data.event_description === "string" ? data.event_description : "",
     event_travel: typeof data.event_travel === "string" ? data.event_travel : "",
+    confirmation_email_enabled:
+      typeof data.confirmation_email_enabled === "string" && data.confirmation_email_enabled.trim()
+        ? data.confirmation_email_enabled.trim()
+        : INITIAL_SETTINGS.confirmation_email_enabled,
+    confirmation_email_subject:
+      typeof data.confirmation_email_subject === "string" && data.confirmation_email_subject.trim()
+        ? data.confirmation_email_subject
+        : INITIAL_SETTINGS.confirmation_email_subject,
     reg_limit:
       typeof data.reg_limit === "string" && data.reg_limit.trim() ? data.reg_limit.trim() : INITIAL_SETTINGS.reg_limit,
     reg_start: normalizeDateTimeLocalValue(typeof data.reg_start === "string" ? data.reg_start : ""),
@@ -1262,6 +1326,7 @@ export default function App() {
   const [registrationListQuery, setRegistrationListQuery] = useState("");
   const [documentListQuery, setDocumentListQuery] = useState("");
   const [logListQuery, setLogListQuery] = useState("");
+  const [selectedLogMessageId, setSelectedLogMessageId] = useState<number | null>(null);
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
@@ -1276,6 +1341,7 @@ export default function App() {
   const [scannerError, setScannerError] = useState("");
   const [lastScannedValue, setLastScannedValue] = useState("");
   const [operationsMenuOpen, setOperationsMenuOpen] = useState(false);
+  const [setupMenuOpen, setSetupMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [knowledgeActionsOpen, setKnowledgeActionsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -1290,6 +1356,7 @@ export default function App() {
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
+  const setupMenuRef = useRef<HTMLDivElement | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const knowledgeActionsRef = useRef<HTMLDivElement | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -1346,12 +1413,17 @@ export default function App() {
       ? "Cmd K"
       : "Ctrl K";
   const isOperationsTab = activeTab === "registrations" || activeTab === "checkin" || activeTab === "logs";
+  const isSetupTab = activeTab === "settings" || activeTab === "team";
   const primaryTabs = [
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
     ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: "Context" }] : []),
     ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: "Test" }] : []),
-    ...(canEditSettings ? [{ id: "settings" as const, icon: SettingsIcon, label: "Setup" }] : []),
   ];
+  const setupTabs = [
+    ...(canEditSettings ? [{ id: "settings" as const, icon: SettingsIcon, label: "Workspace Setup" }] : []),
+    ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: "Team Access" }] : []),
+  ];
+  const selectedSetupTab = setupTabs.find((tab) => tab.id === activeTab) || setupTabs[0] || null;
   const operationsTabs = [
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
     ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: "Check-in" }] : []),
@@ -1548,6 +1620,15 @@ export default function App() {
       parseLineTraceMessage(message.text)?.detail,
     ]),
   );
+  const selectedLogMessage =
+    filteredMessages.find((message) => message.id === selectedLogMessageId)
+    || filteredMessages[0]
+    || null;
+  const selectedSenderThread = selectedLogMessage
+    ? [...messages]
+        .filter((message) => message.sender_id === selectedLogMessage.sender_id)
+        .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime())
+    : [];
   const globalEventResults = deferredGlobalSearchQuery
     ? events.filter((event) =>
         matchesSearchQuery(deferredGlobalSearchQuery, [
@@ -1947,6 +2028,7 @@ export default function App() {
 
   useEffect(() => {
     setOperationsMenuOpen(false);
+    setSetupMenuOpen(false);
     setUserMenuOpen(false);
     setKnowledgeActionsOpen(false);
     setGlobalSearchOpen(false);
@@ -1965,6 +2047,19 @@ export default function App() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [operationsMenuOpen]);
+
+  useEffect(() => {
+    if (!setupMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!setupMenuRef.current?.contains(event.target as Node)) {
+        setSetupMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [setupMenuOpen]);
 
   useEffect(() => {
     if (!userMenuOpen) return;
@@ -2060,6 +2155,17 @@ export default function App() {
   }, [helpOpen]);
 
   useEffect(() => {
+    if (filteredMessages.length === 0) {
+      setSelectedLogMessageId(null);
+      return;
+    }
+
+    if (!filteredMessages.some((message) => message.id === selectedLogMessageId)) {
+      setSelectedLogMessageId(filteredMessages[0]?.id ?? null);
+    }
+  }, [filteredMessages, selectedLogMessageId]);
+
+  useEffect(() => {
     const allowedTabs = [
       ...(canEditSettings ? ["event"] : []),
       ...(canEditSettings ? ["design"] : []),
@@ -2067,12 +2173,13 @@ export default function App() {
       ...(canManageRegistrations ? ["registrations", "checkin"] : []),
       ...(canViewLogs ? ["logs"] : []),
       ...(canEditSettings ? ["settings"] : []),
+      ...(canManageUsers ? ["team"] : []),
     ] as AppTab[];
 
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || "registrations");
     }
-  }, [activeTab, canEditSettings, canRunTest, canViewLogs, canManageRegistrations]);
+  }, [activeTab, canEditSettings, canRunTest, canViewLogs, canManageRegistrations, canManageUsers]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
@@ -2388,6 +2495,8 @@ export default function App() {
       "event_date",
       "event_description",
       "event_travel",
+      "confirmation_email_enabled",
+      "confirmation_email_subject",
       "reg_limit",
       "reg_start",
       "reg_end",
@@ -3779,6 +3888,171 @@ export default function App() {
   ];
   const selectedWebhookConfigItem =
     webhookConfigItems.find((item) => item.key === selectedWebhookConfigKey) || webhookConfigItems[0];
+  const teamAccessPanel = (role === "owner" || role === "admin") ? (
+    <div className="space-y-6">
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Shield className="w-5 h-5 text-blue-600" />
+              Team Access
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">Session-based admin access with roles stored in the database.</p>
+            <p className="mt-2 text-xs text-amber-700">
+              Delete removes the account permanently, revokes active sessions, and cannot be undone.
+            </p>
+          </div>
+          <button
+            onClick={fetchTeamUsers}
+            disabled={teamLoading}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white transition-colors hover:bg-slate-50 disabled:opacity-50"
+            title="Refresh users"
+          >
+            <RefreshCw className={`w-4 h-4 text-slate-500 ${teamLoading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.92fr)]">
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Current Members</p>
+              <p className="text-xs text-slate-500">Manage active accounts, roles, and emergency access changes.</p>
+            </div>
+            <StatusBadge tone="neutral">{teamUsers.length}</StatusBadge>
+          </div>
+          <div className="space-y-3">
+            {teamUsers.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                No users loaded yet.
+              </div>
+            ) : (
+              teamUsers.map((user) => (
+                <div key={user.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900">{user.display_name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{user.username}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                      <StatusBadge tone={getUserAccessTone(user.is_active)}>
+                        {user.is_active ? "active" : "disabled"}
+                      </StatusBadge>
+                      <StatusBadge tone="blue">{user.role}</StatusBadge>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                    <div>
+                      {canManageTargetRole(user) ? (
+                        <select
+                          value={user.role}
+                          onChange={(e) => handleUserRoleChange(user.id, e.target.value as UserRole)}
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          disabled={teamLoading}
+                        >
+                          {MANAGEABLE_ROLES.filter((roleOption) => authUser?.role === "owner" || (roleOption !== "owner" && roleOption !== "admin")).map((roleOption) => (
+                            <option key={roleOption} value={roleOption}>
+                              {roleOption}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-400">
+                          Role change is restricted for this account.
+                        </div>
+                      )}
+                    </div>
+                    {(canManageTargetAccess(user) || canDeleteTeamUser(user)) && (
+                      <div className="flex flex-wrap gap-2 lg:justify-end">
+                        <ActionButton
+                          onClick={() => handleUserAccessToggle(user.id, !user.is_active)}
+                          disabled={teamLoading}
+                          tone={user.is_active ? "rose" : "emerald"}
+                          className="text-sm"
+                        >
+                          {user.is_active ? "Remove Access" : "Restore Access"}
+                        </ActionButton>
+                        {canDeleteTeamUser(user) && (
+                          <ActionButton
+                            onClick={() => void handleDeleteUser(user)}
+                            disabled={teamLoading}
+                            tone="rose"
+                            className="text-sm"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            Delete Member
+                          </ActionButton>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {canManageUsers && (
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+            <div className="flex items-center gap-2">
+              <UserPlus className="w-4 h-4 text-blue-600" />
+              <p className="text-sm font-semibold text-slate-900">Add Team Member</p>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Create a new admin workspace account with a role and temporary password.</p>
+            <div className="mt-4 space-y-3">
+              <input
+                value={newUserDisplayName}
+                onChange={(e) => setNewUserDisplayName(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Display name"
+              />
+              <input
+                value={newUserUsername}
+                onChange={(e) => setNewUserUsername(e.target.value.toLowerCase())}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="username"
+              />
+              <input
+                type="password"
+                value={newUserPassword}
+                onChange={(e) => setNewUserPassword(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Temporary password"
+              />
+              <select
+                value={newUserRole}
+                onChange={(e) => setNewUserRole(e.target.value as UserRole)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {MANAGEABLE_ROLES.filter((roleOption) => roleOption !== "owner" && (role !== "admin" || roleOption !== "admin")).map((roleOption) => (
+                  <option key={roleOption} value={roleOption}>
+                    {roleOption}
+                  </option>
+                ))}
+              </select>
+              <ActionButton
+                onClick={handleCreateUser}
+                disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8}
+                tone="blue"
+                active
+                className="w-full text-sm"
+              >
+                <UserPlus className="w-4 h-4" />
+                Create User
+              </ActionButton>
+            </div>
+            {teamMessage && (
+              <p className={`mt-4 text-xs ${teamMessage.toLowerCase().includes("failed") || teamMessage.toLowerCase().includes("error") || teamMessage.toLowerCase().includes("exists") ? "text-rose-600" : "text-emerald-600"}`}>
+                {teamMessage}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div className="app-shell min-h-dvh bg-slate-50 text-slate-900 font-sans">
@@ -3911,6 +4185,46 @@ export default function App() {
                   <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
                 </button>
               ))}
+              {setupTabs.length > 0 && selectedSetupTab && (
+                <div className="relative min-w-0" ref={setupMenuRef}>
+                  <button
+                    onClick={() => setSetupMenuOpen((open) => !open)}
+                    className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
+                      isSetupTab || setupMenuOpen
+                        ? "bg-white text-blue-600 shadow-sm"
+                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                    }`}
+                    aria-expanded={setupMenuOpen}
+                    aria-haspopup="menu"
+                  >
+                    <selectedSetupTab.icon className="h-4 w-4 shrink-0" />
+                    <span className="sr-only sm:not-sr-only sm:truncate">Setup</span>
+                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {setupMenuOpen && (
+                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                      {setupTabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          onClick={() => {
+                            setActiveTab(tab.id);
+                            setSetupMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
+                            activeTab === tab.id
+                              ? "bg-blue-50 text-blue-700"
+                              : "text-slate-600 hover:bg-slate-50"
+                          }`}
+                          role="menuitem"
+                        >
+                          <tab.icon className="h-4 w-4" />
+                          <span className="font-medium">{tab.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {operationsTabs.length > 0 && (
                 <div className="relative min-w-0" ref={operationsMenuRef}>
                   <button
@@ -3981,18 +4295,18 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2 space-y-6">
+              <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
+                <div className="space-y-6 xl:col-span-7">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Bot className="w-5 h-5 text-blue-600" />
                           Event Information
                         </h3>
                         <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
                         {selectedEvent && (
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1 md:flex-nowrap">
                             <StatusBadge tone={getEventStatusTone(selectedEvent.status)}>manual {selectedEvent.status}</StatusBadge>
                             <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
                               effective {selectedEvent.effective_status}
@@ -4203,6 +4517,43 @@ export default function App() {
                         <p className="mt-1 text-xs text-slate-700">{timingInfo.endLabel}</p>
                       </div>
                     </div>
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">Confirmation Email</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Send a registration email when the attendee provides an email address. Server requires <span className="font-mono">RESEND_API_KEY</span> and <span className="font-mono">EMAIL_FROM</span>.
+                          </p>
+                        </div>
+                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={settings.confirmation_email_enabled === "1"}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                confirmation_email_enabled: e.target.checked ? "1" : "0",
+                              })
+                            }
+                          />
+                          Enable Email
+                        </label>
+                      </div>
+                      <div className="mt-3">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email Subject</label>
+                        <input
+                          value={settings.confirmation_email_subject}
+                          onChange={(e) => setSettings({ ...settings, confirmation_email_subject: e.target.value })}
+                          disabled={settings.confirmation_email_enabled !== "1"}
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          placeholder="Your registration for {{event_name}}"
+                        />
+                        <p className="mt-2 text-[11px] text-slate-500">
+                          Supported placeholders: <span className="font-mono">{"{{event_name}}"}</span>, <span className="font-mono">{"{{registration_id}}"}</span>, <span className="font-mono">{"{{full_name}}"}</span>.
+                        </p>
+                      </div>
+                    </div>
                     {timingInfo.registrationStatus === "invalid" && (
                       <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
                         Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
@@ -4221,7 +4572,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-6">
+                <div className="space-y-6 xl:col-span-5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-5 sm:p-6">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -4447,14 +4798,16 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                <div className="xl:col-span-2 space-y-6">
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+                <div className="space-y-6 xl:col-span-7">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-4 space-y-3">
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
+                        <div className="flex items-center gap-2">
                           <h2 className="text-lg font-semibold">Event Context</h2>
-                          <p className="text-sm text-slate-500">Per-event FAQ, source text, and response guidance for the selected workspace.</p>
+                          <HelpPopover label="Open note for Event Context">
+                            Per-event FAQ, source text, and response guidance for the selected workspace.
+                          </HelpPopover>
                         </div>
                         <div className="flex w-full items-stretch gap-2 sm:w-auto lg:justify-end">
                           <ActionButton
@@ -4525,9 +4878,11 @@ export default function App() {
 
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
+                      <div className="flex items-center gap-2">
                         <h3 className="text-lg font-semibold">Knowledge Documents</h3>
-                        <p className="text-sm text-slate-500">Attach reusable notes, FAQ fragments, policy text, URLs, or import text-based files into the selected event.</p>
+                        <HelpPopover label="Open note for Knowledge Documents">
+                          Attach reusable notes, FAQ fragments, policy text, URLs, or import text-based files into the selected event.
+                        </HelpPopover>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <input
@@ -4623,15 +4978,15 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-6">
+                <div className="space-y-6 xl:col-span-5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-4 flex items-start justify-between gap-3">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold">Attached Documents</h3>
-                          <StatusBadge tone="neutral">{filteredDocuments.length}</StatusBadge>
-                        </div>
-                        <p className="text-sm text-slate-500">Only active documents are used during retrieval.</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-semibold">Attached Documents</h3>
+                        <StatusBadge tone="neutral">{filteredDocuments.length}</StatusBadge>
+                        <HelpPopover label="Open note for Attached Documents">
+                          Only active documents are used during retrieval.
+                        </HelpPopover>
                       </div>
                       <button
                         onClick={() => void fetchDocuments(selectedEventId)}
@@ -4755,11 +5110,11 @@ export default function App() {
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
                     <div className="flex items-center justify-between gap-3 mb-3">
-                      <div>
+                      <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-slate-900">Chunk Inspector</h3>
-                        <p className="text-xs text-slate-500">
+                        <HelpPopover label="Open note for Chunk Inspector">
                           Preview the exact chunks available for retrieval from the selected document.
-                        </p>
+                        </HelpPopover>
                       </div>
                       {selectedDocumentForChunks && (
                         <button
@@ -4820,11 +5175,11 @@ export default function App() {
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
                     <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
+                      <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-slate-900">Embedding Preview</h3>
-                        <p className="text-xs text-slate-500">
+                        <HelpPopover label="Open note for Embedding Preview">
                           Vector-ready metadata and hook payload for the selected document.
-                        </p>
+                        </HelpPopover>
                       </div>
                       {selectedDocumentForChunks && (
                         <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -4873,7 +5228,7 @@ export default function App() {
                           เพิ่มเติมได้ถ้าต้องการ sync ออกระบบภายนอก
                         </div>
 
-                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
                           <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Document Embedding State</p>
                             <div className="space-y-2 text-sm">
@@ -5175,7 +5530,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-1 gap-3 2xl:grid-cols-2">
+                    <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Top Models In Event</p>
@@ -5286,21 +5641,12 @@ export default function App() {
               </div>
 
               <div className="border-b border-slate-100 bg-white px-3 py-3 sm:px-4">
-                <div className={`rounded-2xl border px-4 py-3 ${
-                  eventOperatorGuard.tone === "emerald"
-                    ? "border-emerald-200 bg-emerald-50"
-                    : eventOperatorGuard.tone === "amber"
-                    ? "border-amber-200 bg-amber-50"
-                    : eventOperatorGuard.tone === "rose"
-                    ? "border-rose-200 bg-rose-50"
-                    : "border-slate-200 bg-slate-50"
-                }`}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Simulation Guard</p>
-                    <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
-                  </div>
-                  <p className="mt-2 text-xs text-slate-600">{eventOperatorGuard.body}</p>
-                </div>
+                <CompactGuardBar
+                  title="Simulation Guard"
+                  tone={eventOperatorGuard.tone}
+                  label={eventOperatorGuard.label}
+                  body={eventOperatorGuard.body}
+                />
               </div>
 
               <div className="flex-1 overflow-y-auto bg-slate-50 p-4 space-y-2 sm:p-6">
@@ -5784,16 +6130,13 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className={`mb-4 rounded-2xl border px-4 py-3 ${
-                      checkinOperatorGuard.tone === "emerald"
-                        ? "border-emerald-200 bg-emerald-50"
-                        : checkinOperatorGuard.tone === "amber"
-                        ? "border-amber-200 bg-amber-50"
-                        : checkinOperatorGuard.tone === "rose"
-                        ? "border-rose-200 bg-rose-50"
-                        : "border-slate-200 bg-slate-50"
-                    }`}>
-                      <p className="text-xs text-slate-600">{checkinOperatorGuard.body}</p>
+                    <div className="mb-4">
+                      <CompactGuardBar
+                        title="Door Guard"
+                        tone={checkinOperatorGuard.tone}
+                        label={checkinOperatorGuard.label}
+                        body={checkinOperatorGuard.body}
+                      />
                     </div>
 
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -6157,21 +6500,12 @@ export default function App() {
                   </button>
                 </div>
                 <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
-                  <div className={`rounded-2xl border px-4 py-3 ${
-                    eventOperatorGuard.tone === "emerald"
-                      ? "border-emerald-200 bg-emerald-50"
-                      : eventOperatorGuard.tone === "amber"
-                      ? "border-amber-200 bg-amber-50"
-                      : eventOperatorGuard.tone === "rose"
-                      ? "border-rose-200 bg-rose-50"
-                      : "border-slate-200 bg-slate-50"
-                  }`}>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Reply Guard</p>
-                      <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-600">{eventOperatorGuard.body}</p>
-                  </div>
+                  <CompactGuardBar
+                    title="Reply Guard"
+                    tone={eventOperatorGuard.tone}
+                    label={eventOperatorGuard.label}
+                    body={eventOperatorGuard.body}
+                  />
                 </div>
                 <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
                   <div className="relative">
@@ -6247,7 +6581,7 @@ export default function App() {
                     })
                   )}
                 </div>
-                <div className="hidden overflow-x-auto md:block">
+                <div className="hidden overflow-x-auto md:block xl:hidden">
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                       <tr>
@@ -6271,7 +6605,8 @@ export default function App() {
                             <tr
                               key={msg.id}
                               id={getSearchTargetDomId("log", String(msg.id))}
-                              className={`transition-colors hover:bg-slate-50 ${
+                              onClick={() => setSelectedLogMessageId(msg.id)}
+                              className={`cursor-pointer transition-colors hover:bg-slate-50 ${
                                 isSearchFocused("log", String(msg.id)) ? "bg-blue-50" : ""
                               }`}
                             >
@@ -6311,6 +6646,138 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+                <div className="hidden xl:grid xl:min-h-[38rem] xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.95fr)]">
+                  <div className="min-w-0 border-r border-slate-100">
+                    {filteredMessages.length === 0 ? (
+                      <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
+                        {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
+                      </div>
+                    ) : (
+                      <div className="max-h-[38rem] overflow-y-auto">
+                        {filteredMessages.map((msg) => {
+                          const lineTrace = parseLineTraceMessage(msg.text);
+                          const isSelected = selectedLogMessageId === msg.id;
+                          return (
+                            <button
+                              key={msg.id}
+                              id={getSearchTargetDomId("log", String(msg.id))}
+                              onClick={() => setSelectedLogMessageId(msg.id)}
+                              className={`flex w-full items-start justify-between gap-4 border-b border-slate-100 px-6 py-4 text-left transition-colors ${
+                                isSelected
+                                  ? "bg-blue-50"
+                                  : isSearchFocused("log", String(msg.id))
+                                  ? "bg-blue-50/70"
+                                  : "hover:bg-slate-50"
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
+                                  <StatusBadge tone={lineTrace ? "amber" : msg.type === "incoming" ? "emerald" : "blue"}>
+                                    {lineTrace ? "trace" : msg.type}
+                                  </StatusBadge>
+                                  <p className="truncate text-[11px] font-mono text-blue-600">{msg.sender_id}</p>
+                                </div>
+                                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-slate-700">
+                                  {lineTrace ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status) : msg.text}
+                                </p>
+                              </div>
+                              <p className="shrink-0 whitespace-nowrap text-[11px] text-slate-500">
+                                {new Date(msg.timestamp).toLocaleString()}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 bg-slate-50/70">
+                    {!selectedLogMessage ? (
+                      <div className="flex h-full items-center justify-center px-8 text-center text-sm text-slate-400">
+                        Select a log row to inspect the full message and sender history.
+                      </div>
+                    ) : (
+                      <div className="flex h-full min-h-[38rem] flex-col">
+                        <div className="border-b border-slate-100 bg-white px-6 py-5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender History</p>
+                              <p className="mt-1 break-all font-mono text-sm text-blue-600">{selectedLogMessage.sender_id}</p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                {selectedSenderThread.length} message{selectedSenderThread.length === 1 ? "" : "s"} in the current event log
+                              </p>
+                            </div>
+                            <StatusBadge tone={parseLineTraceMessage(selectedLogMessage.text) ? "amber" : selectedLogMessage.type === "incoming" ? "emerald" : "blue"}>
+                              {parseLineTraceMessage(selectedLogMessage.text) ? "trace" : selectedLogMessage.type}
+                            </StatusBadge>
+                          </div>
+
+                          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
+                            <p className="mt-1 text-[11px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
+                            {(() => {
+                              const selectedTrace = parseLineTraceMessage(selectedLogMessage.text);
+                              if (selectedTrace) {
+                                return (
+                                  <div className="mt-3 space-y-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <StatusBadge tone="emerald">line</StatusBadge>
+                                      <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
+                                    </div>
+                                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                                      {selectedTrace.detail || "-"}
+                                    </p>
+                                  </div>
+                                );
+                              }
+                              return (
+                                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                                  {selectedLogMessage.text}
+                                </p>
+                              );
+                            })()}
+                          </div>
+                        </div>
+
+                        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
+                          {selectedSenderThread.map((threadMessage) => {
+                            const lineTrace = parseLineTraceMessage(threadMessage.text);
+                            const isCurrentMessage = threadMessage.id === selectedLogMessage.id;
+                            return (
+                              <div
+                                key={threadMessage.id}
+                                className={`rounded-2xl border px-4 py-3 ${
+                                  isCurrentMessage
+                                    ? "border-blue-200 bg-blue-50"
+                                    : lineTrace
+                                    ? "border-amber-100 bg-amber-50"
+                                    : threadMessage.type === "incoming"
+                                    ? "border-emerald-100 bg-emerald-50"
+                                    : "border-slate-200 bg-white"
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
+                                    <StatusBadge tone={lineTrace ? "amber" : threadMessage.type === "incoming" ? "emerald" : "blue"}>
+                                      {lineTrace ? "trace" : threadMessage.type}
+                                    </StatusBadge>
+                                    {isCurrentMessage && <StatusBadge tone="blue">selected</StatusBadge>}
+                                  </div>
+                                  <p className="text-[11px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
+                                </div>
+                                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                                  {lineTrace ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status) : threadMessage.text}
+                                </p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
@@ -6323,8 +6790,8 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-8"
             >
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2 space-y-6">
+              <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
+                <div className="space-y-6 xl:col-span-7">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
                     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
@@ -6443,7 +6910,7 @@ export default function App() {
 
                 </div>
 
-                <div className="space-y-6">
+                <div className="space-y-6 xl:col-span-5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-5 sm:p-6">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -6468,21 +6935,12 @@ export default function App() {
                       <p className="text-sm text-slate-500">Compact channel list for the selected event. Open details only when needed.</p>
                     </div>
 
-                    <div className={`rounded-2xl border px-4 py-3 ${
-                      eventOperatorGuard.tone === "emerald"
-                        ? "border-emerald-200 bg-emerald-50"
-                        : eventOperatorGuard.tone === "amber"
-                        ? "border-amber-200 bg-amber-50"
-                        : eventOperatorGuard.tone === "rose"
-                        ? "border-rose-200 bg-rose-50"
-                        : "border-slate-200 bg-slate-50"
-                    }`}>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-600">Channel Guard</p>
-                        <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
-                      </div>
-                      <p className="mt-2 text-xs text-slate-600">{eventOperatorGuard.body}</p>
-                    </div>
+                    <CompactGuardBar
+                      title="Channel Guard"
+                      tone={eventOperatorGuard.tone}
+                      label={eventOperatorGuard.label}
+                      body={eventOperatorGuard.body}
+                    />
 
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -6517,37 +6975,41 @@ export default function App() {
                               isSearchFocused("channel", channel.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
                             }`}
                           >
-                            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
+                            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                               <button
                                 onClick={() => toggleChannelDetails(channel.id)}
                                 className="min-w-0 text-left"
                                 aria-expanded={channelDetailsOpenIds.includes(channel.id)}
                               >
-                                <p className="text-sm font-semibold text-slate-900">{channel.display_name}</p>
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <StatusBadge tone="neutral">
-                                    {channel.platform_label || channel.platform}
-                                  </StatusBadge>
-                                  <StatusBadge tone={getConnectionStatusTone(channel.connection_status)}>
-                                    {channel.connection_status || "incomplete"}
-                                  </StatusBadge>
-                                  <StatusBadge tone={getTokenStatusTone(channel)}>
-                                    {channel.platform === "web_chat"
-                                      ? "no token needed"
-                                      : channel.has_access_token
-                                      ? "saved token"
-                                      : channel.platform === "facebook"
-                                      ? "env fallback"
-                                      : "no token"}
-                                  </StatusBadge>
-                                  <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
-                                    {channel.is_active ? "active" : "inactive"}
-                                  </StatusBadge>
-                                  {selectedEventChannelWritesLocked && !channel.is_active && <StatusBadge tone="neutral">locked</StatusBadge>}
+                                <div className="space-y-3">
+                                  <div className="space-y-1.5">
+                                    <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
+                                    <p className="text-xs font-mono text-slate-500 break-all">{channel.external_id}</p>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <StatusBadge tone="neutral">
+                                      {channel.platform_label || channel.platform}
+                                    </StatusBadge>
+                                    <StatusBadge tone={getConnectionStatusTone(channel.connection_status)}>
+                                      {channel.connection_status || "incomplete"}
+                                    </StatusBadge>
+                                    <StatusBadge tone={getTokenStatusTone(channel)}>
+                                      {channel.platform === "web_chat"
+                                        ? "no token needed"
+                                        : channel.has_access_token
+                                        ? "saved token"
+                                        : channel.platform === "facebook"
+                                        ? "env fallback"
+                                        : "no token"}
+                                    </StatusBadge>
+                                    <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
+                                      {channel.is_active ? "active" : "inactive"}
+                                    </StatusBadge>
+                                    {selectedEventChannelWritesLocked && !channel.is_active && <StatusBadge tone="neutral">locked</StatusBadge>}
+                                  </div>
                                 </div>
-                                <p className="mt-2 text-xs font-mono text-slate-500">{channel.external_id}</p>
                               </button>
-                              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap xl:justify-end">
+                              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
                                 <ActionButton
                                   onClick={() => loadChannelIntoForm(channel)}
                                   tone="blue"
@@ -6857,154 +7319,19 @@ export default function App() {
                     </div>
                   </div>
 
-                  {(role === "owner" || role === "admin") && (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-lg font-semibold flex items-center gap-2">
-                            <Shield className="w-5 h-5 text-blue-600" />
-                            Team Access
-                          </h3>
-                          <p className="text-sm text-slate-500">Session-based admin access with roles stored in the database.</p>
-                          <p className="mt-2 text-xs text-amber-700">
-                            Delete removes the account permanently, revokes active sessions, and cannot be undone.
-                          </p>
-                        </div>
-                        <button
-                          onClick={fetchTeamUsers}
-                          disabled={teamLoading}
-                          className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
-                          title="Refresh users"
-                        >
-                          <RefreshCw className={`w-4 h-4 text-slate-500 ${teamLoading ? "animate-spin" : ""}`} />
-                        </button>
-                      </div>
-
-                      <div className="space-y-2">
-                        {teamUsers.length === 0 ? (
-                          <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                            No users loaded yet.
-                          </div>
-                        ) : (
-                          teamUsers.map((user) => (
-                            <div key={user.id} className="rounded-2xl border border-slate-200 p-3 bg-slate-50 space-y-2">
-                              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <div>
-                                  <p className="text-sm font-semibold">{user.display_name}</p>
-                                  <p className="text-xs text-slate-500">{user.username}</p>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <StatusBadge tone={getUserAccessTone(user.is_active)}>
-                                    {user.is_active ? "active" : "disabled"}
-                                  </StatusBadge>
-                                  <StatusBadge tone="blue">
-                                    {user.role}
-                                  </StatusBadge>
-                                </div>
-                              </div>
-
-                              {canManageTargetRole(user) ? (
-                                <select
-                                  value={user.role}
-                                  onChange={(e) => handleUserRoleChange(user.id, e.target.value as UserRole)}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  disabled={teamLoading}
-                                >
-                                  {MANAGEABLE_ROLES.filter((roleOption) => authUser?.role === "owner" || (roleOption !== "owner" && roleOption !== "admin")).map((roleOption) => (
-                                    <option key={roleOption} value={roleOption}>
-                                      {roleOption}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <p className="text-xs text-slate-400">Role change is restricted for this account.</p>
-                              )}
-
-                              {(canManageTargetAccess(user) || canDeleteTeamUser(user)) && (
-                                <div className="flex flex-wrap justify-end gap-2">
-                                  <ActionButton
-                                    onClick={() => handleUserAccessToggle(user.id, !user.is_active)}
-                                    disabled={teamLoading}
-                                    tone={user.is_active ? "rose" : "emerald"}
-                                  >
-                                    {user.is_active ? "Remove Access" : "Restore Access"}
-                                  </ActionButton>
-                                  {canDeleteTeamUser(user) && (
-                                    <ActionButton
-                                      onClick={() => void handleDeleteUser(user)}
-                                      disabled={teamLoading}
-                                      tone="rose"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                      Delete Member
-                                    </ActionButton>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))
-                        )}
-                      </div>
-
-                      {canManageUsers && (
-                        <div className="border-t border-slate-100 pt-5 space-y-3">
-                          <div className="flex items-center gap-2">
-                            <UserPlus className="w-4 h-4 text-blue-600" />
-                            <p className="text-sm font-semibold">Add Team Member</p>
-                          </div>
-                          <input
-                            value={newUserDisplayName}
-                            onChange={(e) => setNewUserDisplayName(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Display name"
-                          />
-                          <input
-                            value={newUserUsername}
-                            onChange={(e) => setNewUserUsername(e.target.value.toLowerCase())}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="username"
-                          />
-                          <input
-                            type="password"
-                            value={newUserPassword}
-                            onChange={(e) => setNewUserPassword(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Temporary password"
-                          />
-                          <select
-                            value={newUserRole}
-                            onChange={(e) => setNewUserRole(e.target.value as UserRole)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            {MANAGEABLE_ROLES.filter((roleOption) => roleOption !== "owner" && (role !== "admin" || roleOption !== "admin")).map((roleOption) => (
-                              <option key={roleOption} value={roleOption}>
-                                {roleOption}
-                              </option>
-                            ))}
-                          </select>
-                          <ActionButton
-                            onClick={handleCreateUser}
-                            disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8}
-                            tone="blue"
-                            active
-                            className="w-full text-sm"
-                          >
-                            <UserPlus className="w-4 h-4" />
-                            Create User
-                          </ActionButton>
-                        </div>
-                      )}
-
-                      {teamMessage && (
-                        <p className={`text-xs ${teamMessage.toLowerCase().includes("failed") || teamMessage.toLowerCase().includes("error") || teamMessage.toLowerCase().includes("exists") ? "text-rose-600" : "text-emerald-600"}`}>
-                          {teamMessage}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
                 </div>
               </div>
+            </motion.div>
+          )}
+          {activeTab === "team" && (
+            <motion.div
+              key="team"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-6"
+            >
+              {teamAccessPanel}
             </motion.div>
           )}
         </AnimatePresence>

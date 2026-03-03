@@ -244,6 +244,8 @@ export interface Settings {
   event_date: string;
   event_description: string;
   event_travel: string;
+  confirmation_email_enabled: string;
+  confirmation_email_subject: string;
   reg_limit: string;
   reg_start: string;
   reg_end: string;

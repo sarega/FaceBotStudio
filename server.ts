@@ -1718,6 +1718,182 @@ function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, s
   ].join("\n");
 }
 
+function isTruthySetting(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function looksLikeEmailAddress(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function renderRegistrationConfirmationSubject(
+  template: string,
+  registration: RegistrationRow,
+  settings: Record<string, string>,
+) {
+  const fullName = `${registration.first_name || ""} ${registration.last_name || ""}`.trim();
+  const eventName = String(settings.event_name || "Event").trim() || "Event";
+  const eventDate = formatTicketDate(settings.event_date || "", normalizeTimeZone(settings.event_timezone));
+  const source = String(template || "").trim() || "Your registration for {{event_name}}";
+
+  return source
+    .replace(/\{\{\s*event_name\s*\}\}/gi, eventName)
+    .replace(/\{\{\s*registration_id\s*\}\}/gi, registration.id)
+    .replace(/\{\{\s*full_name\s*\}\}/gi, fullName || registration.id)
+    .replace(/\{\{\s*event_date\s*\}\}/gi, eventDate)
+    .trim();
+}
+
+function buildRegistrationConfirmationEmailContent(
+  registration: RegistrationRow,
+  settings: Record<string, string>,
+  subject: string,
+) {
+  const eventName = String(settings.event_name || "Event").trim() || "Event";
+  const fullName = `${registration.first_name || ""} ${registration.last_name || ""}`.trim() || "-";
+  const timeZone = normalizeTimeZone(settings.event_timezone);
+  const eventDate = formatTicketDate(settings.event_date || "", timeZone);
+  const location = String(settings.event_location || "-").trim() || "-";
+  const mapUrl = String(settings.event_map_url || "").trim();
+  const travel = String(settings.event_travel || "").trim();
+  const ticketPngUrl = buildTicketImageUrl(registration.id, "png");
+  const ticketSvgUrl = buildTicketImageUrl(registration.id, "svg");
+  const ticketUrl = ticketPngUrl || ticketSvgUrl || "";
+  const escapedSubject = escapeXml(subject);
+  const escapedEventName = escapeXml(eventName);
+  const escapedFullName = escapeXml(fullName);
+  const escapedRegistrationId = escapeXml(registration.id);
+  const escapedEventDate = escapeXml(eventDate);
+  const escapedLocation = escapeXml(location);
+  const escapedMapUrl = escapeXml(mapUrl);
+  const escapedTravel = escapeXml(travel);
+  const escapedTicketUrl = escapeXml(ticketUrl);
+
+  const textLines = [
+    "Registration confirmed",
+    "",
+    `Event: ${eventName}`,
+    `Name: ${fullName}`,
+    `Registration ID: ${registration.id}`,
+    `Date: ${eventDate}`,
+    `Location: ${location}`,
+    mapUrl ? `Map: ${mapUrl}` : "",
+    travel ? `Travel: ${travel}` : "",
+    ticketUrl ? `Ticket: ${ticketUrl}` : "",
+  ].filter(Boolean);
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+  <body style="margin:0;padding:24px;background:#f3f6fb;font-family:'Noto Sans Thai',system-ui,sans-serif;color:#0f172a;">
+    <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #dbe4f0;border-radius:24px;overflow:hidden;">
+      <div style="padding:24px 24px 18px;background:linear-gradient(135deg,#2857f0 0%,#3567f6 100%);color:#ffffff;">
+        <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;opacity:.85;">Registration confirmed</p>
+        <h1 style="margin:0;font-size:28px;line-height:1.2;">${escapedEventName}</h1>
+      </div>
+      <div style="padding:24px;">
+        <p style="margin:0 0 12px;font-size:16px;">Hello ${escapedFullName}, your registration is confirmed.</p>
+        <div style="border:1px solid #dbe4f0;border-radius:18px;padding:16px 18px;background:#f8fbff;">
+          <p style="margin:0 0 8px;"><strong>Registration ID:</strong> ${escapedRegistrationId}</p>
+          <p style="margin:0 0 8px;"><strong>Date:</strong> ${escapedEventDate}</p>
+          <p style="margin:0;"><strong>Location:</strong> ${escapedLocation}</p>
+        </div>
+        ${ticketPngUrl ? `<div style="margin-top:18px;"><img src="${escapedTicketUrl}" alt="Ticket ${escapedRegistrationId}" style="display:block;width:100%;max-width:360px;border-radius:18px;border:1px solid #dbe4f0;" /></div>` : ""}
+        ${ticketUrl ? `<p style="margin:18px 0 0;"><a href="${escapedTicketUrl}" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#2857f0;color:#ffffff;text-decoration:none;font-weight:700;">Open Ticket</a></p>` : ""}
+        ${mapUrl ? `<p style="margin:18px 0 0;"><a href="${escapedMapUrl}" style="color:#2857f0;">Open Map</a></p>` : ""}
+        ${travel ? `<p style="margin:18px 0 0;font-size:14px;line-height:1.6;color:#334155;"><strong>Travel:</strong> ${escapedTravel}</p>` : ""}
+      </div>
+      <div style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;">
+        ${escapedSubject}
+      </div>
+    </div>
+  </body>
+</html>`;
+
+  return {
+    text: textLines.join("\n"),
+    html,
+    provider: "resend",
+  };
+}
+
+async function sendResendEmail(options: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}) {
+  const apiKey = String(process.env.RESEND_API_KEY || "").trim();
+  const from = String(process.env.EMAIL_FROM || "").trim();
+  const replyTo = String(process.env.EMAIL_REPLY_TO || "").trim();
+  if (!apiKey || !from) {
+    throw new Error("Email confirmation is enabled but RESEND_API_KEY or EMAIL_FROM is missing");
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: [options.to],
+      subject: options.subject,
+      text: options.text,
+      html: options.html,
+      ...(replyTo ? { reply_to: replyTo } : {}),
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      String(payload?.message || payload?.error || payload?.name || "Failed to send email confirmation"),
+    );
+  }
+
+  return payload;
+}
+
+async function sendRegistrationConfirmationEmailIfNeeded(registrationId: string) {
+  const registration = await getRegistrationById(registrationId);
+  if (!registration) return;
+
+  const email = String(registration.email || "").trim();
+  if (!looksLikeEmailAddress(email)) return;
+
+  const eventId = String(registration.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+  const settings = await getSettingsMap(eventId);
+  if (!isTruthySetting(settings.confirmation_email_enabled)) return;
+
+  const subject = renderRegistrationConfirmationSubject(settings.confirmation_email_subject, registration, settings);
+  const delivery = await appDb.createRegistrationEmailDelivery({
+    registration_id: registration.id,
+    event_id: eventId,
+    recipient_email: email,
+    kind: "confirmation",
+    subject,
+    provider: "resend",
+  });
+  if (!delivery) return;
+
+  try {
+    const content = buildRegistrationConfirmationEmailContent(registration, settings, subject);
+    await sendResendEmail({
+      to: email,
+      subject,
+      text: content.text,
+      html: content.html,
+    });
+    await appDb.markRegistrationEmailDeliverySent(delivery.id, content.provider);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await appDb.markRegistrationEmailDeliveryFailed(delivery.id, message, "resend");
+    console.error(`Failed to send confirmation email for registration ${registration.id}:`, error);
+  }
+}
+
 function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
   const timeZone = normalizeTimeZone(settings.event_timezone);
   const eventNameLines = wrapTextLines(settings.event_name || "Event Ticket", 18, 2).map(escapeXml);
@@ -1808,7 +1984,14 @@ async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?
 }
 
 async function createRegistration(input: RegistrationInput) {
-  return appDb.createRegistration(input);
+  const result = await appDb.createRegistration(input);
+  if (result.statusCode === 200 && typeof result.content.id === "string") {
+    const registrationId = String(result.content.id).trim().toUpperCase();
+    void sendRegistrationConfirmationEmailIfNeeded(registrationId).catch((error) => {
+      console.error(`Failed to queue confirmation email for registration ${registrationId}:`, error);
+    });
+  }
+  return result;
 }
 
 async function cancelRegistration(id: unknown) {

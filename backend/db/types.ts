@@ -47,6 +47,32 @@ export interface RegistrationResult {
   content: Record<string, unknown>;
 }
 
+export type RegistrationEmailDeliveryStatus = "queued" | "sent" | "failed";
+
+export interface RegistrationEmailDeliveryRow {
+  id: string;
+  registration_id: string;
+  event_id: string;
+  recipient_email: string;
+  kind: string;
+  provider: string | null;
+  status: RegistrationEmailDeliveryStatus;
+  subject: string;
+  error_message: string | null;
+  queued_at: string;
+  sent_at: string | null;
+  updated_at: string;
+}
+
+export interface CreateRegistrationEmailDeliveryInput {
+  registration_id: string;
+  event_id: string;
+  recipient_email: string;
+  kind: string;
+  subject: string;
+  provider?: string | null;
+}
+
 export interface AuthUserRow {
   id: string;
   username: string;
@@ -282,6 +308,9 @@ export interface AppDatabase {
   listRegistrations(limit?: number, eventId?: string): Promise<RegistrationRow[]>;
   exportRegistrations(eventId?: string): Promise<RegistrationRow[]>;
   createRegistration(input: RegistrationInput): Promise<RegistrationResult>;
+  createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput): Promise<RegistrationEmailDeliveryRow | null>;
+  markRegistrationEmailDeliverySent(id: string, provider?: string | null): Promise<void>;
+  markRegistrationEmailDeliveryFailed(id: string, errorMessage: string, provider?: string | null): Promise<void>;
   cancelRegistration(id: unknown): Promise<RegistrationResult>;
   checkInRegistration(id: string): Promise<boolean>;
   updateRegistrationStatus(id: string, status: RegistrationStatus): Promise<boolean>;
