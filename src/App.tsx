@@ -423,6 +423,20 @@ function formatTraceStatusLabel(status: string) {
     .join(" ");
 }
 
+function getLogMessageDisplayText(message: Message) {
+  const lineTrace = parseLineTraceMessage(message.text);
+  if (lineTrace) {
+    return lineTrace.detail || formatTraceStatusLabel(lineTrace.status);
+  }
+
+  const auditMarker = parseInternalLogMarker(message.text);
+  if (auditMarker) {
+    return auditMarker.marker === "manual-reply" ? auditMarker.detail : auditMarker.summary;
+  }
+
+  return message.text;
+}
+
 function buildWebChatEmbedSnippet(appUrl: string, widgetKey: string) {
   const normalizedBase = String(appUrl || "").replace(/\/+$/, "");
   const safeKey = String(widgetKey || "").trim();
@@ -4682,7 +4696,7 @@ export default function App() {
 
   const logStatusMessages = [manualOverrideMessage, logRegistrationMessage].filter(Boolean);
   const logManualOverridePanel = canSendManualOverride && selectedLogMessage ? (
-    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+    <div className="log-tools-surface rounded-3xl border-2 border-amber-200 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Manual Override</p>
@@ -4708,7 +4722,7 @@ export default function App() {
         </div>
       ) : (
         <>
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender Registrations</p>
@@ -4844,7 +4858,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Resend Ticket</p>
@@ -4885,7 +4899,7 @@ export default function App() {
             )}
           </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Create Registration + Issue Ticket</p>
@@ -4966,7 +4980,7 @@ export default function App() {
       Select a log row to inspect the full message and sender history.
     </div>
   ) : (
-    <div className="flex h-full min-h-[38rem] flex-col">
+    <div className="log-inspector-surface flex h-full min-h-[38rem] flex-col">
       <div className="border-b border-slate-100 bg-white px-6 py-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -4993,49 +5007,51 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
-          <p className="mt-1 text-[11px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
-          {(() => {
-            const selectedTrace = parseLineTraceMessage(selectedLogMessage.text);
-            if (selectedTrace) {
-              return (
-                <div className="mt-3 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge tone="emerald">line</StatusBadge>
-                    <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
-                  </div>
-                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                    {selectedTrace.detail || "-"}
-                  </p>
-                </div>
-              );
-            }
-            if (selectedLogAuditMarker && selectedLogAuditMarker.marker !== "manual-reply") {
-              return (
-                <div className="mt-3 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.actor}</StatusBadge>
-                    <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.label}</StatusBadge>
-                  </div>
-                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                    {selectedLogAuditMarker.summary}
-                  </p>
-                </div>
-              );
-            }
-            return (
-              <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                {selectedLogAuditMarker?.detail || selectedLogMessage.text}
-              </p>
-            );
-          })()}
-        </div>
+        <div className="mt-4 space-y-4">
+          {logToolsOpen && logManualOverridePanel}
 
-        {logToolsOpen && logManualOverridePanel}
+          <div className="rounded-2xl border border-slate-200 bg-slate-100 p-4 shadow-sm">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
+            <p className="mt-1 text-[11px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
+            {(() => {
+              const selectedTrace = parseLineTraceMessage(selectedLogMessage.text);
+              if (selectedTrace) {
+                return (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge tone="emerald">line</StatusBadge>
+                      <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
+                    </div>
+                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                      {selectedTrace.detail || "-"}
+                    </p>
+                  </div>
+                );
+              }
+              if (selectedLogAuditMarker && selectedLogAuditMarker.marker !== "manual-reply") {
+                return (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.actor}</StatusBadge>
+                      <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.label}</StatusBadge>
+                    </div>
+                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                      {selectedLogAuditMarker.summary}
+                    </p>
+                  </div>
+                );
+              }
+              return (
+                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                  {selectedLogAuditMarker?.detail || selectedLogMessage.text}
+                </p>
+              );
+            })()}
+          </div>
+        </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
+      <div className="log-history-surface chat-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
         {selectedSenderThread.map((threadMessage) => {
           const lineTrace = parseLineTraceMessage(threadMessage.text);
           const auditMarker = lineTrace ? null : parseInternalLogMarker(threadMessage.text);
@@ -5043,7 +5059,7 @@ export default function App() {
           return (
             <div
               key={threadMessage.id}
-              className={`rounded-2xl border px-4 py-3 ${
+              className={`rounded-2xl border px-4 py-3 shadow-sm ${
                 isCurrentMessage
                   ? "border-blue-200 bg-blue-50"
                   : lineTrace
@@ -7626,7 +7642,7 @@ export default function App() {
                           {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
                         </StatusBadge>
                       )}
-                      <span>sender threads and delivery traces</span>
+                      <span>full message opens on the right</span>
                     </div>
                   </div>
                 </div>
@@ -7780,7 +7796,7 @@ export default function App() {
                 <div className="hidden border-t border-slate-100 bg-slate-50 md:block xl:hidden">
                   {logInspectorPanel}
                 </div>
-                <div className="hidden xl:grid xl:min-h-[38rem] xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.95fr)]">
+                <div className="hidden xl:grid xl:min-h-[38rem] xl:grid-cols-[minmax(0,1.05fr)_minmax(26rem,0.95fr)]">
                   <div className="min-w-0 border-r border-slate-100">
                     {filteredMessages.length === 0 ? (
                       <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
@@ -7797,7 +7813,7 @@ export default function App() {
                               key={msg.id}
                               id={getSearchTargetDomId("log", String(msg.id))}
                               onClick={() => setSelectedLogMessageId(msg.id)}
-                              className={`flex w-full items-start justify-between gap-4 border-b border-slate-100 px-6 py-4 text-left transition-colors ${
+                              className={`grid h-[6.5rem] w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-4 overflow-hidden border-b border-slate-100 px-6 py-4 text-left transition-colors ${
                                 isSelected
                                   ? "bg-blue-50"
                                   : isSearchFocused("log", String(msg.id))
@@ -7805,26 +7821,20 @@ export default function App() {
                                   : "hover:bg-slate-50"
                               }`}
                             >
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
+                              <div className="min-w-0">
+                                <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                                   {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
                                   {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
                                   <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
                                     {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                                   </StatusBadge>
-                                  <p className="truncate text-[11px] font-mono text-blue-600">{msg.sender_id}</p>
+                                  <p className="min-w-0 truncate text-[11px] font-mono text-blue-600">{msg.sender_id}</p>
                                 </div>
-                                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-slate-700">
-                                  {lineTrace
-                                    ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
-                                    : auditMarker
-                                    ? auditMarker.marker === "manual-reply"
-                                      ? auditMarker.detail
-                                      : auditMarker.summary
-                                    : msg.text}
+                                <p className="mt-2 truncate text-sm leading-6 text-slate-700">
+                                  {getLogMessageDisplayText(msg)}
                                 </p>
                               </div>
-                              <p className="shrink-0 whitespace-nowrap text-[11px] text-slate-500">
+                              <p className="shrink-0 whitespace-nowrap pl-3 text-[11px] text-slate-500">
                                 {new Date(msg.timestamp).toLocaleString()}
                               </p>
                             </button>
@@ -7834,7 +7844,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="min-w-0 bg-slate-50/70">
+                  <div className="log-inspector-surface min-w-0">
                     {logInspectorPanel}
                   </div>
                 </div>
