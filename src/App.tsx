@@ -1409,6 +1409,14 @@ export default function App() {
   const [manualOverrideRegistrationId, setManualOverrideRegistrationId] = useState("");
   const [manualOverrideAction, setManualOverrideAction] = useState<"" | "text" | "ticket">("");
   const [manualOverrideMessage, setManualOverrideMessage] = useState("");
+  const [logRegistrationDraft, setLogRegistrationDraft] = useState({
+    first_name: "",
+    last_name: "",
+    phone: "",
+    email: "",
+  });
+  const [logRegistrationAction, setLogRegistrationAction] = useState<"" | "create_ticket">("");
+  const [logRegistrationMessage, setLogRegistrationMessage] = useState("");
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
@@ -2277,11 +2285,21 @@ export default function App() {
   useEffect(() => {
     setManualOverrideText("");
     setManualOverrideMessage("");
+    setLogRegistrationMessage("");
     setManualOverrideRegistrationId((current) =>
       selectedSenderRegistrations.some((registration) => registration.id === current)
         ? current
         : selectedSenderRegistrations[0]?.id || "",
     );
+    setLogRegistrationDraft(() => {
+      const latestRegistration = selectedSenderRegistrations[0];
+      return {
+        first_name: latestRegistration?.first_name || "",
+        last_name: latestRegistration?.last_name || "",
+        phone: latestRegistration?.phone || "",
+        email: latestRegistration?.email || "",
+      };
+    });
   }, [selectedLogMessage?.id, selectedSenderRegistrationKey]);
 
   useEffect(() => {
@@ -2635,6 +2653,85 @@ export default function App() {
       return false;
     } finally {
       setManualOverrideAction("");
+    }
+  };
+
+  const createRegistrationAndIssueTicketFromLog = async () => {
+    if (!selectedLogMessage) {
+      setLogRegistrationMessage("Select a log row first");
+      return false;
+    }
+    if (manualOverrideUnavailableReason) {
+      setLogRegistrationMessage(manualOverrideUnavailableReason);
+      return false;
+    }
+
+    const eventId = String(selectedLogMessage.event_id || selectedEventId).trim();
+    const pageId = String(selectedLogMessage.page_id || "").trim();
+    const senderId = String(selectedLogMessage.sender_id || "").trim();
+    const payload = {
+      sender_id: senderId,
+      event_id: eventId,
+      first_name: logRegistrationDraft.first_name.trim(),
+      last_name: logRegistrationDraft.last_name.trim(),
+      phone: logRegistrationDraft.phone.trim(),
+      email: logRegistrationDraft.email.trim(),
+    };
+
+    if (!eventId || !pageId || !senderId) {
+      setLogRegistrationMessage("This sender thread is missing event or channel information");
+      return false;
+    }
+    if (!payload.first_name || !payload.last_name || !payload.phone) {
+      setLogRegistrationMessage("First name, last name, and phone are required");
+      return false;
+    }
+
+    setLogRegistrationAction("create_ticket");
+    setLogRegistrationMessage("");
+    try {
+      const createRes = await apiFetch("/api/registrations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const createData = await createRes.json().catch(() => ({}));
+      if (!createRes.ok) {
+        throw new Error((createData as any)?.error || "Failed to create registration");
+      }
+
+      const registrationId = String((createData as any)?.id || "").trim().toUpperCase();
+      if (!registrationId) {
+        throw new Error("Registration was created but no registration ID was returned");
+      }
+
+      const resendRes = await apiFetch("/api/messages/manual-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "ticket",
+          event_id: eventId,
+          sender_id: senderId,
+          page_id: pageId,
+          platform: selectedLogChannel?.platform || undefined,
+          registration_id: registrationId,
+        }),
+      });
+      const resendData = await resendRes.json().catch(() => ({}));
+      if (!resendRes.ok) {
+        throw new Error((resendData as any)?.error || "Registration created but ticket resend failed");
+      }
+
+      await Promise.all([fetchRegistrations(eventId), fetchEvents(), fetchMessages(eventId)]);
+      setManualOverrideRegistrationId(registrationId);
+      setLogRegistrationMessage(`Registration ${registrationId} created and ticket sent`);
+      return true;
+    } catch (err) {
+      console.error("Failed to create registration from logs", err);
+      setLogRegistrationMessage(err instanceof Error ? err.message : "Failed to create registration from logs");
+      return false;
+    } finally {
+      setLogRegistrationAction("");
     }
   };
 
@@ -4326,6 +4423,261 @@ export default function App() {
       </div>
     </div>
   ) : null;
+
+  const logStatusMessages = [manualOverrideMessage, logRegistrationMessage].filter(Boolean);
+  const logManualOverridePanel = canSendManualOverride && selectedLogMessage ? (
+    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Manual Override</p>
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            Send a human reply or create and issue a ticket directly from this sender thread.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedLogChannel && (
+            <StatusBadge tone="neutral">{selectedLogChannel.platform_label || selectedLogChannel.platform}</StatusBadge>
+          )}
+          {manualOverrideUnavailableReason ? (
+            <StatusBadge tone="amber">unavailable</StatusBadge>
+          ) : (
+            <StatusBadge tone="emerald">ready</StatusBadge>
+          )}
+        </div>
+      </div>
+
+      {manualOverrideUnavailableReason ? (
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+          {manualOverrideUnavailableReason}
+        </div>
+      ) : (
+        <>
+          <div className="mt-4 space-y-2">
+            <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+              Manual Reply
+            </label>
+            <textarea
+              value={manualOverrideText}
+              onChange={(event) => setManualOverrideText(event.target.value)}
+              placeholder="Type the operator reply that should be sent to this chat."
+              rows={4}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm leading-relaxed text-slate-700 outline-none transition focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="flex justify-end">
+              <ActionButton
+                tone="blue"
+                active
+                onClick={() => void sendManualOverride("text")}
+                disabled={manualOverrideAction !== "" || !manualOverrideText.trim()}
+              >
+                <Send className="h-4 w-4" />
+                {manualOverrideAction === "text" ? "Sending..." : "Send Reply"}
+              </ActionButton>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Resend Ticket</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Use this after a registration already exists for the sender.
+                </p>
+              </div>
+              <StatusBadge tone="neutral">
+                {selectedSenderRegistrations.length} registration{selectedSenderRegistrations.length === 1 ? "" : "s"}
+              </StatusBadge>
+            </div>
+            {selectedSenderRegistrations.length > 0 ? (
+              <div className="mt-3 flex flex-col gap-3 lg:flex-row">
+                <select
+                  value={manualOverrideRegistrationId}
+                  onChange={(event) => setManualOverrideRegistrationId(event.target.value)}
+                  className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {selectedSenderRegistrations.map((registration) => (
+                    <option key={registration.id} value={registration.id}>
+                      {registration.id} · {registration.first_name} {registration.last_name} · {registration.status}
+                    </option>
+                  ))}
+                </select>
+                <ActionButton
+                  tone="neutral"
+                  onClick={() => void sendManualOverride("ticket")}
+                  disabled={manualOverrideAction !== "" || !manualOverrideRegistrationId}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  {manualOverrideAction === "ticket" ? "Resending..." : "Resend Ticket"}
+                </ActionButton>
+              </div>
+            ) : (
+              <div className="mt-3 rounded-xl border border-dashed border-slate-200 px-3 py-3 text-xs leading-relaxed text-slate-500">
+                No registration for this sender is in the current event list yet.
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Create Registration + Issue Ticket</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Use this when the bot did not finish registration but the sender is ready to confirm now.
+                </p>
+              </div>
+              <StatusBadge tone="blue">operator flow</StatusBadge>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <input
+                value={logRegistrationDraft.first_name}
+                onChange={(event) =>
+                  setLogRegistrationDraft((current) => ({ ...current, first_name: event.target.value }))
+                }
+                placeholder="First name"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <input
+                value={logRegistrationDraft.last_name}
+                onChange={(event) =>
+                  setLogRegistrationDraft((current) => ({ ...current, last_name: event.target.value }))
+                }
+                placeholder="Last name"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <input
+                value={logRegistrationDraft.phone}
+                onChange={(event) =>
+                  setLogRegistrationDraft((current) => ({ ...current, phone: event.target.value }))
+                }
+                placeholder="Phone"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <input
+                value={logRegistrationDraft.email}
+                onChange={(event) =>
+                  setLogRegistrationDraft((current) => ({ ...current, email: event.target.value }))
+                }
+                placeholder="Email (optional)"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="mt-3 flex justify-end">
+              <ActionButton
+                tone="blue"
+                active
+                onClick={() => void createRegistrationAndIssueTicketFromLog()}
+                disabled={manualOverrideAction !== "" || logRegistrationAction !== ""}
+              >
+                <Plus className="h-4 w-4" />
+                {logRegistrationAction === "create_ticket" ? "Creating..." : "Create + Send Ticket"}
+              </ActionButton>
+            </div>
+          </div>
+        </>
+      )}
+
+      {logStatusMessages.map((message) => {
+        const lower = String(message).toLowerCase();
+        const isError =
+          lower.includes("failed")
+          || lower.includes("error")
+          || lower.includes("required")
+          || lower.includes("not")
+          || lower.includes("invalid");
+        return (
+          <p key={message} className={`mt-4 text-xs ${isError ? "text-rose-600" : "text-emerald-600"}`}>
+            {message}
+          </p>
+        );
+      })}
+    </div>
+  ) : null;
+
+  const logInspectorPanel = !selectedLogMessage ? (
+    <div className="flex h-full items-center justify-center px-8 py-12 text-center text-sm text-slate-400">
+      Select a log row to inspect the full message and sender history.
+    </div>
+  ) : (
+    <div className="flex h-full min-h-[38rem] flex-col">
+      <div className="border-b border-slate-100 bg-white px-6 py-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender History</p>
+            <p className="mt-1 break-all font-mono text-sm text-blue-600">{selectedLogMessage.sender_id}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {selectedSenderThread.length} message{selectedSenderThread.length === 1 ? "" : "s"} in the current event log
+            </p>
+          </div>
+          <StatusBadge tone={parseLineTraceMessage(selectedLogMessage.text) ? "amber" : selectedLogMessage.type === "incoming" ? "emerald" : "blue"}>
+            {parseLineTraceMessage(selectedLogMessage.text) ? "trace" : selectedLogMessage.type}
+          </StatusBadge>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
+          <p className="mt-1 text-[11px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
+          {(() => {
+            const selectedTrace = parseLineTraceMessage(selectedLogMessage.text);
+            if (selectedTrace) {
+              return (
+                <div className="mt-3 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone="emerald">line</StatusBadge>
+                    <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
+                  </div>
+                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                    {selectedTrace.detail || "-"}
+                  </p>
+                </div>
+              );
+            }
+            return (
+              <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                {selectedLogMessage.text}
+              </p>
+            );
+          })()}
+        </div>
+
+        {logManualOverridePanel}
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
+        {selectedSenderThread.map((threadMessage) => {
+          const lineTrace = parseLineTraceMessage(threadMessage.text);
+          const isCurrentMessage = threadMessage.id === selectedLogMessage.id;
+          return (
+            <div
+              key={threadMessage.id}
+              className={`rounded-2xl border px-4 py-3 ${
+                isCurrentMessage
+                  ? "border-blue-200 bg-blue-50"
+                  : lineTrace
+                  ? "border-amber-100 bg-amber-50"
+                  : threadMessage.type === "incoming"
+                  ? "border-emerald-100 bg-emerald-50"
+                  : "border-slate-200 bg-white"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
+                  <StatusBadge tone={lineTrace ? "amber" : threadMessage.type === "incoming" ? "emerald" : "blue"}>
+                    {lineTrace ? "trace" : threadMessage.type}
+                  </StatusBadge>
+                  {isCurrentMessage && <StatusBadge tone="blue">selected</StatusBadge>}
+                </div>
+                <p className="text-[11px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
+              </div>
+              <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                {lineTrace ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status) : threadMessage.text}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 
   return (
     <div className="app-shell min-h-dvh bg-slate-50 text-slate-900 font-sans">
@@ -6945,6 +7297,9 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+                <div className="hidden border-t border-slate-100 bg-slate-50 md:block xl:hidden">
+                  {logInspectorPanel}
+                </div>
                 <div className="hidden xl:grid xl:min-h-[38rem] xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.95fr)]">
                   <div className="min-w-0 border-r border-slate-100">
                     {filteredMessages.length === 0 ? (
@@ -6992,200 +7347,7 @@ export default function App() {
                   </div>
 
                   <div className="min-w-0 bg-slate-50/70">
-                    {!selectedLogMessage ? (
-                      <div className="flex h-full items-center justify-center px-8 text-center text-sm text-slate-400">
-                        Select a log row to inspect the full message and sender history.
-                      </div>
-                    ) : (
-                      <div className="flex h-full min-h-[38rem] flex-col">
-                        <div className="border-b border-slate-100 bg-white px-6 py-5">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender History</p>
-                              <p className="mt-1 break-all font-mono text-sm text-blue-600">{selectedLogMessage.sender_id}</p>
-                              <p className="mt-1 text-xs text-slate-500">
-                                {selectedSenderThread.length} message{selectedSenderThread.length === 1 ? "" : "s"} in the current event log
-                              </p>
-                            </div>
-                            <StatusBadge tone={parseLineTraceMessage(selectedLogMessage.text) ? "amber" : selectedLogMessage.type === "incoming" ? "emerald" : "blue"}>
-                              {parseLineTraceMessage(selectedLogMessage.text) ? "trace" : selectedLogMessage.type}
-                            </StatusBadge>
-                          </div>
-
-                          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
-                            <p className="mt-1 text-[11px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
-                            {(() => {
-                              const selectedTrace = parseLineTraceMessage(selectedLogMessage.text);
-                              if (selectedTrace) {
-                                return (
-                                  <div className="mt-3 space-y-2">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <StatusBadge tone="emerald">line</StatusBadge>
-                                      <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
-                                    </div>
-                                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                                      {selectedTrace.detail || "-"}
-                                    </p>
-                                  </div>
-                                );
-                              }
-                              return (
-                                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                                  {selectedLogMessage.text}
-                                </p>
-                              );
-                            })()}
-                          </div>
-
-                          {canSendManualOverride && (
-                            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="flex flex-wrap items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Manual Override</p>
-                                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                                    Send a human reply or resend a ticket directly to this sender without waiting for the bot.
-                                  </p>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  {selectedLogChannel && (
-                                    <StatusBadge tone="neutral">{selectedLogChannel.platform_label || selectedLogChannel.platform}</StatusBadge>
-                                  )}
-                                  {manualOverrideUnavailableReason ? (
-                                    <StatusBadge tone="amber">unavailable</StatusBadge>
-                                  ) : (
-                                    <StatusBadge tone="emerald">ready</StatusBadge>
-                                  )}
-                                </div>
-                              </div>
-
-                              {manualOverrideUnavailableReason ? (
-                                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                                  {manualOverrideUnavailableReason}
-                                </div>
-                              ) : (
-                                <>
-                                  <div className="mt-4 space-y-2">
-                                    <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
-                                      Manual Reply
-                                    </label>
-                                    <textarea
-                                      value={manualOverrideText}
-                                      onChange={(event) => setManualOverrideText(event.target.value)}
-                                      placeholder="Type the operator reply that should be sent to this chat."
-                                      rows={4}
-                                      className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm leading-relaxed text-slate-700 outline-none transition focus:ring-2 focus:ring-blue-500"
-                                    />
-                                    <div className="flex justify-end">
-                                      <ActionButton
-                                        tone="blue"
-                                        active
-                                        onClick={() => void sendManualOverride("text")}
-                                        disabled={manualOverrideAction !== "" || !manualOverrideText.trim()}
-                                      >
-                                        <Send className="h-4 w-4" />
-                                        {manualOverrideAction === "text" ? "Sending..." : "Send Reply"}
-                                      </ActionButton>
-                                    </div>
-                                  </div>
-
-                                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                                    <div className="flex flex-wrap items-center justify-between gap-3">
-                                      <div>
-                                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Resend Ticket</p>
-                                        <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                                          Use this after a registration already exists for the sender.
-                                        </p>
-                                      </div>
-                                      <StatusBadge tone="neutral">
-                                        {selectedSenderRegistrations.length} registration{selectedSenderRegistrations.length === 1 ? "" : "s"}
-                                      </StatusBadge>
-                                    </div>
-                                    {selectedSenderRegistrations.length > 0 ? (
-                                      <div className="mt-3 flex flex-col gap-3 lg:flex-row">
-                                        <select
-                                          value={manualOverrideRegistrationId}
-                                          onChange={(event) => setManualOverrideRegistrationId(event.target.value)}
-                                          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                        >
-                                          {selectedSenderRegistrations.map((registration) => (
-                                            <option key={registration.id} value={registration.id}>
-                                              {registration.id} · {registration.first_name} {registration.last_name} · {registration.status}
-                                            </option>
-                                          ))}
-                                        </select>
-                                        <ActionButton
-                                          tone="neutral"
-                                          onClick={() => void sendManualOverride("ticket")}
-                                          disabled={manualOverrideAction !== "" || !manualOverrideRegistrationId}
-                                        >
-                                          <RefreshCw className="h-4 w-4" />
-                                          {manualOverrideAction === "ticket" ? "Resending..." : "Resend Ticket"}
-                                        </ActionButton>
-                                      </div>
-                                    ) : (
-                                      <div className="mt-3 rounded-xl border border-dashed border-slate-200 px-3 py-3 text-xs leading-relaxed text-slate-500">
-                                        No registration for this sender is in the current event list yet. Create it in Registrations first, then resend the ticket here.
-                                      </div>
-                                    )}
-                                  </div>
-                                </>
-                              )}
-
-                              {manualOverrideMessage && (
-                                <p
-                                  className={`mt-4 text-xs ${
-                                    manualOverrideMessage.toLowerCase().includes("failed")
-                                      || manualOverrideMessage.toLowerCase().includes("error")
-                                      || manualOverrideMessage.toLowerCase().includes("required")
-                                      || manualOverrideMessage.toLowerCase().includes("not")
-                                      ? "text-rose-600"
-                                      : "text-emerald-600"
-                                  }`}
-                                >
-                                  {manualOverrideMessage}
-                                </p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
-                          {selectedSenderThread.map((threadMessage) => {
-                            const lineTrace = parseLineTraceMessage(threadMessage.text);
-                            const isCurrentMessage = threadMessage.id === selectedLogMessage.id;
-                            return (
-                              <div
-                                key={threadMessage.id}
-                                className={`rounded-2xl border px-4 py-3 ${
-                                  isCurrentMessage
-                                    ? "border-blue-200 bg-blue-50"
-                                    : lineTrace
-                                    ? "border-amber-100 bg-amber-50"
-                                    : threadMessage.type === "incoming"
-                                    ? "border-emerald-100 bg-emerald-50"
-                                    : "border-slate-200 bg-white"
-                                }`}
-                              >
-                                <div className="flex flex-wrap items-center justify-between gap-3">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                                    <StatusBadge tone={lineTrace ? "amber" : threadMessage.type === "incoming" ? "emerald" : "blue"}>
-                                      {lineTrace ? "trace" : threadMessage.type}
-                                    </StatusBadge>
-                                    {isCurrentMessage && <StatusBadge tone="blue">selected</StatusBadge>}
-                                  </div>
-                                  <p className="text-[11px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
-                                </div>
-                                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                                  {lineTrace ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status) : threadMessage.text}
-                                </p>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
+                    {logInspectorPanel}
                   </div>
                 </div>
               </div>
