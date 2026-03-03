@@ -1744,6 +1744,33 @@ export default function App() {
       : selectedLogChannel?.platform === "web_chat"
       ? "Manual push is not supported for web chat."
       : "";
+  const manualReplyTemplates = [
+    {
+      id: "ask_registration_fields",
+      label: "Ask Details",
+      text:
+        selectedEvent?.registration_availability === "full"
+          ? "ขออภัยค่ะ ตอนนี้ที่นั่งของงานนี้เต็มแล้ว หากมีที่ว่างเพิ่มแพรวจะแจ้งให้ทราบนะคะ"
+          : "หากต้องการลงทะเบียน กรุณาส่งชื่อ นามสกุล และเบอร์โทรศัพท์ได้เลยค่ะ ถ้ามีอีเมลสามารถแนบมาเพิ่มได้ค่ะ",
+    },
+    {
+      id: "reviewing",
+      label: "Reviewing",
+      text: "รับข้อมูลแล้วค่ะ เดี๋ยวแพรวตรวจสอบและยืนยันให้ในข้อความถัดไปนะคะ",
+    },
+    {
+      id: "ticket_sent",
+      label: "Ticket Sent",
+      text: "ส่งตั๋วให้แล้วนะคะ กรุณาตรวจสอบในแชตนี้ได้เลยค่ะ หากเปิดไม่ได้แจ้งแพรวได้ทันทีค่ะ",
+    },
+    {
+      id: "map_followup",
+      label: "Map Follow-up",
+      text: settings.event_map_url
+        ? `แผนที่สถานที่อยู่ที่นี่ค่ะ ${settings.event_map_url}`
+        : "เดี๋ยวแพรวจะแนบแผนที่สถานที่ให้ในข้อความถัดไปนะคะ",
+    },
+  ];
   const globalEventResults = deferredGlobalSearchQuery
     ? events.filter((event) =>
         matchesSearchQuery(deferredGlobalSearchQuery, [
@@ -2654,6 +2681,17 @@ export default function App() {
     } finally {
       setManualOverrideAction("");
     }
+  };
+
+  const applyManualReplyTemplate = (templateText: string) => {
+    const trimmedTemplate = templateText.trim();
+    if (!trimmedTemplate) return;
+    setManualOverrideText((current) => {
+      const trimmedCurrent = current.trim();
+      if (!trimmedCurrent) return trimmedTemplate;
+      if (trimmedCurrent.includes(trimmedTemplate)) return current;
+      return `${trimmedCurrent}\n\n${trimmedTemplate}`;
+    });
   };
 
   const createRegistrationAndIssueTicketFromLog = async () => {
@@ -4452,10 +4490,75 @@ export default function App() {
         </div>
       ) : (
         <>
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender Registrations</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Existing registrations in this event for the selected sender.
+                </p>
+              </div>
+              <StatusBadge tone="neutral">
+                {selectedSenderRegistrations.length} record{selectedSenderRegistrations.length === 1 ? "" : "s"}
+              </StatusBadge>
+            </div>
+            {selectedSenderRegistrations.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {selectedSenderRegistrations.map((registration) => (
+                  <button
+                    key={registration.id}
+                    type="button"
+                    onClick={() => setManualOverrideRegistrationId(registration.id)}
+                    className={`grid w-full gap-2 rounded-2xl border px-3 py-3 text-left transition-colors md:grid-cols-[minmax(0,1fr)_auto] ${
+                      manualOverrideRegistrationId === registration.id
+                        ? "border-blue-200 bg-blue-50"
+                        : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-mono text-xs font-semibold text-blue-600">{registration.id}</p>
+                        <StatusBadge tone={getRegistrationStatusTone(registration.status)}>
+                          {registration.status}
+                        </StatusBadge>
+                      </div>
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
+                        {registration.first_name} {registration.last_name}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {registration.phone || "-"}
+                        {registration.email ? ` • ${registration.email}` : ""}
+                      </p>
+                    </div>
+                    <p className="text-[11px] text-slate-500 md:text-right">
+                      {new Date(registration.timestamp).toLocaleString()}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 rounded-xl border border-dashed border-slate-200 px-3 py-3 text-xs leading-relaxed text-slate-500">
+                No registration for this sender is in the current event list yet.
+              </div>
+            )}
+          </div>
+
           <div className="mt-4 space-y-2">
             <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
               Manual Reply
             </label>
+            <div className="flex flex-wrap gap-2">
+              {manualReplyTemplates.map((template) => (
+                <ActionButton
+                  key={template.id}
+                  tone="neutral"
+                  className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
+                  onClick={() => applyManualReplyTemplate(template.text)}
+                >
+                  {template.label}
+                </ActionButton>
+              ))}
+            </div>
             <textarea
               value={manualOverrideText}
               onChange={(event) => setManualOverrideText(event.target.value)}
