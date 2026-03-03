@@ -4182,8 +4182,16 @@ async function startServer() {
       const eventId = String(req.body?.event_id || "").trim();
       const accessToken = String(req.body?.access_token || "").trim();
       const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
+      const originalPlatformRaw = String(req.body?.original_platform || "").trim();
+      const originalExternalId = String(req.body?.original_external_id || "").trim();
       if (!ALLOWED_CHANNEL_PLATFORMS.includes(platform)) {
         return res.status(400).json({ error: "Invalid channel platform" });
+      }
+      if (Boolean(originalPlatformRaw) !== Boolean(originalExternalId)) {
+        return res.status(400).json({ error: "original_platform and original_external_id must be provided together" });
+      }
+      if (originalPlatformRaw && !ALLOWED_CHANNEL_PLATFORMS.includes(originalPlatformRaw as ChannelPlatform)) {
+        return res.status(400).json({ error: "Invalid original channel platform" });
       }
       if (!externalId || !eventId) {
         return res.status(400).json({ error: "external_id and event_id are required" });
@@ -4194,20 +4202,47 @@ async function startServer() {
         return res.status(404).json({ error: "Event not found" });
       }
 
-      const existingChannel = await appDb.getChannelAccount(platform, externalId);
+      const originalPlatform = (originalPlatformRaw || "") as ChannelPlatform | "";
+      const originalChannel = originalPlatform
+        ? await appDb.getChannelAccount(originalPlatform, originalExternalId)
+        : undefined;
+      if (originalPlatform && !originalChannel) {
+        return res.status(404).json({ error: "Original channel not found" });
+      }
+
+      const isSameIdentityAsOriginal =
+        Boolean(originalChannel)
+        && originalChannel?.platform === platform
+        && originalChannel?.external_id === externalId;
+      const existingChannel = isSameIdentityAsOriginal
+        ? originalChannel
+        : await appDb.getChannelAccount(platform, externalId);
+      if (existingChannel && originalChannel && existingChannel.id !== originalChannel.id) {
+        return res.status(409).json({ error: "A channel with this platform and external ID already exists" });
+      }
+
+      const credentialSource =
+        originalChannel && originalChannel.platform === platform
+          ? originalChannel
+          : existingChannel && existingChannel.platform === platform
+            ? existingChannel
+            : undefined;
       const nextConfig = sanitizeChannelConfig(platform, req.body?.config);
       const mergedConfig = {
-        ...(existingChannel ? safeParseChannelConfig(existingChannel.config_json) : {}),
+        ...(credentialSource ? safeParseChannelConfig(credentialSource.config_json) : {}),
         ...nextConfig,
       };
-      const effectiveHasAccessToken = Boolean(accessToken || existingChannel?.access_token || (platform === "facebook" && process.env.PAGE_ACCESS_TOKEN));
+      const effectiveAccessToken = accessToken || String(credentialSource?.access_token || "").trim();
+      const effectiveHasAccessToken = Boolean(effectiveAccessToken || (platform === "facebook" && process.env.PAGE_ACCESS_TOKEN));
       const missingRequirements = getChannelMissingRequirements(platform, {
         hasAccessToken: effectiveHasAccessToken,
         config: mergedConfig,
       });
       const isDisableOnlyUpdate =
-        Boolean(existingChannel) &&
-        existingChannel?.event_id === eventId &&
+        Boolean(originalChannel || existingChannel) &&
+        (originalChannel || existingChannel)?.event_id === eventId &&
+        (originalChannel || existingChannel)?.platform === platform &&
+        (originalChannel || existingChannel)?.external_id === externalId &&
         isActive === false;
 
       if ((event.effective_status === "closed" || event.effective_status === "cancelled") && !isDisableOnlyUpdate) {
@@ -4223,21 +4258,30 @@ async function startServer() {
         });
       }
 
-      const channel = await appDb.upsertChannelAccount({
+      const channelInput = {
         platform,
         external_id: externalId,
         display_name: displayName || externalId,
         event_id: eventId,
-        access_token: accessToken,
+        access_token: effectiveAccessToken,
         config_json: JSON.stringify(mergedConfig),
         is_active: isActive,
-      });
+      };
+      const channel = originalChannel
+        ? await appDb.updateChannelAccount(originalChannel.platform, originalChannel.external_id, channelInput)
+        : await appDb.upsertChannelAccount(channelInput);
 
       await recordAudit(req, "channel.upserted", "channel", channel.id, {
         platform: channel.platform,
         external_id: channel.external_id,
         event_id: channel.event_id,
         is_active: channel.is_active,
+        ...(originalChannel
+          ? {
+              original_platform: originalChannel.platform,
+              original_external_id: originalChannel.external_id,
+            }
+          : {}),
       });
 
       return res.json({

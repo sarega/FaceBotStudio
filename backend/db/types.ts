@@ -345,6 +345,11 @@ export interface AppDatabase {
   listChannelAccounts(platform?: ChannelPlatform): Promise<ChannelAccountRow[]>;
   getChannelAccount(platform: ChannelPlatform, externalId: string): Promise<ChannelAccountRow | undefined>;
   upsertChannelAccount(input: UpsertChannelAccountInput): Promise<ChannelAccountRow>;
+  updateChannelAccount(
+    originalPlatform: ChannelPlatform,
+    originalExternalId: string,
+    input: UpsertChannelAccountInput,
+  ): Promise<ChannelAccountRow>;
   resolveEventIdForChannel(platform: ChannelPlatform, externalId: string): Promise<string | undefined>;
   listFacebookPages(): Promise<FacebookPageRow[]>;
   getFacebookPageByPageId(pageId: string): Promise<FacebookPageRow | undefined>;

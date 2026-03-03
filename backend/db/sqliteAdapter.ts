@@ -1284,6 +1284,50 @@ export class SqliteAppDatabase implements AppDatabase {
     return mapChannelRow(row);
   }
 
+  async updateChannelAccount(originalPlatform: ChannelPlatform, originalExternalId: string, input: UpsertChannelAccountInput) {
+    const sourcePlatform = (String(originalPlatform || "facebook").trim() || "facebook") as ChannelPlatform;
+    const sourceExternalId = String(originalExternalId || "").trim();
+    const originalRow = this.db.prepare(
+      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE platform = ? AND external_id = ? LIMIT 1",
+    ).get(sourcePlatform, sourceExternalId) as Record<string, unknown> | undefined;
+    if (!originalRow) {
+      throw new Error("Channel account not found");
+    }
+
+    const original = mapChannelRow(originalRow);
+    const platform = (String(input.platform || "facebook").trim() || "facebook") as ChannelPlatform;
+    const externalId = String(input.external_id || "").trim();
+    const displayName = String(input.display_name || "").trim() || externalId;
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const accessToken = String(input.access_token || "").trim();
+    const configJson = String(input.config_json || "{}").trim() || "{}";
+    const conflicting = this.db.prepare(
+      "SELECT id FROM channel_accounts WHERE platform = ? AND external_id = ? AND id <> ? LIMIT 1",
+    ).get(platform, externalId, original.id) as { id?: string } | undefined;
+    if (conflicting?.id) {
+      throw new Error("Channel account already exists");
+    }
+
+    this.db.prepare(
+      `UPDATE channel_accounts
+       SET platform = ?,
+           external_id = ?,
+           display_name = ?,
+           event_id = ?,
+           access_token = ?,
+           config_json = ?,
+           is_active = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(platform, externalId, displayName, eventId, accessToken, configJson, input.is_active === false ? 0 : 1, original.id);
+
+    const row = this.db.prepare(
+      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE id = ? LIMIT 1",
+    ).get(original.id) as Record<string, unknown> | undefined;
+    if (!row) throw new Error("Failed to update channel account");
+    return mapChannelRow(row);
+  }
+
   async resolveEventIdForChannel(platform: ChannelPlatform, externalId: string) {
     const row = this.db.prepare(
       "SELECT event_id FROM channel_accounts WHERE platform = ? AND external_id = ? AND is_active = 1 LIMIT 1",

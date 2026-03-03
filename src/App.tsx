@@ -1711,10 +1711,15 @@ export default function App() {
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
   const selectedChannelPlatformDefinition = channelPlatformDefinitions.find((definition) => definition.id === newChannelPlatform) || null;
   const editingChannel = channels.find((channel) => `${channel.platform}:${channel.external_id}` === editingChannelKey) || null;
+  const editingChannelKeepsCredentials = Boolean(editingChannel && editingChannel.platform === newChannelPlatform);
   const channelFormMissingRequirements = (() => {
     if (!selectedChannelPlatformDefinition) return [];
     const missing: string[] = [];
-    const hasAccessToken = Boolean(newPageAccessToken.trim() || editingChannel?.has_access_token || (newChannelPlatform === "facebook"));
+    const hasAccessToken = Boolean(
+      newPageAccessToken.trim()
+      || (editingChannelKeepsCredentials && editingChannel?.has_access_token)
+      || (newChannelPlatform === "facebook"),
+    );
     if (selectedChannelPlatformDefinition.access_token_required && !hasAccessToken) {
       missing.push(selectedChannelPlatformDefinition.access_token_label);
     }
@@ -3960,6 +3965,12 @@ export default function App() {
           access_token: accessToken,
           config: newChannelConfig,
           is_active: true,
+          ...(editingChannel
+            ? {
+                original_platform: editingChannel.platform,
+                original_external_id: editingChannel.external_id,
+              }
+            : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -8205,7 +8216,6 @@ export default function App() {
                           setNewChannelPlatform(platform);
                           setNewChannelConfig({});
                         }}
-                        disabled={Boolean(editingChannelKey)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
                       >
                         <option value="facebook">Facebook</option>
@@ -8235,7 +8245,6 @@ export default function App() {
                       <input
                         value={newPageId}
                         onChange={(e) => setNewPageId(e.target.value)}
-                        disabled={Boolean(editingChannelKey)}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
                         placeholder={selectedChannelPlatformDefinition?.external_id_placeholder || "Channel external ID"}
                       />

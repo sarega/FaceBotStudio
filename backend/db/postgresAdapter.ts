@@ -1132,6 +1132,50 @@ export class PostgresAppDatabase implements AppDatabase {
     return mapChannelRow(result.rows[0]);
   }
 
+  async updateChannelAccount(originalPlatform: ChannelPlatform, originalExternalId: string, input: UpsertChannelAccountInput) {
+    const sourcePlatform = (String(originalPlatform || "facebook").trim() || "facebook") as ChannelPlatform;
+    const sourceExternalId = String(originalExternalId || "").trim();
+    const originalResult = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM channel_accounts WHERE platform = $1 AND external_id = $2 LIMIT 1",
+      [sourcePlatform, sourceExternalId],
+    );
+    if (!originalResult.rows[0]) {
+      throw new Error("Channel account not found");
+    }
+
+    const original = mapChannelRow(originalResult.rows[0]);
+    const platform = (String(input.platform || "facebook").trim() || "facebook") as ChannelPlatform;
+    const externalId = String(input.external_id || "").trim();
+    const displayName = String(input.display_name || "").trim() || externalId;
+    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const accessToken = String(input.access_token || "").trim();
+    const configJson = String(input.config_json || "{}").trim() || "{}";
+    const conflicting = await this.pool.query<{ id: string }>(
+      "SELECT id FROM channel_accounts WHERE platform = $1 AND external_id = $2 AND id <> $3 LIMIT 1",
+      [platform, externalId, original.id],
+    );
+    if (conflicting.rows[0]?.id) {
+      throw new Error("Channel account already exists");
+    }
+
+    const result = await this.pool.query<Record<string, unknown>>(
+      `UPDATE channel_accounts
+       SET platform = $1,
+           external_id = $2,
+           display_name = $3,
+           event_id = $4,
+           access_token = $5,
+           config_json = $6,
+           is_active = $7,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $8
+       RETURNING id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at::text AS created_at, updated_at::text AS updated_at`,
+      [platform, externalId, displayName, eventId, accessToken, configJson, input.is_active === false ? false : true, original.id],
+    );
+    if (!result.rows[0]) throw new Error("Failed to update channel account");
+    return mapChannelRow(result.rows[0]);
+  }
+
   async resolveEventIdForChannel(platform: ChannelPlatform, externalId: string) {
     const result = await this.pool.query<{ event_id: string }>(
       "SELECT event_id FROM channel_accounts WHERE platform = $1 AND external_id = $2 AND is_active = TRUE LIMIT 1",
