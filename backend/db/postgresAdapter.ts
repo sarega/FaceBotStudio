@@ -18,6 +18,7 @@ import type {
   CheckinSessionRow,
   CreateEventInput,
   CreateCheckinSessionInput,
+  EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
@@ -31,6 +32,7 @@ import type {
   LlmUsageModelSummaryRow,
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
+  PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
   RegistrationResult,
@@ -71,6 +73,20 @@ function slugifyText(value: string) {
 
 function parseAuditMetadata(value: unknown) {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function parseEmbeddingVector(value: unknown) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return null;
+    const vector = parsed
+      .map((entry) => Number(entry))
+      .filter((entry) => Number.isFinite(entry));
+    return vector.length > 0 ? vector : null;
+  } catch {
+    return null;
+  }
 }
 
 function emptyLlmUsageTotals(): LlmUsageTotalsRow {
@@ -179,6 +195,15 @@ function mapEventDocumentChunkRow(row: Record<string, unknown>) {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentChunkRow;
+}
+
+function mapEventDocumentChunkEmbeddingRow(row: Record<string, unknown>) {
+  const vector = parseEmbeddingVector(row.embedding_vector);
+  return {
+    ...mapEventDocumentChunkRow(row),
+    embedding_vector: vector,
+    embedding_dimensions: Number(row.embedding_dimensions || vector?.length || 0) || null,
+  } satisfies EventDocumentChunkEmbeddingRow;
 }
 
 function mapCheckinSessionRow(row: Record<string, unknown>) {
@@ -727,6 +752,20 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows.map(mapEventDocumentChunkRow);
   }
 
+  async listEventDocumentChunkEmbeddings(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT id, document_id, event_id, chunk_index, content, content_hash, char_count, token_estimate,
+              embedding_status, embedding_model, embedded_at::text AS embedded_at,
+              embedding_vector, embedding_dimensions,
+              created_at::text AS created_at, updated_at::text AS updated_at
+       FROM event_document_chunks
+       WHERE event_id = $1
+       ORDER BY document_id ASC, chunk_index ASC`,
+      [String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID],
+    );
+    return result.rows.map(mapEventDocumentChunkEmbeddingRow);
+  }
+
   async upsertEventDocument(input: UpsertEventDocumentInput) {
     const id = String(input.id || "").trim() || generateEntityId("doc");
     const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
@@ -890,6 +929,78 @@ export class PostgresAppDatabase implements AppDatabase {
       client.release();
     }
     return result.rowCount > 0;
+  }
+
+  async saveEventDocumentChunkEmbeddings(
+    documentId: string,
+    embeddings: PersistChunkEmbeddingInput[],
+    options?: { embeddingModel?: string; embeddedAt?: Date | null },
+  ) {
+    const normalizedDocumentId = String(documentId || "").trim();
+    const embeddingModel = String(options?.embeddingModel || getEmbeddingModelName()).trim() || getEmbeddingModelName();
+    const embeddedAt = options?.embeddedAt || new Date();
+    if (!normalizedDocumentId || embeddings.length === 0) return 0;
+
+    const client = await this.pool.connect();
+    let updatedCount = 0;
+    try {
+      await client.query("BEGIN");
+      for (const item of embeddings) {
+        const vector = Array.isArray(item.embedding)
+          ? item.embedding.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry))
+          : [];
+        if (vector.length === 0) continue;
+        const result = await client.query(
+          `UPDATE event_document_chunks
+           SET embedding_vector = $1,
+               embedding_dimensions = $2,
+               embedding_status = 'ready',
+               embedding_model = $3,
+               embedded_at = $4,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5
+             AND document_id = $6
+             AND ($7::text IS NULL OR content_hash = $8)`,
+          [
+            JSON.stringify(vector),
+            vector.length,
+            embeddingModel,
+            embeddedAt,
+            String(item.chunk_id || "").trim(),
+            normalizedDocumentId,
+            item.content_hash || null,
+            item.content_hash || null,
+          ],
+        );
+        updatedCount += result.rowCount || 0;
+      }
+
+      const missingResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+         FROM event_document_chunks
+         WHERE document_id = $1
+           AND (embedding_status != 'ready' OR embedding_vector IS NULL OR COALESCE(embedding_dimensions, 0) = 0)`,
+        [normalizedDocumentId],
+      );
+      const isReady = Number.parseInt(missingResult.rows[0]?.count || "0", 10) === 0;
+      await client.query(
+        `UPDATE event_documents
+         SET embedding_status = $1,
+             embedding_model = $2,
+             last_embedded_at = $3,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $4`,
+        [isReady ? "ready" : "pending", embeddingModel, isReady ? embeddedAt : null, normalizedDocumentId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return updatedCount;
   }
 
   async listChannelAccounts(platform?: ChannelPlatform) {

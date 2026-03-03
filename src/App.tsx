@@ -1038,14 +1038,14 @@ function EventWorkspaceRow({
     <button
       id={getSearchTargetDomId("event", event.id)}
       onClick={onSelect}
-      className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+      className={`w-full overflow-hidden rounded-2xl border px-4 py-3 text-left transition-colors ${
         selected
           ? "border-blue-200 bg-blue-50 shadow-sm"
           : "border-slate-200 bg-slate-50 hover:bg-slate-100"
       } ${searchFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-slate-900">{event.name}</p>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
             <span className="font-mono">{event.slug}</span>
@@ -1053,7 +1053,7 @@ function EventWorkspaceRow({
             <span>Updated {lastUpdatedLabel}</span>
           </div>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:max-w-[48%] sm:justify-end">
           {event.is_default && <StatusBadge tone="neutral">default</StatusBadge>}
           {event.registration_availability && event.registration_availability !== "open" && (
             <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
@@ -2292,11 +2292,29 @@ export default function App() {
       }
       await fetchDocuments(eventId);
       await fetchEmbeddingPreview(documentId, eventId);
-      setEmbeddingPreviewMessage(
-        (data as any)?.queued
-          ? "Embedding job queued"
-          : "Embedding processed inline because Redis queue was unavailable",
-      );
+      const queued = Boolean((data as any)?.queued);
+      const queueMode = String((data as any)?.queue_mode || (queued ? "redis" : "inline"));
+      const workerMode = String((data as any)?.worker_mode || "embedded");
+      const embeddingModel = String((data as any)?.embedding_model || "text-embedding-3-small");
+      const localVectorStore = Boolean((data as any)?.local_vector_store);
+      const hookConfigured = Boolean((data as any)?.hook_configured);
+
+      if (queued) {
+        setEmbeddingPreviewMessage(
+          workerMode === "external"
+            ? `Embedding queued in Redis. A worker service will generate ${embeddingModel} vectors before retrieval can use them.`
+            : `Embedding queued in Redis. This service will generate ${embeddingModel} vectors in the background.`,
+        );
+      } else {
+        setEmbeddingPreviewMessage(
+          localVectorStore && queueMode === "inline"
+            ? `Embeddings were generated locally with ${embeddingModel}. Retrieval can use vector search now.`
+            : "Embedding job processed immediately.",
+        );
+      }
+      if (hookConfigured) {
+        setEmbeddingPreviewMessage((current) => `${current} External hook delivery is also enabled.`);
+      }
       return true;
     } catch (err) {
       console.error("Failed to queue embedding job", err);
@@ -4276,7 +4294,7 @@ export default function App() {
                         )}
                       </div>
 
-                      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                      <div className="flex flex-wrap gap-2">
                         {eventWorkspaceFilterOptions.map((option) => (
                           <button
                             key={option.id}
@@ -4674,7 +4692,7 @@ export default function App() {
                                   {document.is_active ? "active" : "inactive"}
                                 </StatusBadge>
                                 <StatusBadge tone={getDocumentEmbeddingTone(document.embedding_status)}>
-                                  embedding {document.embedding_status || "pending"}
+                                  embed {document.embedding_status || "pending"}
                                 </StatusBadge>
                                 {selectedDocumentForChunksId === document.id && <StatusBadge tone="blue">selected</StatusBadge>}
                               </div>
@@ -4770,7 +4788,7 @@ export default function App() {
                               {selectedDocumentForChunks.is_active ? "active" : "inactive"}
                             </StatusBadge>
                             <StatusBadge tone={getDocumentEmbeddingTone(selectedDocumentForChunks.embedding_status)}>
-                              embedding {selectedDocumentForChunks.embedding_status || "pending"}
+                              embed {selectedDocumentForChunks.embedding_status || "pending"}
                             </StatusBadge>
                           </div>
                         </div>
@@ -4801,7 +4819,7 @@ export default function App() {
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <h3 className="font-semibold text-slate-900">Embedding Preview</h3>
                         <p className="text-xs text-slate-500">
@@ -4809,12 +4827,13 @@ export default function App() {
                         </p>
                       </div>
                       {selectedDocumentForChunks && (
-                        <div className="flex items-center gap-2">
+                        <div className="flex w-full items-center gap-2 sm:w-auto">
                           <ActionButton
                             onClick={() => void handleEnqueueEmbedding(selectedDocumentForChunks.id, selectedEventId)}
                             disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
                             tone="neutral"
                             active
+                            className="min-w-0 flex-1 text-sm sm:flex-none"
                           >
                             {(embeddingPreviewLoading || embeddingEnqueueLoading) ? (
                               <RefreshCw className="w-4 h-4 animate-spin" />
@@ -4826,7 +4845,7 @@ export default function App() {
                           <button
                             onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
                             disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
-                            className="p-2 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+                            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl p-2 transition-colors hover:bg-slate-200 disabled:opacity-50"
                             title="Refresh embedding preview"
                           >
                             <RefreshCw className={`w-4 h-4 text-slate-500 ${embeddingPreviewLoading ? "animate-spin" : ""}`} />
@@ -4840,32 +4859,48 @@ export default function App() {
                         Select a document to inspect its vector-ready metadata.
                       </div>
                     ) : (
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="min-w-0 space-y-4">
+                        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-relaxed text-blue-800">
+                          หลังจาก queue สำเร็จ worker จะสร้าง embeddings และเก็บ vectors ไว้ในระบบนี้ก่อน ทำให้ retrieval ใช้ cosine similarity
+                          ร่วมกับ keyword ranking ได้จริง ส่วน
+                          {" "}
+                          <span className="font-semibold">Queue Embedding</span>
+                          {" "}
+                          ยังสามารถส่ง payload ไปที่
+                          {" "}
+                          <span className="font-mono">EMBEDDING_HOOK_URL</span>
+                          {" "}
+                          เพิ่มเติมได้ถ้าต้องการ sync ออกระบบภายนอก
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                          <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Document Embedding State</p>
                             <div className="space-y-2 text-sm">
-                              <div className="flex items-center justify-between gap-3">
+                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                 <span className="text-slate-600">Embedding model</span>
-                                <StatusBadge tone="neutral">
+                                <StatusBadge tone="neutral" className="self-start sm:self-auto">
                                   {embeddingPreview?.embedding_model || "text-embedding-3-small"}
                                 </StatusBadge>
                               </div>
-                              <div className="flex items-center justify-between gap-3">
+                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                 <span className="text-slate-600">Document status</span>
-                                <StatusBadge tone={getDocumentEmbeddingTone(embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status)}>
+                                <StatusBadge
+                                  tone={getDocumentEmbeddingTone(embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status)}
+                                  className="self-start sm:self-auto"
+                                >
                                   {embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status || "pending"}
                                 </StatusBadge>
                               </div>
-                              <div className="flex items-center justify-between gap-3">
+                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                 <span className="text-slate-600">Document content hash</span>
-                                <span className="text-xs font-mono text-slate-500 truncate max-w-[14rem] text-right">
+                                <span className="w-full min-w-0 break-all text-left text-xs font-mono text-slate-500 sm:max-w-[14rem] sm:text-right">
                                   {embeddingPreview?.document.content_hash || selectedDocumentForChunks.content_hash || "-"}
                                 </span>
                               </div>
-                              <div className="flex items-center justify-between gap-3">
+                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                 <span className="text-slate-600">Chunk count</span>
-                                <StatusBadge tone="neutral">
+                                <StatusBadge tone="neutral" className="self-start sm:self-auto">
                                   {embeddingPreview?.chunks.length ?? selectedDocumentForChunks.chunk_count ?? 0}
                                 </StatusBadge>
                               </div>
@@ -4877,9 +4912,9 @@ export default function App() {
                             )}
                           </div>
 
-                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Chunk Metadata</p>
-                            <div className="space-y-2 max-h-[14rem] overflow-y-auto pr-1">
+                            <div className="max-h-[14rem] space-y-2 overflow-y-auto overflow-x-hidden pr-1">
                               {embeddingPreviewLoading && (
                                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
                                   Loading embedding preview...
@@ -4891,7 +4926,7 @@ export default function App() {
                                 </div>
                               )}
                               {!embeddingPreviewLoading && embeddingPreview?.chunks.map((chunk) => (
-                                <div key={chunk.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                <div key={chunk.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
                                   <div className="flex flex-wrap items-center gap-2 mb-2 text-[11px] uppercase tracking-wider">
                                     <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">chunk {chunk.chunk_index + 1}</StatusBadge>
                                     <StatusBadge tone="neutral">{chunk.char_count || chunk.content.length} chars</StatusBadge>
@@ -4900,17 +4935,17 @@ export default function App() {
                                       {chunk.embedding_status || "pending"}
                                     </StatusBadge>
                                   </div>
-                                  <p className="text-xs font-mono text-slate-500 break-all">{chunk.content_hash || "-"}</p>
+                                  <p className="break-all text-xs font-mono text-slate-500">{chunk.content_hash || "-"}</p>
                                 </div>
                               ))}
                             </div>
                           </div>
                         </div>
 
-                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                           <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Embedding Hook Payload</p>
-                          <div className="max-h-[22rem] overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <pre className="whitespace-pre-wrap text-xs text-slate-700 font-mono">
+                          <div className="max-h-[22rem] overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <pre className="whitespace-pre-wrap break-all text-xs text-slate-700 font-mono">
                               {embeddingPreview ? JSON.stringify(embeddingPreview.payload, null, 2) : "Select a document to preview the embedding payload."}
                             </pre>
                           </div>
@@ -4972,6 +5007,12 @@ export default function App() {
                           </p>
                           <div className="space-y-2 text-sm">
                             <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-600">Retrieval mode</span>
+                              <StatusBadge tone={retrievalDebug?.layers.retrieval_mode === "hybrid" ? "blue" : "neutral"}>
+                                {retrievalDebug?.layers.retrieval_mode || "lexical"}
+                              </StatusBadge>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
                               <span className="text-slate-600">Global system prompt</span>
                               <StatusBadge tone={retrievalDebug?.layers.global_system_prompt_present ? "emerald" : "neutral"}>
                                 {retrievalDebug?.layers.global_system_prompt_present ? `${retrievalDebug.layers.global_system_prompt_chars} chars` : "empty"}
@@ -4995,6 +5036,20 @@ export default function App() {
                                 {retrievalDebug?.layers.active_chunk_count ?? documentChunks.length}
                               </StatusBadge>
                             </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-600">Vector-ready chunks</span>
+                              <StatusBadge tone={Number(retrievalDebug?.layers.vector_ready_chunk_count || 0) > 0 ? "blue" : "neutral"}>
+                                {retrievalDebug?.layers.vector_ready_chunk_count ?? 0}
+                              </StatusBadge>
+                            </div>
+                            {retrievalDebug?.layers.query_embedding_model && (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Query embedding model</span>
+                                <StatusBadge tone="neutral">
+                                  {retrievalDebug.layers.query_embedding_model}
+                                </StatusBadge>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -5022,7 +5077,18 @@ export default function App() {
                                 <div key={`${match.document_id}:${match.chunk_index}:${match.rank}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                                   <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] uppercase tracking-wider">
                                     <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">#{match.rank}</StatusBadge>
-                                    <StatusBadge tone="blue">score {match.score}</StatusBadge>
+                                    <StatusBadge tone="blue">score {match.score.toFixed(2)}</StatusBadge>
+                                    {match.strategy && (
+                                      <StatusBadge tone={match.strategy === "hybrid" ? "blue" : "neutral"}>
+                                        {match.strategy}
+                                      </StatusBadge>
+                                    )}
+                                    {typeof match.vector_score === "number" && (
+                                      <StatusBadge tone="blue">vector {match.vector_score.toFixed(2)}</StatusBadge>
+                                    )}
+                                    {typeof match.lexical_score === "number" && (
+                                      <StatusBadge tone="neutral">lexical {match.lexical_score}</StatusBadge>
+                                    )}
                                     <StatusBadge tone="neutral">{match.source_type}</StatusBadge>
                                     <StatusBadge tone="neutral">chunk {match.chunk_index + 1}</StatusBadge>
                                   </div>

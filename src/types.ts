@@ -159,6 +159,9 @@ export interface EventDocumentChunkRecord {
 export interface RetrievalDebugMatch {
   rank: number;
   score: number;
+  lexical_score?: number;
+  vector_score?: number | null;
+  strategy?: "lexical" | "vector" | "hybrid";
   document_id: string;
   document_title: string;
   source_type: "note" | "document" | "url";
@@ -175,8 +178,11 @@ export interface RetrievalDebugResponse {
     global_system_prompt_chars: number;
     event_context_present: boolean;
     event_context_chars: number;
+    retrieval_mode?: "none" | "lexical" | "hybrid";
+    query_embedding_model?: string | null;
     active_document_count: number;
     active_chunk_count: number;
+    vector_ready_chunk_count?: number;
   };
   matches: RetrievalDebugMatch[];
   composed_knowledge_context: string;

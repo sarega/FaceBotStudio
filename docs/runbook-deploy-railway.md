@@ -56,6 +56,7 @@ When ready to separate web and worker services:
 - Login and webhook rate limiting use Redis when available, with in-memory fallback.
 - Facebook inbound webhook events are deduplicated before processing.
 - If Redis is unavailable, the app falls back to inline processing.
+- Document embedding jobs generate local vectors through OpenRouter; `EMBEDDING_HOOK_URL` is optional and only mirrors payloads outward.
 
 ## Rollback notes
 - Keep the SQLite volume in place during Sprint 1.

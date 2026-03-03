@@ -48,6 +48,7 @@ import {
   createAppDatabase,
   type AuthUserRow,
   type ChannelPlatform,
+  type EventDocumentChunkEmbeddingRow,
   type MessageRow,
   type RegistrationInput,
   type RegistrationRow,
@@ -64,7 +65,7 @@ const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || "google
 const appDb = createAppDatabase();
 const APP_RUNTIME = String(process.env.APP_RUNTIME || "all").trim().toLowerCase();
 const RUN_WEB_SERVER = APP_RUNTIME !== "worker";
-const RUN_EMBEDDED_WORKER = APP_RUNTIME === "all";
+const RUN_EMBEDDED_WORKER = APP_RUNTIME === "all" || APP_RUNTIME === "worker";
 const INBOUND_BURST_WINDOW_MS = Math.max(250, Number.parseInt(process.env.INBOUND_BURST_WINDOW_MS || "1400", 10) || 1400);
 const WEBCHAT_BURST_WINDOW_MS = Math.max(0, Number.parseInt(process.env.WEBCHAT_BURST_WINDOW_MS || "350", 10) || 350);
 const CONVERSATION_ROW_LIMIT = Math.max(12, Number.parseInt(process.env.CONVERSATION_ROW_LIMIT || "24", 10) || 24);
@@ -556,6 +557,88 @@ function openRouterHeaders() {
   return headers;
 }
 
+function splitIntoBatches<T>(items: T[], size: number) {
+  const normalizedSize = Math.max(1, size);
+  const batches: T[][] = [];
+  for (let index = 0; index < items.length; index += normalizedSize) {
+    batches.push(items.slice(index, index + normalizedSize));
+  }
+  return batches;
+}
+
+async function requestOpenRouterEmbeddings(
+  inputs: string[],
+  usageContext?: LlmUsageContext,
+) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured in .env");
+  }
+
+  const normalizedInputs = inputs
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (!normalizedInputs.length) return [] as number[][];
+
+  const model = getEmbeddingModelName();
+  const vectors: number[][] = [];
+
+  for (const batch of splitIntoBatches(normalizedInputs, 32)) {
+    const upstream = await fetch("https://openrouter.ai/api/v1/embeddings", {
+      method: "POST",
+      headers: openRouterHeaders(),
+      body: JSON.stringify({
+        model,
+        input: batch,
+        encoding_format: "float",
+      }),
+    });
+
+    const payload = await upstream.json().catch(() => ({}));
+    if (!upstream.ok) {
+      throw new Error(payload?.error?.message || "OpenRouter embeddings request failed");
+    }
+
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    const batchVectors = rows
+      .slice()
+      .sort((a: any, b: any) => Number(a?.index || 0) - Number(b?.index || 0))
+      .map((row: any) => Array.isArray(row?.embedding)
+        ? row.embedding.map((entry: unknown) => Number(entry)).filter((entry: number) => Number.isFinite(entry))
+        : []);
+
+    if (batchVectors.length !== batch.length || batchVectors.some((vector) => vector.length === 0)) {
+      throw new Error("OpenRouter embeddings response was incomplete");
+    }
+
+    vectors.push(...batchVectors);
+
+    if (usageContext) {
+      try {
+        const usage = normalizeOpenRouterUsage(payload);
+        await appDb.recordLlmUsage({
+          event_id: usageContext.eventId || null,
+          actor_user_id: usageContext.actorUserId || null,
+          source: usageContext.source,
+          provider: "openrouter",
+          model: String(payload?.model || model),
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: 0,
+          total_tokens: usage.total_tokens || usage.prompt_tokens,
+          estimated_cost_usd: usage.estimated_cost_usd,
+          metadata: {
+            ...usageContext.metadata,
+            embedding_inputs: batch.length,
+          },
+        });
+      } catch (error) {
+        console.error("Failed to record embedding usage:", error);
+      }
+    }
+  }
+
+  return vectors;
+}
+
 function parseToolArgs(rawArgs: unknown) {
   if (typeof rawArgs !== "string") {
     return typeof rawArgs === "object" && rawArgs !== null ? rawArgs as Record<string, unknown> : {};
@@ -809,6 +892,10 @@ async function getEventDocuments(eventId: string) {
 
 async function getEventDocumentChunks(eventId: string) {
   return appDb.listEventDocumentChunks(eventId);
+}
+
+async function getEventDocumentChunkEmbeddings(eventId: string) {
+  return appDb.listEventDocumentChunkEmbeddings(eventId);
 }
 
 async function getRegistrationById(id: string) {
@@ -1117,53 +1204,145 @@ function tokenizeForDocumentMatch(value: string) {
     .filter((token) => token.length >= 2);
 }
 
-function rankKnowledgeMatches(
+function computeLexicalKnowledgeScore(
+  document: { title: string; source_url?: string | null },
+  chunk: { content: string },
+  message: string,
+) {
+  const normalizedMessage = String(message || "").trim().toLowerCase();
+  const tokens = tokenizeForDocumentMatch(message);
+  const haystack = `${document.title}\n${chunk.content}\n${document.source_url || ""}`.toLowerCase();
+  let score = 0;
+
+  if (normalizedMessage && normalizedMessage.length >= 4 && haystack.includes(normalizedMessage)) {
+    score += 6;
+  }
+
+  for (const token of tokens) {
+    if (haystack.includes(token)) {
+      score += 1;
+    }
+  }
+
+  return score;
+}
+
+function cosineSimilarity(left: number[], right: number[]) {
+  if (!left.length || left.length !== right.length) return null;
+
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftMagnitude += left[index] * left[index];
+    rightMagnitude += right[index] * right[index];
+  }
+
+  if (!leftMagnitude || !rightMagnitude) return null;
+  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+}
+
+type KnowledgeMatch = {
+  document: { id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean };
+  chunk: EventDocumentChunkEmbeddingRow;
+  index: number;
+  score: number;
+  lexical_score: number;
+  vector_score: number | null;
+  strategy: "lexical" | "vector" | "hybrid";
+};
+
+async function rankKnowledgeMatches(
   documents: Array<{ id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
-  chunks: Array<{ document_id: string; chunk_index: number; content: string }>,
+  chunks: EventDocumentChunkEmbeddingRow[],
   message: string,
 ) {
   const activeDocuments = documents.filter((document) => document.is_active);
-  if (!activeDocuments.length) return [] as Array<{
-    document: { id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean };
-    chunk: { document_id: string; chunk_index: number; content: string };
-    index: number;
-    score: number;
-  }>;
+  if (!activeDocuments.length) {
+    return {
+      matches: [] as KnowledgeMatch[],
+      mode: "none" as const,
+      vector_ready_chunk_count: 0,
+      query_embedding_model: null,
+    };
+  }
 
   const documentMap = new Map(activeDocuments.map((document) => [document.id, document]));
-  const normalizedMessage = String(message || "").trim().toLowerCase();
-  const tokens = tokenizeForDocumentMatch(message);
+  const candidateChunks = chunks.filter((chunk) => documentMap.has(chunk.document_id));
+  if (!candidateChunks.length) {
+    return {
+      matches: [] as KnowledgeMatch[],
+      mode: "none" as const,
+      vector_ready_chunk_count: 0,
+      query_embedding_model: null,
+    };
+  }
 
-  return chunks
-    .filter((chunk) => documentMap.has(chunk.document_id))
+  const embeddingModel = getEmbeddingModelName();
+  const vectorReadyChunks = candidateChunks.filter((chunk) =>
+    chunk.embedding_status === "ready"
+    && chunk.embedding_model === embeddingModel
+    && Array.isArray(chunk.embedding_vector)
+    && chunk.embedding_vector.length > 0,
+  );
+
+  let queryVector: number[] | null = null;
+  if (String(message || "").trim() && vectorReadyChunks.length > 0) {
+    try {
+      queryVector = (await requestOpenRouterEmbeddings(
+        [message],
+        {
+          source: "knowledge_query_embedding",
+          metadata: {
+            active_document_count: activeDocuments.length,
+            vector_ready_chunk_count: vectorReadyChunks.length,
+          },
+        },
+      ))[0] || null;
+    } catch (error) {
+      console.error("Falling back to lexical retrieval because query embedding failed:", error);
+    }
+  }
+
+  const matches = candidateChunks
     .map((chunk, index) => {
       const document = documentMap.get(chunk.document_id)!;
-      const haystack = `${document.title}\n${chunk.content}\n${document.source_url || ""}`.toLowerCase();
-      let score = 0;
+      const lexicalScore = computeLexicalKnowledgeScore(document, chunk, message);
+      const vectorScore = queryVector && chunk.embedding_vector
+        ? cosineSimilarity(queryVector, chunk.embedding_vector)
+        : null;
+      const vectorBoost = vectorScore === null ? 0 : Math.max(vectorScore, 0) * 10;
+      const score = lexicalScore + vectorBoost;
+      const strategy = vectorScore !== null && lexicalScore > 0
+        ? "hybrid"
+        : vectorScore !== null
+        ? "vector"
+        : "lexical";
 
-      if (normalizedMessage && normalizedMessage.length >= 4 && haystack.includes(normalizedMessage)) {
-        score += 6;
-      }
-
-      for (const token of tokens) {
-        if (haystack.includes(token)) {
-          score += 1;
-        }
-      }
-
-      return { document, chunk, index, score };
+      return {
+        document,
+        chunk,
+        index,
+        score,
+        lexical_score: lexicalScore,
+        vector_score: vectorScore,
+        strategy,
+      } satisfies KnowledgeMatch;
     })
-    .sort((a, b) => (b.score - a.score) || (a.index - b.index));
+    .sort((left, right) => (right.score - left.score) || (right.lexical_score - left.lexical_score) || (left.index - right.index));
+
+  return {
+    matches,
+    mode: queryVector ? "hybrid" as const : "lexical" as const,
+    vector_ready_chunk_count: vectorReadyChunks.length,
+    query_embedding_model: queryVector ? embeddingModel : null,
+  };
 }
 
-function buildKnowledgeContext(
-  documents: Array<{ id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
-  chunks: Array<{ document_id: string; chunk_index: number; content: string }>,
-  message: string,
-) {
-  const rankedChunks = rankKnowledgeMatches(documents, chunks, message);
-
-  const selected = rankedChunks
+function buildKnowledgeContextFromMatches(matches: KnowledgeMatch[]) {
+  const selected = matches
     .filter((entry, index) => entry.score > 0 || index < 2)
     .slice(0, 5);
 
@@ -1201,6 +1380,15 @@ function buildKnowledgeContext(
   return sections.length
     ? `Event Knowledge Documents:\n${sections.map((section, index) => `Document ${index + 1}\n${section}`).join("\n\n")}`
     : "";
+}
+
+async function buildKnowledgeContext(
+  documents: Array<{ id: string; title: string; content: string; source_type: string; source_url?: string | null; is_active: boolean }>,
+  chunks: EventDocumentChunkEmbeddingRow[],
+  message: string,
+) {
+  const rankedChunks = await rankKnowledgeMatches(documents, chunks, message);
+  return buildKnowledgeContextFromMatches(rankedChunks.matches);
 }
 
 function buildTicketImageUrl(registrationId: string, format: "svg" | "png" = "png") {
@@ -1853,8 +2041,8 @@ async function generateBotReplyForSender(
 ): Promise<BotReplyResult> {
   const settings = await getSettingsMap(eventId);
   const documents = await getEventDocuments(eventId);
-  const chunks = await getEventDocumentChunks(eventId);
-  const knowledgeContext = buildKnowledgeContext(documents, chunks, incomingText);
+  const chunks = await getEventDocumentChunkEmbeddings(eventId);
+  const knowledgeContext = await buildKnowledgeContext(documents, chunks, incomingText);
   const event = await appDb.getEventById(eventId);
   const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId);
 
@@ -2889,19 +3077,59 @@ async function processEmbeddingJob(job: EmbeddingJob) {
   }
 
   if (document.content_hash && job.contentHash && document.content_hash !== job.contentHash) {
+    console.warn("Embedding job content hash changed before processing; using latest document snapshot:", job.documentId);
+  }
+
+  const chunks = (await getEventDocumentChunkEmbeddings(job.eventId)).filter((chunk) => chunk.document_id === job.documentId);
+  if (!chunks.length) {
+    await appDb.setEventDocumentEmbeddingStatus(job.documentId, "failed", {
+      embeddingModel: getEmbeddingModelName(),
+      embeddedAt: null,
+    });
     return;
   }
 
-  const chunks = (await getEventDocumentChunks(job.eventId)).filter((chunk) => chunk.document_id === job.documentId);
-  const payload = buildEmbeddingHookPayload(document, chunks);
-  const hookUrl = String(process.env.EMBEDDING_HOOK_URL || "").trim();
+  try {
+    const vectors = await requestOpenRouterEmbeddings(
+      chunks.map((chunk) => chunk.content),
+      {
+        eventId: job.eventId,
+        source: "knowledge_document_embedding",
+        metadata: {
+          document_id: job.documentId,
+          chunk_count: chunks.length,
+        },
+      },
+    );
 
-  if (!hookUrl) {
-    console.warn("Embedding job skipped because EMBEDDING_HOOK_URL is not configured:", job.documentId);
+    const updatedCount = await appDb.saveEventDocumentChunkEmbeddings(
+      job.documentId,
+      chunks.map((chunk, index) => ({
+        chunk_id: chunk.id,
+        content_hash: chunk.content_hash || null,
+        embedding: vectors[index] || [],
+      })),
+      {
+        embeddingModel: getEmbeddingModelName(),
+        embeddedAt: new Date(),
+      },
+    );
+
+    if (updatedCount !== chunks.length) {
+      throw new Error(`Stored embeddings for ${updatedCount}/${chunks.length} chunks`);
+    }
+  } catch (error) {
+    console.error("Failed to generate or store embeddings:", job.documentId, error);
     await appDb.setEventDocumentEmbeddingStatus(job.documentId, "failed", {
-      embeddingModel: payload.embedding_model,
+      embeddingModel: getEmbeddingModelName(),
       embeddedAt: null,
     });
+    return;
+  }
+
+  const payload = buildEmbeddingHookPayload(document, chunks);
+  const hookUrl = String(process.env.EMBEDDING_HOOK_URL || "").trim();
+  if (!hookUrl) {
     return;
   }
 
@@ -2917,17 +3145,8 @@ async function processEmbeddingJob(job: EmbeddingJob) {
     if (!response.ok) {
       throw new Error(`Embedding hook responded with ${response.status}`);
     }
-
-    await appDb.setEventDocumentEmbeddingStatus(job.documentId, "ready", {
-      embeddingModel: payload.embedding_model,
-      embeddedAt: new Date(),
-    });
   } catch (error) {
-    console.error("Failed to process embedding job:", job.documentId, error);
-    await appDb.setEventDocumentEmbeddingStatus(job.documentId, "failed", {
-      embeddingModel: payload.embedding_model,
-      embeddedAt: null,
-    });
+    console.error("Embedding hook delivery failed after local embeddings were stored:", job.documentId, error);
   }
 }
 
@@ -3985,6 +4204,8 @@ async function startServer() {
         metadata: {
           event_id: eventId,
           queued,
+          embedding_model: getEmbeddingModelName(),
+          local_vector_store: true,
           hook_configured: Boolean(String(process.env.EMBEDDING_HOOK_URL || "").trim()),
         },
       });
@@ -3992,6 +4213,11 @@ async function startServer() {
       return res.json({
         status: "ok",
         queued,
+        queue_mode: canUseEmbeddingQueue() ? "redis" : "inline",
+        worker_mode: RUN_EMBEDDED_WORKER ? "embedded" : "external",
+        local_vector_store: true,
+        embedding_model: getEmbeddingModelName(),
+        hook_configured: Boolean(String(process.env.EMBEDDING_HOOK_URL || "").trim()),
         document_id: documentId,
         embedding_status: document.is_active ? "pending" : "skipped",
       });
@@ -4006,18 +4232,21 @@ async function startServer() {
       const eventId = getRequestedEventId(req);
       const query = String(req.query?.query || "").trim();
       const documents = await getEventDocuments(eventId);
-      const chunks = await getEventDocumentChunks(eventId);
+      const chunks = await getEventDocumentChunkEmbeddings(eventId);
       const settings = await getSettingsMap(eventId);
       const activeDocuments = documents.filter((document) => document.is_active);
       const activeDocumentIds = new Set(activeDocuments.map((document) => document.id));
       const activeChunks = chunks.filter((chunk) => activeDocumentIds.has(chunk.document_id));
-      const ranked = rankKnowledgeMatches(documents, chunks, query);
-      const matches = ranked
+      const ranked = await rankKnowledgeMatches(documents, chunks, query);
+      const matches = ranked.matches
         .filter((entry, index) => entry.score > 0 || index < 3)
         .slice(0, 8)
         .map((entry, index) => ({
           rank: index + 1,
           score: entry.score,
+          lexical_score: entry.lexical_score,
+          vector_score: entry.vector_score,
+          strategy: entry.strategy,
           document_id: entry.document.id,
           document_title: entry.document.title,
           source_type: entry.document.source_type,
@@ -4034,11 +4263,14 @@ async function startServer() {
           global_system_prompt_chars: String(settings.global_system_prompt || "").trim().length,
           event_context_present: Boolean(String(settings.context || "").trim()),
           event_context_chars: String(settings.context || "").trim().length,
+          retrieval_mode: ranked.mode,
+          query_embedding_model: ranked.query_embedding_model,
           active_document_count: activeDocuments.length,
           active_chunk_count: activeChunks.length,
+          vector_ready_chunk_count: ranked.vector_ready_chunk_count,
         },
         matches,
-        composed_knowledge_context: buildKnowledgeContext(documents, chunks, query),
+        composed_knowledge_context: buildKnowledgeContextFromMatches(ranked.matches),
       });
     } catch (error) {
       console.error("Failed to fetch retrieval debug:", error);
@@ -4174,8 +4406,8 @@ async function startServer() {
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
       const documents = await getEventDocuments(eventId);
-      const chunks = await getEventDocumentChunks(eventId);
-      const knowledgeContext = buildKnowledgeContext(documents, chunks, message);
+      const chunks = await getEventDocumentChunkEmbeddings(eventId);
+      const knowledgeContext = await buildKnowledgeContext(documents, chunks, message);
       const event = await appDb.getEventById(eventId);
       const hasToolResponses = history.some((entry) =>
         Array.isArray(entry?.parts) && entry.parts.some((part) => Boolean(part?.functionResponse)),

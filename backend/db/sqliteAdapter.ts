@@ -15,6 +15,7 @@ import type {
   CheckinSessionRow,
   CreateEventInput,
   CreateCheckinSessionInput,
+  EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
   EventDocumentRow,
   CreateUserInput,
@@ -28,6 +29,7 @@ import type {
   LlmUsageModelSummaryRow,
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
+  PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
   RegistrationResult,
@@ -73,6 +75,20 @@ function parseAuditMetadata(value: unknown) {
     return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   } catch {
     return {};
+  }
+}
+
+function parseEmbeddingVector(value: unknown) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return null;
+    const vector = parsed
+      .map((entry) => Number(entry))
+      .filter((entry) => Number.isFinite(entry));
+    return vector.length > 0 ? vector : null;
+  } catch {
+    return null;
   }
 }
 
@@ -182,6 +198,15 @@ function mapEventDocumentChunkRow(row: Record<string, unknown>) {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies EventDocumentChunkRow;
+}
+
+function mapEventDocumentChunkEmbeddingRow(row: Record<string, unknown>) {
+  const vector = parseEmbeddingVector(row.embedding_vector);
+  return {
+    ...mapEventDocumentChunkRow(row),
+    embedding_vector: vector,
+    embedding_dimensions: Number(row.embedding_dimensions || vector?.length || 0) || null,
+  } satisfies EventDocumentChunkEmbeddingRow;
 }
 
 function mapCheckinSessionRow(row: Record<string, unknown>) {
@@ -412,6 +437,8 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("event_document_chunks", "embedding_status", "TEXT DEFAULT 'pending'");
     this.ensureColumn("event_document_chunks", "embedding_model", "TEXT");
     this.ensureColumn("event_document_chunks", "embedded_at", "TEXT");
+    this.ensureColumn("event_document_chunks", "embedding_vector", "TEXT");
+    this.ensureColumn("event_document_chunks", "embedding_dimensions", "INTEGER");
     this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
     this.db.exec(`
       UPDATE events
@@ -420,6 +447,26 @@ export class SqliteAppDatabase implements AppDatabase {
         WHEN is_active = 1 THEN 'active'
         ELSE 'closed'
       END
+    `);
+    this.db.exec(`
+      UPDATE event_document_chunks
+      SET embedding_status = 'pending',
+          embedded_at = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE embedding_status = 'ready'
+        AND (embedding_vector IS NULL OR COALESCE(embedding_dimensions, 0) = 0);
+
+      UPDATE event_documents
+      SET embedding_status = 'pending',
+          last_embedded_at = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE embedding_status = 'ready'
+        AND EXISTS (
+          SELECT 1
+          FROM event_document_chunks c
+          WHERE c.document_id = event_documents.id
+            AND (c.embedding_vector IS NULL OR COALESCE(c.embedding_dimensions, 0) = 0)
+        );
     `);
 
     const insertSetting = this.db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
@@ -881,6 +928,18 @@ export class SqliteAppDatabase implements AppDatabase {
     return rows.map(mapEventDocumentChunkRow);
   }
 
+  async listEventDocumentChunkEmbeddings(eventId: string) {
+    const rows = this.db.prepare(
+      `SELECT id, document_id, event_id, chunk_index, content, content_hash, char_count, token_estimate,
+              embedding_status, embedding_model, embedded_at, embedding_vector, embedding_dimensions,
+              created_at, updated_at
+       FROM event_document_chunks
+       WHERE event_id = ?
+       ORDER BY document_id ASC, chunk_index ASC`,
+    ).all(String(eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID) as Array<Record<string, unknown>>;
+    return rows.map(mapEventDocumentChunkEmbeddingRow);
+  }
+
   async upsertEventDocument(input: UpsertEventDocumentInput) {
     const id = String(input.id || "").trim() || generateEntityId("doc");
     const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
@@ -1011,6 +1070,72 @@ export class SqliteAppDatabase implements AppDatabase {
     });
     transaction();
     return Boolean(documentResult?.changes);
+  }
+
+  async saveEventDocumentChunkEmbeddings(
+    documentId: string,
+    embeddings: PersistChunkEmbeddingInput[],
+    options?: { embeddingModel?: string; embeddedAt?: Date | null },
+  ) {
+    const normalizedDocumentId = String(documentId || "").trim();
+    const embeddingModel = String(options?.embeddingModel || getEmbeddingModelName()).trim() || getEmbeddingModelName();
+    const embeddedAt = (options?.embeddedAt || new Date()).toISOString();
+    if (!normalizedDocumentId || embeddings.length === 0) return 0;
+
+    const updateChunk = this.db.prepare(
+      `UPDATE event_document_chunks
+       SET embedding_vector = ?,
+           embedding_dimensions = ?,
+           embedding_status = 'ready',
+           embedding_model = ?,
+           embedded_at = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND document_id = ?
+         AND (? IS NULL OR content_hash = ?)`,
+    );
+    const countMissing = this.db.prepare(
+      `SELECT COUNT(*) AS count
+       FROM event_document_chunks
+       WHERE document_id = ?
+         AND (embedding_status != 'ready' OR embedding_vector IS NULL OR COALESCE(embedding_dimensions, 0) = 0)`,
+    );
+    const updateDocument = this.db.prepare(
+      `UPDATE event_documents
+       SET embedding_status = ?,
+           embedding_model = ?,
+           last_embedded_at = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+
+    let updatedCount = 0;
+    const transaction = this.db.transaction(() => {
+      for (const item of embeddings) {
+        const vector = Array.isArray(item.embedding)
+          ? item.embedding.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry))
+          : [];
+        if (vector.length === 0) continue;
+        const result = updateChunk.run(
+          JSON.stringify(vector),
+          vector.length,
+          embeddingModel,
+          embeddedAt,
+          String(item.chunk_id || "").trim(),
+          normalizedDocumentId,
+          item.content_hash || null,
+          item.content_hash || null,
+        );
+        updatedCount += result.changes;
+      }
+
+      const missingRow = countMissing.get(normalizedDocumentId) as { count?: number } | undefined;
+      const isReady = Number(missingRow?.count || 0) === 0;
+      updateDocument.run(isReady ? "ready" : "pending", embeddingModel, isReady ? embeddedAt : null, normalizedDocumentId);
+    });
+
+    transaction();
+    return updatedCount;
   }
 
   async listChannelAccounts(platform?: ChannelPlatform) {

@@ -180,6 +180,17 @@ export interface EventDocumentChunkRow {
   updated_at: string;
 }
 
+export interface EventDocumentChunkEmbeddingRow extends EventDocumentChunkRow {
+  embedding_vector: number[] | null;
+  embedding_dimensions: number | null;
+}
+
+export interface PersistChunkEmbeddingInput {
+  chunk_id: string;
+  content_hash?: string | null;
+  embedding: number[];
+}
+
 export interface CreateEventInput {
   name: string;
 }
@@ -285,6 +296,7 @@ export interface AppDatabase {
   updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
   listEventDocuments(eventId: string): Promise<EventDocumentRow[]>;
   listEventDocumentChunks(eventId: string): Promise<EventDocumentChunkRow[]>;
+  listEventDocumentChunkEmbeddings(eventId: string): Promise<EventDocumentChunkEmbeddingRow[]>;
   upsertEventDocument(input: UpsertEventDocumentInput): Promise<EventDocumentRow>;
   resetEventKnowledge(
     eventId: string,
@@ -296,6 +308,11 @@ export interface AppDatabase {
     status: EmbeddingStatus,
     options?: { embeddingModel?: string; embeddedAt?: Date | null },
   ): Promise<boolean>;
+  saveEventDocumentChunkEmbeddings(
+    documentId: string,
+    embeddings: PersistChunkEmbeddingInput[],
+    options?: { embeddingModel?: string; embeddedAt?: Date | null },
+  ): Promise<number>;
   listChannelAccounts(platform?: ChannelPlatform): Promise<ChannelAccountRow[]>;
   getChannelAccount(platform: ChannelPlatform, externalId: string): Promise<ChannelAccountRow | undefined>;
   upsertChannelAccount(input: UpsertChannelAccountInput): Promise<ChannelAccountRow>;
