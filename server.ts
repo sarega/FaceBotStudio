@@ -240,11 +240,11 @@ function getSystemInstruction(
     "Respect the Registration Availability Right Now field. If it is full, clearly explain that registration is currently unavailable because capacity is full.",
     "Do not volunteer exact remaining seat counts unless the user asks, but never imply registration is still open when capacity is full.",
     "If the event lifecycle is past, explain that the event date has already passed.",
-    "Treat multiple user messages sent close together as one bundled request. Reply once and merge overlapping questions into one concise answer.",
-    "If recent history already has an assistant reply, do not greet again and do not restart the conversation from zero.",
+    "Read the recent conversation history before replying and continue naturally from the current chat.",
+    "Only greet on the first assistant reply of a conversation or after a long idle gap. Do not greet on every reply.",
+    "If the user sent several back-to-back messages before your turn, answer them in one natural reply without restarting from the beginning.",
     "Do not repeat the same event benefits, registration call-to-action, or required registration fields if they were already stated in recent history.",
-    "If the latest user turn overlaps with a previous answer, reply only with the missing delta.",
-    "When answering multiple FAQ items in one turn, prefer short bullets or numbers instead of repeating long paragraphs.",
+    "When several user questions are pending, answer them concisely and avoid repeating information that was already answered.",
     "Ask for registration details only after the user clearly wants to register or explicitly confirms they want to continue.",
     "Summarize registration details exactly once, immediately before calling the registerUser tool.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
@@ -318,18 +318,6 @@ function isNearDuplicateReply(candidate: string, previous: string) {
   return overlap / Math.min(leftTokens.size, rightTokens.size) >= 0.88;
 }
 
-function buildBundledIncomingPrompt(messages: string[]) {
-  const cleaned = messages.map((message) => String(message || "").trim()).filter(Boolean);
-  if (cleaned.length <= 1) return cleaned[0] || "";
-
-  return [
-    `The user sent ${cleaned.length} quick messages before the assistant replied. Treat them as one bundled request and answer once.`,
-    "User messages:",
-    ...cleaned.map((message, index) => `${index + 1}. ${message}`),
-    "Respond once, merge overlaps, and avoid repeating greetings or registration prompts that were already covered.",
-  ].join("\n");
-}
-
 function buildChatHistoryFromRows(rows: MessageRow[]) {
   return [...rows]
     .filter((row) => row.type === "incoming" || !isSyntheticOutgoingMessage(row.text || ""))
@@ -363,22 +351,31 @@ async function buildPendingConversationTurn(
     .sort((left, right) => left.id - right.id);
   if (!pendingRows.length) return null;
 
-  const pendingRowIds = new Set(pendingRows.map((row) => row.id));
-  const pendingTexts = pendingRows
-    .map((row) => String(row.text || "").trim())
-    .filter(Boolean)
-    .filter((text, index, list) => index === 0 || normalizeReplyComparisonText(text) !== normalizeReplyComparisonText(list[index - 1]));
-  if (!pendingTexts.length) return null;
+  const distinctPendingRows = pendingRows.filter((row, index, list) => {
+    const text = String(row.text || "").trim();
+    if (!text) return false;
+    if (index === 0) return true;
+    const previousText = String(list[index - 1]?.text || "").trim();
+    return normalizeReplyComparisonText(text) !== normalizeReplyComparisonText(previousText);
+  });
+  if (!distinctPendingRows.length) return null;
 
-  const historyRows = rows.filter((row) => !pendingRowIds.has(row.id));
+  const latestPendingRow = distinctPendingRows[distinctPendingRows.length - 1];
+  const priorPendingRowIds = new Set(
+    distinctPendingRows.slice(0, -1).map((row) => row.id),
+  );
+  const historyRows = rows.filter((row) => {
+    if (row.id <= boundaryMessageId) return true;
+    return row.type === "incoming" && priorPendingRowIds.has(row.id);
+  });
   const latestVisibleOutgoingText =
     historyRows.find((row) => row.type === "outgoing" && !isSyntheticOutgoingMessage(row.text || ""))?.text || "";
 
   return {
-    inputText: buildBundledIncomingPrompt(pendingTexts),
+    inputText: String(latestPendingRow?.text || "").trim(),
     history: buildChatHistoryFromRows(historyRows),
-    highestPendingMessageId: pendingRows[pendingRows.length - 1]?.id || 0,
-    pendingMessageCount: pendingTexts.length,
+    highestPendingMessageId: latestPendingRow?.id || 0,
+    pendingMessageCount: distinctPendingRows.length,
     latestVisibleOutgoingText,
   };
 }
