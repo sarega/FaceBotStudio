@@ -67,6 +67,12 @@ const APP_RUNTIME = String(process.env.APP_RUNTIME || "all").trim().toLowerCase(
 const RUN_WEB_SERVER = APP_RUNTIME !== "worker";
 const RUN_EMBEDDED_WORKER = APP_RUNTIME === "all" || APP_RUNTIME === "worker";
 const INBOUND_BURST_WINDOW_MS = Math.max(250, Number.parseInt(process.env.INBOUND_BURST_WINDOW_MS || "1400", 10) || 1400);
+const DEFAULT_FACEBOOK_INBOUND_BURST_WINDOW_MS = Math.max(INBOUND_BURST_WINDOW_MS, 2200);
+const FACEBOOK_INBOUND_BURST_WINDOW_MS = Math.max(
+  250,
+  Number.parseInt(process.env.FACEBOOK_INBOUND_BURST_WINDOW_MS || String(DEFAULT_FACEBOOK_INBOUND_BURST_WINDOW_MS), 10)
+    || DEFAULT_FACEBOOK_INBOUND_BURST_WINDOW_MS,
+);
 const WEBCHAT_BURST_WINDOW_MS = Math.max(0, Number.parseInt(process.env.WEBCHAT_BURST_WINDOW_MS || "350", 10) || 350);
 const CONVERSATION_ROW_LIMIT = Math.max(12, Number.parseInt(process.env.CONVERSATION_ROW_LIMIT || "24", 10) || 24);
 const INBOUND_RESERVATION_TTL_MS = Math.max(5000, Number.parseInt(process.env.INBOUND_RESERVATION_TTL_MS || "30000", 10) || 30000);
@@ -256,6 +262,10 @@ function getSystemInstruction(
     "If the user sent several back-to-back messages before your turn, answer them in one natural reply without restarting from the beginning.",
     "Do not repeat the same event benefits, registration call-to-action, or required registration fields if they were already stated in recent history.",
     "When several user questions are pending, answer them concisely and avoid repeating information that was already answered.",
+    "For short follow-up questions such as cost, date, location, dress code, or eligibility, answer the follow-up directly before adding any optional next step.",
+    "If registration steps were already explained in recent history, do not restate the full steps unless the user explicitly asks for them again.",
+    "Do not add another greeting when replying to a follow-up in the same active exchange.",
+    "Keep follow-up replies brief and specific. Do not restart the conversation summary unless the user asks for a recap.",
     "Ask for registration details only after the user clearly wants to register or explicitly confirms they want to continue.",
     "Summarize registration details exactly once, immediately before calling the registerUser tool.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
@@ -472,16 +482,16 @@ async function prepareBundledConversationTurnForSender(
   channel: string,
   senderId: string,
   eventId: string,
-  options?: { burstWindowMs?: number },
+  options?: { burstWindowMs?: number; alreadySerialized?: boolean },
 ): Promise<PreparedConversationTurn | null> {
   const conversationKey = buildInboundConversationKey(channel, senderId, eventId);
   const burstWindowMs = Math.max(0, options?.burstWindowMs ?? INBOUND_BURST_WINDOW_MS);
 
-  if (burstWindowMs > 0) {
-    await sleep(burstWindowMs);
-  }
+  const prepareTurn = async () => {
+    if (burstWindowMs > 0) {
+      await sleep(burstWindowMs);
+    }
 
-  return runSerializedInboundTask(conversationKey, async () => {
     while (true) {
       const remainingQuietMs = getRemainingQuietWindowMs(conversationKey, burstWindowMs);
       if (remainingQuietMs > 0) {
@@ -502,7 +512,13 @@ async function prepareBundledConversationTurnForSender(
         conversationKey,
       };
     }
-  });
+  };
+
+  if (options?.alreadySerialized) {
+    return prepareTurn();
+  }
+
+  return runSerializedInboundTask(conversationKey, prepareTurn);
 }
 
 async function generateReplyForPreparedTurn(
@@ -2935,93 +2951,99 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
   }
   const eventId = resolvedEventId || DEFAULT_EVENT_ID;
   await saveMessage(senderId, trimmed, "incoming", eventId, pageId);
-  markInboundConversationActivity(buildInboundConversationKey("facebook", senderId, eventId));
+  const conversationKey = buildInboundConversationKey("facebook", senderId, eventId);
+  markInboundConversationActivity(conversationKey);
 
   if (!(await getFacebookAccessToken(pageId))) {
     console.warn(`Facebook access token is unavailable for page ${pageId || "default"}; skipping outbound reply`);
     return;
   }
 
-  const preparedTurn = await prepareBundledConversationTurnForSender("facebook", senderId, eventId);
-  if (!preparedTurn) return;
+  await runSerializedInboundTask(conversationKey, async () => {
+    const preparedTurn = await prepareBundledConversationTurnForSender("facebook", senderId, eventId, {
+      burstWindowMs: FACEBOOK_INBOUND_BURST_WINDOW_MS,
+      alreadySerialized: true,
+    });
+    if (!preparedTurn) return;
 
-  let replyText = "";
-  let ticketRegistrationIds: string[] = [];
-  try {
-    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
-    replyText = result.text;
-    ticketRegistrationIds = result.ticketRegistrationIds;
-  } catch (error) {
-    console.error("Failed to generate bot reply:", error);
-    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
-  }
-
-  if (replyText) {
-    await sendFacebookTextMessage(senderId, replyText, pageId);
-    await saveMessage(senderId, replyText, "outgoing", eventId, pageId);
-  }
-  markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
-
-  const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
-  let sentTicketArtifact = false;
-  const settings = uniqueTicketIds.length > 0 ? await getSettingsMap(eventId) : null;
-  for (const registrationId of uniqueTicketIds) {
-    const reg = await getRegistrationById(registrationId);
-    if (reg && settings) {
-      const ticketSummaryText = buildTicketSummaryText(reg, settings);
-      try {
-        await sendFacebookTextMessage(senderId, ticketSummaryText, pageId);
-        await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, pageId);
-      } catch (error) {
-        console.error("Failed to send ticket summary text:", error);
-      }
-    }
-
-    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
-    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
-    if (!ticketPngUrl && !ticketSvgUrl) {
-      console.warn("APP_URL is not set; skipping ticket image send");
-      continue;
-    }
-
+    let replyText = "";
+    let ticketRegistrationIds: string[] = [];
     try {
-      if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
-      await sendFacebookImageMessage(senderId, ticketPngUrl, pageId);
-      await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, pageId);
-      sentTicketArtifact = true;
+      const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+      replyText = result.text;
+      ticketRegistrationIds = result.ticketRegistrationIds;
     } catch (error) {
-      console.error("Failed to send PNG ticket image:", error);
-      try {
-        if (!ticketSvgUrl) throw new Error("SVG ticket URL is not available");
-        await sendFacebookImageMessage(senderId, ticketSvgUrl, pageId);
-        await saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing", eventId, pageId);
-        sentTicketArtifact = true;
-      } catch (svgError) {
-        console.error("Failed to send SVG ticket image fallback:", svgError);
+      console.error("Failed to generate bot reply:", error);
+      replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+    }
+
+    if (replyText) {
+      await sendFacebookTextMessage(senderId, replyText, pageId);
+      await saveMessage(senderId, replyText, "outgoing", eventId, pageId);
+    }
+    markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
+
+    const uniqueTicketIds = [...new Set(ticketRegistrationIds)];
+    let sentTicketArtifact = false;
+    const settings = uniqueTicketIds.length > 0 ? await getSettingsMap(eventId) : null;
+    for (const registrationId of uniqueTicketIds) {
+      const reg = await getRegistrationById(registrationId);
+      if (reg && settings) {
+        const ticketSummaryText = buildTicketSummaryText(reg, settings);
         try {
-          const textUrl = ticketPngUrl || ticketSvgUrl;
-          if (!textUrl) throw new Error("No ticket URL available");
-          await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, pageId);
-          await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, pageId);
+          await sendFacebookTextMessage(senderId, ticketSummaryText, pageId);
+          await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, pageId);
+        } catch (error) {
+          console.error("Failed to send ticket summary text:", error);
+        }
+      }
+
+      const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
+      const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+      if (!ticketPngUrl && !ticketSvgUrl) {
+        console.warn("APP_URL is not set; skipping ticket image send");
+        continue;
+      }
+
+      try {
+        if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
+        await sendFacebookImageMessage(senderId, ticketPngUrl, pageId);
+        await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, pageId);
+        sentTicketArtifact = true;
+      } catch (error) {
+        console.error("Failed to send PNG ticket image:", error);
+        try {
+          if (!ticketSvgUrl) throw new Error("SVG ticket URL is not available");
+          await sendFacebookImageMessage(senderId, ticketSvgUrl, pageId);
+          await saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing", eventId, pageId);
           sentTicketArtifact = true;
-        } catch (fallbackError) {
-          console.error("Failed to send ticket link fallback:", fallbackError);
+        } catch (svgError) {
+          console.error("Failed to send SVG ticket image fallback:", svgError);
+          try {
+            const textUrl = ticketPngUrl || ticketSvgUrl;
+            if (!textUrl) throw new Error("No ticket URL available");
+            await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, pageId);
+            await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, pageId);
+            sentTicketArtifact = true;
+          } catch (fallbackError) {
+            console.error("Failed to send ticket link fallback:", fallbackError);
+          }
         }
       }
     }
-  }
 
-  if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
-    const mapUrl = String(settings?.event_map_url || "").trim();
-    if (mapUrl) {
-      try {
-        await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId);
-        await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, pageId);
-      } catch (error) {
-        console.error("Failed to send map link:", error);
+    if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
+      const mapUrl = String(settings?.event_map_url || "").trim();
+      if (mapUrl) {
+        try {
+          await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId);
+          await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, pageId);
+        } catch (error) {
+          console.error("Failed to send map link:", error);
+        }
       }
     }
-  }
+  });
 }
 
 async function handleIncomingLineText(senderId: string, text: string, destination: string, replyToken?: string) {
