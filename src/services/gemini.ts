@@ -55,12 +55,15 @@ export async function getChatResponse(
     body: JSON.stringify({ message, settings, history, event_id: eventId }),
   });
 
-  const data = await res.json();
+  const data = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(data?.error || "Failed to get response from OpenRouter");
+    const message = data && typeof data === "object" && "error" in data && typeof (data as any).error === "string"
+      ? (data as any).error
+      : `LLM request failed (${res.status})`;
+    throw new Error(message);
   }
 
-  return data;
+  return data as ChatResponse;
 }
 
 export async function getAdminAgentResponse(
@@ -77,7 +80,10 @@ export async function getAdminAgentResponse(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error || "Failed to run admin agent");
+    const message = typeof data?.error === "string" && data.error.trim()
+      ? data.error
+      : `Admin Agent request failed (${res.status})`;
+    throw new Error(message);
   }
 
   return {
