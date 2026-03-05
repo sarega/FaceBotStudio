@@ -76,6 +76,11 @@ const FACEBOOK_INBOUND_BURST_WINDOW_MS = Math.max(
 const WEBCHAT_BURST_WINDOW_MS = Math.max(0, Number.parseInt(process.env.WEBCHAT_BURST_WINDOW_MS || "350", 10) || 350);
 const CONVERSATION_ROW_LIMIT = Math.max(12, Number.parseInt(process.env.CONVERSATION_ROW_LIMIT || "24", 10) || 24);
 const INBOUND_RESERVATION_TTL_MS = Math.max(5000, Number.parseInt(process.env.INBOUND_RESERVATION_TTL_MS || "30000", 10) || 30000);
+const FAILED_INBOUND_TURN_TTL_MS = Math.max(
+  60000,
+  Number.parseInt(process.env.FAILED_INBOUND_TURN_TTL_MS || String(1000 * 60 * 60 * 6), 10) || 1000 * 60 * 60 * 6,
+);
+const BOT_TEMPORARY_FAILURE_MESSAGE = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
 
 type ChatPart = {
   text?: string;
@@ -149,6 +154,13 @@ type BotReplyResult = {
   ticketRegistrationIds: string[];
 };
 
+type FailedInboundTurn = {
+  inputText: string;
+  history: ChatHistoryMessage[];
+  recordedAt: number;
+  reason?: string;
+};
+
 type AuthContext = {
   sessionId: string;
   tokenHash: string;
@@ -167,6 +179,7 @@ const inboundConversationTails = new Map<string, Promise<void>>();
 const inboundHandledMessageIds = new Map<string, number>();
 const inboundConversationActivity = new Map<string, number>();
 const inboundReservedMessageIds = new Map<string, { messageId: number; expiresAt: number }>();
+const failedInboundTurns = new Map<string, FailedInboundTurn>();
 
 function parseRegistrationLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
@@ -283,6 +296,58 @@ function buildInboundConversationKey(channel: string, senderId: string, eventId:
   return `${channel}:${eventId}:${senderId}`;
 }
 
+function getInboundConversationChannelFromPlatform(platform: ChannelPlatform) {
+  switch (platform) {
+    case "line_oa":
+      return "line";
+    case "web_chat":
+      return "webchat";
+    default:
+      return platform;
+  }
+}
+
+function rememberFailedInboundTurn(conversationKey: string, turn: { inputText: string; history: ChatHistoryMessage[] }, reason?: string) {
+  const inputText = String(turn.inputText || "").trim();
+  if (!inputText) return;
+
+  const now = Date.now();
+  failedInboundTurns.set(conversationKey, {
+    inputText,
+    history: Array.isArray(turn.history) ? turn.history : [],
+    recordedAt: now,
+    reason: String(reason || "").slice(0, 500) || undefined,
+  });
+
+  if (failedInboundTurns.size > 4000) {
+    for (const [key, value] of failedInboundTurns.entries()) {
+      if (now - value.recordedAt > FAILED_INBOUND_TURN_TTL_MS) {
+        failedInboundTurns.delete(key);
+      }
+    }
+    if (failedInboundTurns.size > 4000) {
+      const keys = [...failedInboundTurns.keys()].slice(0, 500);
+      for (const key of keys) {
+        failedInboundTurns.delete(key);
+      }
+    }
+  }
+}
+
+function clearFailedInboundTurn(conversationKey: string) {
+  failedInboundTurns.delete(conversationKey);
+}
+
+function getFailedInboundTurn(conversationKey: string, now = Date.now()) {
+  const cached = failedInboundTurns.get(conversationKey);
+  if (!cached) return null;
+  if (now - cached.recordedAt > FAILED_INBOUND_TURN_TTL_MS) {
+    failedInboundTurns.delete(conversationKey);
+    return null;
+  }
+  return cached;
+}
+
 function markInboundConversationActivity(conversationKey: string, activityAt = Date.now()) {
   inboundConversationActivity.set(conversationKey, activityAt);
   if (inboundConversationActivity.size > 4000) {
@@ -307,10 +372,6 @@ function normalizeReplyComparisonText(value: string) {
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function isSyntheticOutgoingMessage(text: string) {
-  return /^\[[a-z0-9-]+\]/i.test(String(text || "").trim());
 }
 
 function isNearDuplicateReply(candidate: string, previous: string) {
@@ -341,11 +402,16 @@ function isNearDuplicateReply(candidate: string, previous: string) {
 
 function buildChatHistoryFromRows(rows: MessageRow[]) {
   return [...rows]
-    .filter((row) => row.type === "incoming" || !isSyntheticOutgoingMessage(row.text || ""))
+    .map((row): { role: ChatHistoryMessage["role"]; text: string; id: number } => ({
+      role: row.type === "incoming" ? "user" : "model",
+      text: normalizeMessageTextForHistory(row.text || ""),
+      id: row.id,
+    }))
+    .filter((row) => row.text)
     .sort((left, right) => left.id - right.id)
     .map((row) => ({
-      role: row.type === "incoming" ? "user" : "model",
-      parts: [{ text: row.text || "" }],
+      role: row.role,
+      parts: [{ text: row.text }],
     }) satisfies ChatHistoryMessage);
 }
 
@@ -431,8 +497,12 @@ async function buildPendingConversationTurn(
     if (row.id <= boundaryMessageId) return true;
     return row.type === "incoming" && priorPendingRowIds.has(row.id);
   });
-  const latestVisibleOutgoingText =
-    historyRows.find((row) => row.type === "outgoing" && !isSyntheticOutgoingMessage(row.text || ""))?.text || "";
+  const latestVisibleOutgoingRow = historyRows.find(
+    (row) => row.type === "outgoing" && normalizeMessageTextForHistory(row.text || ""),
+  );
+  const latestVisibleOutgoingText = latestVisibleOutgoingRow
+    ? normalizeMessageTextForHistory(latestVisibleOutgoingRow.text || "")
+    : "";
 
   return {
     inputText: String(latestPendingRow?.text || "").trim(),
@@ -535,6 +605,45 @@ async function generateReplyForPreparedTurn(
     ...result,
     text: shouldSuppressDuplicate ? "" : result.text,
   };
+}
+
+async function buildLatestIncomingRetryTurn(senderId: string, eventId: string) {
+  const rows = await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId);
+  if (!rows.length) return null;
+
+  const latestIncomingRow = rows.find(
+    (row) => row.type === "incoming" && normalizeMessageTextForHistory(row.text || ""),
+  );
+  if (!latestIncomingRow) return null;
+
+  const inputText = normalizeMessageTextForHistory(latestIncomingRow.text || "");
+  if (!inputText) return null;
+
+  const historyRows = rows.filter((row) => row.id < latestIncomingRow.id);
+  return {
+    inputText,
+    history: buildChatHistoryFromRows(historyRows),
+    source: "latest-incoming",
+  } as const;
+}
+
+async function buildRetryTurnForConversation(conversationKey: string, senderId: string, eventId: string) {
+  const failedTurn = getFailedInboundTurn(conversationKey);
+  if (failedTurn) {
+    return {
+      inputText: failedTurn.inputText,
+      history: failedTurn.history,
+      source: "failed-turn",
+      reason: failedTurn.reason || null,
+    } as const;
+  }
+
+  const latestIncomingTurn = await buildLatestIncomingRetryTurn(senderId, eventId);
+  if (!latestIncomingTurn) return null;
+  return {
+    ...latestIncomingTurn,
+    reason: null,
+  } as const;
 }
 
 function normalizeHistoryForOpenRouter(history: ChatHistoryMessage[] = []) {
@@ -1279,6 +1388,47 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
     registration_id: normalizedRegistrationId,
     steps,
   };
+}
+
+async function retryBotReplyForOutboundTarget(target: ManualOutboundTarget) {
+  const channel = getInboundConversationChannelFromPlatform(target.platform);
+  const conversationKey = buildInboundConversationKey(channel, target.senderId, target.eventId);
+
+  return runSerializedInboundTask(conversationKey, async () => {
+    const retryTurn = await buildRetryTurnForConversation(conversationKey, target.senderId, target.eventId);
+    if (!retryTurn) {
+      throw new Error("No recent incoming message is available to retry");
+    }
+
+    const result = await generateBotReplyForSender(
+      target.senderId,
+      target.eventId,
+      retryTurn.inputText,
+      retryTurn.history,
+    );
+
+    const replyText = String(result.text || "").trim();
+    if (replyText) {
+      await sendTextToOutboundTarget(target, replyText);
+      await saveMessage(target.senderId, replyText, "outgoing", target.eventId, target.externalId);
+    }
+
+    const uniqueTicketIds = [...new Set(result.ticketRegistrationIds.map((id) => String(id || "").trim().toUpperCase()).filter(Boolean))];
+    for (const registrationId of uniqueTicketIds) {
+      await resendTicketArtifactsToOutboundTarget(target, registrationId);
+    }
+
+    clearFailedInboundTurn(conversationKey);
+    return {
+      steps: [
+        replyText ? "text" : "no-text",
+        uniqueTicketIds.length > 0 ? "ticket" : "no-ticket",
+      ],
+      replay_source: retryTurn.source,
+      replay_reason: retryTurn.reason,
+      ticket_count: uniqueTicketIds.length,
+    };
+  });
 }
 
 async function getWebChatChannel(widgetKey?: string) {
@@ -2972,9 +3122,15 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
       const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
       replyText = result.text;
       ticketRegistrationIds = result.ticketRegistrationIds;
+      clearFailedInboundTurn(preparedTurn.conversationKey);
     } catch (error) {
       console.error("Failed to generate bot reply:", error);
-      replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+      rememberFailedInboundTurn(
+        preparedTurn.conversationKey,
+        preparedTurn,
+        error instanceof Error ? error.message : String(error),
+      );
+      replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
     }
 
     if (replyText) {
@@ -3074,9 +3230,15 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
     const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
+    clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
     console.error("Failed to generate LINE bot reply:", error);
-    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+    rememberFailedInboundTurn(
+      preparedTurn.conversationKey,
+      preparedTurn,
+      error instanceof Error ? error.message : String(error),
+    );
+    replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
   }
 
   if (replyText) {
@@ -3190,9 +3352,15 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
     const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
+    clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
     console.error("Failed to generate Instagram bot reply:", error);
-    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+    rememberFailedInboundTurn(
+      preparedTurn.conversationKey,
+      preparedTurn,
+      error instanceof Error ? error.message : String(error),
+    );
+    replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
   }
 
   if (replyText) {
@@ -3282,9 +3450,15 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
     const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
+    clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
     console.error("Failed to generate WhatsApp bot reply:", error);
-    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+    rememberFailedInboundTurn(
+      preparedTurn.conversationKey,
+      preparedTurn,
+      error instanceof Error ? error.message : String(error),
+    );
+    replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
   }
 
   if (replyText) {
@@ -3374,9 +3548,15 @@ async function handleIncomingTelegramText(senderId: string, text: string, botKey
     const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
+    clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
     console.error("Failed to generate Telegram bot reply:", error);
-    replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+    rememberFailedInboundTurn(
+      preparedTurn.conversationKey,
+      preparedTurn,
+      error instanceof Error ? error.message : String(error),
+    );
+    replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
   }
 
   if (replyText) {
@@ -4995,6 +5175,58 @@ async function startServer() {
     }
   });
 
+  app.post("/api/messages/manual-retry-bot", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+      const senderId = String(req.body?.sender_id || "").trim();
+      const pageId = String(req.body?.page_id || "").trim();
+      const platform = String(req.body?.platform || "").trim();
+
+      if (!senderId || !pageId || !eventId) {
+        return res.status(400).json({ error: "event_id, sender_id, and page_id are required" });
+      }
+
+      const target = await resolveManualOutboundTarget(eventId, senderId, pageId, platform);
+      const result = await retryBotReplyForOutboundTarget(target);
+
+      await recordAudit(
+        req,
+        "message.manual_retry",
+        "message",
+        senderId,
+        {
+          event_id: eventId,
+          sender_id: senderId,
+          page_id: pageId,
+          platform: target.platform,
+          ...result,
+        },
+      );
+
+      return res.json({
+        status: "ok",
+        mode: "retry-bot",
+        platform: target.platform,
+        ...result,
+      });
+    } catch (error) {
+      console.error("Failed to retry bot reply manually:", error);
+      const message = error instanceof Error ? error.message : "Failed to retry bot reply";
+      const lower = message.toLowerCase();
+      const statusCode =
+        lower.includes("required")
+        || lower.includes("invalid")
+        || lower.includes("not supported")
+        || lower.includes("not linked")
+        || lower.includes("not found")
+        || lower.includes("does not belong")
+        || lower.includes("no recent incoming")
+          ? 400
+          : 500;
+      return res.status(statusCode).json({ error: message });
+    }
+  });
+
   app.get("/api/llm/models", requireRoles(["owner", "admin", "operator"]), async (req, res) => {
     if (!process.env.OPENROUTER_API_KEY) {
       return res.status(400).json({ error: "OPENROUTER_API_KEY is not configured in .env" });
@@ -5534,9 +5766,15 @@ async function startServer() {
           const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
           replyText = result.text;
           ticketRegistrationIds = result.ticketRegistrationIds;
+          clearFailedInboundTurn(preparedTurn.conversationKey);
         } catch (error) {
           console.error("Failed to generate web chat bot reply:", error);
-          replyText = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+          rememberFailedInboundTurn(
+            preparedTurn.conversationKey,
+            preparedTurn,
+            error instanceof Error ? error.message : String(error),
+          );
+          replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
         }
       }
 

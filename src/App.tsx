@@ -1160,7 +1160,7 @@ function InlineActionsMenu({
       {open && (
         <div
           className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(16rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-          onClickCapture={(event) => {
+          onClick={(event) => {
             const target = event.target as HTMLElement | null;
             if (target?.closest('[role="menuitem"]')) {
               setOpen(false);
@@ -1569,7 +1569,7 @@ export default function App() {
   const [selectedLogMessageId, setSelectedLogMessageId] = useState<number | null>(null);
   const [manualOverrideText, setManualOverrideText] = useState("");
   const [manualOverrideRegistrationId, setManualOverrideRegistrationId] = useState("");
-  const [manualOverrideAction, setManualOverrideAction] = useState<"" | "text" | "ticket">("");
+  const [manualOverrideAction, setManualOverrideAction] = useState<"" | "text" | "ticket" | "retry">("");
   const [manualOverrideMessage, setManualOverrideMessage] = useState("");
   const [logRegistrationDraft, setLogRegistrationDraft] = useState({
     first_name: "",
@@ -2893,6 +2893,69 @@ export default function App() {
     } catch (err) {
       console.error("Failed to send manual override", err);
       setManualOverrideMessage(err instanceof Error ? err.message : "Failed to send manual override");
+      return false;
+    } finally {
+      setManualOverrideAction("");
+    }
+  };
+
+  const retryBotFromLog = async () => {
+    if (!selectedLogMessage) {
+      setManualOverrideMessage("Select a log row first");
+      return false;
+    }
+    if (manualOverrideUnavailableReason) {
+      setManualOverrideMessage(manualOverrideUnavailableReason);
+      return false;
+    }
+
+    const eventId = String(selectedLogMessage.event_id || selectedEventId).trim();
+    const pageId = String(selectedLogMessage.page_id || "").trim();
+    const senderId = String(selectedLogMessage.sender_id || "").trim();
+
+    if (!eventId || !pageId || !senderId) {
+      setManualOverrideMessage("This sender thread is missing event or channel information");
+      return false;
+    }
+
+    setManualOverrideAction("retry");
+    setManualOverrideMessage("");
+    try {
+      const res = await apiFetch("/api/messages/manual-retry-bot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: eventId,
+          sender_id: senderId,
+          page_id: pageId,
+          platform: selectedLogChannel?.platform || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as any)?.error || "Failed to retry bot reply");
+      }
+
+      await fetchMessages(eventId);
+      setSelectedLogMessageId(null);
+
+      const steps = Array.isArray((data as any)?.steps)
+        ? (data as any).steps.map((entry: unknown) => String(entry || ""))
+        : [];
+      const sentText = steps.includes("text");
+      const sentTicket = steps.includes("ticket");
+
+      if (!sentText && !sentTicket) {
+        setManualOverrideMessage("Retry completed but no outbound message was generated");
+      } else if (String((data as any)?.replay_source || "") === "failed-turn") {
+        setManualOverrideMessage("Bot resumed from the last failed turn");
+      } else {
+        setManualOverrideMessage("Bot retried from the latest incoming message");
+      }
+      return true;
+    } catch (err) {
+      console.error("Failed to retry bot reply", err);
+      setManualOverrideMessage(err instanceof Error ? err.message : "Failed to retry bot reply");
       return false;
     } finally {
       setManualOverrideAction("");
@@ -4866,6 +4929,28 @@ export default function App() {
               >
                 <Send className="h-4 w-4" />
                 {manualOverrideAction === "text" ? "Sending..." : "Send Reply"}
+              </ActionButton>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Resume Bot</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Re-run the bot on the latest sender turn if auto-reply failed and stopped.
+                </p>
+              </div>
+              <StatusBadge tone="amber">recovery</StatusBadge>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <ActionButton
+                tone="amber"
+                onClick={() => void retryBotFromLog()}
+                disabled={manualOverrideAction !== ""}
+              >
+                <RefreshCw className={`h-4 w-4 ${manualOverrideAction === "retry" ? "animate-spin" : ""}`} />
+                {manualOverrideAction === "retry" ? "Retrying..." : "Retry Bot Reply"}
               </ActionButton>
             </div>
           </div>
