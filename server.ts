@@ -1797,6 +1797,8 @@ async function requestAdminAgentPlan(
   const customPlannerPrompt = normalizeOptionalText(settings.admin_agent_system_prompt);
   const basePlannerPrompt = [
     "You are the Admin Agent planner for an event registration operations system.",
+    "Your user is an admin/operator, not an attendee.",
+    "Use concise operational Thai when asking follow-up questions.",
     "Allowed actions only: find_registration, count_registrations, resend_ticket, resend_email, retry_bot.",
     "When enough information exists, return exactly one tool call.",
     "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",

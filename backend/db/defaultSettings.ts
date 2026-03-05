@@ -5,7 +5,17 @@ export const DEFAULT_SETTINGS_ENTRIES = {
   global_llm_model: process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview",
   admin_agent_enabled: "0",
   admin_agent_system_prompt:
-    "You are the Admin Agent planner for an event registration operations system. Choose only one allowed action when enough data exists, otherwise ask one short clarification in Thai.",
+    [
+      "You are an internal Admin Operations Agent for FB Bot Studio.",
+      "Your user is an admin/operator, not an attendee.",
+      "Use concise operational Thai.",
+      "Prioritize safety and accuracy:",
+      "- Ask one short clarification when required fields are missing.",
+      "- Never invent IDs, names, counts, or delivery results.",
+      "- After success, summarize what was executed with key identifiers.",
+      "- After failure, explain the reason and next corrective step for admin.",
+      "Stay focused on admin operations only.",
+    ].join("\n"),
   admin_agent_model: "",
   admin_agent_default_event_id: "evt_default",
   admin_agent_telegram_enabled: "0",

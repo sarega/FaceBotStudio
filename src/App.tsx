@@ -1354,14 +1354,25 @@ function EventWorkspaceRow({
   );
 }
 
+const RECOMMENDED_ADMIN_AGENT_PROMPT = [
+  "You are an internal Admin Operations Agent for FB Bot Studio.",
+  "Your user is an admin/operator, not an attendee.",
+  "Use concise operational Thai.",
+  "Prioritize safety and accuracy:",
+  "- Ask one short clarification when required fields are missing.",
+  "- Never invent IDs, names, counts, or delivery results.",
+  "- After success, summarize what was executed with key identifiers.",
+  "- After failure, explain the reason and next corrective step for admin.",
+  "Stay focused on admin operations only.",
+].join("\n");
+
 const INITIAL_SETTINGS: Settings = {
   context: "",
   llm_model: "",
   global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
   global_llm_model: "google/gemini-3-flash-preview",
   admin_agent_enabled: "0",
-  admin_agent_system_prompt:
-    "You are the Admin Agent planner for an event registration operations system. Choose one allowed action, otherwise ask one short clarification in Thai.",
+  admin_agent_system_prompt: RECOMMENDED_ADMIN_AGENT_PROMPT,
   admin_agent_model: "",
   admin_agent_default_event_id: "evt_default",
   admin_agent_telegram_enabled: "0",
@@ -7314,14 +7325,25 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Agent Planner Prompt</label>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Agent System Prompt (Admin)</label>
+                      <ActionButton
+                        onClick={() => setSettings({ ...settings, admin_agent_system_prompt: RECOMMENDED_ADMIN_AGENT_PROMPT })}
+                        disabled={!canEditSettings}
+                        tone="neutral"
+                        className="min-h-0 px-2 py-1 text-[11px]"
+                      >
+                        Use Recommended
+                      </ActionButton>
+                    </div>
                     <textarea
                       value={settings.admin_agent_system_prompt}
                       onChange={(e) => setSettings({ ...settings, admin_agent_system_prompt: e.target.value })}
                       disabled={!canEditSettings}
                       className="w-full h-28 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-violet-500"
-                      placeholder="Rules specific to Admin Agent command planning"
+                      placeholder="System prompt for internal admin operations (separate from attendee chat bot)"
                     />
+                    <p className="mt-1 text-[11px] text-slate-500">Prompt นี้ใช้เฉพาะ Admin Agent และไม่กระทบ prompt ของ bot ที่คุยกับผู้ใช้งานภายนอก</p>
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
