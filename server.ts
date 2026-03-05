@@ -137,16 +137,33 @@ type ToolExecutionBundle = {
 };
 
 type AdminAgentActionName =
+  | "create_event"
+  | "update_event_setup"
+  | "update_event_status"
+  | "update_event_context"
   | "find_event"
+  | "search_system"
   | "get_event_overview"
   | "find_registration"
   | "list_registrations"
   | "count_registrations"
   | "get_registration_timeline"
+  | "set_registration_status"
   | "send_message_to_sender"
   | "resend_ticket"
   | "resend_email"
   | "retry_bot";
+
+type AdminAgentPolicy = {
+  readEvent: boolean;
+  manageEventSetup: boolean;
+  manageEventStatus: boolean;
+  manageEventContext: boolean;
+  readRegistration: boolean;
+  manageRegistration: boolean;
+  messageUser: boolean;
+  searchAllEvents: boolean;
+};
 
 type AdminAgentToolCall = {
   name: AdminAgentActionName;
@@ -849,17 +866,98 @@ function extractAssistantText(content: unknown) {
 }
 
 const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
+  "create_event",
+  "update_event_setup",
+  "update_event_status",
+  "update_event_context",
   "find_event",
+  "search_system",
   "get_event_overview",
   "find_registration",
   "list_registrations",
   "count_registrations",
   "get_registration_timeline",
+  "set_registration_status",
   "send_message_to_sender",
   "resend_ticket",
   "resend_email",
   "retry_bot",
 ]);
+
+const ADMIN_AGENT_ACTION_POLICY_LABEL: Record<AdminAgentActionName, string> = {
+  create_event: "create event",
+  update_event_setup: "update event setup",
+  update_event_status: "update event status",
+  update_event_context: "update event context",
+  find_event: "find event",
+  search_system: "search system",
+  get_event_overview: "event overview",
+  find_registration: "find registration",
+  list_registrations: "list registrations",
+  count_registrations: "count registrations",
+  get_registration_timeline: "registration timeline",
+  set_registration_status: "set registration status",
+  send_message_to_sender: "send message",
+  resend_ticket: "resend ticket",
+  resend_email: "resend email",
+  retry_bot: "retry bot",
+};
+
+function parseAdminAgentPolicy(settings: Record<string, any>): AdminAgentPolicy {
+  return {
+    readEvent: isTruthySetting(settings.admin_agent_policy_read_event ?? "1"),
+    manageEventSetup: isTruthySetting(settings.admin_agent_policy_manage_event_setup ?? "0"),
+    manageEventStatus: isTruthySetting(settings.admin_agent_policy_manage_event_status ?? "0"),
+    manageEventContext: isTruthySetting(settings.admin_agent_policy_manage_event_context ?? "0"),
+    readRegistration: isTruthySetting(settings.admin_agent_policy_read_registration ?? "1"),
+    manageRegistration: isTruthySetting(settings.admin_agent_policy_manage_registration ?? "1"),
+    messageUser: isTruthySetting(settings.admin_agent_policy_message_user ?? "1"),
+    searchAllEvents: isTruthySetting(settings.admin_agent_policy_search_all_events ?? "1"),
+  };
+}
+
+function getAllowedAdminAgentActions(policy: AdminAgentPolicy): AdminAgentActionName[] {
+  const allowed = new Set<AdminAgentActionName>();
+  if (policy.readEvent) {
+    allowed.add("find_event");
+    allowed.add("get_event_overview");
+  }
+  if (policy.searchAllEvents && (policy.readEvent || policy.readRegistration)) {
+    allowed.add("search_system");
+  }
+  if (policy.manageEventSetup) {
+    allowed.add("create_event");
+    allowed.add("update_event_setup");
+  }
+  if (policy.manageEventStatus) {
+    allowed.add("update_event_status");
+  }
+  if (policy.manageEventContext) {
+    allowed.add("update_event_context");
+  }
+  if (policy.readRegistration) {
+    allowed.add("find_registration");
+    allowed.add("list_registrations");
+    allowed.add("count_registrations");
+    allowed.add("get_registration_timeline");
+  }
+  if (policy.manageRegistration) {
+    allowed.add("set_registration_status");
+    allowed.add("resend_ticket");
+    allowed.add("resend_email");
+  }
+  if (policy.messageUser) {
+    allowed.add("send_message_to_sender");
+    allowed.add("retry_bot");
+  }
+  return [...allowed].filter((name) => ADMIN_AGENT_ACTION_SET.has(name));
+}
+
+function ensureAdminActionAllowed(actionName: AdminAgentActionName, allowedActions: Set<AdminAgentActionName>) {
+  if (allowedActions.has(actionName)) return;
+  const label = ADMIN_AGENT_ACTION_POLICY_LABEL[actionName] || actionName;
+  throw new Error(`Action "${label}" is disabled by Agent policy. Enable it in Agent > Advanced Policy.`);
+}
 
 function normalizeComparableText(value: unknown) {
   return String(value ?? "")
@@ -1920,8 +2018,11 @@ function parseAdminAgentEventSearchOptions(
   };
 }
 
-async function listAdminAgentEventCandidates(): Promise<AdminAgentEventCandidate[]> {
-  const events = await appDb.listEvents();
+async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> | null }): Promise<AdminAgentEventCandidate[]> {
+  const filterEventIds = options?.eventIds && options.eventIds.size > 0 ? options.eventIds : null;
+  const events = (await appDb.listEvents()).filter((event) => (
+    !filterEventIds || filterEventIds.has(String(event.id || "").trim())
+  ));
   const candidates = await Promise.all(events.map(async (event) => {
     const settings = await getSettingsMap(event.id);
     const configuredName = normalizeOptionalText(settings.event_name);
@@ -1998,10 +2099,11 @@ async function searchAdminAgentEvents(
   query: string,
   limit = 5,
   options?: AdminAgentEventSearchOptions,
+  scope?: { eventIds?: Set<string> | null },
 ): Promise<AdminAgentEventCandidate[]> {
   const normalizedQuery = normalizeComparableText(query);
   const maxResults = parsePositiveInteger(limit, 5, 20);
-  const candidates = await listAdminAgentEventCandidates();
+  const candidates = await listAdminAgentEventCandidates(scope);
   const derivedFilters = parseAdminAgentEventSearchOptions({ query }, query);
   const effectiveStatuses = options?.effectiveStatuses?.length
     ? options.effectiveStatuses
@@ -2077,14 +2179,27 @@ function buildAdminAgentFindEventReply(matches: AdminAgentEventCandidate[], quer
   return `${header}\n${lines.join("\n")}`;
 }
 
-async function resolveAdminAgentEventId(eventId: string) {
+async function resolveAdminAgentEventId(eventId: string, options?: { allowedEventId?: string; allowCrossEventSearch?: boolean }) {
   const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
+  const allowedEventId = normalizeOptionalText(options?.allowedEventId) || "";
+  const allowCrossEventSearch = options?.allowCrossEventSearch !== false;
+
+  if (allowedEventId && !allowCrossEventSearch && normalizedEventId !== allowedEventId) {
+    throw new Error(`Cross-event override is disabled by Agent policy. Current event: ${allowedEventId}`);
+  }
+
   const exactEvent = await appDb.getEventById(normalizedEventId);
   if (exactEvent) {
+    if (allowedEventId && !allowCrossEventSearch && normalizedEventId !== allowedEventId) {
+      throw new Error(`Cross-event override is disabled by Agent policy. Current event: ${allowedEventId}`);
+    }
     return normalizedEventId;
   }
 
-  const matches = await searchAdminAgentEvents(normalizedEventId, 5);
+  const searchScope = allowedEventId && !allowCrossEventSearch
+    ? { eventIds: new Set([allowedEventId]) }
+    : undefined;
+  const matches = await searchAdminAgentEvents(normalizedEventId, 5, undefined, searchScope);
   if (matches.length === 1) {
     return matches[0]!.id;
   }
@@ -2117,6 +2232,129 @@ function parseAdminAgentEventOverride(text: string, fallbackEventId: string) {
     eventId: fallbackEventId,
     command: normalized,
   };
+}
+
+function normalizeAdminEventStatusInput(value: unknown): "pending" | "active" | "inactive" | "cancelled" | null {
+  const normalized = normalizeComparableText(value);
+  if (normalized === "pending" || normalized === "active" || normalized === "inactive" || normalized === "cancelled") {
+    return normalized;
+  }
+  if (normalized === "live") return "active";
+  if (normalized === "pause" || normalized === "paused") return "inactive";
+  return null;
+}
+
+function parseOptionalBooleanSetting(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value == null) return null;
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return null;
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return null;
+}
+
+function normalizeDateTimeInput(value: unknown) {
+  const raw = normalizeOptionalText(value);
+  if (!raw) return "";
+  const normalized = raw.replace(/\s+/, "T");
+  const match = normalized.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if (match) {
+    return `${match[1]}T${match[2]}`;
+  }
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  const pad = (num: number) => String(num).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
+function parseAdminAgentEventSetupPatch(args: Record<string, unknown>) {
+  const patch: Record<string, string> = {};
+  const changedKeys: string[] = [];
+
+  const put = (key: string, value: string) => {
+    patch[key] = value;
+    changedKeys.push(key);
+  };
+
+  const eventName = normalizeOptionalText(args.event_name) || normalizeOptionalText(args.name);
+  if (eventName) put("event_name", eventName);
+
+  const timeZone = normalizeOptionalText(args.event_timezone) || normalizeOptionalText(args.timezone);
+  if (timeZone) put("event_timezone", normalizeTimeZone(timeZone));
+
+  const location = normalizeOptionalText(args.event_location) || normalizeOptionalText(args.location);
+  if (location) put("event_location", location);
+
+  const mapUrl = normalizeOptionalText(args.event_map_url) || normalizeOptionalText(args.map_url);
+  if (mapUrl) put("event_map_url", mapUrl);
+
+  const eventDate = normalizeDateTimeInput(args.event_date || args.start_date || args.event_start);
+  if (eventDate) put("event_date", eventDate);
+
+  const eventEndDate = normalizeDateTimeInput(args.event_end_date || args.end_date || args.event_end);
+  if (eventEndDate) put("event_end_date", eventEndDate);
+
+  const description = normalizeOptionalText(args.event_description) || normalizeOptionalText(args.description);
+  if (description) put("event_description", description);
+
+  const travel = normalizeOptionalText(args.event_travel) || normalizeOptionalText(args.travel);
+  if (travel) put("event_travel", travel);
+
+  const regLimitRaw = normalizeOptionalText(args.reg_limit) || normalizeOptionalText(args.registration_limit);
+  if (regLimitRaw) {
+    const parsed = parseRegistrationLimit(regLimitRaw);
+    if (parsed === null) {
+      if (["0", "none", "unlimited", "no-limit", "nolimit", "infinite"].includes(normalizeComparableText(regLimitRaw))) {
+        put("reg_limit", "0");
+      } else {
+        throw new Error("registration_limit must be a positive integer or 0/unlimited");
+      }
+    } else {
+      put("reg_limit", String(parsed));
+    }
+  }
+
+  const regStart = normalizeDateTimeInput(args.reg_start || args.registration_start || args.open_date);
+  if (regStart) put("reg_start", regStart);
+
+  const regEnd = normalizeDateTimeInput(args.reg_end || args.registration_end || args.close_date);
+  if (regEnd) put("reg_end", regEnd);
+
+  const uniqueName = parseOptionalBooleanSetting(args.reg_unique_name ?? args.unique_full_name);
+  if (uniqueName !== null) {
+    put("reg_unique_name", uniqueName ? "1" : "0");
+  }
+
+  const confirmationEnabled = parseOptionalBooleanSetting(
+    args.confirmation_email_enabled ?? args.email_enabled ?? args.enable_confirmation_email,
+  );
+  if (confirmationEnabled !== null) {
+    put("confirmation_email_enabled", confirmationEnabled ? "1" : "0");
+  }
+
+  const confirmationSubject = normalizeOptionalText(args.confirmation_email_subject) || normalizeOptionalText(args.email_subject);
+  if (confirmationSubject) {
+    put("confirmation_email_subject", confirmationSubject);
+  }
+
+  return { patch, changedKeys };
+}
+
+function validateEventSettingsPatch(baseSettings: Record<string, string>, patch: Record<string, string>) {
+  const merged = {
+    ...baseSettings,
+    ...patch,
+  };
+  const state = getEventState(merged);
+  if (state.registrationStatus === "invalid") {
+    throw new Error("Registration close date must be later than or equal to open date");
+  }
+  if (state.eventScheduleStatus === "invalid") {
+    throw new Error("Event end time must be later than or equal to the event start time");
+  }
 }
 
 function formatEventScopedTimestamp(value: string, timeZone?: string) {
@@ -2250,6 +2488,8 @@ async function requestAdminAgentPlan(
   message: string,
   history: ChatHistoryMessage[],
   settings: Record<string, any>,
+  allowedActions: AdminAgentActionName[],
+  policy: AdminAgentPolicy,
   usageContext?: LlmUsageContext,
 ): Promise<AdminAgentPlannerResult> {
   if (!process.env.OPENROUTER_API_KEY) {
@@ -2264,20 +2504,36 @@ async function requestAdminAgentPlan(
     ? settings.global_llm_model.trim()
     : DEFAULT_OPENROUTER_MODEL;
   const customPlannerPrompt = normalizeOptionalText(settings.admin_agent_system_prompt);
+  const allowedActionSet = new Set(
+    allowedActions.filter((actionName): actionName is AdminAgentActionName => ADMIN_AGENT_ACTION_SET.has(actionName)),
+  );
+  if (allowedActionSet.size === 0) {
+    throw new Error("No Admin Agent actions are allowed by current policy");
+  }
+  const allowedActionText = [...allowedActionSet].join(", ");
   const basePlannerPrompt = [
     "You are the Admin Agent planner for an event registration operations system.",
     "Your user is an admin/operator, not an attendee.",
     "Use concise operational Thai when asking follow-up questions.",
-    "Allowed actions only: find_event, get_event_overview, find_registration, list_registrations, count_registrations, get_registration_timeline, send_message_to_sender, resend_ticket, resend_email, retry_bot.",
+    `Allowed actions only: ${allowedActionText}.`,
     "Default to the selected event scope unless the admin explicitly asks for another event.",
+    policy.searchAllEvents
+      ? "Cross-event search and cross-event commands are allowed."
+      : "Cross-event search is disabled. Stay within the selected/default event only.",
     "Use conversation history for follow-up intent; do not ignore prior turns in the same chat session.",
     "When enough information exists, return exactly one tool call.",
     "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
     "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
     "When matching by name, pass full_name or first_name/last_name.",
+    "Use create_event when admin asks to create a new event from natural language details.",
+    "Use update_event_setup to fill event detail/rules fields after event creation.",
+    "Use update_event_status for live/inactive/pending/cancelled updates.",
+    "Use update_event_context for writing event context notes from admin instructions.",
     "Use find_event when asked to check whether an event exists, or when event name is partial.",
+    "Use search_system only when admin asks to search across the whole system.",
     "Use get_event_overview when asked for event status/time/place/map/description/travel/registration-rules summary.",
     "Use list_registrations for list requests, and get_registration_timeline for sender chat history.",
+    "Use set_registration_status when admin asks to change attendee status (registered/cancelled/checked-in).",
     "Use send_message_to_sender when admin asks to send a custom message to a specific user sender_id.",
     "Do not call find_registration without at least one attendee filter (registration_id, full_name, sender_id, phone, email, or query).",
     "When asked to continue a stuck chat, use retry_bot.",
@@ -2306,6 +2562,99 @@ async function requestAdminAgentPlan(
         {
           type: "function",
           function: {
+            name: "create_event",
+            description: "Create a new event workspace, optionally with initial status and setup fields.",
+            parameters: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                event_name: { type: "string" },
+                status: { type: "string", enum: ["pending", "active", "inactive", "cancelled"] },
+                event_timezone: { type: "string" },
+                event_location: { type: "string" },
+                event_map_url: { type: "string" },
+                event_date: { type: "string" },
+                event_end_date: { type: "string" },
+                event_description: { type: "string" },
+                event_travel: { type: "string" },
+                reg_limit: { type: "string" },
+                reg_start: { type: "string" },
+                reg_end: { type: "string" },
+                reg_unique_name: { type: "boolean" },
+                confirmation_email_enabled: { type: "boolean" },
+                confirmation_email_subject: { type: "string" },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "update_event_setup",
+            description: "Update event detail/rules fields: schedule, location, map, description, travel, registration open/close/limit, unique-name, email confirmation.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                name: { type: "string" },
+                event_name: { type: "string" },
+                event_timezone: { type: "string" },
+                event_location: { type: "string" },
+                event_map_url: { type: "string" },
+                map_url: { type: "string" },
+                event_date: { type: "string" },
+                event_end_date: { type: "string" },
+                event_description: { type: "string" },
+                description: { type: "string" },
+                event_travel: { type: "string" },
+                travel: { type: "string" },
+                reg_limit: { type: "string" },
+                registration_limit: { type: "string" },
+                reg_start: { type: "string" },
+                registration_start: { type: "string" },
+                reg_end: { type: "string" },
+                registration_end: { type: "string" },
+                reg_unique_name: { type: "boolean" },
+                unique_full_name: { type: "boolean" },
+                confirmation_email_enabled: { type: "boolean" },
+                confirmation_email_subject: { type: "string" },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "update_event_status",
+            description: "Update event lifecycle status (pending/active/inactive/cancelled).",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                status: { type: "string", enum: ["pending", "active", "inactive", "cancelled"] },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "update_event_context",
+            description: "Write event context text for the selected event, either replacing or appending.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                context: { type: "string" },
+                text: { type: "string" },
+                mode: { type: "string", enum: ["replace", "append"] },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
             name: "find_event",
             description: "Find events by event ID, slug, or partial event name.",
             parameters: {
@@ -2319,6 +2668,23 @@ async function requestAdminAgentPlan(
                 registration_availability: { type: "string", enum: ["open", "not_started", "closed", "invalid", "full"] },
                 registration_open_only: { type: "boolean" },
                 limit: { type: "integer", minimum: 1, maximum: 20 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "search_system",
+            description: "Search across all events and registrations by free-text query.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                include_events: { type: "boolean" },
+                include_registrations: { type: "boolean" },
+                status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+                limit: { type: "integer", minimum: 1, maximum: 30 },
               },
             },
           },
@@ -2431,6 +2797,29 @@ async function requestAdminAgentPlan(
         {
           type: "function",
           function: {
+            name: "set_registration_status",
+            description: "Update one attendee registration status in the selected event.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                registration_id: { type: "string" },
+                sender_id: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                phone: { type: "string" },
+                email: { type: "string" },
+                query: { type: "string" },
+                status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+              },
+              required: ["status"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
             name: "send_message_to_sender",
             description: "Send a custom outbound text message to a user sender ID on their most recent active channel in the selected event.",
             parameters: {
@@ -2512,7 +2901,10 @@ async function requestAdminAgentPlan(
             },
           },
         },
-      ],
+      ].filter((tool) => {
+        const name = String((tool as { function?: { name?: string } }).function?.name || "") as AdminAgentActionName;
+        return allowedActionSet.has(name);
+      }),
       tool_choice: "auto",
       parallel_tool_calls: false,
     }),
@@ -2553,7 +2945,7 @@ async function requestAdminAgentPlan(
   }
 
   return {
-    toolCall: ADMIN_AGENT_ACTION_SET.has(callName)
+    toolCall: ADMIN_AGENT_ACTION_SET.has(callName) && allowedActionSet.has(callName)
       ? {
           name: callName,
           args: callArgs,
@@ -2569,8 +2961,134 @@ async function requestAdminAgentPlan(
   };
 }
 
-async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCall, rawMessage: string) {
+async function executeAdminAgentToolCall(
+  eventId: string,
+  call: AdminAgentToolCall,
+  rawMessage: string,
+  options: { policy: AdminAgentPolicy },
+) {
   switch (call.name) {
+    case "create_event": {
+      const eventName = normalizeOptionalText(call.args.name) || normalizeOptionalText(call.args.event_name);
+      if (!eventName) {
+        throw new Error("Event name is required to create event");
+      }
+
+      const created = await appDb.createEvent({ name: eventName });
+      const setupPatch = parseAdminAgentEventSetupPatch(call.args);
+      if (Object.keys(setupPatch.patch).length > 0) {
+        const baseSettings = await getSettingsMap(created.id);
+        validateEventSettingsPatch(baseSettings, setupPatch.patch);
+        await appDb.upsertSettings(setupPatch.patch, created.id);
+      }
+      const status = normalizeAdminEventStatusInput(call.args.status);
+      if (status) {
+        await appDb.updateEvent(created.id, { status });
+      }
+
+      return {
+        reply: `สร้างอีเวนต์ใหม่แล้ว: ${created.id} • ${eventName}`,
+        result: {
+          event_id: created.id,
+          event_name: eventName,
+          status: status || created.status,
+          setup_keys: Object.keys(setupPatch.patch),
+        },
+        targetType: "event",
+        targetId: created.id,
+      };
+    }
+    case "update_event_setup": {
+      const explicitEventId = normalizeOptionalText(call.args.event_id);
+      const targetEventId = explicitEventId || eventId;
+      if (!options.policy.searchAllEvents && explicitEventId && explicitEventId !== eventId) {
+        throw new Error(`Cross-event setup update is disabled by policy. Current event: ${eventId}`);
+      }
+      const targetEvent = await appDb.getEventById(targetEventId);
+      if (!targetEvent) {
+        throw new Error(`Event ${targetEventId} was not found`);
+      }
+
+      const { patch, changedKeys } = parseAdminAgentEventSetupPatch(call.args);
+      const nextEventName = normalizeOptionalText(call.args.event_name) || normalizeOptionalText(call.args.name);
+      if (!nextEventName && changedKeys.length === 0) {
+        throw new Error("No setup fields provided");
+      }
+
+      const baseSettings = await getSettingsMap(targetEventId);
+      if (Object.keys(patch).length > 0) {
+        validateEventSettingsPatch(baseSettings, patch);
+        await appDb.upsertSettings(patch, targetEventId);
+      }
+      if (nextEventName && nextEventName !== targetEvent.name) {
+        await appDb.updateEvent(targetEventId, { name: nextEventName });
+      }
+
+      return {
+        reply: `อัปเดต setup ของ ${targetEventId} แล้ว (${Math.max(changedKeys.length, nextEventName ? 1 : 0)} รายการ)`,
+        result: {
+          event_id: targetEventId,
+          updated_event_name: nextEventName || null,
+          changed_keys: changedKeys,
+        },
+        targetType: "event",
+        targetId: targetEventId,
+      };
+    }
+    case "update_event_status": {
+      const explicitEventId = normalizeOptionalText(call.args.event_id);
+      const targetEventId = explicitEventId || eventId;
+      if (!options.policy.searchAllEvents && explicitEventId && explicitEventId !== eventId) {
+        throw new Error(`Cross-event status update is disabled by policy. Current event: ${eventId}`);
+      }
+      const status = normalizeAdminEventStatusInput(call.args.status);
+      if (!status) {
+        throw new Error("Valid event status is required (pending/active/inactive/cancelled)");
+      }
+      const updated = await appDb.updateEvent(targetEventId, { status });
+      if (!updated) {
+        throw new Error(`Failed to update event status for ${targetEventId}`);
+      }
+      return {
+        reply: `ตั้งสถานะ ${targetEventId} เป็น ${status} แล้ว`,
+        result: {
+          event_id: targetEventId,
+          status,
+        },
+        targetType: "event",
+        targetId: targetEventId,
+      };
+    }
+    case "update_event_context": {
+      const explicitEventId = normalizeOptionalText(call.args.event_id);
+      const targetEventId = explicitEventId || eventId;
+      if (!options.policy.searchAllEvents && explicitEventId && explicitEventId !== eventId) {
+        throw new Error(`Cross-event context update is disabled by policy. Current event: ${eventId}`);
+      }
+      const incomingText = normalizeOptionalText(call.args.context) || normalizeOptionalText(call.args.text);
+      if (!incomingText) {
+        throw new Error("Context text is required");
+      }
+      const mode = normalizeComparableText(call.args.mode) === "append" ? "append" : "replace";
+      const currentSettings = await getSettingsMap(targetEventId);
+      const currentContext = normalizeOptionalText(currentSettings.context);
+      const nextContext = mode === "append" && currentContext
+        ? `${currentContext}\n\n${incomingText}`
+        : incomingText;
+      await appDb.upsertSettings({ context: nextContext }, targetEventId);
+      return {
+        reply: mode === "append"
+          ? `เพิ่ม context ให้ ${targetEventId} แล้ว`
+          : `อัปเดต context ของ ${targetEventId} แล้ว`,
+        result: {
+          event_id: targetEventId,
+          mode,
+          context_chars: nextContext.length,
+        },
+        targetType: "event",
+        targetId: targetEventId,
+      };
+    }
     case "find_event": {
       const query =
         normalizeOptionalText(call.args.query)
@@ -2580,7 +3098,8 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
         || normalizeOptionalText(rawMessage);
       const limit = parsePositiveInteger(call.args.limit, 5, 20);
       const searchOptions = parseAdminAgentEventSearchOptions(call.args, rawMessage);
-      const matches = await searchAdminAgentEvents(query, limit, searchOptions);
+      const searchScope = options.policy.searchAllEvents ? undefined : { eventIds: new Set([eventId]) };
+      const matches = await searchAdminAgentEvents(query, limit, searchOptions, searchScope);
       return {
         reply: buildAdminAgentFindEventReply(matches, query, limit),
         result: {
@@ -2595,6 +3114,105 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
         },
         targetType: matches.length === 1 ? "event" : "workspace",
         targetId: matches.length === 1 ? matches[0]!.id : "events",
+      };
+    }
+    case "search_system": {
+      if (!options.policy.searchAllEvents) {
+        throw new Error("Cross-event search is disabled by Agent policy");
+      }
+      const query = normalizeComparableText(call.args.query || rawMessage);
+      const includeEvents = parseOptionalBooleanSetting(call.args.include_events);
+      const includeRegistrations = parseOptionalBooleanSetting(call.args.include_registrations);
+      const limit = parsePositiveInteger(call.args.limit, 8, 30);
+      const targetStatus = normalizeRegistrationStatusInput(call.args.status);
+
+      const shouldSearchEvents = includeEvents !== false && options.policy.readEvent;
+      const shouldSearchRegistrations = includeRegistrations !== false && options.policy.readRegistration;
+      if (!shouldSearchEvents && !shouldSearchRegistrations) {
+        throw new Error("Search scope is disabled by policy (event-read and registration-read are both off)");
+      }
+      const eventRows = shouldSearchEvents ? await appDb.listEvents() : [];
+      const eventNameMap = new Map(eventRows.map((event) => [event.id, event.name]));
+
+      const eventMatches = shouldSearchEvents
+        ? eventRows.filter((row) => {
+            if (!query) return true;
+            const haystack = [
+              row.id,
+              row.slug,
+              row.name,
+              row.effective_status,
+              row.registration_availability || "",
+            ].map(normalizeComparableText).join("\n");
+            return haystack.includes(query);
+          }).slice(0, limit)
+        : [];
+
+      const registrationMatches = shouldSearchRegistrations
+        ? (await appDb.listRegistrations(undefined))
+            .filter((row) => {
+              if (targetStatus && row.status !== targetStatus) return false;
+              if (!query) return true;
+              const haystack = [
+                row.id,
+                row.event_id || "",
+                eventNameMap.get(String(row.event_id || "")) || "",
+                row.first_name,
+                row.last_name,
+                `${row.first_name || ""} ${row.last_name || ""}`,
+                row.phone,
+                row.email,
+                row.sender_id,
+                row.status,
+              ].map(normalizeComparableText).join("\n");
+              return haystack.includes(query);
+            })
+            .slice(0, limit)
+            .map((row) => ({
+              id: row.id,
+              event_id: row.event_id || DEFAULT_EVENT_ID,
+              event_name: eventNameMap.get(String(row.event_id || "")) || "",
+              full_name: formatRegistrationDisplayName(row),
+              status: row.status,
+              timestamp: row.timestamp,
+            }))
+        : [];
+
+      const replyLines = [
+        query ? `ผลค้นหาทั้งระบบสำหรับ "${query}"` : "ผลค้นหาทั้งระบบล่าสุด",
+        shouldSearchEvents ? `- events: ${eventMatches.length}` : "- events: skipped",
+        shouldSearchRegistrations ? `- registrations: ${registrationMatches.length}` : "- registrations: skipped",
+      ];
+      if (eventMatches.length > 0) {
+        replyLines.push("Events:");
+        for (const [index, row] of eventMatches.slice(0, 5).entries()) {
+          replyLines.push(`${index + 1}. ${row.id} • ${row.name} • ${row.effective_status}`);
+        }
+      }
+      if (registrationMatches.length > 0) {
+        replyLines.push("Registrations:");
+        for (const [index, row] of registrationMatches.slice(0, 5).entries()) {
+          replyLines.push(`${index + 1}. ${row.id} • ${row.full_name} • ${row.status} • ${row.event_id}`);
+        }
+      }
+
+      return {
+        reply: replyLines.join("\n"),
+        result: {
+          query,
+          limit,
+          status: targetStatus,
+          events: eventMatches.map((row) => ({
+            id: row.id,
+            slug: row.slug,
+            name: row.name,
+            effective_status: row.effective_status,
+            registration_availability: row.registration_availability || null,
+          })),
+          registrations: registrationMatches,
+        },
+        targetType: "workspace",
+        targetId: "system_search",
       };
     }
     case "get_event_overview": {
@@ -2750,6 +3368,29 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
         targetId: registration?.id || senderId,
       };
     }
+    case "set_registration_status": {
+      const status = normalizeRegistrationStatusInput(call.args.status);
+      if (!status) {
+        throw new Error("Registration status is required (registered/cancelled/checked-in)");
+      }
+
+      const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+      const updated = await appDb.updateRegistrationStatus(registration.id, status);
+      if (!updated) {
+        throw new Error(`Failed to update status for ${registration.id}`);
+      }
+      return {
+        reply: `อัปเดตสถานะ ${registration.id} เป็น ${status} แล้ว`,
+        result: {
+          event_id: eventId,
+          registration_id: registration.id,
+          full_name: formatRegistrationDisplayName(registration),
+          status,
+        },
+        targetType: "registration",
+        targetId: registration.id,
+      };
+    }
     case "send_message_to_sender": {
       const customMessage = normalizeOptionalText(call.args.message) || normalizeOptionalText(call.args.text);
       if (!customMessage) {
@@ -2883,6 +3524,7 @@ function getAdminAgentErrorStatusCode(message: string) {
     || lower.includes("no recent")
     || lower.includes("missing")
     || lower.includes("unsupported")
+    || lower.includes("disabled by agent policy")
     || lower.includes("no channel destination")
   ) {
     return 400;
@@ -3024,28 +3666,44 @@ async function runAdminAgentCommand(options: {
     throw new Error("Message is required");
   }
 
-  const scopedEventId = await resolveAdminAgentEventId(parsedCommand.eventId || requestedEventId);
   const providedSettings = options.settings && typeof options.settings === "object"
     ? options.settings as Record<string, any>
     : null;
-  const shouldReuseProvidedSettings = Boolean(providedSettings) && scopedEventId === requestedEventId;
-  const eventSettings = shouldReuseProvidedSettings
-    ? (providedSettings as Record<string, any>)
-    : await getSettingsMap(scopedEventId);
+  const requestedSettings = await getSettingsMap(requestedEventId);
+  const requestedPolicy = parseAdminAgentPolicy({
+    ...requestedSettings,
+    ...(providedSettings || {}),
+  });
+
+  const overrideEventId = normalizeOptionalText(parsedCommand.eventId);
+  const hasCrossEventOverride = Boolean(overrideEventId) && overrideEventId !== requestedEventId;
+  if (hasCrossEventOverride) {
+    if (!requestedPolicy.searchAllEvents) {
+      throw new Error(`Cross-event override is disabled by Agent policy. Current event: ${requestedEventId}`);
+    }
+  }
+
+  const scopedEventId = await resolveAdminAgentEventId(parsedCommand.eventId || requestedEventId, {
+    allowedEventId: requestedEventId,
+    allowCrossEventSearch: requestedPolicy.searchAllEvents,
+  });
+  const eventSettings = await getSettingsMap(scopedEventId);
   const settings = {
     ...eventSettings,
-    ...(providedSettings && normalizeOptionalText(providedSettings.admin_agent_system_prompt)
-      ? { admin_agent_system_prompt: providedSettings.admin_agent_system_prompt }
-      : {}),
-    ...(providedSettings && normalizeOptionalText(providedSettings.admin_agent_model)
-      ? { admin_agent_model: providedSettings.admin_agent_model }
-      : {}),
+    ...(providedSettings || {}),
   };
+  const policy = parseAdminAgentPolicy(settings);
+  const allowedActions = getAllowedAdminAgentActions(policy);
+  if (allowedActions.length === 0) {
+    throw new Error("Admin Agent has no allowed actions. Enable at least one action in Advanced Policy.");
+  }
 
   const plan = await requestAdminAgentPlan(
     message,
     options.history || [],
     settings,
+    allowedActions,
+    policy,
     {
       eventId: scopedEventId,
       actorUserId: options.actorUserId || null,
@@ -3070,12 +3728,18 @@ async function runAdminAgentCommand(options: {
     };
   }
 
-  const actionUsesEventScope = plan.toolCall.name !== "find_event";
+  const allowedActionSet = new Set<AdminAgentActionName>(allowedActions);
+  ensureAdminActionAllowed(plan.toolCall.name, allowedActionSet);
+
+  const actionUsesEventScope = !new Set<AdminAgentActionName>(["find_event", "search_system", "create_event"]).has(plan.toolCall.name);
   let executionEventId = scopedEventId;
   if (actionUsesEventScope) {
     const actionEventId = normalizeOptionalText(plan.toolCall.args.event_id);
     if (actionEventId) {
-      executionEventId = await resolveAdminAgentEventId(actionEventId);
+      executionEventId = await resolveAdminAgentEventId(actionEventId, {
+        allowedEventId: scopedEventId,
+        allowCrossEventSearch: policy.searchAllEvents,
+      });
     }
   }
 
@@ -3089,7 +3753,9 @@ async function runAdminAgentCommand(options: {
       }
     : plan.toolCall;
 
-  const execution = await executeAdminAgentToolCall(executionEventId, action, message);
+  const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
+    policy,
+  });
   return {
     reply: execution.reply,
     action,
@@ -7098,12 +7764,24 @@ async function startServer() {
         if (/^\/start\b/i.test(text) || /^\/help\b/i.test(text)) {
           const helpMessage = [
             "Admin Agent พร้อมใช้งาน",
+            "",
+            "Telegram setup (step-by-step):",
+            "1) เปิด Agent tab ในเว็บ แล้ว Enable Telegram Access + Save",
+            "2) วาง Bot Token และตั้ง Webhook Secret Token ให้ตรงกัน",
+            "3) เรียก setWebhook ด้วย URL /api/admin-agent/telegram/webhook",
+            "4) ใส่ Allowed Chat IDs ของแอดมินที่อนุญาต",
+            "5) กลับมาที่ Telegram แล้วพิมพ์ /agent <คำสั่ง>",
+            "",
             "ตัวอย่างคำสั่ง:",
             "- หาอีเวนต์ สหจะโยคะ 5 สัปดาห์",
+            "- สร้างอีเวนต์ โปรแกรมใหม่ชื่อ Yoga Intro",
+            "- ตั้งสถานะ event นี้เป็น active",
+            "- อัปเดต context event นี้ว่า ...",
             "- สรุปอีเวนต์นี้",
             "- ขอรายละเอียดอีเวนต์นี้ทั้งหมด",
             "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
             "- list registrations status registered",
+            "- ตั้งสถานะ REG-XXXXXX เป็น checked-in",
             "- หาชื่อ สมชาย ใจดี",
             "- ส่งข้อความถึง sender 123456 ว่า ติดตามรายละเอียดได้ที่ลิงก์นี้",
             "- timeline REG-XXXXXX",

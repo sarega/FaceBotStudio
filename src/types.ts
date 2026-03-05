@@ -241,6 +241,14 @@ export interface Settings {
   admin_agent_system_prompt: string;
   admin_agent_model: string;
   admin_agent_default_event_id: string;
+  admin_agent_policy_read_event: string;
+  admin_agent_policy_manage_event_setup: string;
+  admin_agent_policy_manage_event_status: string;
+  admin_agent_policy_manage_event_context: string;
+  admin_agent_policy_read_registration: string;
+  admin_agent_policy_manage_registration: string;
+  admin_agent_policy_message_user: string;
+  admin_agent_policy_search_all_events: string;
   admin_agent_telegram_enabled: string;
   admin_agent_telegram_bot_token: string;
   admin_agent_telegram_webhook_secret: string;

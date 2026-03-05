@@ -275,6 +275,7 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
+const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
 const INITIAL_CHECKIN_TOKEN =
   typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("checkin_token")?.trim() || ""
@@ -284,6 +285,53 @@ function getStoredThemeMode(): ThemeMode {
   if (typeof window === "undefined") return "system";
   const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
   return raw === "light" || raw === "dark" || raw === "system" ? raw : "system";
+}
+
+function readAdminAgentChatStore() {
+  if (typeof window === "undefined") return {} as Record<string, AdminAgentChatMessage[]>;
+  try {
+    const raw = window.localStorage.getItem(ADMIN_AGENT_CHAT_STORAGE_KEY);
+    if (!raw) return {} as Record<string, AdminAgentChatMessage[]>;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {} as Record<string, AdminAgentChatMessage[]>;
+    const store: Record<string, AdminAgentChatMessage[]> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!Array.isArray(value)) continue;
+      const messages = value
+        .filter((item) => item && typeof item === "object")
+        .map((item) => {
+          const row = item as Record<string, unknown>;
+          const role = row.role === "user" ? "user" : row.role === "agent" ? "agent" : null;
+          const text = typeof row.text === "string" ? row.text : "";
+          const timestamp = typeof row.timestamp === "string" ? row.timestamp : "";
+          if (!role || !text || !timestamp) return null;
+          const actionSource = row.actionSource === "rule" ? "rule" : "llm";
+          return {
+            role,
+            text,
+            timestamp,
+            actionName: typeof row.actionName === "string" ? row.actionName : "",
+            actionSource,
+          } satisfies AdminAgentChatMessage;
+        })
+        .filter(Boolean) as AdminAgentChatMessage[];
+      if (messages.length > 0) {
+        store[key] = messages.slice(-120);
+      }
+    }
+    return store;
+  } catch {
+    return {} as Record<string, AdminAgentChatMessage[]>;
+  }
+}
+
+function writeAdminAgentChatStore(store: Record<string, AdminAgentChatMessage[]>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ADMIN_AGENT_CHAT_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // ignore storage write failures
+  }
 }
 
 function resolveThemeMode(mode: ThemeMode) {
@@ -1358,10 +1406,12 @@ const RECOMMENDED_ADMIN_AGENT_PROMPT = [
   "You are an internal Admin Operations Agent for FB Bot Studio.",
   "Your user is an admin/operator, not an attendee.",
   "Use concise operational Thai.",
+  "Follow Agent policy scopes strictly. If required action is disabled, tell admin to enable it in Advanced Action Policy.",
   "Respect event scope: operate on the selected event unless admin explicitly specifies another event ID.",
   "When admin asks by partial event name, find and confirm matching event IDs before running event-specific actions.",
   "Use prior chat turns as working memory for follow-up questions in the same session.",
   "When asked for event details, include schedule, location, map, description, travel notes, and registration rules (capacity/open/close/unique-name).",
+  "When policy allows, you can create event, update event setup/status/context, and update registration status.",
   "When asked to message a user by sender ID, execute the send-message action and report delivery target.",
   "Prioritize safety and accuracy:",
   "- Ask one short clarification when required fields are missing.",
@@ -1380,6 +1430,14 @@ const INITIAL_SETTINGS: Settings = {
   admin_agent_system_prompt: RECOMMENDED_ADMIN_AGENT_PROMPT,
   admin_agent_model: "",
   admin_agent_default_event_id: "evt_default",
+  admin_agent_policy_read_event: "1",
+  admin_agent_policy_manage_event_setup: "0",
+  admin_agent_policy_manage_event_status: "0",
+  admin_agent_policy_manage_event_context: "0",
+  admin_agent_policy_read_registration: "1",
+  admin_agent_policy_manage_registration: "1",
+  admin_agent_policy_message_user: "1",
+  admin_agent_policy_search_all_events: "1",
   admin_agent_telegram_enabled: "0",
   admin_agent_telegram_bot_token: "",
   admin_agent_telegram_webhook_secret: "",
@@ -1470,6 +1528,14 @@ const AGENT_SETTINGS_KEYS = [
   "admin_agent_system_prompt",
   "admin_agent_model",
   "admin_agent_default_event_id",
+  "admin_agent_policy_read_event",
+  "admin_agent_policy_manage_event_setup",
+  "admin_agent_policy_manage_event_status",
+  "admin_agent_policy_manage_event_context",
+  "admin_agent_policy_read_registration",
+  "admin_agent_policy_manage_registration",
+  "admin_agent_policy_message_user",
+  "admin_agent_policy_search_all_events",
   "admin_agent_telegram_enabled",
   "admin_agent_telegram_bot_token",
   "admin_agent_telegram_webhook_secret",
@@ -1502,6 +1568,38 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.admin_agent_default_event_id === "string" && data.admin_agent_default_event_id.trim()
         ? data.admin_agent_default_event_id.trim()
         : previous.admin_agent_default_event_id,
+    admin_agent_policy_read_event:
+      typeof data.admin_agent_policy_read_event === "string" && data.admin_agent_policy_read_event.trim()
+        ? data.admin_agent_policy_read_event.trim()
+        : previous.admin_agent_policy_read_event,
+    admin_agent_policy_manage_event_setup:
+      typeof data.admin_agent_policy_manage_event_setup === "string" && data.admin_agent_policy_manage_event_setup.trim()
+        ? data.admin_agent_policy_manage_event_setup.trim()
+        : previous.admin_agent_policy_manage_event_setup,
+    admin_agent_policy_manage_event_status:
+      typeof data.admin_agent_policy_manage_event_status === "string" && data.admin_agent_policy_manage_event_status.trim()
+        ? data.admin_agent_policy_manage_event_status.trim()
+        : previous.admin_agent_policy_manage_event_status,
+    admin_agent_policy_manage_event_context:
+      typeof data.admin_agent_policy_manage_event_context === "string" && data.admin_agent_policy_manage_event_context.trim()
+        ? data.admin_agent_policy_manage_event_context.trim()
+        : previous.admin_agent_policy_manage_event_context,
+    admin_agent_policy_read_registration:
+      typeof data.admin_agent_policy_read_registration === "string" && data.admin_agent_policy_read_registration.trim()
+        ? data.admin_agent_policy_read_registration.trim()
+        : previous.admin_agent_policy_read_registration,
+    admin_agent_policy_manage_registration:
+      typeof data.admin_agent_policy_manage_registration === "string" && data.admin_agent_policy_manage_registration.trim()
+        ? data.admin_agent_policy_manage_registration.trim()
+        : previous.admin_agent_policy_manage_registration,
+    admin_agent_policy_message_user:
+      typeof data.admin_agent_policy_message_user === "string" && data.admin_agent_policy_message_user.trim()
+        ? data.admin_agent_policy_message_user.trim()
+        : previous.admin_agent_policy_message_user,
+    admin_agent_policy_search_all_events:
+      typeof data.admin_agent_policy_search_all_events === "string" && data.admin_agent_policy_search_all_events.trim()
+        ? data.admin_agent_policy_search_all_events.trim()
+        : previous.admin_agent_policy_search_all_events,
     admin_agent_telegram_enabled:
       typeof data.admin_agent_telegram_enabled === "string" && data.admin_agent_telegram_enabled.trim()
         ? data.admin_agent_telegram_enabled.trim()
@@ -1731,6 +1829,7 @@ export default function App() {
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const searchFocusTimeoutRef = useRef<number | null>(null);
   const adminAgentScrollRef = useRef<HTMLDivElement | null>(null);
+  const adminAgentHistoryLoadedKeyRef = useRef("");
   selectedEventIdRef.current = selectedEventId;
   settingsRef.current = settings;
 
@@ -1764,6 +1863,9 @@ export default function App() {
   const deferredRegistrationListQuery = useDeferredValue(normalizeSearchQuery(registrationListQuery));
   const deferredDocumentListQuery = useDeferredValue(normalizeSearchQuery(documentListQuery));
   const deferredLogListQuery = useDeferredValue(normalizeSearchQuery(logListQuery));
+  const adminAgentChatStorageKey = authUser?.id && selectedEventId
+    ? `${authUser.id}:${selectedEventId}`
+    : "";
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const latestCheckinRegistration = checkinLatestResult || selectedRegistration;
@@ -1776,6 +1878,26 @@ export default function App() {
   const cancelledCount = registrations.filter((reg) => reg.status === "cancelled").length;
   const checkedInCount = registrations.filter((reg) => reg.status === "checked-in").length;
   const activeAgentMessageCount = adminAgentMessages.length;
+  const adminAgentPolicy = {
+    readEvent: settings.admin_agent_policy_read_event !== "0",
+    manageEventSetup: settings.admin_agent_policy_manage_event_setup === "1",
+    manageEventStatus: settings.admin_agent_policy_manage_event_status === "1",
+    manageEventContext: settings.admin_agent_policy_manage_event_context === "1",
+    readRegistration: settings.admin_agent_policy_read_registration !== "0",
+    manageRegistration: settings.admin_agent_policy_manage_registration !== "0",
+    messageUser: settings.admin_agent_policy_message_user !== "0",
+    searchAllEvents: settings.admin_agent_policy_search_all_events !== "0",
+  };
+  const adminAgentEnabledPolicies = [
+    adminAgentPolicy.readEvent ? "event-read" : "",
+    adminAgentPolicy.manageEventSetup ? "event-setup-write" : "",
+    adminAgentPolicy.manageEventStatus ? "event-status-write" : "",
+    adminAgentPolicy.manageEventContext ? "event-context-write" : "",
+    adminAgentPolicy.readRegistration ? "registration-read" : "",
+    adminAgentPolicy.manageRegistration ? "registration-write" : "",
+    adminAgentPolicy.messageUser ? "message-send/retry" : "",
+    adminAgentPolicy.searchAllEvents ? "cross-event-search" : "",
+  ].filter(Boolean);
   const activeAttendeeCount = registrations.filter((reg) => reg.status !== "cancelled").length;
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
   const canUseQrScanner =
@@ -2358,6 +2480,35 @@ export default function App() {
       media.removeEventListener?.("change", handleChange);
     };
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!adminAgentChatStorageKey) {
+      adminAgentHistoryLoadedKeyRef.current = "";
+      setAdminAgentMessages([]);
+      return;
+    }
+
+    const store = readAdminAgentChatStore();
+    const nextMessages = store[adminAgentChatStorageKey] || [];
+    adminAgentHistoryLoadedKeyRef.current = "";
+    setAdminAgentMessages(() => {
+      adminAgentHistoryLoadedKeyRef.current = adminAgentChatStorageKey;
+      return nextMessages;
+    });
+  }, [adminAgentChatStorageKey]);
+
+  useEffect(() => {
+    if (!adminAgentChatStorageKey) return;
+    if (adminAgentHistoryLoadedKeyRef.current !== adminAgentChatStorageKey) return;
+
+    const store = readAdminAgentChatStore();
+    if (adminAgentMessages.length > 0) {
+      store[adminAgentChatStorageKey] = adminAgentMessages.slice(-120);
+    } else {
+      delete store[adminAgentChatStorageKey];
+    }
+    writeAdminAgentChatStore(store);
+  }, [adminAgentMessages, adminAgentChatStorageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3362,6 +3513,14 @@ export default function App() {
     "admin_agent_system_prompt",
     "admin_agent_model",
     "admin_agent_default_event_id",
+    "admin_agent_policy_read_event",
+    "admin_agent_policy_manage_event_setup",
+    "admin_agent_policy_manage_event_status",
+    "admin_agent_policy_manage_event_context",
+    "admin_agent_policy_read_registration",
+    "admin_agent_policy_manage_registration",
+    "admin_agent_policy_message_user",
+    "admin_agent_policy_search_all_events",
     "admin_agent_telegram_enabled",
     "admin_agent_telegram_bot_token",
     "admin_agent_telegram_webhook_secret",
@@ -7234,7 +7393,7 @@ export default function App() {
                     label={settings.admin_agent_enabled === "1" ? "live actions" : "disabled"}
                     body={
                       settings.admin_agent_enabled === "1"
-                        ? "Agent mode executes real actions (overview/find/list/timeline/count/send/resend/retry) and writes audit logs."
+                        ? `Agent mode executes only enabled policy scopes (${adminAgentEnabledPolicies.length}/8): ${adminAgentEnabledPolicies.join(", ") || "none"}.`
                         : "Enable Admin Agent in setup before running commands from UI or Telegram."
                     }
                   />
@@ -7245,7 +7404,7 @@ export default function App() {
                     <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                       <MonitorCog className="h-10 w-10" />
                       <p className="text-sm max-w-xs">
-                        สั่งงาน Agent เช่น สรุป event/rules, list/find registration, ดู timeline, ส่งข้อความหา user, resend ticket/email, หรือ retry bot
+                        สั่งงาน Agent เช่น สร้าง/อัปเดต event, ตั้ง status/context, จัดการ registration, ส่งข้อความถึง user, หรือค้นทั้งระบบ (ตาม policy ที่เปิดไว้)
                       </p>
                     </div>
                   )}
@@ -7396,6 +7555,94 @@ export default function App() {
                     </div>
                   </div>
 
+                  <details className="rounded-xl border border-slate-200 bg-slate-50">
+                    <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-semibold text-slate-800">
+                      Advanced Action Policy
+                    </summary>
+                    <div className="space-y-2 border-t border-slate-200 px-3 py-3 text-sm">
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_read_event !== "0"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_read_event: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Event Read</span> <span className="text-xs text-slate-500">find_event, event overview</span></span>
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_manage_event_setup === "1"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_event_setup: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Event Setup Write</span> <span className="text-xs text-slate-500">create event + set detail/rules</span></span>
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_manage_event_status === "1"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_event_status: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Event Status Write</span> <span className="text-xs text-slate-500">set pending/active/inactive/cancelled</span></span>
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_manage_event_context === "1"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_event_context: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Event Context Write</span> <span className="text-xs text-slate-500">update context knowledge</span></span>
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_read_registration !== "0"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_read_registration: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Registration Read</span> <span className="text-xs text-slate-500">find/list/count/timeline</span></span>
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_manage_registration !== "0"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_registration: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Registration Write</span> <span className="text-xs text-slate-500">set status, resend ticket/email</span></span>
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_message_user !== "0"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_message_user: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Messaging Actions</span> <span className="text-xs text-slate-500">send message, retry bot</span></span>
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_policy_search_all_events !== "0"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_search_all_events: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span><span className="font-medium">Search Whole System</span> <span className="text-xs text-slate-500">allow cross-event search/override</span></span>
+                      </label>
+                    </div>
+                  </details>
+
                   {!canEditSettings && (
                     <p className="text-xs text-amber-600">Only owner/admin can change Agent settings. Operator can still run commands.</p>
                   )}
@@ -7488,9 +7735,17 @@ export default function App() {
                     )}
                   </div>
 
-                  <p className="text-xs text-slate-500">
-                    Telegram setup: call <code>setWebhook</code> with this URL and the same secret token, then send commands via your allowlisted chat.
-                  </p>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                    <p className="font-semibold text-slate-700">Telegram Setup (Step by step)</p>
+                    <ol className="mt-2 space-y-1 list-decimal pl-4">
+                      <li>สร้าง bot ใน Telegram ด้วย BotFather และคัดลอก Bot Token</li>
+                      <li>วาง Bot Token และกำหนด Webhook Secret Token ในหน้านี้</li>
+                      <li>เปิด <span className="font-medium">Enable Telegram Access</span> แล้วกด <span className="font-medium">Save Agent Setup</span></li>
+                      <li>กด <span className="font-medium">Copy setWebhook</span> แล้วเปิด URL นั้นเพื่อผูก webhook</li>
+                      <li>ใส่ Allowed Chat IDs (อย่างน้อย chat id ของแอดมิน)</li>
+                      <li>ใน Telegram พิมพ์ <code>/start</code> หรือ <code>/help</code> แล้วสั่งงาน เช่น <code>/agent สรุปอีเวนต์นี้</code></li>
+                    </ol>
+                  </div>
                 </div>
 
                 {settingsMessage && (
