@@ -298,6 +298,14 @@ const COLLAPSIBLE_SECTION_KEYS = {
   setupChannels: "setup-channels",
   setupWebhookConfig: "setup-webhook-config",
 } as const;
+const CHANNEL_PLATFORM_WEBHOOK_MAP: Record<ChannelPlatform, WebhookConfigKey[]> = {
+  facebook: ["facebook"],
+  line_oa: ["line"],
+  instagram: ["instagram"],
+  whatsapp: ["whatsapp"],
+  telegram: ["telegram"],
+  web_chat: ["webchat_config", "webchat_message"],
+};
 const ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-pref-v1";
 const ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-last-audit-v1";
 const INITIAL_CHECKIN_TOKEN =
@@ -1913,6 +1921,8 @@ export default function App() {
   });
   const [copied, setCopied] = useState(false);
   const [selectedWebhookConfigKey, setSelectedWebhookConfigKey] = useState<WebhookConfigKey>("facebook");
+  const [setupSelectedChannelId, setSetupSelectedChannelId] = useState("");
+  const [channelConfigDialogOpen, setChannelConfigDialogOpen] = useState(false);
   const [searchId, setSearchId] = useState("");
   const [checkinAccessToken] = useState(INITIAL_CHECKIN_TOKEN);
   const [checkinAccessSession, setCheckinAccessSession] = useState<CheckinAccessSession | null>(null);
@@ -1955,7 +1965,6 @@ export default function App() {
   const [logRegistrationMessage, setLogRegistrationMessage] = useState("");
   const [logToolsOpen, setLogToolsOpen] = useState(false);
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
-  const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
   const [collapsedSectionMap, setCollapsedSectionMap] = useState<Record<string, boolean>>(() => readCollapsedSectionStore());
   const [collapsedContextDocumentIds, setCollapsedContextDocumentIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
@@ -2148,6 +2157,11 @@ export default function App() {
     selectedEvent?.registration_availability,
   );
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
+  const selectedEventChannelIdsKey = selectedEventChannels.map((channel) => channel.id).join("|");
+  const setupSelectedChannel =
+    selectedEventChannels.find((channel) => channel.id === setupSelectedChannelId)
+    || selectedEventChannels[0]
+    || null;
   const selectedChannelPlatformDefinition = channelPlatformDefinitions.find((definition) => definition.id === newChannelPlatform) || null;
   const editingChannel = channels.find((channel) => `${channel.platform}:${channel.external_id}` === editingChannelKey) || null;
   const editingChannelKeepsCredentials = Boolean(editingChannel && editingChannel.platform === newChannelPlatform);
@@ -2764,6 +2778,27 @@ export default function App() {
     }
     writeAdminAgentChatStore(store);
   }, [adminAgentMessages, adminAgentChatStorageKey]);
+
+  useEffect(() => {
+    const channelIds = selectedEventChannelIdsKey ? selectedEventChannelIdsKey.split("|") : [];
+    if (!channelIds.length) {
+      setSetupSelectedChannelId("");
+      return;
+    }
+    setSetupSelectedChannelId((current) =>
+      channelIds.includes(current)
+        ? current
+        : channelIds[0],
+    );
+  }, [selectedEventChannelIdsKey]);
+
+  useEffect(() => {
+    if (!setupSelectedChannel) return;
+    const nextKeys = CHANNEL_PLATFORM_WEBHOOK_MAP[setupSelectedChannel.platform];
+    if (!nextKeys.includes(selectedWebhookConfigKey)) {
+      setSelectedWebhookConfigKey(nextKeys[0]);
+    }
+  }, [setupSelectedChannel?.platform, selectedWebhookConfigKey]);
 
   useEffect(() => {
     if (!desktopNotificationSupported) {
@@ -4808,13 +4843,13 @@ export default function App() {
   };
 
   const handleSaveChannel = async () => {
-    if (!selectedEventId) return;
+    if (!selectedEventId) return false;
     const externalId = newPageId.trim();
     const displayName = newPageName.trim();
     const accessToken = newPageAccessToken.trim();
     if (!lineChannelIdAutoResolved && !externalId) {
       setEventMessage(selectedChannelPlatformDefinition?.external_id_label || "Channel external ID is required");
-      return;
+      return false;
     }
 
     setEventLoading(true);
@@ -4847,8 +4882,10 @@ export default function App() {
       setEventMessage(editingChannelKey ? "Channel updated" : "Channel linked");
       resetChannelForm();
       window.setTimeout(() => setEventMessage(""), 2500);
+      return true;
     } catch (err) {
       setEventMessage(err instanceof Error ? err.message : "Failed to save channel");
+      return false;
     } finally {
       setEventLoading(false);
     }
@@ -4991,10 +5028,28 @@ export default function App() {
     focusSearchTarget("document", documentId);
   };
 
-  const toggleChannelDetails = (channelId: string) => {
-    setChannelDetailsOpenIds((current) =>
-      current.includes(channelId) ? current.filter((id) => id !== channelId) : [...current, channelId],
-    );
+  const selectSetupChannel = (channel: ChannelAccountRecord) => {
+    setSetupSelectedChannelId(channel.id);
+    const nextKeys = CHANNEL_PLATFORM_WEBHOOK_MAP[channel.platform];
+    if (!nextKeys.includes(selectedWebhookConfigKey)) {
+      setSelectedWebhookConfigKey(nextKeys[0]);
+    }
+  };
+
+  const openChannelConfigDialog = (channel?: ChannelAccountRecord) => {
+    if (channel) {
+      selectSetupChannel(channel);
+      loadChannelIntoForm(channel);
+    } else {
+      resetChannelForm();
+    }
+    setHelpOpen(false);
+    setChannelConfigDialogOpen(true);
+  };
+
+  const closeChannelConfigDialog = () => {
+    setChannelConfigDialogOpen(false);
+    resetChannelForm();
   };
 
   const handleGlobalSearchSelect = (kind: GlobalSearchResultKind, id: string) => {
@@ -5022,8 +5077,9 @@ export default function App() {
       }
       if (channel) {
         setChannelListQuery(channel.external_id || channel.display_name || "");
+        selectSetupChannel(channel);
         loadChannelIntoForm(channel);
-        setChannelDetailsOpenIds((current) => (current.includes(channel.id) ? current : [...current, channel.id]));
+        setChannelConfigDialogOpen(true);
       }
       setActiveTab("settings");
       focusSearchTarget("channel", id);
@@ -5407,8 +5463,16 @@ export default function App() {
       help: <>POST <code>widget_key</code>, <code>sender_id</code>, and <code>text</code> from the site widget.</>,
     },
   ];
+  const setupWebhookItems =
+    setupSelectedChannel
+      ? webhookConfigItems.filter((item) =>
+          CHANNEL_PLATFORM_WEBHOOK_MAP[setupSelectedChannel.platform].includes(item.key),
+        )
+      : webhookConfigItems;
   const selectedWebhookConfigItem =
-    webhookConfigItems.find((item) => item.key === selectedWebhookConfigKey) || webhookConfigItems[0];
+    setupWebhookItems.find((item) => item.key === selectedWebhookConfigKey)
+    || setupWebhookItems[0]
+    || webhookConfigItems[0];
   const teamAccessPanel = (role === "owner" || role === "admin") ? (
     <div className="space-y-4">
       <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
@@ -9479,7 +9543,7 @@ export default function App() {
               className="space-y-4"
             >
               <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-                <div className="space-y-4 xl:col-span-7">
+                <div className="space-y-4 xl:col-span-8">
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
@@ -9599,9 +9663,6 @@ export default function App() {
                     </div>
                   </div>
 
-                </div>
-
-                <div className="space-y-4 xl:col-span-5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -9625,347 +9686,182 @@ export default function App() {
                           )}
                         </div>
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
-                          <p className="text-sm text-slate-500">Compact channel list for the selected event. Open details only when needed.</p>
+                          <p className="text-sm text-slate-500">Use cards for quick status checks. Open full configuration only when needed.</p>
                         )}
                       </div>
-                      <CollapseIconButton
-                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
-                      />
+                      <div className="flex items-center gap-2">
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
+                          <ActionButton
+                            onClick={() => openChannelConfigDialog()}
+                            tone="blue"
+                            active
+                            className="px-3 text-sm"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                            Add Channel
+                          </ActionButton>
+                        )}
+                        <CollapseIconButton
+                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+                        />
+                      </div>
                     </div>
 
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
-                    <>
-                    <CompactGuardBar
-                      title="Channel Guard"
-                      tone={eventOperatorGuard.tone}
-                      label={eventOperatorGuard.label}
-                      body={eventOperatorGuard.body}
-                    />
+                      <>
+                        <CompactGuardBar
+                          title="Channel Guard"
+                          tone={eventOperatorGuard.tone}
+                          label={eventOperatorGuard.label}
+                          body={eventOperatorGuard.body}
+                        />
 
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={channelListQuery}
-                        onChange={(e) => setChannelListQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Search channels by name, platform, ID, or status"
-                      />
-                      {channelListQuery && (
-                        <button
-                          onClick={() => setChannelListQuery("")}
-                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                          aria-label="Clear channel search"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="space-y-2">
-                      {filteredSelectedEventChannels.length === 0 ? (
-                        <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                          {deferredChannelListQuery ? "No channels match this search." : "No channels linked to this event yet."}
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            value={channelListQuery}
+                            onChange={(e) => setChannelListQuery(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Search channels by name, platform, ID, or status"
+                          />
+                          {channelListQuery && (
+                            <button
+                              onClick={() => setChannelListQuery("")}
+                              className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                              aria-label="Clear channel search"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
-                      ) : (
-                        filteredSelectedEventChannels.map((channel) => (
-                          <div
-                            key={channel.id}
-                            id={getSearchTargetDomId("channel", channel.id)}
-                            className={`rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2.5 ${
-                              isSearchFocused("channel", channel.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
-                            }`}
-                          >
-                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-                              <button
-                                onClick={() => toggleChannelDetails(channel.id)}
-                                className="min-w-0 text-left"
-                                aria-expanded={channelDetailsOpenIds.includes(channel.id)}
-                              >
-                                <div className="space-y-3">
-                                  <div className="space-y-1.5">
-                                    <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
-                                    <p className="text-xs font-mono text-slate-500 break-all">{channel.external_id}</p>
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <StatusBadge tone="neutral">
-                                      {channel.platform_label || channel.platform}
-                                    </StatusBadge>
-                                    <StatusBadge tone={getConnectionStatusTone(channel.connection_status)}>
-                                      {channel.connection_status || "incomplete"}
-                                    </StatusBadge>
-                                    <StatusBadge tone={getTokenStatusTone(channel)}>
-                                      {channel.platform === "web_chat"
-                                        ? "no token needed"
-                                        : channel.has_access_token
-                                        ? "saved token"
-                                        : channel.platform === "facebook"
-                                        ? "env fallback"
-                                        : "no token"}
-                                    </StatusBadge>
-                                    <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
-                                      {channel.is_active ? "active" : "inactive"}
-                                    </StatusBadge>
-                                    {selectedEventChannelWritesLocked && !channel.is_active && <StatusBadge tone="neutral">locked</StatusBadge>}
-                                  </div>
-                                </div>
-                              </button>
-                              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                                <ActionButton
-                                  onClick={() => loadChannelIntoForm(channel)}
-                                  tone="blue"
-                                  className="px-3 text-sm"
+
+                        {filteredSelectedEventChannels.length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                            {deferredChannelListQuery
+                              ? "No channels match this search."
+                              : "No channels linked to this event yet. Click Add Channel to connect one."}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                            {filteredSelectedEventChannels.map((channel) => {
+                              const isSelected = setupSelectedChannel?.id === channel.id;
+                              const isFocused = isSearchFocused("channel", channel.id);
+                              const disableToggle = selectedEventChannelWritesLocked && !channel.is_active;
+                              const toggleLabel = disableToggle
+                                ? "Locked"
+                                : channel.is_active
+                                ? "Disable"
+                                : "Enable";
+                              return (
+                                <div
+                                  key={channel.id}
+                                  id={getSearchTargetDomId("channel", channel.id)}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => selectSetupChannel(channel)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                      event.preventDefault();
+                                      selectSetupChannel(channel);
+                                    }
+                                  }}
+                                  className={`rounded-2xl border p-3 transition cursor-pointer ${
+                                    isSelected
+                                      ? "border-blue-200 bg-blue-50"
+                                      : "border-slate-200 bg-slate-50 hover:border-slate-300"
+                                  } ${isFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                                 >
-                                  <PencilLine className="h-3.5 w-3.5" />
-                                  Edit
-                                </ActionButton>
-                                <InlineActionsMenu
-                                  label="Actions"
-                                  tone={channel.is_active ? "amber" : "neutral"}
-                                >
-                                  <MenuActionItem
-                                    onClick={() => toggleChannelDetails(channel.id)}
-                                    tone="neutral"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    <span className="font-medium">
-                                      {channelDetailsOpenIds.includes(channel.id) ? "Hide Details" : "Show Details"}
-                                    </span>
-                                  </MenuActionItem>
-                                  <MenuActionItem
-                                    onClick={() => void handleToggleChannel(channel)}
-                                    disabled={eventLoading || (selectedEventChannelWritesLocked && !channel.is_active)}
-                                    tone={selectedEventChannelWritesLocked && !channel.is_active ? "neutral" : channel.is_active ? "amber" : "emerald"}
-                                    className="mt-1"
-                                  >
-                                    <Power className="h-3.5 w-3.5" />
-                                    <span className="font-medium">
-                                      {selectedEventChannelWritesLocked && !channel.is_active
-                                        ? "Locked by Event Status"
-                                        : channel.is_active
-                                        ? "Disable Channel"
-                                        : "Enable Channel"}
-                                    </span>
-                                  </MenuActionItem>
-                                </InlineActionsMenu>
-                              </div>
-                            </div>
-                            {channel.missing_requirements && channel.missing_requirements.length > 0 && (
-                              <p className="text-xs text-amber-700">
-                                Missing: {channel.missing_requirements.join(", ")}
-                              </p>
-                            )}
-                            {channelDetailsOpenIds.includes(channel.id) && (
-                              <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
-                                {channel.platform_description && (
-                                  <p className="text-xs text-slate-500">{channel.platform_description}</p>
-                                )}
-                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">External ID</p>
-                                    <p className="mt-1 break-all text-[11px] text-slate-700">{channel.external_id}</p>
-                                  </div>
-                                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Updated</p>
-                                    <p className="mt-1 text-[11px] text-slate-700">{new Date(channel.updated_at).toLocaleString()}</p>
-                                  </div>
-                                </div>
-                                {channel.config_summary && channel.config_summary.length > 0 && (
-                                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                    {channel.config_summary.map((item) => (
-                                      <div key={`${channel.id}:${item.key}`} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
-                                        <p className="mt-1 break-all text-[11px] text-slate-700">{item.value}</p>
+                                  <div className="space-y-2.5">
+                                    <div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
+                                        {isSelected && <StatusBadge tone="blue">selected</StatusBadge>}
                                       </div>
-                                    ))}
-                                  </div>
-                                )}
-                                {channel.secret_config_fields_present && channel.secret_config_fields_present.length > 0 && (
-                                  <p className="text-[11px] text-slate-500">
-                                    Stored secret fields: {channel.secret_config_fields_present.join(", ")}
-                                  </p>
-                                )}
-                                {channel.platform === "web_chat" && (
-                                  <div className="rounded-xl border border-violet-100 bg-violet-50 p-3 space-y-2">
-                                    <p className="text-xs font-semibold text-violet-800">Embed Snippet</p>
-                                    <pre className="overflow-x-auto rounded-lg bg-white border border-violet-100 p-3 text-[11px] leading-relaxed text-slate-700">
-                                      <code>{buildWebChatEmbedSnippet(appUrl, channel.external_id)}</code>
-                                    </pre>
+                                      <p className="mt-1 text-[11px] font-mono text-slate-500 break-all">{channel.external_id}</p>
+                                    </div>
                                     <div className="flex flex-wrap items-center gap-2">
+                                      <StatusBadge tone="neutral">
+                                        {channel.platform_label || channel.platform}
+                                      </StatusBadge>
+                                      <StatusBadge tone={getConnectionStatusTone(channel.connection_status)}>
+                                        {channel.connection_status || "incomplete"}
+                                      </StatusBadge>
+                                      <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
+                                        {channel.is_active ? "active" : "inactive"}
+                                      </StatusBadge>
+                                      <StatusBadge tone={getTokenStatusTone(channel)}>
+                                        {channel.platform === "web_chat"
+                                          ? "no token needed"
+                                          : channel.has_access_token
+                                          ? "saved token"
+                                          : channel.platform === "facebook"
+                                          ? "env fallback"
+                                          : "no token"}
+                                      </StatusBadge>
+                                    </div>
+                                    {channel.missing_requirements && channel.missing_requirements.length > 0 && (
+                                      <p className="text-xs text-amber-700">
+                                        Missing: {channel.missing_requirements.join(", ")}
+                                      </p>
+                                    )}
+                                    <div className="flex flex-wrap items-center gap-2 pt-1">
                                       <ActionButton
-                                        onClick={() => copyToClipboard(buildWebChatEmbedSnippet(appUrl, channel.external_id))}
-                                        tone="violet"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          openChannelConfigDialog(channel);
+                                        }}
+                                        tone="blue"
+                                        className="px-3 text-sm"
                                       >
-                                        Copy Embed Snippet
+                                        <PencilLine className="h-3.5 w-3.5" />
+                                        Configure
                                       </ActionButton>
                                       <ActionButton
-                                        onClick={() => copyToClipboard(`${appUrl}/api/webchat/config/${encodeURIComponent(channel.external_id)}`)}
-                                        tone="neutral"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void handleToggleChannel(channel);
+                                        }}
+                                        disabled={eventLoading || disableToggle}
+                                        tone={disableToggle ? "neutral" : channel.is_active ? "amber" : "emerald"}
+                                        className="px-3 text-sm"
                                       >
-                                        Copy Config URL
+                                        <Power className="h-3.5 w-3.5" />
+                                        {toggleLabel}
                                       </ActionButton>
                                     </div>
                                   </div>
-                                )}
-                              </div>
-                            )}
+                                </div>
+                              );
+                            })}
                           </div>
-                        ))
-                      )}
-                    </div>
-
-                    <div className="space-y-2.5 border-t border-slate-100 pt-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold">{editingChannelKey ? "Edit Channel" : "Link Channel to Selected Event"}</p>
-                        {editingChannelKey && (
-                          <ActionButton
-                            onClick={resetChannelForm}
-                            tone="neutral"
-                          >
-                            Cancel Edit
-                          </ActionButton>
                         )}
-                      </div>
-                      <select
-                        value={newChannelPlatform}
-                        onChange={(e) => {
-                          const platform = e.target.value as ChannelPlatform;
-                          setNewChannelPlatform(platform);
-                          setNewChannelConfig({});
-                          if (platform === "line_oa") {
-                            setNewPageId("");
-                          }
-                        }}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
-                      >
-                        <option value="facebook">Facebook</option>
-                        <option value="line_oa">LINE OA</option>
-                        <option value="instagram">Instagram</option>
-                        <option value="whatsapp">WhatsApp</option>
-                        <option value="telegram">Telegram</option>
-                        <option value="web_chat">Web Chat</option>
-                      </select>
-                      {selectedChannelPlatformDefinition && (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 space-y-2">
-                          <p className="font-semibold text-slate-800">{selectedChannelPlatformDefinition.label}</p>
-                          <p>{selectedChannelPlatformDefinition.description}</p>
-                          <div className="space-y-1 text-xs text-slate-500">
-                            {selectedChannelPlatformDefinition.notes.map((note) => (
-                              <p key={`${selectedChannelPlatformDefinition.id}:${note}`}>{note}</p>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <input
-                        value={newPageName}
-                        onChange={(e) => setNewPageName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Channel display name"
-                      />
-                      <input
-                        value={newPageId}
-                        onChange={(e) => setNewPageId(e.target.value)}
-                        disabled={lineChannelIdAutoResolved}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
-                        placeholder={selectedChannelPlatformDefinition?.external_id_placeholder || "Channel external ID"}
-                      />
-                      {lineChannelIdAutoResolved && (
-                        <p className="text-xs text-slate-500">
-                          LINE Bot User ID (`U...`) is resolved automatically from the saved access token when you save this channel.
-                        </p>
-                      )}
-                      {selectedChannelPlatformDefinition && (
-                        <div className="flex justify-end">
-                          <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.external_id_label}`}>
-                            {selectedChannelPlatformDefinition.external_id_label}
-                          </HelpPopover>
-                        </div>
-                      )}
-                      {selectedChannelPlatformDefinition?.access_token_label && (
-                        <>
-                          <input
-                            value={newPageAccessToken}
-                            onChange={(e) => setNewPageAccessToken(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder={selectedChannelPlatformDefinition.access_token_label || "Channel access token"}
-                          />
-                          {selectedChannelPlatformDefinition.access_token_help && (
-                            <div className="flex justify-end">
-                              <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.access_token_label}`}>
-                                {selectedChannelPlatformDefinition.access_token_help}
-                              </HelpPopover>
-                            </div>
-                          )}
-                        </>
-                      )}
-                      {selectedChannelPlatformDefinition?.config_fields.map((field) => (
-                        <div key={`${newChannelPlatform}:${field.key}`} className="space-y-1.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
-                              {field.label}
-                              {field.required ? " Required" : ""}
-                            </p>
-                            {field.help ? (
-                              <HelpPopover label={`Open note for ${field.label}`}>
-                                {field.help}
-                              </HelpPopover>
-                            ) : null}
-                          </div>
-                          <input
-                            value={newChannelConfig[field.key] || ""}
-                            onChange={(e) => setNewChannelConfig((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                            type={field.secret ? "password" : "text"}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder={field.placeholder || field.label}
-                          />
-                        </div>
-                      ))}
-                      <ActionButton
-                        onClick={() => void handleSaveChannel()}
-                        disabled={
-                          !selectedEventId
-                          || (!lineChannelIdAutoResolved && !newPageId.trim())
-                          || eventLoading
-                          || selectedEventChannelWritesLocked
-                          || channelFormMissingRequirements.length > 0
-                        }
-                        tone="blue"
-                        active
-                        className="w-full text-sm"
-                      >
-                        {editingChannelKey ? "Update Channel" : "Link Channel to Event"}
-                      </ActionButton>
-                      {channelFormMissingRequirements.length > 0 && (
-                        <p className="text-xs text-amber-700">
-                          Missing before save: {channelFormMissingRequirements.join(", ")}
-                        </p>
-                      )}
-                      {selectedEvent && selectedEventChannelWritesLocked && (
-                        <p className="text-xs text-amber-700">
-                          Closed or cancelled events cannot link or re-enable channels. You can still disable an active channel if you want to stop replies entirely.
-                        </p>
-                      )}
-                      {selectedEvent && !selectedEventChannelWritesLocked && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
-                        <p className="text-xs text-slate-500">
-                          Channel wiring stays available, but this event currently responds with guardrails for <span className="font-semibold">{getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</span> instead of accepting normal registrations.
-                        </p>
-                      )}
-                      <p className="text-xs text-slate-500">
-                        Facebook, LINE OA, Instagram, WhatsApp, Telegram, and Web Chat are wired into live message handling right now.
-                      </p>
-                    </div>
-                    </>
+                        {selectedEvent && selectedEventChannelWritesLocked && (
+                          <p className="text-xs text-amber-700">
+                            Closed or cancelled events cannot link or re-enable channels. You can still disable an active channel if you want to stop replies entirely.
+                          </p>
+                        )}
+                        {selectedEvent && !selectedEventChannelWritesLocked && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
+                          <p className="text-xs text-slate-500">
+                            Channel wiring stays available, but this event currently responds with guardrails for <span className="font-semibold">{getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</span> instead of accepting normal registrations.
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
+                </div>
 
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                <div className="space-y-4 xl:col-span-4">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) ? "p-3 sm:p-3" : "space-y-4 p-4 sm:p-5"}`}>
                     <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) ? "mb-0" : "mb-4"} flex items-center justify-between gap-2`}>
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <SettingsIcon className="w-5 h-5 text-blue-600" />
-                          Webhook Configuration
+                          Channel Sync
                         </h3>
-                        {webhookSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) && (
+                          <p className="text-sm text-slate-500">Select a channel card to keep endpoint and setup details in sync.</p>
+                        )}
                       </div>
                       <CollapseIconButton
                         collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig)}
@@ -9974,6 +9870,52 @@ export default function App() {
                     </div>
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) && (
                       <div className="space-y-4">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          {setupSelectedChannel ? (
+                            <div className="space-y-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-slate-900">{setupSelectedChannel.display_name}</p>
+                                  <p className="mt-1 break-all text-xs font-mono text-slate-500">{setupSelectedChannel.external_id}</p>
+                                </div>
+                                <ActionButton
+                                  onClick={() => openChannelConfigDialog(setupSelectedChannel)}
+                                  tone="blue"
+                                  className="px-3 text-sm"
+                                >
+                                  <PencilLine className="h-3.5 w-3.5" />
+                                  Configure
+                                </ActionButton>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge tone="neutral">{setupSelectedChannel.platform_label || setupSelectedChannel.platform}</StatusBadge>
+                                <StatusBadge tone={getConnectionStatusTone(setupSelectedChannel.connection_status)}>
+                                  {setupSelectedChannel.connection_status || "incomplete"}
+                                </StatusBadge>
+                                <StatusBadge tone={setupSelectedChannel.is_active ? "emerald" : "neutral"}>
+                                  {setupSelectedChannel.is_active ? "active" : "inactive"}
+                                </StatusBadge>
+                              </div>
+                              {setupSelectedChannel.platform_description && (
+                                <p className="text-xs text-slate-600">{setupSelectedChannel.platform_description}</p>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-sm font-semibold text-slate-900">No channel selected</p>
+                              <p className="text-xs text-slate-500">Create the first channel to load endpoint setup details here.</p>
+                              <ActionButton
+                                onClick={() => openChannelConfigDialog()}
+                                tone="blue"
+                                active
+                                className="px-3 text-sm"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                Add Channel
+                              </ActionButton>
+                            </div>
+                          )}
+                        </div>
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                             <div className="min-w-0 flex-1">
@@ -9987,7 +9929,7 @@ export default function App() {
                                   onChange={(e) => setSelectedWebhookConfigKey(e.target.value as WebhookConfigKey)}
                                   className="min-w-0 w-full bg-transparent text-sm font-medium outline-none"
                                 >
-                                  {webhookConfigItems.map((item) => (
+                                  {setupWebhookItems.map((item) => (
                                     <option key={item.key} value={item.key}>
                                       {item.label}
                                     </option>
@@ -10019,12 +9961,37 @@ export default function App() {
                               {selectedWebhookConfigItem.help}
                             </div>
                           ) : null}
+                          {setupSelectedChannel?.platform === "web_chat" && (
+                            <div className="mt-3 rounded-2xl border border-violet-100 bg-violet-50 p-3 space-y-2">
+                              <p className="text-xs font-semibold text-violet-800">Web Chat Embed Snippet</p>
+                              <pre className="overflow-x-auto rounded-lg bg-white border border-violet-100 p-3 text-[11px] leading-relaxed text-slate-700">
+                                <code>{buildWebChatEmbedSnippet(appUrl, setupSelectedChannel.external_id)}</code>
+                              </pre>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <ActionButton
+                                  onClick={() => copyToClipboard(buildWebChatEmbedSnippet(appUrl, setupSelectedChannel.external_id))}
+                                  tone="violet"
+                                >
+                                  Copy Embed
+                                </ActionButton>
+                                <ActionButton
+                                  onClick={() => copyToClipboard(`${appUrl}/api/webchat/config/${encodeURIComponent(setupSelectedChannel.external_id)}`)}
+                                  tone="neutral"
+                                >
+                                  Copy Config URL
+                                </ActionButton>
+                              </div>
+                            </div>
+                          )}
                           <p className="mt-3 text-xs text-slate-500">
-                            Select one endpoint at a time to keep the card readable. Copy always uses the full URL.
+                            Endpoint list auto-filters by the selected channel platform.
                           </p>
                         </div>
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          <label className="mb-2 block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Verify Token</label>
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <label className="block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Verify Token</label>
+                            {webhookSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                          </div>
                           <div className="flex gap-2">
                             <input
                               value={settings.verify_token}
@@ -10063,6 +10030,183 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {channelConfigDialogOpen && (
+          <>
+            <motion.div
+              className="fixed inset-0 z-30 bg-slate-950/25 backdrop-blur-[2px]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeChannelConfigDialog}
+            />
+            <motion.aside
+              className="app-overlay-surface fixed inset-y-0 right-0 z-40 flex w-[min(34rem,100vw)] flex-col border-l border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)]"
+              initial={{ opacity: 0, x: 28 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 24 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="border-b border-slate-100 px-4 py-4 sm:px-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Channel Config</p>
+                    <h3 className="mt-1 text-lg font-semibold text-slate-900">
+                      {editingChannelKey ? "Update Channel" : "Link Channel to Event"}
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Save platform credentials and channel identifiers for this event.
+                    </p>
+                  </div>
+                  <button
+                    onClick={closeChannelConfigDialog}
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
+                    aria-label="Close channel configuration"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-5">
+                <select
+                  value={newChannelPlatform}
+                  onChange={(e) => {
+                    const platform = e.target.value as ChannelPlatform;
+                    setNewChannelPlatform(platform);
+                    setNewChannelConfig({});
+                    if (platform === "line_oa") {
+                      setNewPageId("");
+                    }
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+                >
+                  <option value="facebook">Facebook</option>
+                  <option value="line_oa">LINE OA</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="web_chat">Web Chat</option>
+                </select>
+                {selectedChannelPlatformDefinition && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 space-y-2">
+                    <p className="font-semibold text-slate-800">{selectedChannelPlatformDefinition.label}</p>
+                    <p>{selectedChannelPlatformDefinition.description}</p>
+                    <div className="space-y-1 text-xs text-slate-500">
+                      {selectedChannelPlatformDefinition.notes.map((note) => (
+                        <p key={`${selectedChannelPlatformDefinition.id}:${note}`}>{note}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <input
+                  value={newPageName}
+                  onChange={(e) => setNewPageName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Channel display name"
+                />
+                <input
+                  value={newPageId}
+                  onChange={(e) => setNewPageId(e.target.value)}
+                  disabled={lineChannelIdAutoResolved}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+                  placeholder={selectedChannelPlatformDefinition?.external_id_placeholder || "Channel external ID"}
+                />
+                {lineChannelIdAutoResolved && (
+                  <p className="text-xs text-slate-500">
+                    LINE Bot User ID (`U...`) is resolved automatically from the saved access token when you save this channel.
+                  </p>
+                )}
+                {selectedChannelPlatformDefinition && (
+                  <div className="flex justify-end">
+                    <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.external_id_label}`}>
+                      {selectedChannelPlatformDefinition.external_id_label}
+                    </HelpPopover>
+                  </div>
+                )}
+                {selectedChannelPlatformDefinition?.access_token_label && (
+                  <>
+                    <input
+                      value={newPageAccessToken}
+                      onChange={(e) => setNewPageAccessToken(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder={selectedChannelPlatformDefinition.access_token_label || "Channel access token"}
+                    />
+                    {selectedChannelPlatformDefinition.access_token_help && (
+                      <div className="flex justify-end">
+                        <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.access_token_label}`}>
+                          {selectedChannelPlatformDefinition.access_token_help}
+                        </HelpPopover>
+                      </div>
+                    )}
+                  </>
+                )}
+                {selectedChannelPlatformDefinition?.config_fields.map((field) => (
+                  <div key={`${newChannelPlatform}:${field.key}`} className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
+                        {field.label}
+                        {field.required ? " Required" : ""}
+                      </p>
+                      {field.help ? (
+                        <HelpPopover label={`Open note for ${field.label}`}>
+                          {field.help}
+                        </HelpPopover>
+                      ) : null}
+                    </div>
+                    <input
+                      value={newChannelConfig[field.key] || ""}
+                      onChange={(e) => setNewChannelConfig((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                      type={field.secret ? "password" : "text"}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder={field.placeholder || field.label}
+                    />
+                  </div>
+                ))}
+                {channelFormMissingRequirements.length > 0 && (
+                  <p className="text-xs text-amber-700">
+                    Missing before save: {channelFormMissingRequirements.join(", ")}
+                  </p>
+                )}
+                <p className="text-xs text-slate-500">
+                  Facebook, LINE OA, Instagram, WhatsApp, Telegram, and Web Chat are wired into live message handling right now.
+                </p>
+              </div>
+              <div className="border-t border-slate-100 bg-white px-4 py-4 sm:px-5">
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <ActionButton
+                    onClick={closeChannelConfigDialog}
+                    tone="neutral"
+                  >
+                    Cancel
+                  </ActionButton>
+                  <ActionButton
+                    onClick={async () => {
+                      const saved = await handleSaveChannel();
+                      if (saved) {
+                        closeChannelConfigDialog();
+                      }
+                    }}
+                    disabled={
+                      !selectedEventId
+                      || (!lineChannelIdAutoResolved && !newPageId.trim())
+                      || eventLoading
+                      || selectedEventChannelWritesLocked
+                      || channelFormMissingRequirements.length > 0
+                    }
+                    tone="blue"
+                    active
+                    className="px-3"
+                  >
+                    {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    {editingChannelKey ? "Update Channel" : "Link Channel"}
+                  </ActionButton>
+                </div>
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
 
       {canEditSettings && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 hidden lg:block">
@@ -10347,19 +10491,21 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          <button
-            onClick={() => setHelpOpen((open) => !open)}
-            className={`fixed bottom-[calc(0.9rem+env(safe-area-inset-bottom))] right-3 z-40 inline-flex h-12 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold shadow-lg transition-all sm:right-6 ${
-              helpOpen
-                ? "border-slate-900 bg-slate-900 text-white"
-                : "border-blue-200 bg-white text-blue-700 hover:border-blue-300 hover:bg-blue-50"
-            }`}
-            aria-expanded={helpOpen}
-            aria-label={helpOpen ? "Close help overlay" : "Open contextual help"}
-          >
-            {helpOpen ? <X className="h-4 w-4" /> : <CircleHelp className="h-4 w-4" />}
-            <span className="hidden sm:inline">{helpOpen ? "Close Help" : "Help"}</span>
-          </button>
+          {!channelConfigDialogOpen && (
+            <button
+              onClick={() => setHelpOpen((open) => !open)}
+              className={`fixed bottom-[calc(0.9rem+env(safe-area-inset-bottom))] right-3 z-40 inline-flex h-12 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold shadow-lg transition-all sm:right-6 ${
+                helpOpen
+                  ? "border-slate-900 bg-slate-900 text-white"
+                  : "border-blue-200 bg-white text-blue-700 hover:border-blue-300 hover:bg-blue-50"
+              }`}
+              aria-expanded={helpOpen}
+              aria-label={helpOpen ? "Close help overlay" : "Open contextual help"}
+            >
+              {helpOpen ? <X className="h-4 w-4" /> : <CircleHelp className="h-4 w-4" />}
+              <span className="hidden sm:inline">{helpOpen ? "Close Help" : "Help"}</span>
+            </button>
+          )}
         </>
       )}
     </div>
