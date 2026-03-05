@@ -66,6 +66,13 @@
     -webkit-touch-callout: default;
   }
 
+  .chat-selectable,
+  .chat-selectable * {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+
   html.theme-dark body {
     background: #020617;
     color: #e2e8f0;

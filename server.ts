@@ -131,6 +131,7 @@ type ToolExecutionBundle = {
 };
 
 type AdminAgentActionName =
+  | "find_event"
   | "get_event_overview"
   | "find_registration"
   | "list_registrations"
@@ -841,6 +842,7 @@ function extractAssistantText(content: unknown) {
 }
 
 const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
+  "find_event",
   "get_event_overview",
   "find_registration",
   "list_registrations",
@@ -1830,13 +1832,144 @@ async function sendRegistrationConfirmationEmailManually(registrationId: string)
   }
 }
 
+type AdminAgentEventCandidate = {
+  id: string;
+  slug: string;
+  name: string;
+  displayName: string;
+  effectiveStatus: string;
+  registrationAvailability: string;
+  searchable: string;
+};
+
+async function listAdminAgentEventCandidates(): Promise<AdminAgentEventCandidate[]> {
+  const events = await appDb.listEvents();
+  const candidates = await Promise.all(events.map(async (event) => {
+    const settings = await getSettingsMap(event.id);
+    const configuredName = normalizeOptionalText(settings.event_name);
+    const displayName = configuredName || normalizeOptionalText(event.name) || event.id;
+    const searchableParts = [
+      normalizeComparableText(event.id),
+      normalizeComparableText(event.slug),
+      normalizeComparableText(event.name),
+      normalizeComparableText(configuredName),
+    ].filter(Boolean);
+    return {
+      id: event.id,
+      slug: event.slug,
+      name: event.name,
+      displayName,
+      effectiveStatus: String(event.effective_status || ""),
+      registrationAvailability: String(event.registration_availability || ""),
+      searchable: searchableParts.join("\n"),
+    };
+  }));
+
+  return candidates.sort((left, right) => {
+    const leftActive = left.effectiveStatus === "active" ? 0 : 1;
+    const rightActive = right.effectiveStatus === "active" ? 0 : 1;
+    if (leftActive !== rightActive) return leftActive - rightActive;
+    return left.displayName.localeCompare(right.displayName, "th");
+  });
+}
+
+function scoreAdminAgentEventCandidate(candidate: AdminAgentEventCandidate, normalizedQuery: string) {
+  if (!normalizedQuery) return 0;
+  const normalizedId = normalizeComparableText(candidate.id);
+  const normalizedSlug = normalizeComparableText(candidate.slug);
+  const normalizedDisplayName = normalizeComparableText(candidate.displayName);
+  let score = 0;
+
+  if (normalizedId === normalizedQuery) score = Math.max(score, 260);
+  if (normalizedSlug === normalizedQuery) score = Math.max(score, 240);
+  if (normalizedDisplayName === normalizedQuery) score = Math.max(score, 220);
+  if (candidate.searchable.includes(normalizedQuery)) {
+    score = Math.max(score, 170 + Math.min(30, normalizedQuery.length));
+  }
+
+  const tokens = normalizedQuery.split(" ").filter(Boolean);
+  if (tokens.length > 0) {
+    let hitCount = 0;
+    for (const token of tokens) {
+      if (candidate.searchable.includes(token)) {
+        hitCount += 1;
+      }
+    }
+    if (hitCount === tokens.length) {
+      score = Math.max(score, 130 + hitCount * 6);
+    } else if (hitCount > 0) {
+      score = Math.max(score, 70 + hitCount * 8);
+    }
+  }
+
+  return score;
+}
+
+async function searchAdminAgentEvents(query: string, limit = 5): Promise<AdminAgentEventCandidate[]> {
+  const normalizedQuery = normalizeComparableText(query);
+  const maxResults = parsePositiveInteger(limit, 5, 20);
+  const candidates = await listAdminAgentEventCandidates();
+  if (!normalizedQuery) {
+    return candidates.slice(0, maxResults);
+  }
+
+  return candidates
+    .map((candidate) => ({
+      candidate,
+      score: scoreAdminAgentEventCandidate(candidate, normalizedQuery),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => {
+      if (left.score !== right.score) return right.score - left.score;
+      return left.candidate.displayName.localeCompare(right.candidate.displayName, "th");
+    })
+    .slice(0, maxResults)
+    .map((entry) => entry.candidate);
+}
+
+function serializeAdminAgentEvent(candidate: AdminAgentEventCandidate) {
+  return {
+    id: candidate.id,
+    slug: candidate.slug,
+    name: candidate.name,
+    display_name: candidate.displayName,
+    effective_status: candidate.effectiveStatus,
+    registration_availability: candidate.registrationAvailability || null,
+  };
+}
+
+function buildAdminAgentFindEventReply(matches: AdminAgentEventCandidate[], query: string, limit: number) {
+  if (matches.length === 0) {
+    return query
+      ? `ไม่พบอีเวนต์ที่ตรงกับ "${query}" ลองระบุคำสำคัญเพิ่มหรือใช้ event_id`
+      : "ยังไม่พบรายการอีเวนต์ในระบบ";
+  }
+  const header = query
+    ? `พบอีเวนต์ ${matches.length} รายการที่ตรงกับ "${query}" (แสดงสูงสุด ${Math.min(limit, matches.length)})`
+    : `รายการอีเวนต์ที่ใช้งานล่าสุด ${Math.min(limit, matches.length)} รายการ`;
+  const lines = matches.slice(0, limit).map((event, index) => (
+    `${index + 1}. ${event.id} • ${event.displayName} • ${event.effectiveStatus}`
+  ));
+  return `${header}\n${lines.join("\n")}`;
+}
+
 async function resolveAdminAgentEventId(eventId: string) {
   const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
-  const event = await appDb.getEventById(normalizedEventId);
-  if (!event) {
-    throw new Error(`Event ${normalizedEventId} was not found`);
+  const exactEvent = await appDb.getEventById(normalizedEventId);
+  if (exactEvent) {
+    return normalizedEventId;
   }
-  return normalizedEventId;
+
+  const matches = await searchAdminAgentEvents(normalizedEventId, 5);
+  if (matches.length === 1) {
+    return matches[0]!.id;
+  }
+  if (matches.length > 1) {
+    const options = matches.slice(0, 3).map((event) => `${event.id} (${event.displayName})`).join(", ");
+    throw new Error(`Event "${normalizedEventId}" matched multiple events: ${options}. Please specify event_id.`);
+  }
+
+  throw new Error(`Event ${normalizedEventId} was not found`);
 }
 
 function parseAdminAgentEventOverride(text: string, fallbackEventId: string) {
@@ -1975,14 +2108,16 @@ async function requestAdminAgentPlan(
     "You are the Admin Agent planner for an event registration operations system.",
     "Your user is an admin/operator, not an attendee.",
     "Use concise operational Thai when asking follow-up questions.",
-    "Allowed actions only: get_event_overview, find_registration, list_registrations, count_registrations, get_registration_timeline, resend_ticket, resend_email, retry_bot.",
+    "Allowed actions only: find_event, get_event_overview, find_registration, list_registrations, count_registrations, get_registration_timeline, resend_ticket, resend_email, retry_bot.",
     "Default to the selected event scope unless the admin explicitly asks for another event.",
     "When enough information exists, return exactly one tool call.",
     "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
     "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
     "When matching by name, pass full_name or first_name/last_name.",
+    "Use find_event when asked to check whether an event exists, or when event name is partial.",
     "Use get_event_overview when asked for event status/time/place/capacity summary.",
     "Use list_registrations for list requests, and get_registration_timeline for sender chat history.",
+    "Do not call find_registration without at least one attendee filter (registration_id, full_name, sender_id, phone, email, or query).",
     "When asked to continue a stuck chat, use retry_bot.",
   ].join("\n");
   const plannerPrompt = customPlannerPrompt
@@ -2006,6 +2141,23 @@ async function requestAdminAgentPlan(
         },
       ],
       tools: [
+        {
+          type: "function",
+          function: {
+            name: "find_event",
+            description: "Find events by event ID, slug, or partial event name.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                event_id: { type: "string" },
+                name: { type: "string" },
+                slug: { type: "string" },
+                limit: { type: "integer", minimum: 1, maximum: 20 },
+              },
+            },
+          },
+        },
         {
           type: "function",
           function: {
@@ -2231,12 +2383,43 @@ async function requestAdminAgentPlan(
 
 async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCall, rawMessage: string) {
   switch (call.name) {
+    case "find_event": {
+      const query =
+        normalizeOptionalText(call.args.query)
+        || normalizeOptionalText(call.args.event_id)
+        || normalizeOptionalText(call.args.name)
+        || normalizeOptionalText(call.args.slug);
+      const limit = parsePositiveInteger(call.args.limit, 5, 20);
+      const matches = await searchAdminAgentEvents(query, limit);
+      return {
+        reply: buildAdminAgentFindEventReply(matches, query, limit),
+        result: {
+          query,
+          total_matches: matches.length,
+          limit,
+          matches: matches.map(serializeAdminAgentEvent),
+        },
+        targetType: matches.length === 1 ? "event" : "workspace",
+        targetId: matches.length === 1 ? matches[0]!.id : "events",
+      };
+    }
     case "get_event_overview": {
       const recentLimit = parsePositiveInteger(call.args.recent_limit, 5, 10);
       return buildAdminAgentEventOverview(eventId, recentLimit);
     }
     case "find_registration": {
-      const lookup = await findRegistrationsForAdminAction(eventId, call.args, rawMessage, { defaultToRecent: true });
+      const lookup = await findRegistrationsForAdminAction(eventId, call.args, rawMessage, { defaultToRecent: false });
+      if (lookup.usedFilters.length === 0) {
+        return {
+          reply: "ระบุเงื่อนไขผู้ลงทะเบียนก่อน เช่น full name, registration_id, sender_id, phone, email หรือ query",
+          result: {
+            event_id: eventId,
+            requires_filter: true,
+          },
+          targetType: "event",
+          targetId: eventId,
+        };
+      }
       return {
         reply: buildAdminAgentFindReply(lookup.matches, lookup.totalMatches, lookup.limit, lookup.usedFilters),
         result: {
@@ -2254,7 +2437,7 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
       const settings = await getSettingsMap(eventId);
       const lookup = await findRegistrationsForAdminAction(eventId, call.args, rawMessage, {
         defaultToRecent: true,
-        limit: parsePositiveInteger(call.args.limit, 15, 50),
+        limit: parsePositiveInteger(call.args.limit, 5, 50),
       });
       return {
         reply: buildAdminAgentListReply(
@@ -2652,19 +2835,24 @@ async function runAdminAgentCommand(options: {
     };
   }
 
+  const actionUsesEventScope = plan.toolCall.name !== "find_event";
   let executionEventId = scopedEventId;
-  const actionEventId = normalizeOptionalText(plan.toolCall.args.event_id);
-  if (actionEventId) {
-    executionEventId = await resolveAdminAgentEventId(actionEventId);
+  if (actionUsesEventScope) {
+    const actionEventId = normalizeOptionalText(plan.toolCall.args.event_id);
+    if (actionEventId) {
+      executionEventId = await resolveAdminAgentEventId(actionEventId);
+    }
   }
 
-  const action: AdminAgentToolCall = {
-    ...plan.toolCall,
-    args: {
-      ...plan.toolCall.args,
-      event_id: executionEventId,
-    },
-  };
+  const action: AdminAgentToolCall = actionUsesEventScope
+    ? {
+        ...plan.toolCall,
+        args: {
+          ...plan.toolCall.args,
+          event_id: executionEventId,
+        },
+      }
+    : plan.toolCall;
 
   const execution = await executeAdminAgentToolCall(executionEventId, action, message);
   return {
@@ -2672,9 +2860,9 @@ async function runAdminAgentCommand(options: {
     action,
     result: execution.result as Record<string, unknown>,
     meta: plan.meta,
-    eventId: executionEventId,
+    eventId: actionUsesEventScope ? executionEventId : scopedEventId,
     targetType: execution.targetType || "event",
-    targetId: execution.targetId || executionEventId,
+    targetId: execution.targetId || (actionUsesEventScope ? executionEventId : scopedEventId),
   };
 }
 
@@ -6676,6 +6864,7 @@ async function startServer() {
           const helpMessage = [
             "Admin Agent พร้อมใช้งาน",
             "ตัวอย่างคำสั่ง:",
+            "- หาอีเวนต์ สหจะโยคะ 5 สัปดาห์",
             "- สรุปอีเวนต์นี้",
             "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
             "- list registrations status registered",

@@ -1359,6 +1359,7 @@ const RECOMMENDED_ADMIN_AGENT_PROMPT = [
   "Your user is an admin/operator, not an attendee.",
   "Use concise operational Thai.",
   "Respect event scope: operate on the selected event unless admin explicitly specifies another event ID.",
+  "When admin asks by partial event name, find and confirm matching event IDs before running event-specific actions.",
   "Prioritize safety and accuracy:",
   "- Ask one short clarification when required fields are missing.",
   "- Never invent IDs, names, counts, or delivery results.",
@@ -1726,6 +1727,7 @@ export default function App() {
   const knowledgeActionsRef = useRef<HTMLDivElement | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const searchFocusTimeoutRef = useRef<number | null>(null);
+  const adminAgentScrollRef = useRef<HTMLDivElement | null>(null);
   selectedEventIdRef.current = selectedEventId;
   settingsRef.current = settings;
 
@@ -2637,6 +2639,13 @@ export default function App() {
       setSelectedLogMessageId(filteredMessages[0]?.id ?? null);
     }
   }, [filteredMessages, selectedLogMessageId]);
+
+  useEffect(() => {
+    if (activeTab !== "agent") return;
+    const panel = adminAgentScrollRef.current;
+    if (!panel) return;
+    panel.scrollTop = panel.scrollHeight;
+  }, [activeTab, adminAgentMessages, adminAgentTyping]);
 
   useEffect(() => {
     setManualOverrideText("");
@@ -5271,7 +5280,7 @@ export default function App() {
       Select a log row to inspect the full message and sender history.
     </div>
   ) : (
-    <div className="log-inspector-surface flex h-full min-h-[34rem] flex-col">
+    <div className="log-inspector-surface chat-selectable flex h-full min-h-[34rem] flex-col">
       <div className="border-b border-slate-100 bg-white px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -5313,7 +5322,7 @@ export default function App() {
                       <StatusBadge tone="emerald">line</StatusBadge>
                       <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
                     </div>
-                    <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
+                    <p className="chat-selectable whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                       {selectedTrace.detail || "-"}
                     </p>
                   </div>
@@ -5326,14 +5335,14 @@ export default function App() {
                       <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.actor}</StatusBadge>
                       <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.label}</StatusBadge>
                     </div>
-                    <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
+                    <p className="chat-selectable whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                       {selectedLogAuditMarker.summary}
                     </p>
                   </div>
                 );
               }
               return (
-                <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
+                <p className="chat-selectable mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                   {selectedLogAuditMarker?.detail || selectedLogMessage.text}
                 </p>
               );
@@ -5374,7 +5383,7 @@ export default function App() {
                   </div>
                   <p className="text-[10px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
                 </div>
-                <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
+                <p className="chat-selectable mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                   {lineTrace
                     ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
                     : auditMarker
@@ -7087,7 +7096,7 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
+              <div className="chat-scroll chat-selectable flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                 {testMessages.length === 0 && (
                   <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                     <MessageSquare className="h-10 w-10" />
@@ -7224,7 +7233,7 @@ export default function App() {
                   />
                 </div>
 
-                <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
+                <div ref={adminAgentScrollRef} className="chat-scroll chat-selectable flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                   {adminAgentMessages.length === 0 && (
                     <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                       <MonitorCog className="h-10 w-10" />
@@ -8316,7 +8325,7 @@ export default function App() {
                               {isSelected && <StatusBadge tone="blue">selected</StatusBadge>}
                             </div>
                             <div className="mt-1.5 flex items-start justify-between gap-2">
-                              <p className="log-list-preview-2 min-w-0 text-sm leading-5 text-slate-700">
+                              <p className="chat-selectable log-list-preview-2 min-w-0 text-sm leading-5 text-slate-700">
                                 {getLogMessageDisplayText(msg)}
                               </p>
                               <p className="shrink-0 text-[10px] text-slate-500">
@@ -8328,7 +8337,7 @@ export default function App() {
                           {isSelected && (
                             <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
                               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
-                              <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                              <p className="chat-selectable mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
                                 {lineTrace
                                   ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
                                   : auditMarker
@@ -8390,7 +8399,7 @@ export default function App() {
                                         {formatTraceStatusLabel(lineTrace.status)}
                                       </span>
                                     </div>
-                                    <p className="text-sm text-slate-700 break-words">
+                                    <p className="chat-selectable text-sm text-slate-700 break-words">
                                       {lineTrace.detail || "-"}
                                     </p>
                                   </div>
@@ -8400,12 +8409,12 @@ export default function App() {
                                       <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>
                                       <StatusBadge tone={auditMarker.tone}>{auditMarker.label}</StatusBadge>
                                     </div>
-                                    <p className="text-sm text-slate-700 break-words">
+                                    <p className="chat-selectable text-sm text-slate-700 break-words">
                                       {auditMarker.marker === "manual-reply" ? auditMarker.detail : auditMarker.summary}
                                     </p>
                                   </div>
                                 ) : (
-                                  <span className="truncate block">{msg.text}</span>
+                                  <span className="chat-selectable truncate block">{msg.text}</span>
                                 )}
                               </td>
                               <td className="px-6 py-4">
@@ -8457,7 +8466,7 @@ export default function App() {
                                   </StatusBadge>
                                   <p className="min-w-0 truncate text-[10px] font-mono text-blue-600">{msg.sender_id}</p>
                                 </div>
-                                <p className="log-list-preview-2 mt-1 text-[13px] leading-5 text-slate-700">
+                                <p className="chat-selectable log-list-preview-2 mt-1 text-[13px] leading-5 text-slate-700">
                                   {getLogMessageDisplayText(msg)}
                                 </p>
                               </div>
