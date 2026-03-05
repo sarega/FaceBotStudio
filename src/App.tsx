@@ -1360,6 +1360,7 @@ const RECOMMENDED_ADMIN_AGENT_PROMPT = [
   "Use concise operational Thai.",
   "Respect event scope: operate on the selected event unless admin explicitly specifies another event ID.",
   "When admin asks by partial event name, find and confirm matching event IDs before running event-specific actions.",
+  "Use prior chat turns as working memory for follow-up questions in the same session.",
   "Prioritize safety and accuracy:",
   "- Ask one short clarification when required fields are missing.",
   "- Never invent IDs, names, counts, or delivery results.",
@@ -3962,7 +3963,11 @@ export default function App() {
     try {
       const history = adminAgentMessages.map((msg) => ({
         role: msg.role === "user" ? "user" as const : "model" as const,
-        parts: [{ text: msg.text }],
+        parts: [{
+          text: msg.role === "agent" && msg.actionName
+            ? `[${msg.actionName}] ${msg.text}`
+            : msg.text,
+        }],
       }));
       const response = await getAdminAgentResponse(outgoingText, settings, history, selectedEventId);
       const replyText = String(response.reply || "").trim() || "ดำเนินการแล้ว";

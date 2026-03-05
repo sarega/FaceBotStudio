@@ -1842,6 +1842,76 @@ type AdminAgentEventCandidate = {
   searchable: string;
 };
 
+type AdminAgentEventSearchOptions = {
+  effectiveStatuses?: string[];
+  registrationAvailability?: string[];
+};
+
+function sanitizeAdminAgentEventQuery(rawQuery: string) {
+  const source = normalizeOptionalText(rawQuery);
+  if (!source) return "";
+  return source
+    .replace(/^\/agent\b/i, " ")
+    .replace(/[\?\!]/g, " ")
+    .replace(/(อีเวนต์|อีเว้นต์|งาน|รายการ|events?)/gi, " ")
+    .replace(/(เปิดอยู่|กำลังเปิด|ยังไม่เริ่ม|รอดำเนินการ|จบแล้ว|ปิดแล้ว|ยกเลิก|รับสมัคร|ลงทะเบียน|เต็ม)/g, " ")
+    .replace(/\b(active|open|pending|inactive|closed|cancelled|canceled|registration)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseAdminAgentEventSearchOptions(
+  args: Record<string, unknown>,
+  rawMessage: string,
+): AdminAgentEventSearchOptions {
+  const source = `${normalizeOptionalText(args.query)} ${normalizeOptionalText(args.name)} ${normalizeOptionalText(rawMessage)}`.toLowerCase();
+  const effectiveStatuses = new Set<string>();
+  const registrationAvailability = new Set<string>();
+  const normalizedStatus = normalizeComparableText(args.status);
+  const normalizedAvailability = normalizeComparableText(args.registration_availability);
+  const normalizedOpenOnly = normalizeComparableText(args.registration_open_only);
+
+  if (normalizedStatus === "active" || /active|เปิดอยู่|กำลังเปิด|เปิดตอนนี้/.test(source)) {
+    effectiveStatuses.add("active");
+  }
+  if (normalizedStatus === "pending" || /pending|รอดำเนินการ|ยังไม่เริ่ม|upcoming/.test(source)) {
+    effectiveStatuses.add("pending");
+  }
+  if (normalizedStatus === "inactive" || /inactive|ปิดใช้งาน|ไม่ active/.test(source)) {
+    effectiveStatuses.add("inactive");
+  }
+  if (normalizedStatus === "closed" || /closed|จบแล้ว|ปิดแล้ว|สิ้นสุด/.test(source)) {
+    effectiveStatuses.add("closed");
+  }
+  if (normalizedStatus === "cancelled" || /cancelled|canceled|ยกเลิก/.test(source)) {
+    effectiveStatuses.add("cancelled");
+  }
+
+  if (
+    normalizedAvailability === "open"
+    || /เปิดรับสมัคร|ลงทะเบียน.*(เปิด|อยู่)|registration open|open registration|open for registration/.test(source)
+    || normalizedOpenOnly === "true"
+    || normalizedOpenOnly === "1"
+    || normalizedOpenOnly === "yes"
+  ) {
+    registrationAvailability.add("open");
+  }
+  if (normalizedAvailability === "not_started" || /ยังไม่เปิดลงทะเบียน|not started/.test(source)) {
+    registrationAvailability.add("not_started");
+  }
+  if (normalizedAvailability === "closed" || /ปิดรับสมัคร|registration closed|closed registration/.test(source)) {
+    registrationAvailability.add("closed");
+  }
+  if (normalizedAvailability === "full" || /เต็ม|full/.test(source)) {
+    registrationAvailability.add("full");
+  }
+
+  return {
+    effectiveStatuses: [...effectiveStatuses],
+    registrationAvailability: [...registrationAvailability],
+  };
+}
+
 async function listAdminAgentEventCandidates(): Promise<AdminAgentEventCandidate[]> {
   const events = await appDb.listEvents();
   const candidates = await Promise.all(events.map(async (event) => {
@@ -1853,6 +1923,17 @@ async function listAdminAgentEventCandidates(): Promise<AdminAgentEventCandidate
       normalizeComparableText(event.slug),
       normalizeComparableText(event.name),
       normalizeComparableText(configuredName),
+      normalizeComparableText(event.effective_status || ""),
+      normalizeComparableText(event.registration_availability || ""),
+      event.effective_status === "active" ? "open เปิด เปิดอยู่ กำลังเปิด" : "",
+      event.effective_status === "pending" ? "pending upcoming ยังไม่เริ่ม รอดำเนินการ" : "",
+      event.effective_status === "closed" ? "closed จบแล้ว ปิดแล้ว สิ้นสุด" : "",
+      event.effective_status === "inactive" ? "inactive ปิดใช้งาน" : "",
+      event.effective_status === "cancelled" ? "cancelled canceled ยกเลิก" : "",
+      event.registration_availability === "open" ? "registration open เปิดรับสมัคร ลงทะเบียนได้" : "",
+      event.registration_availability === "not_started" ? "registration not started ยังไม่เปิดลงทะเบียน" : "",
+      event.registration_availability === "closed" ? "registration closed ปิดรับสมัคร" : "",
+      event.registration_availability === "full" ? "registration full เต็ม" : "",
     ].filter(Boolean);
     return {
       id: event.id,
@@ -1905,18 +1986,45 @@ function scoreAdminAgentEventCandidate(candidate: AdminAgentEventCandidate, norm
   return score;
 }
 
-async function searchAdminAgentEvents(query: string, limit = 5): Promise<AdminAgentEventCandidate[]> {
+async function searchAdminAgentEvents(
+  query: string,
+  limit = 5,
+  options?: AdminAgentEventSearchOptions,
+): Promise<AdminAgentEventCandidate[]> {
   const normalizedQuery = normalizeComparableText(query);
   const maxResults = parsePositiveInteger(limit, 5, 20);
   const candidates = await listAdminAgentEventCandidates();
-  if (!normalizedQuery) {
-    return candidates.slice(0, maxResults);
+  const derivedFilters = parseAdminAgentEventSearchOptions({ query }, query);
+  const effectiveStatuses = options?.effectiveStatuses?.length
+    ? options.effectiveStatuses
+    : (derivedFilters.effectiveStatuses || []);
+  const registrationAvailability = options?.registrationAvailability?.length
+    ? options.registrationAvailability
+    : (derivedFilters.registrationAvailability || []);
+  let filteredCandidates = candidates.slice();
+
+  if (effectiveStatuses.length > 0) {
+    filteredCandidates = filteredCandidates.filter((candidate) =>
+      effectiveStatuses.includes(candidate.effectiveStatus),
+    );
+  }
+  if (registrationAvailability.length > 0) {
+    filteredCandidates = filteredCandidates.filter((candidate) =>
+      registrationAvailability.includes(candidate.registrationAvailability),
+    );
   }
 
-  return candidates
+  const cleanedQuery = sanitizeAdminAgentEventQuery(query);
+  const normalizedCleanedQuery = normalizeComparableText(cleanedQuery);
+  const effectiveQuery = normalizedCleanedQuery || normalizedQuery;
+  if (!effectiveQuery) {
+    return filteredCandidates.slice(0, maxResults);
+  }
+
+  const scored = filteredCandidates
     .map((candidate) => ({
       candidate,
-      score: scoreAdminAgentEventCandidate(candidate, normalizedQuery),
+      score: scoreAdminAgentEventCandidate(candidate, effectiveQuery),
     }))
     .filter((entry) => entry.score > 0)
     .sort((left, right) => {
@@ -1925,6 +2033,14 @@ async function searchAdminAgentEvents(query: string, limit = 5): Promise<AdminAg
     })
     .slice(0, maxResults)
     .map((entry) => entry.candidate);
+
+  if (scored.length > 0) {
+    return scored;
+  }
+  if (effectiveStatuses.length > 0 || registrationAvailability.length > 0) {
+    return filteredCandidates.slice(0, maxResults);
+  }
+  return [];
 }
 
 function serializeAdminAgentEvent(candidate: AdminAgentEventCandidate) {
@@ -2110,6 +2226,7 @@ async function requestAdminAgentPlan(
     "Use concise operational Thai when asking follow-up questions.",
     "Allowed actions only: find_event, get_event_overview, find_registration, list_registrations, count_registrations, get_registration_timeline, resend_ticket, resend_email, retry_bot.",
     "Default to the selected event scope unless the admin explicitly asks for another event.",
+    "Use conversation history for follow-up intent; do not ignore prior turns in the same chat session.",
     "When enough information exists, return exactly one tool call.",
     "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
     "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
@@ -2153,6 +2270,9 @@ async function requestAdminAgentPlan(
                 event_id: { type: "string" },
                 name: { type: "string" },
                 slug: { type: "string" },
+                status: { type: "string", enum: ["pending", "active", "inactive", "cancelled", "closed"] },
+                registration_availability: { type: "string", enum: ["open", "not_started", "closed", "invalid", "full"] },
+                registration_open_only: { type: "boolean" },
                 limit: { type: "integer", minimum: 1, maximum: 20 },
               },
             },
@@ -2388,13 +2508,19 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
         normalizeOptionalText(call.args.query)
         || normalizeOptionalText(call.args.event_id)
         || normalizeOptionalText(call.args.name)
-        || normalizeOptionalText(call.args.slug);
+        || normalizeOptionalText(call.args.slug)
+        || normalizeOptionalText(rawMessage);
       const limit = parsePositiveInteger(call.args.limit, 5, 20);
-      const matches = await searchAdminAgentEvents(query, limit);
+      const searchOptions = parseAdminAgentEventSearchOptions(call.args, rawMessage);
+      const matches = await searchAdminAgentEvents(query, limit, searchOptions);
       return {
         reply: buildAdminAgentFindEventReply(matches, query, limit),
         result: {
           query,
+          filters: {
+            effective_statuses: searchOptions.effectiveStatuses || [],
+            registration_availability: searchOptions.registrationAvailability || [],
+          },
           total_matches: matches.length,
           limit,
           matches: matches.map(serializeAdminAgentEvent),
