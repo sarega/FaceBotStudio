@@ -4613,8 +4613,8 @@ export default function App() {
   const selectedWebhookConfigItem =
     webhookConfigItems.find((item) => item.key === selectedWebhookConfigKey) || webhookConfigItems[0];
   const teamAccessPanel = (role === "owner" || role === "admin") ? (
-    <div className="space-y-6">
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -4637,8 +4637,8 @@ export default function App() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.92fr)]">
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.92fr)]">
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-900">Current Members</p>
@@ -4653,7 +4653,7 @@ export default function App() {
               </div>
             ) : (
               teamUsers.map((user) => (
-                <div key={user.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                <div key={user.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2.5">
                   <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-slate-900">{user.display_name}</p>
@@ -4719,13 +4719,13 @@ export default function App() {
         </div>
 
         {canManageUsers && (
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
             <div className="flex items-center gap-2">
               <UserPlus className="w-4 h-4 text-blue-600" />
               <p className="text-sm font-semibold text-slate-900">Add Team Member</p>
             </div>
             <p className="mt-1 text-xs text-slate-500">Create a new admin workspace account with a role and temporary password.</p>
-            <div className="mt-4 space-y-3">
+            <div className="mt-3 space-y-2.5">
               <input
                 value={newUserDisplayName}
                 onChange={(e) => setNewUserDisplayName(e.target.value)}
@@ -5441,7 +5441,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`max-w-7xl mx-auto px-3 py-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-6 lg:px-6 lg:py-8 ${canEditSettings ? "lg:pb-28" : ""}`}>
+      <main className={`max-w-7xl mx-auto px-3 py-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4 lg:px-6 lg:py-5 ${canEditSettings ? "lg:pb-28" : ""}`}>
         <AnimatePresence mode="wait">
           {activeTab === "event" && (
             <motion.div
@@ -5449,12 +5449,12 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-6"
+              className="space-y-4"
             >
-              <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
-                <div className="space-y-6 xl:col-span-7">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
-                    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+                <div className="space-y-4 xl:col-span-7">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -5629,8 +5629,8 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
-                    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex items-start justify-between gap-3 sm:block">
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Activity className="w-5 h-5 text-blue-600" />
@@ -5796,8 +5796,8 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-6 xl:col-span-5">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-5 sm:p-6">
+                <div className="space-y-4 xl:col-span-5">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -6042,11 +6042,11 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-6"
+              className="space-y-4"
             >
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-                <div className="space-y-6 xl:col-span-7">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+                <div className="space-y-4 xl:col-span-7">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 space-y-3">
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div className="flex items-center gap-2">
@@ -6123,7 +6123,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex items-center gap-2">
                         <h3 className="text-lg font-semibold">Knowledge Documents</h3>
@@ -6225,8 +6225,8 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-6 xl:col-span-5">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                <div className="space-y-4 xl:col-span-5">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 flex items-start justify-between gap-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-lg font-semibold">Attached Documents</h3>
@@ -6355,7 +6355,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 shadow-sm sm:p-5">
                     <div className="flex items-center justify-between gap-3 mb-3">
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-slate-900">Chunk Inspector</h3>
@@ -6420,7 +6420,7 @@ export default function App() {
 
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 shadow-sm sm:p-5">
                     <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-slate-900">Embedding Preview</h3>
@@ -6556,7 +6556,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600 shadow-sm">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 shadow-sm sm:p-5">
                     <div className="flex items-center justify-between gap-3 mb-4">
                       <div>
                         <h3 className="font-semibold text-slate-900">Retrieval Debug</h3>
@@ -6727,7 +6727,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -6849,7 +6849,7 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]"
             >
-              <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-3 sm:p-4">
+              <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100">
                     <Bot className="h-5 w-5 text-blue-600" />
@@ -6887,7 +6887,7 @@ export default function App() {
                 </InlineActionsMenu>
               </div>
 
-              <div className="border-b border-slate-100 bg-white px-3 py-3 sm:px-4">
+              <div className="border-b border-slate-100 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
                 <CompactGuardBar
                   title="Simulation Guard"
                   tone={eventOperatorGuard.tone}
@@ -6896,7 +6896,7 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex-1 overflow-y-auto bg-slate-50 p-4 space-y-2 sm:p-6">
+              <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                 {testMessages.length === 0 && (
                   <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                     <MessageSquare className="h-10 w-10" />
@@ -6955,7 +6955,7 @@ export default function App() {
                 )}
               </div>
 
-              <div className="border-t border-slate-100 p-3 sm:p-4 lg:px-6 lg:pb-9 lg:pt-4">
+              <div className="border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
                 <div className="flex gap-2 lg:pr-16">
                   <input
                     type="text"
@@ -7345,11 +7345,11 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-6"
+              className="space-y-4"
             >
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                <div className="xl:col-span-2 space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+                <div className="space-y-4">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
                     <div className="mb-4 flex items-start justify-between gap-3">
                       <div>
                         <h2 className="text-xl font-semibold flex items-center gap-2">
@@ -7433,7 +7433,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
                     <div className="flex items-start justify-between gap-3 mb-4">
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -7500,8 +7500,8 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                <div className="space-y-4">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
                     <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
                       <Search className="w-5 h-5 text-blue-600" />
                       Manual Check-in
@@ -7539,7 +7539,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
                     <div className="flex items-center justify-between gap-3 mb-3">
                       <div>
                         <h3 className="text-lg font-semibold">Latest Result</h3>
@@ -7553,7 +7553,7 @@ export default function App() {
                     </div>
 
                     {!latestCheckinRegistration ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+                      <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-sm text-slate-400">
                         No attendee checked in yet in this session.
                       </div>
                     ) : (
@@ -7588,7 +7588,7 @@ export default function App() {
                   </div>
 
                   {canManageCheckinAccess && (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
+                    <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Shield className="w-5 h-5 text-blue-600" />
@@ -7669,7 +7669,7 @@ export default function App() {
                         ) : (
                           <div className="space-y-2">
                             {checkinSessions.map((session) => (
-                              <div key={session.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-3">
+                              <div key={session.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 space-y-2.5">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                   <div className="min-w-0">
                                     <p className="text-sm font-semibold text-slate-900 truncate">{session.label}</p>
@@ -7978,12 +7978,12 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-8"
+              className="space-y-4"
             >
-              <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
-                <div className="space-y-6 xl:col-span-7">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
-                    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+                <div className="space-y-4 xl:col-span-7">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -8010,7 +8010,7 @@ export default function App() {
                         Save AI Settings
                       </ActionButton>
                     </div>
-                    <div className="space-y-5">
+                    <div className="space-y-4">
                       <div>
                         <div className="mb-1 flex items-center justify-between gap-2">
                           <label className="block text-xs font-bold text-slate-500 uppercase">Global System Prompt</label>
@@ -8026,7 +8026,7 @@ export default function App() {
                         />
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div>
                           <div className="mb-1 flex items-center justify-between gap-2">
                             <label className="block text-xs font-bold text-slate-500 uppercase">Global Default Model</label>
@@ -8103,8 +8103,8 @@ export default function App() {
 
                 </div>
 
-                <div className="space-y-6 xl:col-span-5">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-5 sm:p-6">
+                <div className="space-y-4 xl:col-span-5">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -8164,11 +8164,11 @@ export default function App() {
                           <div
                             key={channel.id}
                             id={getSearchTargetDomId("channel", channel.id)}
-                            className={`rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3 ${
+                            className={`rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2.5 ${
                               isSearchFocused("channel", channel.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
                             }`}
                           >
-                            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                               <button
                                 onClick={() => toggleChannelDetails(channel.id)}
                                 className="min-w-0 text-left"
@@ -8306,7 +8306,7 @@ export default function App() {
                       )}
                     </div>
 
-                    <div className="border-t border-slate-100 pt-5 space-y-3">
+                    <div className="space-y-2.5 border-t border-slate-100 pt-4">
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-sm font-semibold">{editingChannelKey ? "Edit Channel" : "Link Channel to Selected Event"}</p>
                         {editingChannelKey && (
@@ -8338,7 +8338,7 @@ export default function App() {
                         <option value="web_chat">Web Chat</option>
                       </select>
                       {selectedChannelPlatformDefinition && (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 space-y-2">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 space-y-2">
                           <p className="font-semibold text-slate-800">{selectedChannelPlatformDefinition.label}</p>
                           <p>{selectedChannelPlatformDefinition.description}</p>
                           <div className="space-y-1 text-xs text-slate-500">
@@ -8448,7 +8448,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sm:p-6">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 flex flex-wrap items-center gap-2">
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <SettingsIcon className="w-5 h-5 text-blue-600" />
@@ -8538,7 +8538,7 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-6"
+              className="space-y-4"
             >
               {teamAccessPanel}
             </motion.div>
