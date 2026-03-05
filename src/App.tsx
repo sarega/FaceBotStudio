@@ -285,11 +285,14 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
+const COLLAPSED_SECTION_STORAGE_KEY = "facebotstudio-collapsed-sections-v1";
 const COLLAPSIBLE_SECTION_KEYS = {
   contextEvent: "context-event",
   contextKnowledgeDocuments: "context-knowledge-documents",
   contextAttachedDocuments: "context-attached-documents",
   contextChunkInspector: "context-chunk-inspector",
+  contextEmbeddingPreview: "context-embedding-preview",
+  contextRetrievalDebug: "context-retrieval-debug",
   agentRuntime: "agent-runtime",
   agentExternalChannel: "agent-external-channel",
   setupChannels: "setup-channels",
@@ -350,6 +353,33 @@ function writeAdminAgentChatStore(store: Record<string, AdminAgentChatMessage[]>
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(ADMIN_AGENT_CHAT_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function readCollapsedSectionStore() {
+  if (typeof window === "undefined") return {} as Record<string, boolean>;
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_SECTION_STORAGE_KEY);
+    if (!raw) return {} as Record<string, boolean>;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {} as Record<string, boolean>;
+    const normalized: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof key !== "string" || !key.trim()) continue;
+      normalized[key] = Boolean(value);
+    }
+    return normalized;
+  } catch {
+    return {} as Record<string, boolean>;
+  }
+}
+
+function writeCollapsedSectionStore(map: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(COLLAPSED_SECTION_STORAGE_KEY, JSON.stringify(map));
   } catch {
     // ignore storage write failures
   }
@@ -1182,9 +1212,9 @@ function CollapseIconButton({
       aria-label={`${action} ${label}`}
       title={`${action} ${label}`}
       tone={tone}
-      className={`h-8 w-8 min-h-0 rounded-xl p-0 text-base font-semibold leading-none ${className}`.trim()}
+      className={`h-8 w-8 min-h-0 rounded-lg p-0 text-lg font-black leading-none ${className}`.trim()}
     >
-      <span aria-hidden="true">{collapsed ? "▾" : "▴"}</span>
+      <span aria-hidden="true" className="font-mono">{collapsed ? "+" : "-"}</span>
     </ActionButton>
   );
 }
@@ -1926,7 +1956,7 @@ export default function App() {
   const [logToolsOpen, setLogToolsOpen] = useState(false);
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
-  const [collapsedSectionMap, setCollapsedSectionMap] = useState<Record<string, boolean>>({});
+  const [collapsedSectionMap, setCollapsedSectionMap] = useState<Record<string, boolean>>(() => readCollapsedSectionStore());
   const [collapsedContextDocumentIds, setCollapsedContextDocumentIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
@@ -2016,6 +2046,9 @@ export default function App() {
         : [...current, documentId],
     );
   };
+  useEffect(() => {
+    writeCollapsedSectionStore(collapsedSectionMap);
+  }, [collapsedSectionMap]);
   const desktopNotificationSupported = typeof window !== "undefined" && typeof Notification !== "undefined";
   const desktopNotifyPermissionLabel =
     desktopNotifyPermission === "granted"
@@ -2057,6 +2090,12 @@ export default function App() {
     adminAgentPolicy.messageUser ? "message-send/retry" : "",
     adminAgentPolicy.searchAllEvents ? "cross-event-search" : "",
   ].filter(Boolean);
+  const adminAgentGuardTone: BadgeTone = settings.admin_agent_enabled === "1" ? "emerald" : "amber";
+  const adminAgentGuardLabel = settings.admin_agent_enabled === "1" ? "live actions" : "disabled";
+  const adminAgentGuardBody =
+    settings.admin_agent_enabled === "1"
+      ? `Agent mode executes only enabled policy scopes (${adminAgentEnabledPolicies.length}/8): ${adminAgentEnabledPolicies.join(", ") || "none"}.`
+      : "Enable Admin Agent in setup before running commands from UI or Telegram.";
   const activeAttendeeCount = registrations.filter((reg) => reg.status !== "cancelled").length;
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
   const canUseQrScanner =
@@ -6559,9 +6598,9 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-4 xl:col-span-5">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
-                    <div className="flex items-start justify-between gap-3">
+                <div className="space-y-3 xl:col-span-5">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "p-3 sm:p-3" : "space-y-4 p-4 sm:p-5"}`}>
+                    <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "items-center" : "items-start"}`}>
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <CalendarRange className="w-5 h-5 text-blue-600" />
@@ -6809,9 +6848,9 @@ export default function App() {
             >
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-7">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 space-y-3">
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "mb-0" : "mb-4"} space-y-3`}>
+                      <div className={`flex flex-col gap-3 lg:flex-row lg:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "lg:items-center" : "lg:items-start"}`}>
                         <div className="flex items-center gap-2">
                           <h2 className="text-lg font-semibold">Event Context</h2>
                           {eventContextDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
@@ -6900,8 +6939,8 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "mb-0" : "mb-4"} flex flex-col gap-3 sm:flex-row sm:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "sm:items-center" : "sm:items-start"}`}>
                       <div className="flex items-center gap-2">
                         <h3 className="text-lg font-semibold">Knowledge Documents</h3>
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
@@ -7017,18 +7056,28 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4 xl:col-span-5">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 flex items-start justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-lg font-semibold">Attached Documents</h3>
-                        <StatusBadge tone="neutral">{filteredDocuments.length}</StatusBadge>
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "mb-0 items-center" : "mb-3 items-start"} flex justify-between gap-3`}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
+                        className="min-w-0 flex-1 text-left"
+                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "Expand" : "Collapse"} Attached Documents`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold">Attached Documents</h3>
+                          <StatusBadge tone="neutral">{filteredDocuments.length}</StatusBadge>
+                        </div>
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
+                          <p className="mt-1 text-xs text-slate-500">Only active documents are used during retrieval.</p>
+                        )}
+                      </button>
+                      <div className="flex items-center gap-2">
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
                           <HelpPopover label="Open note for Attached Documents">
                             Only active documents are used during retrieval.
                           </HelpPopover>
                         )}
-                      </div>
-                      <div className="flex items-center gap-2">
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
                           <button
                             onClick={() => void fetchDocuments(selectedEventId)}
@@ -7175,17 +7224,22 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 shadow-sm sm:p-5">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
+                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "mb-0" : "mb-3"} flex items-center justify-between gap-3`}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
+                        className="min-w-0 flex-1 text-left"
+                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "Expand" : "Collapse"} Chunk Inspector`}
+                      >
                         <h3 className="font-semibold text-slate-900">Chunk Inspector</h3>
+                      </button>
+                      <div className="flex items-center gap-2">
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && (
                           <HelpPopover label="Open note for Chunk Inspector">
                             Preview the exact chunks available for retrieval from the selected document.
                           </HelpPopover>
                         )}
-                      </div>
-                      <div className="flex items-center gap-2">
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && selectedDocumentForChunks && (
                           <button
                             onClick={() => void fetchDocumentChunks(selectedDocumentForChunks.id, selectedEventId)}
@@ -7252,311 +7306,343 @@ export default function App() {
 
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 shadow-sm sm:p-5">
-                    <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="flex items-center gap-2">
+                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "mb-0" : "mb-3"} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
+                        className="min-w-0 flex-1 text-left"
+                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "Expand" : "Collapse"} Embedding Preview`}
+                      >
                         <h3 className="font-semibold text-slate-900">Embedding Preview</h3>
-                        <HelpPopover label="Open note for Embedding Preview">
-                          Vector-ready metadata and hook payload for the selected document.
-                        </HelpPopover>
+                      </button>
+                      <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) && (
+                          <HelpPopover label="Open note for Embedding Preview">
+                            Vector-ready metadata and hook payload for the selected document.
+                          </HelpPopover>
+                        )}
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) && selectedDocumentForChunks && (
+                          <div className="flex w-full items-center gap-2 sm:w-auto">
+                            <ActionButton
+                              onClick={() => void handleEnqueueEmbedding(selectedDocumentForChunks.id, selectedEventId)}
+                              disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
+                              tone="neutral"
+                              active
+                              className="min-w-0 flex-1 text-sm sm:flex-none"
+                            >
+                              {(embeddingPreviewLoading || embeddingEnqueueLoading) ? (
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Save className="w-4 h-4" />
+                              )}
+                              Queue Embedding
+                            </ActionButton>
+                            <button
+                              onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
+                              disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
+                              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl p-2 transition-colors hover:bg-slate-200 disabled:opacity-50"
+                              title="Refresh embedding preview"
+                            >
+                              <RefreshCw className={`w-4 h-4 text-slate-500 ${embeddingPreviewLoading ? "animate-spin" : ""}`} />
+                            </button>
+                          </div>
+                        )}
+                        <CollapseIconButton
+                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
+                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
+                        />
                       </div>
-                      {selectedDocumentForChunks && (
-                        <div className="flex w-full items-center gap-2 sm:w-auto">
-                          <ActionButton
-                            onClick={() => void handleEnqueueEmbedding(selectedDocumentForChunks.id, selectedEventId)}
-                            disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
-                            tone="neutral"
-                            active
-                            className="min-w-0 flex-1 text-sm sm:flex-none"
-                          >
-                            {(embeddingPreviewLoading || embeddingEnqueueLoading) ? (
-                              <RefreshCw className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Save className="w-4 h-4" />
-                            )}
-                            Queue Embedding
-                          </ActionButton>
-                          <button
-                            onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
-                            disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
-                            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl p-2 transition-colors hover:bg-slate-200 disabled:opacity-50"
-                            title="Refresh embedding preview"
-                          >
-                            <RefreshCw className={`w-4 h-4 text-slate-500 ${embeddingPreviewLoading ? "animate-spin" : ""}`} />
-                          </button>
-                        </div>
-                      )}
                     </div>
 
-                    {!selectedDocumentForChunks ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
-                        Select a document to inspect its vector-ready metadata.
-                      </div>
-                    ) : (
-                      <div className="min-w-0 space-y-4">
-                        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-relaxed text-blue-800">
-                          หลังจาก queue สำเร็จ worker จะสร้าง embeddings และเก็บ vectors ไว้ในระบบนี้ก่อน ทำให้ retrieval ใช้ cosine similarity
-                          ร่วมกับ keyword ranking ได้จริง ส่วน
-                          {" "}
-                          <span className="font-semibold">Queue Embedding</span>
-                          {" "}
-                          ยังสามารถส่ง payload ไปที่
-                          {" "}
-                          <span className="font-mono">EMBEDDING_HOOK_URL</span>
-                          {" "}
-                          เพิ่มเติมได้ถ้าต้องการ sync ออกระบบภายนอก
-                        </div>
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) && (
+                      <>
+                        {!selectedDocumentForChunks ? (
+                          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                            Select a document to inspect its vector-ready metadata.
+                          </div>
+                        ) : (
+                          <div className="min-w-0 space-y-4">
+                            <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-relaxed text-blue-800">
+                              หลังจาก queue สำเร็จ worker จะสร้าง embeddings และเก็บ vectors ไว้ในระบบนี้ก่อน ทำให้ retrieval ใช้ cosine similarity
+                              ร่วมกับ keyword ranking ได้จริง ส่วน
+                              {" "}
+                              <span className="font-semibold">Queue Embedding</span>
+                              {" "}
+                              ยังสามารถส่ง payload ไปที่
+                              {" "}
+                              <span className="font-mono">EMBEDDING_HOOK_URL</span>
+                              {" "}
+                              เพิ่มเติมได้ถ้าต้องการ sync ออกระบบภายนอก
+                            </div>
 
-                        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-                          <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Document Embedding State</p>
-                            <div className="space-y-2 text-sm">
-                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                <span className="text-slate-600">Embedding model</span>
-                                <StatusBadge tone="neutral" className="self-start sm:self-auto">
-                                  {embeddingPreview?.embedding_model || "text-embedding-3-small"}
-                                </StatusBadge>
+                            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
+                              <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Document Embedding State</p>
+                                <div className="space-y-2 text-sm">
+                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                                    <span className="text-slate-600">Embedding model</span>
+                                    <StatusBadge tone="neutral" className="self-start sm:self-auto">
+                                      {embeddingPreview?.embedding_model || "text-embedding-3-small"}
+                                    </StatusBadge>
+                                  </div>
+                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                                    <span className="text-slate-600">Document status</span>
+                                    <StatusBadge
+                                      tone={getDocumentEmbeddingTone(embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status)}
+                                      className="self-start sm:self-auto"
+                                    >
+                                      {embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status || "pending"}
+                                    </StatusBadge>
+                                  </div>
+                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                                    <span className="text-slate-600">Document content hash</span>
+                                    <span className="w-full min-w-0 break-all text-left text-xs font-mono text-slate-500 sm:max-w-[14rem] sm:text-right">
+                                      {embeddingPreview?.document.content_hash || selectedDocumentForChunks.content_hash || "-"}
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                                    <span className="text-slate-600">Chunk count</span>
+                                    <StatusBadge tone="neutral" className="self-start sm:self-auto">
+                                      {embeddingPreview?.chunks.length ?? selectedDocumentForChunks.chunk_count ?? 0}
+                                    </StatusBadge>
+                                  </div>
+                                </div>
+                                {embeddingPreviewMessage && (
+                                  <p className={`mt-3 text-xs ${embeddingPreviewMessage.toLowerCase().includes("failed") || embeddingPreviewMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-500"}`}>
+                                    {embeddingPreviewMessage}
+                                  </p>
+                                )}
                               </div>
-                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                <span className="text-slate-600">Document status</span>
-                                <StatusBadge
-                                  tone={getDocumentEmbeddingTone(embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status)}
-                                  className="self-start sm:self-auto"
-                                >
-                                  {embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status || "pending"}
-                                </StatusBadge>
-                              </div>
-                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                <span className="text-slate-600">Document content hash</span>
-                                <span className="w-full min-w-0 break-all text-left text-xs font-mono text-slate-500 sm:max-w-[14rem] sm:text-right">
-                                  {embeddingPreview?.document.content_hash || selectedDocumentForChunks.content_hash || "-"}
-                                </span>
-                              </div>
-                              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                <span className="text-slate-600">Chunk count</span>
-                                <StatusBadge tone="neutral" className="self-start sm:self-auto">
-                                  {embeddingPreview?.chunks.length ?? selectedDocumentForChunks.chunk_count ?? 0}
-                                </StatusBadge>
+
+                              <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Chunk Metadata</p>
+                                <div className="max-h-[14rem] space-y-2 overflow-y-auto overflow-x-hidden pr-1">
+                                  {embeddingPreviewLoading && (
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                      Loading embedding preview...
+                                    </div>
+                                  )}
+                                  {!embeddingPreviewLoading && !embeddingPreview?.chunks.length && (
+                                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                      No chunks available for embedding yet.
+                                    </div>
+                                  )}
+                                  {!embeddingPreviewLoading && embeddingPreview?.chunks.map((chunk) => (
+                                    <div key={chunk.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
+                                        <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">chunk {chunk.chunk_index + 1}</StatusBadge>
+                                        <StatusBadge tone="neutral">{chunk.char_count || chunk.content.length} chars</StatusBadge>
+                                        <StatusBadge tone="neutral">~{chunk.token_estimate || 0} tokens</StatusBadge>
+                                        <StatusBadge tone={getDocumentEmbeddingTone(chunk.embedding_status)}>
+                                          {chunk.embedding_status || "pending"}
+                                        </StatusBadge>
+                                      </div>
+                                      <p className="break-all text-xs font-mono text-slate-500">{chunk.content_hash || "-"}</p>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
                             </div>
-                            {embeddingPreviewMessage && (
-                              <p className={`mt-3 text-xs ${embeddingPreviewMessage.toLowerCase().includes("failed") || embeddingPreviewMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-500"}`}>
-                                {embeddingPreviewMessage}
+
+                            <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Embedding Hook Payload</p>
+                              <div className="max-h-[22rem] overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                <pre className="whitespace-pre-wrap break-all text-xs font-mono text-slate-700">
+                                  {embeddingPreview ? JSON.stringify(embeddingPreview.payload, null, 2) : "Select a document to preview the embedding payload."}
+                                </pre>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "mb-0" : "mb-3"} flex items-center justify-between gap-3`}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
+                        className="min-w-0 flex-1 text-left"
+                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "Expand" : "Collapse"} Retrieval Debug`}
+                      >
+                        <h3 className="font-semibold text-slate-900">Retrieval Debug</h3>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) && (
+                          <HelpPopover label="Open note for Retrieval Debug">
+                            Inspect which event chunks this workspace would send into the prompt for a specific question.
+                          </HelpPopover>
+                        )}
+                        <CollapseIconButton
+                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
+                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
+                        />
+                      </div>
+                    </div>
+
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) && (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr,0.9fr]">
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                              Test Query
+                            </label>
+                            <textarea
+                              value={retrievalQuery}
+                              onChange={(e) => setRetrievalQuery(e.target.value)}
+                              rows={3}
+                              placeholder="Example: งานนี้จัดที่ไหน เดินทางยังไง และเปิดลงทะเบียนถึงวันไหน"
+                              className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <div className="mt-3 flex items-center gap-2">
+                              <ActionButton
+                                onClick={() => void fetchRetrievalDebug()}
+                                disabled={!selectedEventId || retrievalLoading || !retrievalQuery.trim()}
+                                tone="neutral"
+                                active
+                                className="text-sm"
+                              >
+                                {retrievalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                                Analyze Retrieval
+                              </ActionButton>
+                              {retrievalDebug && (
+                                <span className="text-xs text-slate-500">
+                                  Event-scoped results for <span className="font-semibold text-slate-700">{selectedEvent?.name || "selected event"}</span>
+                                </span>
+                              )}
+                            </div>
+                            {retrievalMessage && (
+                              <p className={`mt-3 text-xs ${retrievalMessage.toLowerCase().includes("failed") || retrievalMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-amber-700"}`}>
+                                {retrievalMessage}
                               </p>
                             )}
                           </div>
 
-                          <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Chunk Metadata</p>
-                            <div className="max-h-[14rem] space-y-2 overflow-y-auto overflow-x-hidden pr-1">
-                              {embeddingPreviewLoading && (
-                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
-                                  Loading embedding preview...
-                                </div>
-                              )}
-                              {!embeddingPreviewLoading && !embeddingPreview?.chunks.length && (
-                                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
-                                  No chunks available for embedding yet.
-                                </div>
-                              )}
-                              {!embeddingPreviewLoading && embeddingPreview?.chunks.map((chunk) => (
-                                <div key={chunk.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                                  <div className="flex flex-wrap items-center gap-2 mb-2 text-[11px] uppercase tracking-wider">
-                                    <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">chunk {chunk.chunk_index + 1}</StatusBadge>
-                                    <StatusBadge tone="neutral">{chunk.char_count || chunk.content.length} chars</StatusBadge>
-                                    <StatusBadge tone="neutral">~{chunk.token_estimate || 0} tokens</StatusBadge>
-                                    <StatusBadge tone={getDocumentEmbeddingTone(chunk.embedding_status)}>
-                                      {chunk.embedding_status || "pending"}
-                                    </StatusBadge>
-                                  </div>
-                                  <p className="break-all text-xs font-mono text-slate-500">{chunk.content_hash || "-"}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Embedding Hook Payload</p>
-                          <div className="max-h-[22rem] overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <pre className="whitespace-pre-wrap break-all text-xs text-slate-700 font-mono">
-                              {embeddingPreview ? JSON.stringify(embeddingPreview.payload, null, 2) : "Select a document to preview the embedding payload."}
-                            </pre>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 shadow-sm sm:p-5">
-                    <div className="flex items-center justify-between gap-3 mb-4">
-                      <div>
-                        <h3 className="font-semibold text-slate-900">Retrieval Debug</h3>
-                        <p className="text-xs text-slate-500">
-                          Inspect which event chunks this workspace would send into the prompt for a specific question.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr,0.9fr] gap-4">
-                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
-                            Test Query
-                          </label>
-                          <textarea
-                            value={retrievalQuery}
-                            onChange={(e) => setRetrievalQuery(e.target.value)}
-                            rows={3}
-                            placeholder="Example: งานนี้จัดที่ไหน เดินทางยังไง และเปิดลงทะเบียนถึงวันไหน"
-                            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                          />
-                          <div className="mt-3 flex items-center gap-2">
-                            <ActionButton
-                              onClick={() => void fetchRetrievalDebug()}
-                              disabled={!selectedEventId || retrievalLoading || !retrievalQuery.trim()}
-                              tone="neutral"
-                              active
-                              className="text-sm"
-                            >
-                              {retrievalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                              Analyze Retrieval
-                            </ActionButton>
-                            {retrievalDebug && (
-                              <span className="text-xs text-slate-500">
-                                Event-scoped results for <span className="font-semibold text-slate-700">{selectedEvent?.name || "selected event"}</span>
-                              </span>
-                            )}
-                          </div>
-                          {retrievalMessage && (
-                            <p className={`mt-3 text-xs ${retrievalMessage.toLowerCase().includes("failed") || retrievalMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-amber-700"}`}>
-                              {retrievalMessage}
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                              Prompt Layers
                             </p>
-                          )}
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-                            Prompt Layers
-                          </p>
-                          <div className="space-y-2 text-sm">
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-slate-600">Retrieval mode</span>
-                              <StatusBadge tone={retrievalDebug?.layers.retrieval_mode === "hybrid" ? "blue" : "neutral"}>
-                                {retrievalDebug?.layers.retrieval_mode || "lexical"}
-                              </StatusBadge>
-                            </div>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-slate-600">Global system prompt</span>
-                              <StatusBadge tone={retrievalDebug?.layers.global_system_prompt_present ? "emerald" : "neutral"}>
-                                {retrievalDebug?.layers.global_system_prompt_present ? `${retrievalDebug.layers.global_system_prompt_chars} chars` : "empty"}
-                              </StatusBadge>
-                            </div>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-slate-600">Event context</span>
-                              <StatusBadge tone={retrievalDebug?.layers.event_context_present ? "blue" : "neutral"}>
-                                {retrievalDebug?.layers.event_context_present ? `${retrievalDebug.layers.event_context_chars} chars` : "empty"}
-                              </StatusBadge>
-                            </div>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-slate-600">Active documents</span>
-                              <StatusBadge tone="neutral">
-                                {retrievalDebug?.layers.active_document_count ?? documents.filter((document) => document.is_active).length}
-                              </StatusBadge>
-                            </div>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-slate-600">Active chunks</span>
-                              <StatusBadge tone="neutral">
-                                {retrievalDebug?.layers.active_chunk_count ?? documentChunks.length}
-                              </StatusBadge>
-                            </div>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-slate-600">Vector-ready chunks</span>
-                              <StatusBadge tone={Number(retrievalDebug?.layers.vector_ready_chunk_count || 0) > 0 ? "blue" : "neutral"}>
-                                {retrievalDebug?.layers.vector_ready_chunk_count ?? 0}
-                              </StatusBadge>
-                            </div>
-                            {retrievalDebug?.layers.query_embedding_model && (
+                            <div className="space-y-2 text-sm">
                               <div className="flex items-center justify-between gap-3">
-                                <span className="text-slate-600">Query embedding model</span>
-                                <StatusBadge tone="neutral">
-                                  {retrievalDebug.layers.query_embedding_model}
+                                <span className="text-slate-600">Retrieval mode</span>
+                                <StatusBadge tone={retrievalDebug?.layers.retrieval_mode === "hybrid" ? "blue" : "neutral"}>
+                                  {retrievalDebug?.layers.retrieval_mode || "lexical"}
                                 </StatusBadge>
                               </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {retrievalDebug && (
-                        <div className="grid grid-cols-1 xl:grid-cols-[1.2fr,0.9fr] gap-4">
-                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                            <div className="flex items-center justify-between gap-3 mb-3">
-                              <div>
-                                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Matched Chunks</p>
-                                <p className="text-xs text-slate-500">Top ranked event chunks for this query.</p>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Global system prompt</span>
+                                <StatusBadge tone={retrievalDebug?.layers.global_system_prompt_present ? "emerald" : "neutral"}>
+                                  {retrievalDebug?.layers.global_system_prompt_present ? `${retrievalDebug.layers.global_system_prompt_chars} chars` : "empty"}
+                                </StatusBadge>
                               </div>
-                              <StatusBadge tone="blue">
-                                {retrievalDebug.matches.length} matches
-                              </StatusBadge>
-                            </div>
-
-                            <div className="space-y-3 max-h-[26rem] overflow-y-auto pr-1">
-                              {retrievalDebug.matches.length === 0 && (
-                                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
-                                  No ranked chunks for this query. The bot will answer from global rules and event context only.
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Event context</span>
+                                <StatusBadge tone={retrievalDebug?.layers.event_context_present ? "blue" : "neutral"}>
+                                  {retrievalDebug?.layers.event_context_present ? `${retrievalDebug.layers.event_context_chars} chars` : "empty"}
+                                </StatusBadge>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Active documents</span>
+                                <StatusBadge tone="neutral">
+                                  {retrievalDebug?.layers.active_document_count ?? documents.filter((document) => document.is_active).length}
+                                </StatusBadge>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Active chunks</span>
+                                <StatusBadge tone="neutral">
+                                  {retrievalDebug?.layers.active_chunk_count ?? documentChunks.length}
+                                </StatusBadge>
+                              </div>
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Vector-ready chunks</span>
+                                <StatusBadge tone={Number(retrievalDebug?.layers.vector_ready_chunk_count || 0) > 0 ? "blue" : "neutral"}>
+                                  {retrievalDebug?.layers.vector_ready_chunk_count ?? 0}
+                                </StatusBadge>
+                              </div>
+                              {retrievalDebug?.layers.query_embedding_model && (
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-slate-600">Query embedding model</span>
+                                  <StatusBadge tone="neutral">
+                                    {retrievalDebug.layers.query_embedding_model}
+                                  </StatusBadge>
                                 </div>
                               )}
-                              {retrievalDebug.matches.map((match) => (
-                                <div key={`${match.document_id}:${match.chunk_index}:${match.rank}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                  <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] uppercase tracking-wider">
-                                    <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">#{match.rank}</StatusBadge>
-                                    <StatusBadge tone="blue">score {match.score.toFixed(2)}</StatusBadge>
-                                    {match.strategy && (
-                                      <StatusBadge tone={match.strategy === "hybrid" ? "blue" : "neutral"}>
-                                        {match.strategy}
-                                      </StatusBadge>
-                                    )}
-                                    {typeof match.vector_score === "number" && (
-                                      <StatusBadge tone="blue">vector {match.vector_score.toFixed(2)}</StatusBadge>
-                                    )}
-                                    {typeof match.lexical_score === "number" && (
-                                      <StatusBadge tone="neutral">lexical {match.lexical_score}</StatusBadge>
-                                    )}
-                                    <StatusBadge tone="neutral">{match.source_type}</StatusBadge>
-                                    <StatusBadge tone="neutral">chunk {match.chunk_index + 1}</StatusBadge>
-                                  </div>
-                                  <p className="font-semibold text-slate-900">{match.document_title}</p>
-                                  {match.source_url && (
-                                    <a
-                                      href={match.source_url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="mt-1 inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                                    >
-                                      <ExternalLink className="w-3 h-3" />
-                                      Open source URL
-                                    </a>
-                                  )}
-                                  <p className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">{match.chunk_content}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-                              Injected Knowledge Context
-                            </p>
-                            <div className="max-h-[26rem] overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <pre className="whitespace-pre-wrap text-xs text-slate-700 font-mono">
-                                {retrievalDebug.composed_knowledge_context || "No knowledge context was composed for this query."}
-                              </pre>
                             </div>
                           </div>
                         </div>
-                      )}
-                    </div>
+
+                        {retrievalDebug && (
+                          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr,0.9fr]">
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <div className="mb-3 flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Matched Chunks</p>
+                                  <p className="text-xs text-slate-500">Top ranked event chunks for this query.</p>
+                                </div>
+                                <StatusBadge tone="blue">
+                                  {retrievalDebug.matches.length} matches
+                                </StatusBadge>
+                              </div>
+
+                              <div className="max-h-[26rem] space-y-3 overflow-y-auto pr-1">
+                                {retrievalDebug.matches.length === 0 && (
+                                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                    No ranked chunks for this query. The bot will answer from global rules and event context only.
+                                  </div>
+                                )}
+                                {retrievalDebug.matches.map((match) => (
+                                  <div key={`${match.document_id}:${match.chunk_index}:${match.rank}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                    <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
+                                      <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">#{match.rank}</StatusBadge>
+                                      <StatusBadge tone="blue">score {match.score.toFixed(2)}</StatusBadge>
+                                      {match.strategy && (
+                                        <StatusBadge tone={match.strategy === "hybrid" ? "blue" : "neutral"}>
+                                          {match.strategy}
+                                        </StatusBadge>
+                                      )}
+                                      {typeof match.vector_score === "number" && (
+                                        <StatusBadge tone="blue">vector {match.vector_score.toFixed(2)}</StatusBadge>
+                                      )}
+                                      {typeof match.lexical_score === "number" && (
+                                        <StatusBadge tone="neutral">lexical {match.lexical_score}</StatusBadge>
+                                      )}
+                                      <StatusBadge tone="neutral">{match.source_type}</StatusBadge>
+                                      <StatusBadge tone="neutral">chunk {match.chunk_index + 1}</StatusBadge>
+                                    </div>
+                                    <p className="font-semibold text-slate-900">{match.document_title}</p>
+                                    {match.source_url && (
+                                      <a
+                                        href={match.source_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="mt-1 inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
+                                      >
+                                        <ExternalLink className="w-3 h-3" />
+                                        Open source URL
+                                      </a>
+                                    )}
+                                    <p className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">{match.chunk_content}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                                Injected Knowledge Context
+                              </p>
+                              <div className="max-h-[26rem] overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                <pre className="whitespace-pre-wrap text-xs font-mono text-slate-700">
+                                  {retrievalDebug.composed_knowledge_context || "No knowledge context was composed for this query."}
+                                </pre>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
@@ -7686,17 +7772,21 @@ export default function App() {
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100">
                     <Bot className="h-5 w-5 text-blue-600" />
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-sm">Bot Simulator</h3>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="w-2 h-2 bg-emerald-500 rounded-full" />
-                      <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Active</span>
-                      <StatusBadge tone="blue">simulator</StatusBadge>
-                      <StatusBadge tone="neutral">{testMessages.length} msgs</StatusBadge>
-                      {selectedEvent && (
-                        <>
-                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                            {getEventStatusLabel(selectedEvent.effective_status)}
+                    <div>
+                      <h3 className="font-semibold text-sm">Bot Simulator</h3>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-full" />
+                        <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Active</span>
+                        <StatusBadge tone="blue">simulator</StatusBadge>
+                        <StatusBadge tone="neutral">{testMessages.length} msgs</StatusBadge>
+                        <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
+                        <HelpPopover label="Open note for Simulation Guard">
+                          {eventOperatorGuard.body}
+                        </HelpPopover>
+                        {selectedEvent && (
+                          <>
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                              {getEventStatusLabel(selectedEvent.effective_status)}
                           </StatusBadge>
                           {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
                             <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
@@ -7718,15 +7808,6 @@ export default function App() {
                     <span className="font-medium">Clear Chat</span>
                   </MenuActionItem>
                 </InlineActionsMenu>
-              </div>
-
-              <div className="border-b border-slate-100 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
-                <CompactGuardBar
-                  title="Simulation Guard"
-                  tone={eventOperatorGuard.tone}
-                  label={eventOperatorGuard.label}
-                  body={eventOperatorGuard.body}
-                />
               </div>
 
               <div className="chat-scroll chat-selectable flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
@@ -7833,6 +7914,10 @@ export default function App() {
                           {settings.admin_agent_enabled === "1" ? "enabled" : "disabled"}
                         </StatusBadge>
                         <StatusBadge tone="neutral">{activeAgentMessageCount} msgs</StatusBadge>
+                        <StatusBadge tone={adminAgentGuardTone}>{adminAgentGuardLabel}</StatusBadge>
+                        <HelpPopover label="Open note for Agent Guard">
+                          {adminAgentGuardBody}
+                        </HelpPopover>
                         {selectedEvent && (
                           <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
                             {getEventStatusLabel(selectedEvent.effective_status)}
@@ -7863,19 +7948,6 @@ export default function App() {
                       </MenuActionItem>
                     </InlineActionsMenu>
                   </div>
-                </div>
-
-                <div className="border-b border-slate-100 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
-                  <CompactGuardBar
-                    title="Agent Guard"
-                    tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"}
-                    label={settings.admin_agent_enabled === "1" ? "live actions" : "disabled"}
-                    body={
-                      settings.admin_agent_enabled === "1"
-                        ? `Agent mode executes only enabled policy scopes (${adminAgentEnabledPolicies.length}/8): ${adminAgentEnabledPolicies.join(", ") || "none"}.`
-                        : "Enable Admin Agent in setup before running commands from UI or Telegram."
-                    }
-                  />
                 </div>
 
                 <div ref={adminAgentScrollRef} className="chat-scroll chat-selectable flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
@@ -7940,8 +8012,8 @@ export default function App() {
               </div>
 
               <div className="space-y-4">
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
-                  <div className="flex items-start justify-between gap-3">
+                <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "p-3" : "space-y-4 p-4"}`}>
+                  <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "items-center" : "items-start"}`}>
                     <button
                       type="button"
                       onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
@@ -8266,8 +8338,8 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
-                  <div className="flex items-start justify-between gap-3">
+                <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "p-3" : "space-y-4 p-4"}`}>
+                  <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "items-center" : "items-start"}`}>
                     <button
                       type="button"
                       onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
@@ -9886,8 +9958,8 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 flex items-center justify-between gap-2">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) ? "mb-0" : "mb-4"} flex items-center justify-between gap-2`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <SettingsIcon className="w-5 h-5 text-blue-600" />
