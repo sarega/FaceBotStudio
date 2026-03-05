@@ -7649,14 +7649,27 @@ export default function App() {
                 </div>
 
                 <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
-                  <div>
-                    <h3 className="text-lg font-semibold flex items-center gap-2">
-                      <Link2 className="w-5 h-5 text-violet-600" />
-                      External Agent Channel (Telegram)
-                    </h3>
-                    <p className="text-sm text-slate-500">
-                      Dedicated Telegram webhook for Admin Agent commands, separate from event chat channels.
-                    </p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Link2 className="w-5 h-5 text-violet-600" />
+                        External Agent Channel (Telegram)
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Dedicated Telegram webhook for Admin Agent commands, separate from event chat channels.
+                      </p>
+                    </div>
+                    <HelpPopover label="Open note for Admin Agent Telegram setup">
+                      <p className="font-semibold text-slate-700">Telegram setup (step by step)</p>
+                      <ol className="mt-2 list-decimal space-y-1 pl-4">
+                        <li>สร้าง bot ด้วย BotFather และคัดลอก Bot Token</li>
+                        <li>วาง Bot Token และตั้ง Webhook Secret Token ใน section นี้</li>
+                        <li>เปิด Enable Telegram Access แล้วกด Save Agent Setup</li>
+                        <li>กด Copy setWebhook แล้วเปิด URL เพื่อผูก webhook</li>
+                        <li>ใส่ Allowed Chat IDs ของแอดมินที่อนุญาต</li>
+                        <li>ทดสอบใน Telegram ด้วย /start, /help หรือ /agent สรุปอีเวนต์นี้</li>
+                      </ol>
+                    </HelpPopover>
                   </div>
 
                   <label className="flex items-start gap-3 text-sm rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -7735,17 +7748,6 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-                    <p className="font-semibold text-slate-700">Telegram Setup (Step by step)</p>
-                    <ol className="mt-2 space-y-1 list-decimal pl-4">
-                      <li>สร้าง bot ใน Telegram ด้วย BotFather และคัดลอก Bot Token</li>
-                      <li>วาง Bot Token และกำหนด Webhook Secret Token ในหน้านี้</li>
-                      <li>เปิด <span className="font-medium">Enable Telegram Access</span> แล้วกด <span className="font-medium">Save Agent Setup</span></li>
-                      <li>กด <span className="font-medium">Copy setWebhook</span> แล้วเปิด URL นั้นเพื่อผูก webhook</li>
-                      <li>ใส่ Allowed Chat IDs (อย่างน้อย chat id ของแอดมิน)</li>
-                      <li>ใน Telegram พิมพ์ <code>/start</code> หรือ <code>/help</code> แล้วสั่งงาน เช่น <code>/agent สรุปอีเวนต์นี้</code></li>
-                    </ol>
-                  </div>
                 </div>
 
                 {settingsMessage && (
