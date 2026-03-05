@@ -4608,7 +4608,17 @@ export default function App() {
       ]);
 
       if (response.action?.name) {
-        void Promise.all([fetchMessages(selectedEventId), fetchRegistrations(selectedEventId), fetchEvents()]);
+        const actionEventId = String(response.event_id || selectedEventId || "").trim() || selectedEventId;
+        if (actionEventId && actionEventId === selectedEventId) {
+          void Promise.all([
+            fetchSettings(selectedEventId),
+            fetchMessages(selectedEventId),
+            fetchRegistrations(selectedEventId),
+            fetchEvents(),
+          ]);
+        } else {
+          void fetchEvents();
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to run admin agent";

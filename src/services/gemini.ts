@@ -30,6 +30,7 @@ type AdminAgentAction = {
 export type AdminAgentResponse = {
   reply: string;
   action: AdminAgentAction | null;
+  event_id?: string;
   result?: Record<string, unknown> | null;
   meta?: {
     model?: string;
@@ -95,6 +96,7 @@ export async function getAdminAgentResponse(
           source: (data.action as Record<string, unknown>).source === "rule" ? "rule" : "llm",
         }
       : null,
+    event_id: typeof data?.event_id === "string" ? data.event_id : undefined,
     result: data?.result && typeof data.result === "object" ? data.result as Record<string, unknown> : null,
     meta: data?.meta && typeof data.meta === "object" ? data.meta as AdminAgentResponse["meta"] : undefined,
   };

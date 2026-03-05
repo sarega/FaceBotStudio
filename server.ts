@@ -141,6 +141,7 @@ type AdminAgentActionName =
   | "update_event_setup"
   | "update_event_status"
   | "update_event_context"
+  | "create_registration"
   | "find_event"
   | "search_system"
   | "get_event_overview"
@@ -872,6 +873,7 @@ const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
   "update_event_setup",
   "update_event_status",
   "update_event_context",
+  "create_registration",
   "find_event",
   "search_system",
   "get_event_overview",
@@ -891,6 +893,7 @@ const ADMIN_AGENT_ACTION_POLICY_LABEL: Record<AdminAgentActionName, string> = {
   update_event_setup: "update event setup",
   update_event_status: "update event status",
   update_event_context: "update event context",
+  create_registration: "create registration",
   find_event: "find event",
   search_system: "search system",
   get_event_overview: "event overview",
@@ -944,6 +947,7 @@ function getAllowedAdminAgentActions(policy: AdminAgentPolicy): AdminAgentAction
     allowed.add("get_registration_timeline");
   }
   if (policy.manageRegistration) {
+    allowed.add("create_registration");
     allowed.add("set_registration_status");
     allowed.add("resend_ticket");
     allowed.add("resend_email");
@@ -1793,6 +1797,94 @@ function buildRegistrationLookupFilters(args: Record<string, unknown>, rawMessag
   };
 }
 
+function splitAdminFullName(rawName: string) {
+  const tokens = normalizeOptionalText(rawName).split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return { firstName: "", lastName: "" };
+  }
+  if (tokens.length === 1) {
+    return { firstName: tokens[0], lastName: "" };
+  }
+  return {
+    firstName: tokens[0],
+    lastName: tokens.slice(1).join(" "),
+  };
+}
+
+function normalizeAdminPhoneCandidate(value: unknown) {
+  const raw = normalizeOptionalText(value);
+  if (!raw) return "";
+  const cleaned = raw.replace(/[^\d+]/g, "");
+  if (!cleaned) return "";
+  const hasPlus = cleaned.startsWith("+");
+  const digits = hasPlus ? cleaned.slice(1) : cleaned;
+  if (!/^\d+$/.test(digits)) return "";
+  if (digits.length < 8 || digits.length > 18) return "";
+  return hasPlus ? `+${digits}` : digits;
+}
+
+function parseAdminRegistrationDraft(args: Record<string, unknown>, rawMessage: string) {
+  let firstName = normalizeOptionalText(args.first_name);
+  let lastName = normalizeOptionalText(args.last_name);
+  let phone = normalizeAdminPhoneCandidate(args.phone);
+  let email = normalizeOptionalText(args.email);
+  let senderId = normalizeOptionalText(args.sender_id);
+  const fullNameArg = normalizeOptionalText(args.full_name);
+
+  if ((!firstName || !lastName) && fullNameArg) {
+    const splitFromFull = splitAdminFullName(fullNameArg);
+    firstName = firstName || splitFromFull.firstName;
+    lastName = lastName || splitFromFull.lastName;
+  }
+
+  const rawTokens = normalizeOptionalText(rawMessage)
+    .split(/\s+/)
+    .map((token) => token.replace(/^[,;]+|[,;]+$/g, "").trim())
+    .filter(Boolean);
+  if (rawTokens.length > 0) {
+    let emailIndex = -1;
+    if (!email) {
+      emailIndex = rawTokens.findIndex((token) => looksLikeEmailAddress(token));
+      if (emailIndex >= 0) {
+        email = rawTokens[emailIndex];
+      }
+    }
+
+    let phoneIndex = -1;
+    if (!phone) {
+      phoneIndex = rawTokens.findIndex((token) => Boolean(normalizeAdminPhoneCandidate(token)));
+      if (phoneIndex >= 0) {
+        phone = normalizeAdminPhoneCandidate(rawTokens[phoneIndex]);
+      }
+    }
+
+    const candidateNameTokens = rawTokens.filter((_, index) => index !== emailIndex && index !== phoneIndex);
+    if (!firstName && candidateNameTokens.length > 0) {
+      firstName = candidateNameTokens[0] || "";
+    }
+    if (!lastName && candidateNameTokens.length > 1) {
+      lastName = candidateNameTokens.slice(1).join(" ");
+    }
+  }
+
+  const normalizedPhoneDigits = phone.replace(/\D/g, "");
+  if (!senderId) {
+    if (normalizedPhoneDigits) {
+      senderId = `admin-manual:${normalizedPhoneDigits}`;
+    } else {
+      senderId = `admin-manual:${Date.now().toString(36)}`;
+    }
+  }
+
+  return {
+    firstName,
+    lastName,
+    phone,
+    email,
+    senderId,
+  };
+}
+
 async function findRegistrationsForAdminAction(
   eventId: string,
   args: Record<string, unknown>,
@@ -2024,7 +2116,11 @@ function sanitizeAdminAgentEventQuery(rawQuery: string) {
   return source
     .replace(/^\/agent\b/i, " ")
     .replace(/[\?\!]/g, " ")
+    .replace(/(ค้นหา|search|find|show|list|แสดง|ลิสต์|ช่วย|ขอ|ลอง|บอก|ดู)/gi, " ")
     .replace(/(อีเวนต์|อีเว้นต์|งาน|รายการ|events?)/gi, " ")
+    .replace(/(มีอะไรบ้าง|มีอะไร|อะไรบ้าง|ทั้งหมด|all events?)/gi, " ")
+    .replace(/(ที่จัดที่|ที่จัด|สถานที่จัดงาน|สถานที่)/g, " ")
+    .replace(/(ครับ|ค่ะ|คะ|นะ|หน่อย|ที|ทีครับ|ไหม|มั้ย|หรือเปล่า|หรือไม่|บ้าง)$/g, " ")
     .replace(/(เปิดอยู่|กำลังเปิด|ยังไม่เริ่ม|รอดำเนินการ|จบแล้ว|ปิดแล้ว|ยกเลิก|รับสมัคร|ลงทะเบียน|เต็ม)/g, " ")
     .replace(/\b(active|open|pending|inactive|closed|cancelled|canceled|registration)\b/gi, " ")
     .replace(/\s+/g, " ")
@@ -2091,12 +2187,20 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
   const candidates = await Promise.all(events.map(async (event) => {
     const settings = await getSettingsMap(event.id);
     const configuredName = normalizeOptionalText(settings.event_name);
+    const configuredLocation = normalizeOptionalText(settings.event_location);
+    const configuredMapUrl = normalizeOptionalText(settings.event_map_url);
+    const configuredDescription = normalizeOptionalText(settings.event_description).slice(0, 400);
+    const configuredTravel = normalizeOptionalText(settings.event_travel).slice(0, 400);
     const displayName = configuredName || normalizeOptionalText(event.name) || event.id;
     const searchableParts = [
       normalizeComparableText(event.id),
       normalizeComparableText(event.slug),
       normalizeComparableText(event.name),
       normalizeComparableText(configuredName),
+      normalizeComparableText(configuredLocation),
+      normalizeComparableText(configuredMapUrl),
+      normalizeComparableText(configuredDescription),
+      normalizeComparableText(configuredTravel),
       normalizeComparableText(event.effective_status || ""),
       normalizeComparableText(event.registration_availability || ""),
       event.effective_status === "active" ? "open เปิด เปิดอยู่ กำลังเปิด" : "",
@@ -2128,17 +2232,43 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
   });
 }
 
+function buildCharacterNgramSet(value: string, size = 3) {
+  const compact = normalizeComparableText(value).replace(/\s+/g, "");
+  const ngramSize = Math.max(2, size);
+  if (!compact) return new Set<string>();
+  if (compact.length <= ngramSize) {
+    return new Set([compact]);
+  }
+  const grams = new Set<string>();
+  for (let index = 0; index <= compact.length - ngramSize; index += 1) {
+    grams.add(compact.slice(index, index + ngramSize));
+  }
+  return grams;
+}
+
+function computeCharacterNgramOverlap(query: string, haystack: string, size = 3) {
+  const left = buildCharacterNgramSet(query, size);
+  const right = buildCharacterNgramSet(haystack, size);
+  if (!left.size || !right.size) return 0;
+  let hit = 0;
+  for (const gram of left) {
+    if (right.has(gram)) hit += 1;
+  }
+  return hit / left.size;
+}
+
 function scoreAdminAgentEventCandidate(candidate: AdminAgentEventCandidate, normalizedQuery: string) {
   if (!normalizedQuery) return 0;
   const normalizedId = normalizeComparableText(candidate.id);
   const normalizedSlug = normalizeComparableText(candidate.slug);
   const normalizedDisplayName = normalizeComparableText(candidate.displayName);
+  const searchable = normalizeComparableText(candidate.searchable);
   let score = 0;
 
   if (normalizedId === normalizedQuery) score = Math.max(score, 260);
   if (normalizedSlug === normalizedQuery) score = Math.max(score, 240);
   if (normalizedDisplayName === normalizedQuery) score = Math.max(score, 220);
-  if (candidate.searchable.includes(normalizedQuery)) {
+  if (searchable.includes(normalizedQuery)) {
     score = Math.max(score, 170 + Math.min(30, normalizedQuery.length));
   }
 
@@ -2146,7 +2276,7 @@ function scoreAdminAgentEventCandidate(candidate: AdminAgentEventCandidate, norm
   if (tokens.length > 0) {
     let hitCount = 0;
     for (const token of tokens) {
-      if (candidate.searchable.includes(token)) {
+      if (searchable.includes(token)) {
         hitCount += 1;
       }
     }
@@ -2211,6 +2341,27 @@ async function searchAdminAgentEvents(
 
   if (scored.length > 0) {
     return scored;
+  }
+
+  const fuzzyScored = filteredCandidates
+    .map((candidate) => {
+      const overlap = computeCharacterNgramOverlap(
+        effectiveQuery,
+        candidate.searchable,
+        effectiveQuery.replace(/\s+/g, "").length >= 8 ? 3 : 2,
+      );
+      return { candidate, overlap };
+    })
+    .filter((entry) => entry.overlap >= 0.34)
+    .sort((left, right) => {
+      if (left.overlap !== right.overlap) return right.overlap - left.overlap;
+      return left.candidate.displayName.localeCompare(right.candidate.displayName, "th");
+    })
+    .slice(0, maxResults)
+    .map((entry) => entry.candidate);
+
+  if (fuzzyScored.length > 0) {
+    return fuzzyScored;
   }
   if (effectiveStatuses.length > 0 || registrationAvailability.length > 0) {
     return filteredCandidates.slice(0, maxResults);
@@ -2597,8 +2748,11 @@ async function requestAdminAgentPlan(
     "Use find_event when asked to check whether an event exists, or when event name is partial.",
     "Use search_system only when admin asks to search across the whole system.",
     "Use get_event_overview when asked for event status/time/place/map/description/travel/registration-rules summary.",
+    "Use create_registration when admin asks to register a new attendee.",
     "Use list_registrations for list requests, and get_registration_timeline for sender chat history.",
-    "Use set_registration_status when admin asks to change attendee status (registered/cancelled/checked-in).",
+    "Use set_registration_status only when admin asks to change status of an existing registration (registered/cancelled/checked-in).",
+    "Do not use set_registration_status to create a new attendee record.",
+    "If admin says email should be optional for attendee input, do not auto-disable confirmation email. confirmation_email_enabled controls delivery behavior, not whether email field is optional.",
     "Use send_message_to_sender when admin asks to send a custom message to a specific user sender_id.",
     "Do not call find_registration without at least one attendee filter (registration_id, full_name, sender_id, phone, email, or query).",
     "When asked to continue a stuck chat, use retry_bot.",
@@ -2764,6 +2918,25 @@ async function requestAdminAgentPlan(
               properties: {
                 event_id: { type: "string" },
                 recent_limit: { type: "integer", minimum: 0, maximum: 10 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "create_registration",
+            description: "Create a new attendee registration in the selected event.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                full_name: { type: "string" },
+                phone: { type: "string" },
+                email: { type: "string" },
+                sender_id: { type: "string" },
               },
             },
           },
@@ -3190,6 +3363,7 @@ async function executeAdminAgentToolCall(
       const includeRegistrations = parseOptionalBooleanSetting(call.args.include_registrations);
       const limit = parsePositiveInteger(call.args.limit, 8, 30);
       const targetStatus = normalizeRegistrationStatusInput(call.args.status);
+      const eventSearchOptions = parseAdminAgentEventSearchOptions(call.args, rawMessage);
 
       const shouldSearchEvents = includeEvents !== false && options.policy.readEvent;
       const shouldSearchRegistrations = includeRegistrations !== false && options.policy.readRegistration;
@@ -3197,20 +3371,13 @@ async function executeAdminAgentToolCall(
         throw new Error("Search scope is disabled by policy (event-read and registration-read are both off)");
       }
       const eventRows = shouldSearchEvents ? await appDb.listEvents() : [];
+      const eventRowMap = new Map(eventRows.map((event) => [event.id, event]));
       const eventNameMap = new Map(eventRows.map((event) => [event.id, event.name]));
 
       const eventMatches = shouldSearchEvents
-        ? eventRows.filter((row) => {
-            if (!query) return true;
-            const haystack = [
-              row.id,
-              row.slug,
-              row.name,
-              row.effective_status,
-              row.registration_availability || "",
-            ].map(normalizeComparableText).join("\n");
-            return haystack.includes(query);
-          }).slice(0, limit)
+        ? (await searchAdminAgentEvents(query, limit, eventSearchOptions)).map((candidate) =>
+            eventRowMap.get(candidate.id),
+          ).filter((row): row is NonNullable<typeof row> => Boolean(row))
         : [];
 
       const registrationMatches = shouldSearchRegistrations
@@ -3310,6 +3477,75 @@ async function executeAdminAgentToolCall(
         },
         targetType: "event",
         targetId: eventId,
+      };
+    }
+    case "create_registration": {
+      const draft = parseAdminRegistrationDraft(call.args, rawMessage);
+      const missing: string[] = [];
+      if (!draft.firstName) missing.push("ชื่อ");
+      if (!draft.lastName) missing.push("นามสกุล");
+      if (!draft.phone) missing.push("เบอร์โทร");
+
+      if (missing.length > 0) {
+        return {
+          reply: `ต้องการข้อมูลเพิ่มก่อนลงทะเบียน: ${missing.join(", ")}`,
+          result: {
+            event_id: eventId,
+            missing_fields: missing,
+          },
+          targetType: "event",
+          targetId: eventId,
+        };
+      }
+
+      const creation = await createRegistration(
+        {
+          sender_id: draft.senderId,
+          event_id: eventId,
+          first_name: draft.firstName,
+          last_name: draft.lastName,
+          phone: draft.phone,
+          email: draft.email || "",
+        },
+        { source: "admin_agent_action" },
+      );
+      if (creation.statusCode !== 200 || typeof creation.content?.id !== "string") {
+        const detail = typeof creation.content?.error === "string"
+          ? creation.content.error
+          : "Failed to create registration";
+        throw new Error(detail);
+      }
+
+      const registrationId = String(creation.content.id || "").trim().toUpperCase();
+      const registration = await getRegistrationById(registrationId);
+      const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
+      const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+      const attendeeLabel = registration
+        ? formatRegistrationDisplayName(registration)
+        : `${draft.firstName} ${draft.lastName}`.trim();
+
+      return {
+        reply: `ลงทะเบียนเรียบร้อย: ${attendeeLabel} (${registrationId})`,
+        result: {
+          event_id: eventId,
+          registration: registration ? serializeAdminRegistration(registration) : {
+            id: registrationId,
+            sender_id: draft.senderId,
+            event_id: eventId,
+            first_name: draft.firstName,
+            last_name: draft.lastName,
+            phone: draft.phone,
+            email: draft.email || "",
+            status: "registered",
+          },
+          sender_id: draft.senderId,
+          ticket: {
+            png_url: ticketPngUrl,
+            svg_url: ticketSvgUrl,
+          },
+        },
+        targetType: "registration",
+        targetId: registrationId,
       };
     }
     case "list_registrations": {
@@ -3440,8 +3676,62 @@ async function executeAdminAgentToolCall(
       if (!status) {
         throw new Error("Registration status is required (registered/cancelled/checked-in)");
       }
-
-      const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+      let registration: RegistrationRow;
+      try {
+        registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+      } catch (error) {
+        if (status === "registered") {
+          const draft = parseAdminRegistrationDraft(call.args, rawMessage);
+          if (draft.firstName && draft.lastName && draft.phone) {
+            const creation = await createRegistration(
+              {
+                sender_id: draft.senderId,
+                event_id: eventId,
+                first_name: draft.firstName,
+                last_name: draft.lastName,
+                phone: draft.phone,
+                email: draft.email || "",
+              },
+              { source: "admin_agent_action" },
+            );
+            if (creation.statusCode !== 200 || typeof creation.content?.id !== "string") {
+              const detail = typeof creation.content?.error === "string"
+                ? creation.content.error
+                : "Failed to create registration";
+              throw new Error(detail);
+            }
+            const createdId = String(creation.content.id || "").trim().toUpperCase();
+            const created = await getRegistrationById(createdId);
+            const ticketPngUrl = buildTicketImageUrl(createdId, "png");
+            const ticketSvgUrl = buildTicketImageUrl(createdId, "svg");
+            return {
+              reply: `ลงทะเบียนเรียบร้อย: ${(created ? formatRegistrationDisplayName(created) : `${draft.firstName} ${draft.lastName}`.trim())} (${createdId})`,
+              result: {
+                event_id: eventId,
+                registration: created ? serializeAdminRegistration(created) : {
+                  id: createdId,
+                  sender_id: draft.senderId,
+                  event_id: eventId,
+                  first_name: draft.firstName,
+                  last_name: draft.lastName,
+                  phone: draft.phone,
+                  email: draft.email || "",
+                  status: "registered",
+                },
+                sender_id: draft.senderId,
+                ticket: {
+                  png_url: ticketPngUrl,
+                  svg_url: ticketSvgUrl,
+                },
+                upgraded_from: "set_registration_status",
+              },
+              targetType: "registration",
+              targetId: createdId,
+            };
+          }
+        }
+        throw error;
+      }
       const updated = await updateRegistrationStatusWithNotification(registration.id, status, {
         source: "admin_agent_action",
       });
@@ -4759,7 +5049,7 @@ async function sendResendEmail(options: {
   const from = String(process.env.EMAIL_FROM || "").trim();
   const replyTo = String(process.env.EMAIL_REPLY_TO || "").trim();
   if (!apiKey || !from) {
-    throw new Error("Email confirmation is enabled but RESEND_API_KEY or EMAIL_FROM is missing");
+    throw new Error("Email service is not configured (missing RESEND_API_KEY or EMAIL_FROM)");
   }
 
   const response = await fetch("https://api.resend.com/emails", {
@@ -8076,6 +8366,7 @@ async function startServer() {
             "- ขอรายละเอียดอีเวนต์นี้ทั้งหมด",
             "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
             "- list registrations status registered",
+            "- ลงทะเบียนใหม่ ชื่อ สมชาย ใจดี เบอร์ 0895551234 อีเมล somchai@example.com",
             "- ตั้งสถานะ REG-XXXXXX เป็น checked-in",
             "- หาชื่อ สมชาย ใจดี",
             "- ส่งข้อความถึง sender 123456 ว่า ติดตามรายละเอียดได้ที่ลิงก์นี้",
