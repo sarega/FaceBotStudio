@@ -147,6 +147,7 @@ type AdminAgentActionName =
   | "get_event_overview"
   | "find_registration"
   | "list_registrations"
+  | "export_registrations_csv"
   | "count_registrations"
   | "get_registration_timeline"
   | "set_registration_status"
@@ -879,6 +880,7 @@ const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
   "get_event_overview",
   "find_registration",
   "list_registrations",
+  "export_registrations_csv",
   "count_registrations",
   "get_registration_timeline",
   "set_registration_status",
@@ -899,6 +901,7 @@ const ADMIN_AGENT_ACTION_POLICY_LABEL: Record<AdminAgentActionName, string> = {
   get_event_overview: "event overview",
   find_registration: "find registration",
   list_registrations: "list registrations",
+  export_registrations_csv: "export registrations csv",
   count_registrations: "count registrations",
   get_registration_timeline: "registration timeline",
   set_registration_status: "set registration status",
@@ -943,6 +946,7 @@ function getAllowedAdminAgentActions(policy: AdminAgentPolicy): AdminAgentAction
   if (policy.readRegistration) {
     allowed.add("find_registration");
     allowed.add("list_registrations");
+    allowed.add("export_registrations_csv");
     allowed.add("count_registrations");
     allowed.add("get_registration_timeline");
   }
@@ -1051,6 +1055,12 @@ function normalizeRegistrationStatusInput(value: unknown): RegistrationStatus | 
 function parsePositiveInteger(value: unknown, fallbackValue: number, maxValue: number) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallbackValue;
+  return Math.min(parsed, maxValue);
+}
+
+function parseNonNegativeInteger(value: unknown, fallbackValue: number, maxValue: number) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallbackValue;
   return Math.min(parsed, maxValue);
 }
 
@@ -1719,6 +1729,67 @@ function formatAdminAgentRegistrationLine(registration: RegistrationRow) {
   return `${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status} • phone ${phone} • email ${email}`;
 }
 
+const REGISTRATION_EXPORT_FIELDS: Array<keyof RegistrationRow> = [
+  "id",
+  "event_id",
+  "sender_id",
+  "first_name",
+  "last_name",
+  "phone",
+  "email",
+  "status",
+  "timestamp",
+];
+
+function buildRegistrationExportFilename(eventName: string) {
+  const slug = String(eventName || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9ก-๙]/g, "-")
+    .split("-")
+    .filter(Boolean)
+    .slice(0, 3)
+    .join("-");
+  return `registrations-${slug || "data"}.csv`;
+}
+
+function buildRegistrationsCsvWithBom(rows: RegistrationRow[]) {
+  const normalizedRows = rows.map((row) => ({
+    id: String(row.id || ""),
+    event_id: String(row.event_id || ""),
+    sender_id: String(row.sender_id || ""),
+    first_name: String(row.first_name || ""),
+    last_name: String(row.last_name || ""),
+    phone: String(row.phone || ""),
+    email: String(row.email || ""),
+    status: String(row.status || ""),
+    timestamp: String(row.timestamp || ""),
+  })) as RegistrationRow[];
+  const json2csvParser = new Parser<RegistrationRow>({ fields: REGISTRATION_EXPORT_FIELDS });
+  const csv = json2csvParser.parse(normalizedRows);
+  return `\uFEFF${csv}`;
+}
+
+async function buildAdminAgentRegistrationCsvBundle(eventId: string, args: Record<string, unknown>, rawMessage: string) {
+  const [settings, event, lookup] = await Promise.all([
+    getSettingsMap(eventId),
+    appDb.getEventById(eventId),
+    findRegistrationsForAdminAction(eventId, args, rawMessage, {
+      defaultToRecent: true,
+      limit: Number.MAX_SAFE_INTEGER,
+      offset: 0,
+    }),
+  ]);
+  const eventName = normalizeOptionalText(settings.event_name) || normalizeOptionalText(event?.name) || eventId;
+  return {
+    eventId,
+    filename: buildRegistrationExportFilename(eventName),
+    csv: buildRegistrationsCsvWithBom(lookup.matches),
+    totalMatches: lookup.totalMatches,
+    filters: lookup.usedFilters,
+    registrations: lookup.matches,
+  };
+}
+
 function buildAdminAgentFindReply(matches: RegistrationRow[], totalMatches: number, limit: number, filters: string[]) {
   if (totalMatches === 0) {
     return filters.length > 0
@@ -1742,6 +1813,7 @@ function buildAdminAgentListReply(
   limit: number,
   filters: string[],
   timeZone?: string,
+  offset = 0,
 ) {
   if (totalMatches === 0) {
     return filters.length > 0
@@ -1749,16 +1821,26 @@ function buildAdminAgentListReply(
       : "ยังไม่มีรายชื่อลงทะเบียนในอีเวนต์นี้";
   }
 
+  const displayCount = Math.min(matches.length, 20);
+  const shownStart = Math.min(offset + 1, totalMatches);
+  const shownEnd = Math.min(offset + matches.length, totalMatches);
   const header = filters.length > 0
     ? `รายชื่อที่ตรงเงื่อนไข ${totalMatches} รายการ (${filters.join(", ")})`
-    : `รายชื่อผู้ลงทะเบียนล่าสุด ${Math.min(matches.length, limit)} รายการ`;
-  const lines = matches.slice(0, 8).map((registration, index) => (
+    : `รายชื่อผู้ลงทะเบียน ${totalMatches} รายการ`;
+  const lines = matches.slice(0, displayCount).map((registration, index) => (
     `${index + 1}. ${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status} • phone ${normalizeOptionalText(registration.phone) || "-"} • email ${normalizeOptionalText(registration.email) || "-"} • ${formatEventScopedTimestamp(registration.timestamp, timeZone)}`
   ));
-  const truncatedNote = totalMatches > matches.length
-    ? `\nแสดง ${matches.length} จาก ${totalMatches} รายการ`
-    : "";
-  return `${header}\n${lines.join("\n")}${truncatedNote}`;
+  const notes: string[] = [];
+  notes.push(`แสดงลำดับ ${shownStart}-${shownEnd} (limit ${limit}, offset ${offset})`);
+  if (matches.length > displayCount) {
+    notes.push(`สรุปข้อความ ${displayCount} จาก ${matches.length} รายการที่โหลดมา`);
+  }
+  if (totalMatches > offset + matches.length) {
+    const nextOffset = offset + matches.length;
+    notes.push(`ยังเหลืออีก ${totalMatches - nextOffset} รายการ (ลองสั่งต่อด้วย offset ${nextOffset})`);
+  }
+
+  return `${header}\n${lines.join("\n")}\n${notes.join("\n")}`;
 }
 
 function buildRegistrationLookupFilters(args: Record<string, unknown>, rawMessage: string) {
@@ -1889,11 +1971,15 @@ async function findRegistrationsForAdminAction(
   eventId: string,
   args: Record<string, unknown>,
   rawMessage: string,
-  options?: { defaultToRecent?: boolean; limit?: number },
+  options?: { defaultToRecent?: boolean; limit?: number; offset?: number },
 ) {
   const rows = await appDb.listRegistrations(undefined, eventId);
   const filters = buildRegistrationLookupFilters(args, rawMessage);
-  const limit = options?.limit || filters.limit || 8;
+  const limitCandidate = Number.isFinite(options?.limit) ? Number(options?.limit) : filters.limit;
+  const limit = Number.isFinite(limitCandidate) && limitCandidate > 0
+    ? Math.floor(limitCandidate)
+    : 8;
+  const offset = parseNonNegativeInteger(options?.offset, 0, Math.max(rows.length, 0));
   let matches = rows.slice();
   const usedFilters: string[] = [];
 
@@ -1957,20 +2043,28 @@ async function findRegistrationsForAdminAction(
     usedFilters.push(`query="${query}"`);
   }
 
+  const slicedRows = (source: RegistrationRow[]) => {
+    const start = Math.min(offset, source.length);
+    const end = Math.min(start + limit, source.length);
+    return source.slice(start, end);
+  };
+
   if (usedFilters.length === 0 && options?.defaultToRecent) {
     return {
       totalMatches: rows.length,
-      matches: rows.slice(0, Math.min(limit, rows.length)),
+      matches: slicedRows(rows),
       usedFilters,
       limit,
+      offset,
     };
   }
 
   return {
     totalMatches: matches.length,
-    matches: matches.slice(0, Math.min(limit, matches.length)),
+    matches: slicedRows(matches),
     usedFilters,
     limit,
+    offset,
   };
 }
 
@@ -2750,6 +2844,8 @@ async function requestAdminAgentPlan(
     "Use get_event_overview when asked for event status/time/place/map/description/travel/registration-rules summary.",
     "Use create_registration when admin asks to register a new attendee.",
     "Use list_registrations for list requests, and get_registration_timeline for sender chat history.",
+    "Use export_registrations_csv when admin asks for CSV/Excel export or full attendee export file.",
+    "If admin asks for remaining rows after a previous list, call list_registrations with offset.",
     "Use set_registration_status only when admin asks to change status of an existing registration (registered/cancelled/checked-in).",
     "Do not use set_registration_status to create a new attendee record.",
     "If admin says email should be optional for attendee input, do not auto-disable confirmation email. confirmation_email_enabled controls delivery behavior, not whether email field is optional.",
@@ -2990,6 +3086,32 @@ async function requestAdminAgentPlan(
                 phone: { type: "string" },
                 email: { type: "string" },
                 limit: { type: "integer", minimum: 1, maximum: 50 },
+                offset: { type: "integer", minimum: 0, maximum: 5000 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "export_registrations_csv",
+            description: "Export registrations from the selected event into CSV (all matched rows).",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+                from_timestamp: { type: "string" },
+                to_timestamp: { type: "string" },
+                since: { type: "string" },
+                until: { type: "string" },
+                query: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                sender_id: { type: "string" },
+                phone: { type: "string" },
+                email: { type: "string" },
               },
             },
           },
@@ -3550,9 +3672,11 @@ async function executeAdminAgentToolCall(
     }
     case "list_registrations": {
       const settings = await getSettingsMap(eventId);
+      const offset = parseNonNegativeInteger(call.args.offset, 0, 5000);
       const lookup = await findRegistrationsForAdminAction(eventId, call.args, rawMessage, {
         defaultToRecent: true,
-        limit: parsePositiveInteger(call.args.limit, 5, 50),
+        limit: parsePositiveInteger(call.args.limit, 20, 50),
+        offset,
       });
       return {
         reply: buildAdminAgentListReply(
@@ -3561,13 +3685,32 @@ async function executeAdminAgentToolCall(
           lookup.limit,
           lookup.usedFilters,
           settings.event_timezone,
+          lookup.offset,
         ),
         result: {
           event_id: eventId,
           total_matches: lookup.totalMatches,
           limit: lookup.limit,
+          offset: lookup.offset,
           filters: lookup.usedFilters,
           registrations: lookup.matches.map(serializeAdminRegistration),
+        },
+        targetType: "event",
+        targetId: eventId,
+      };
+    }
+    case "export_registrations_csv": {
+      const exportBundle = await buildAdminAgentRegistrationCsvBundle(eventId, call.args, rawMessage);
+      return {
+        reply: exportBundle.totalMatches > 0
+          ? `เตรียมไฟล์ CSV แล้ว (${exportBundle.totalMatches} รายการ): ${exportBundle.filename}`
+          : `ไม่มีข้อมูลสำหรับ export CSV ในอีเวนต์นี้: ${exportBundle.filename}`,
+        result: {
+          event_id: exportBundle.eventId,
+          total_matches: exportBundle.totalMatches,
+          filters: exportBundle.filters,
+          filename: exportBundle.filename,
+          download_url: `/api/registrations/export?event_id=${encodeURIComponent(exportBundle.eventId)}`,
         },
         targetType: "event",
         targetId: eventId,
@@ -4025,6 +4168,38 @@ async function sendTelegramTextWithBotToken(botToken: string, chatId: string, te
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(payload?.description || "Failed to send Telegram message");
+  }
+  return payload;
+}
+
+async function sendTelegramDocumentWithBotToken(
+  botToken: string,
+  chatId: string,
+  filename: string,
+  content: string,
+  caption?: string,
+) {
+  const token = normalizeOptionalText(botToken);
+  if (!token) {
+    throw new Error("Admin Agent Telegram bot token is missing");
+  }
+
+  const formData = new FormData();
+  formData.set("chat_id", chatId);
+  formData.set("document", new Blob([content], { type: "text/csv;charset=utf-8" }), filename);
+  const safeCaption = normalizeOptionalText(caption);
+  if (safeCaption) {
+    formData.set("caption", normalizeLineText(safeCaption));
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+    method: "POST",
+    body: formData,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.description || "Failed to send Telegram document");
   }
   return payload;
 }
@@ -7586,24 +7761,9 @@ async function startServer() {
       const eventId = getRequestedEventId(req);
       const rows = await appDb.exportRegistrations(eventId);
       const eventName = (await appDb.getSettingValue("event_name", eventId)) || "event";
-      
-      // Create a short slug for the filename
-      const slug = eventName
-        .toLowerCase()
-        .replace(/[^a-z0-9ก-๙]/g, "-") // Keep Thai characters and alphanumeric
-        .split("-")
-        .filter(Boolean)
-        .slice(0, 3) // Take first 3 words
-        .join("-");
-      
-      const filename = `registrations-${slug || "data"}.csv`;
-      
-      const json2csvParser = new Parser();
-      const csv = json2csvParser.parse(rows);
-      
-      // Add UTF-8 BOM for Excel compatibility with Thai characters
-      const csvWithBOM = "\uFEFF" + csv;
-      
+      const filename = buildRegistrationExportFilename(eventName);
+      const csvWithBOM = buildRegistrationsCsvWithBom(rows);
+
       res.header("Content-Type", "text/csv; charset=utf-8");
       res.attachment(filename);
       res.send(csvWithBOM);
@@ -8366,6 +8526,7 @@ async function startServer() {
             "- ขอรายละเอียดอีเวนต์นี้ทั้งหมด",
             "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
             "- list registrations status registered",
+            "- export registrations csv",
             "- ลงทะเบียนใหม่ ชื่อ สมชาย ใจดี เบอร์ 0895551234 อีเมล somchai@example.com",
             "- ตั้งสถานะ REG-XXXXXX เป็น checked-in",
             "- หาชื่อ สมชาย ใจดี",
@@ -8415,6 +8576,22 @@ async function startServer() {
           const effectiveEventId = normalizeOptionalText(execution.eventId) || eventId;
 
           await sendTelegramTextWithBotToken(settings.telegramBotToken, normalized.chatId, replyText);
+          if (execution.action?.name === "export_registrations_csv") {
+            const exportBundle = await buildAdminAgentRegistrationCsvBundle(
+              effectiveEventId,
+              execution.action.args,
+              command,
+            );
+            if (exportBundle.totalMatches > 0) {
+              await sendTelegramDocumentWithBotToken(
+                settings.telegramBotToken,
+                normalized.chatId,
+                exportBundle.filename,
+                exportBundle.csv,
+                `CSV ผู้ลงทะเบียน ${exportBundle.totalMatches} รายการ`,
+              );
+            }
+          }
 
           await appDb.recordAuditLog({
             actor_user_id: null,
