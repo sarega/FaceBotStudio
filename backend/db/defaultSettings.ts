@@ -3,6 +3,15 @@ export const DEFAULT_SETTINGS_ENTRIES = {
   llm_model: "",
   global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
   global_llm_model: process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview",
+  admin_agent_enabled: "0",
+  admin_agent_system_prompt:
+    "You are the Admin Agent planner for an event registration operations system. Choose only one allowed action when enough data exists, otherwise ask one short clarification in Thai.",
+  admin_agent_model: "",
+  admin_agent_default_event_id: "evt_default",
+  admin_agent_telegram_enabled: "0",
+  admin_agent_telegram_bot_token: "",
+  admin_agent_telegram_webhook_secret: "",
+  admin_agent_telegram_allowed_chat_ids: "",
   verify_token: "my_secret_verify_token",
   event_name: "AI Innovation Summit 2026",
   event_timezone: process.env.EVENT_TIMEZONE || "Asia/Bangkok",
@@ -58,6 +67,18 @@ export const EVENT_SETTING_KEYS = [
   "reg_end",
 ] as const;
 
-export const GLOBAL_SETTING_KEYS = ["verify_token", "global_system_prompt", "global_llm_model"] as const;
+export const GLOBAL_SETTING_KEYS = [
+  "verify_token",
+  "global_system_prompt",
+  "global_llm_model",
+  "admin_agent_enabled",
+  "admin_agent_system_prompt",
+  "admin_agent_model",
+  "admin_agent_default_event_id",
+  "admin_agent_telegram_enabled",
+  "admin_agent_telegram_bot_token",
+  "admin_agent_telegram_webhook_secret",
+  "admin_agent_telegram_allowed_chat_ids",
+] as const;
 
 export const DEFAULT_EVENT_ID = "evt_default";

@@ -237,6 +237,14 @@ export interface Settings {
   llm_model: string;
   global_system_prompt: string;
   global_llm_model: string;
+  admin_agent_enabled: string;
+  admin_agent_system_prompt: string;
+  admin_agent_model: string;
+  admin_agent_default_event_id: string;
+  admin_agent_telegram_enabled: string;
+  admin_agent_telegram_bot_token: string;
+  admin_agent_telegram_webhook_secret: string;
+  admin_agent_telegram_allowed_chat_ids: string;
   verify_token: string;
   event_name: string;
   event_timezone: string;

@@ -1787,11 +1787,26 @@ async function requestAdminAgentPlan(
     throw new Error("OPENROUTER_API_KEY is not configured in .env");
   }
 
-  const model = (typeof settings.llm_model === "string" && settings.llm_model.trim())
+  const model = (typeof settings.admin_agent_model === "string" && settings.admin_agent_model.trim())
+    ? settings.admin_agent_model.trim()
+    : (typeof settings.llm_model === "string" && settings.llm_model.trim())
     ? settings.llm_model.trim()
     : (typeof settings.global_llm_model === "string" && settings.global_llm_model.trim())
     ? settings.global_llm_model.trim()
     : DEFAULT_OPENROUTER_MODEL;
+  const customPlannerPrompt = normalizeOptionalText(settings.admin_agent_system_prompt);
+  const basePlannerPrompt = [
+    "You are the Admin Agent planner for an event registration operations system.",
+    "Allowed actions only: find_registration, count_registrations, resend_ticket, resend_email, retry_bot.",
+    "When enough information exists, return exactly one tool call.",
+    "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
+    "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
+    "When matching by name, pass full_name or first_name/last_name.",
+    "When asked to continue a stuck chat, use retry_bot.",
+  ].join("\n");
+  const plannerPrompt = customPlannerPrompt
+    ? `${basePlannerPrompt}\n\nCustom Planner Prompt:\n${customPlannerPrompt}`
+    : basePlannerPrompt;
 
   const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -1801,15 +1816,7 @@ async function requestAdminAgentPlan(
       messages: [
         {
           role: "system",
-          content: [
-            "You are the Admin Agent planner for an event registration operations system.",
-            "Allowed actions only: find_registration, count_registrations, resend_ticket, resend_email, retry_bot.",
-            "When enough information exists, return exactly one tool call.",
-            "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
-            "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
-            "When matching by name, pass full_name or first_name/last_name.",
-            "When asked to continue a stuck chat, use retry_bot.",
-          ].join("\n"),
+          content: plannerPrompt,
         },
         ...normalizeHistoryForOpenRouter(history),
         {
@@ -2130,6 +2137,169 @@ function summarizeAdminAgentResultForAudit(result: unknown) {
     }
   }
   return summary;
+}
+
+type AdminAgentGlobalSettings = {
+  enabled: boolean;
+  systemPrompt: string;
+  model: string;
+  defaultEventId: string;
+  telegramEnabled: boolean;
+  telegramBotToken: string;
+  telegramWebhookSecret: string;
+  telegramAllowedChatIdsRaw: string;
+};
+
+async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> {
+  const [
+    enabledRaw,
+    systemPromptRaw,
+    modelRaw,
+    defaultEventIdRaw,
+    telegramEnabledRaw,
+    telegramBotTokenRaw,
+    telegramWebhookSecretRaw,
+    telegramAllowedChatIdsRaw,
+  ] = await Promise.all([
+    appDb.getSettingValue("admin_agent_enabled"),
+    appDb.getSettingValue("admin_agent_system_prompt"),
+    appDb.getSettingValue("admin_agent_model"),
+    appDb.getSettingValue("admin_agent_default_event_id"),
+    appDb.getSettingValue("admin_agent_telegram_enabled"),
+    appDb.getSettingValue("admin_agent_telegram_bot_token"),
+    appDb.getSettingValue("admin_agent_telegram_webhook_secret"),
+    appDb.getSettingValue("admin_agent_telegram_allowed_chat_ids"),
+  ]);
+
+  return {
+    enabled: isTruthySetting(enabledRaw),
+    systemPrompt: normalizeOptionalText(systemPromptRaw),
+    model: normalizeOptionalText(modelRaw),
+    defaultEventId: normalizeOptionalText(defaultEventIdRaw) || DEFAULT_EVENT_ID,
+    telegramEnabled: isTruthySetting(telegramEnabledRaw),
+    telegramBotToken: normalizeOptionalText(telegramBotTokenRaw),
+    telegramWebhookSecret: normalizeOptionalText(telegramWebhookSecretRaw),
+    telegramAllowedChatIdsRaw: String(telegramAllowedChatIdsRaw || ""),
+  };
+}
+
+function parseAdminAgentTelegramAllowedChatIds(rawValue: string) {
+  return new Set(
+    String(rawValue || "")
+      .split(/[\s,\n\r]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  );
+}
+
+function normalizeAdminAgentTelegramUpdate(body: any) {
+  const message = body?.message || body?.edited_message;
+  const chatId = message?.chat?.id;
+  const text = typeof message?.text === "string" ? message.text.trim() : "";
+  if (!chatId || !text) {
+    return null;
+  }
+  return {
+    updateId: Number(body?.update_id || 0) || 0,
+    chatId: String(chatId).trim(),
+    text,
+    messageId: Number(message?.message_id || 0) || 0,
+  };
+}
+
+async function sendTelegramTextWithBotToken(botToken: string, chatId: string, text: string) {
+  const token = normalizeOptionalText(botToken);
+  if (!token) {
+    throw new Error("Admin Agent Telegram bot token is missing");
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: normalizeLineText(text),
+      disable_web_page_preview: true,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.description || "Failed to send Telegram message");
+  }
+  return payload;
+}
+
+function parseAdminAgentTelegramEventOverride(text: string, fallbackEventId: string) {
+  const raw = String(text || "").trim();
+  const overrideWithSlash = raw.match(/^\/event\s+([a-zA-Z0-9_-]+)\s+([\s\S]+)$/i);
+  if (overrideWithSlash) {
+    return {
+      eventId: String(overrideWithSlash[1] || "").trim() || fallbackEventId,
+      command: String(overrideWithSlash[2] || "").trim(),
+    };
+  }
+  const overrideWithPrefix = raw.match(/^event\s*:\s*([a-zA-Z0-9_-]+)\s+([\s\S]+)$/i);
+  if (overrideWithPrefix) {
+    return {
+      eventId: String(overrideWithPrefix[1] || "").trim() || fallbackEventId,
+      command: String(overrideWithPrefix[2] || "").trim(),
+    };
+  }
+  return {
+    eventId: fallbackEventId,
+    command: raw.replace(/^\/agent\s+/i, "").trim(),
+  };
+}
+
+async function runAdminAgentCommand(options: {
+  message: string;
+  eventId: string;
+  history?: ChatHistoryMessage[];
+  settings?: Record<string, any>;
+  actorUserId?: string | null;
+  source: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const eventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
+  const message = normalizeOptionalText(options.message);
+  if (!message) {
+    throw new Error("Message is required");
+  }
+
+  const settings = options.settings || await getSettingsMap(eventId);
+  const plan = await requestAdminAgentPlan(
+    message,
+    options.history || [],
+    settings,
+    {
+      eventId,
+      actorUserId: options.actorUserId || null,
+      source: options.source,
+      metadata: options.metadata,
+    },
+  );
+
+  if (!plan.toolCall) {
+    return {
+      reply: plan.assistantText || "ขอรายละเอียดเพิ่มอีกนิด เพื่อให้ผมสั่งงานต่อได้ถูกต้อง",
+      action: null as AdminAgentToolCall | null,
+      result: null as Record<string, unknown> | null,
+      meta: plan.meta,
+      targetType: "event",
+      targetId: eventId,
+    };
+  }
+
+  const execution = await executeAdminAgentToolCall(eventId, plan.toolCall, message);
+  return {
+    reply: execution.reply,
+    action: plan.toolCall,
+    result: execution.result as Record<string, unknown>,
+    meta: plan.meta,
+    targetType: execution.targetType || "event",
+    targetId: execution.targetId || eventId,
+  };
 }
 
 async function getWebChatChannel(widgetKey?: string) {
@@ -6027,48 +6197,44 @@ async function startServer() {
       const settings = (body.settings && typeof body.settings === "object")
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
-
-      const plan = await requestAdminAgentPlan(
-        message,
-        history,
-        settings,
-        {
-          eventId,
-          actorUserId: req.auth?.user.id || null,
-          source: "admin_agent_planner",
-          metadata: { mode: "planning" },
-        },
-      );
-
-      if (!plan.toolCall) {
-        return res.json({
-          reply: plan.assistantText || "ขอรายละเอียดเพิ่มอีกนิด เพื่อให้ผมสั่งงานต่อได้ถูกต้อง",
-          action: null,
-          result: null,
-          meta: plan.meta,
-        });
+      const globalAgentSettings = await getAdminAgentGlobalSettings();
+      if (!globalAgentSettings.enabled) {
+        return res.status(403).json({ error: "Admin Agent is disabled. Enable it in Agent Setup first." });
       }
 
       try {
-        const execution = await executeAdminAgentToolCall(eventId, plan.toolCall, message);
+        const execution = await runAdminAgentCommand({
+          message,
+          eventId,
+          history,
+          settings: {
+            ...settings,
+            ...(globalAgentSettings.systemPrompt ? { admin_agent_system_prompt: globalAgentSettings.systemPrompt } : {}),
+            ...(globalAgentSettings.model ? { admin_agent_model: globalAgentSettings.model } : {}),
+          },
+          actorUserId: req.auth?.user.id || null,
+          source: "admin_agent_planner",
+          metadata: { mode: "ui" },
+        });
+
         await recordAudit(
           req,
-          "admin_agent.action_executed",
+          execution.action ? "admin_agent.action_executed" : "admin_agent.clarification_requested",
           execution.targetType || "event",
           execution.targetId || eventId,
           {
             event_id: eventId,
-            action: plan.toolCall.name,
-            source: plan.toolCall.source,
-            args: plan.toolCall.args,
+            action: execution.action?.name || null,
+            source: execution.action?.source || "llm",
+            args: execution.action?.args || {},
             result: summarizeAdminAgentResultForAudit(execution.result),
           },
         );
         return res.json({
           reply: execution.reply,
-          action: plan.toolCall,
+          action: execution.action,
           result: execution.result,
-          meta: plan.meta,
+          meta: execution.meta,
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Failed to execute admin action";
@@ -6079,9 +6245,9 @@ async function startServer() {
           eventId,
           {
             event_id: eventId,
-            action: plan.toolCall.name,
-            source: plan.toolCall.source,
-            args: plan.toolCall.args,
+            action: null,
+            source: "llm",
+            args: {},
             error: errorMessage,
           },
         );
@@ -6093,6 +6259,123 @@ async function startServer() {
       const status = /OPENROUTER_API_KEY/.test(message) ? 400 : 500;
       return res.status(status).json({ error: message });
     }
+  });
+
+  app.post("/api/admin-agent/telegram/webhook", webhookRateLimit, (req: RawBodyRequest, res) => {
+    const payload = req.body;
+    res.status(200).json({ status: "ok" });
+
+    void (async () => {
+      try {
+        const settings = await getAdminAgentGlobalSettings();
+        if (!settings.enabled || !settings.telegramEnabled || !settings.telegramBotToken) {
+          return;
+        }
+
+        const providedSecret = typeof req.headers["x-telegram-bot-api-secret-token"] === "string"
+          ? req.headers["x-telegram-bot-api-secret-token"]
+          : "";
+        if (settings.telegramWebhookSecret && providedSecret !== settings.telegramWebhookSecret) {
+          console.warn("Rejected Admin Agent Telegram webhook due to invalid secret token");
+          return;
+        }
+
+        const normalized = normalizeAdminAgentTelegramUpdate(payload);
+        if (!normalized) return;
+        const allowedChatIds = parseAdminAgentTelegramAllowedChatIds(settings.telegramAllowedChatIdsRaw);
+        if (allowedChatIds.size > 0 && !allowedChatIds.has(normalized.chatId)) {
+          console.warn("Ignored Admin Agent Telegram message from unauthorized chat", {
+            chat_id: normalized.chatId,
+            update_id: normalized.updateId,
+          });
+          return;
+        }
+
+        const text = normalized.text;
+        if (/^\/start\b/i.test(text) || /^\/help\b/i.test(text)) {
+          const helpMessage = [
+            "Admin Agent พร้อมใช้งาน",
+            "ตัวอย่างคำสั่ง:",
+            "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
+            "- หาชื่อ สมชาย ใจดี",
+            "- resend ticket REG-XXXXXX",
+            "- resend email REG-XXXXXX",
+            "- retry bot sender 123456",
+            "- /event evt_xxx แล้วตามด้วยคำสั่ง",
+          ].join("\n");
+          await sendTelegramTextWithBotToken(settings.telegramBotToken, normalized.chatId, helpMessage);
+          return;
+        }
+
+        const parsedCommand = parseAdminAgentTelegramEventOverride(text, settings.defaultEventId || DEFAULT_EVENT_ID);
+        const eventId = normalizeOptionalText(parsedCommand.eventId) || DEFAULT_EVENT_ID;
+        const command = normalizeOptionalText(parsedCommand.command);
+        if (!command) {
+          await sendTelegramTextWithBotToken(
+            settings.telegramBotToken,
+            normalized.chatId,
+            "กรุณาพิมพ์คำสั่งหลัง /agent หรือส่งคำสั่งตรงๆ",
+          );
+          return;
+        }
+
+        try {
+          const eventSettings = await getSettingsMap(eventId);
+          const execution = await runAdminAgentCommand({
+            message: command,
+            eventId,
+            history: [],
+            settings: {
+              ...eventSettings,
+              ...(settings.systemPrompt ? { admin_agent_system_prompt: settings.systemPrompt } : {}),
+              ...(settings.model ? { admin_agent_model: settings.model } : {}),
+            },
+            source: "admin_agent_telegram",
+            metadata: {
+              mode: "telegram",
+              chat_id: normalized.chatId,
+              update_id: normalized.updateId,
+            },
+          });
+
+          const replyText = execution.action
+            ? `[${execution.action.name}] ${execution.reply}`
+            : execution.reply;
+
+          await sendTelegramTextWithBotToken(settings.telegramBotToken, normalized.chatId, replyText);
+
+          await appDb.recordAuditLog({
+            actor_user_id: null,
+            action: execution.action ? "admin_agent.telegram_action_executed" : "admin_agent.telegram_clarification",
+            target_type: execution.targetType || "event",
+            target_id: execution.targetId || eventId,
+            metadata: {
+              event_id: eventId,
+              chat_id: normalized.chatId,
+              action: execution.action?.name || null,
+              args: execution.action?.args || {},
+              result: summarizeAdminAgentResultForAudit(execution.result),
+            },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to execute admin command";
+          await sendTelegramTextWithBotToken(settings.telegramBotToken, normalized.chatId, `Error: ${message}`);
+          await appDb.recordAuditLog({
+            actor_user_id: null,
+            action: "admin_agent.telegram_action_failed",
+            target_type: "event",
+            target_id: eventId,
+            metadata: {
+              event_id: eventId,
+              chat_id: normalized.chatId,
+              error: message,
+            },
+          });
+        }
+      } catch (error) {
+        console.error("Admin Agent Telegram webhook failed:", error);
+      }
+    })();
   });
 
   // Facebook Webhook Verification

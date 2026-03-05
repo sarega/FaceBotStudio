@@ -64,8 +64,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "design" | "test" | "logs" | "settings" | "team" | "registrations" | "checkin";
-type TestConsoleMode = "bot" | "admin_agent";
+type AppTab = "event" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin";
 type EventWorkspaceFilter = "all" | EventStatus;
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
@@ -148,19 +147,37 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
   },
   test: {
     title: "Test Console Help",
-    summary: "Use this console for two modes: Bot Simulator (prompt testing) and Admin Agent (real operational commands).",
+    summary: "Use the test surface to verify prompts, event context, and retrieval before exposing the flow to real users.",
     points: [
       {
         label: "Probe behavior",
-        body: "Bot Simulator lets you probe replies, prompt tone, and event context behavior before live traffic sees it.",
+        body: "Ask the bot representative questions and inspect whether the selected event is producing the right operational answers.",
       },
       {
-        label: "Run operations",
-        body: "Admin Agent can execute controlled actions such as find registrations, count attendees, resend ticket/email, and retry stuck bot replies.",
+        label: "Check retrieval",
+        body: "When debugging, compare the response with the active documents and chunk inspector to confirm the correct knowledge source was used.",
       },
       {
-        label: "Choose mode carefully",
-        body: "Simulator is for testing. Admin Agent runs real actions in the selected event and records audit logs.",
+        label: "Keep it isolated",
+        body: "This tab is for simulation only. It should help verify behavior without changing production registrations or channels.",
+      },
+    ],
+  },
+  agent: {
+    title: "Agent Console Help",
+    summary: "Run operational admin commands here, and configure standalone Agent behavior including external Telegram access.",
+    points: [
+      {
+        label: "Operational commands",
+        body: "Use natural commands to find attendees, count registrations, resend ticket or email, and retry stuck bot replies.",
+      },
+      {
+        label: "Dedicated setup",
+        body: "Agent prompt, model override, default event routing, and Telegram webhook control live here instead of general event chat setup.",
+      },
+      {
+        label: "External access",
+        body: "Telegram can call this Agent without loading the web UI, with allowlisted chat IDs and webhook secret protection.",
       },
     ],
   },
@@ -1342,6 +1359,15 @@ const INITIAL_SETTINGS: Settings = {
   llm_model: "",
   global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
   global_llm_model: "google/gemini-3-flash-preview",
+  admin_agent_enabled: "0",
+  admin_agent_system_prompt:
+    "You are the Admin Agent planner for an event registration operations system. Choose one allowed action, otherwise ask one short clarification in Thai.",
+  admin_agent_model: "",
+  admin_agent_default_event_id: "evt_default",
+  admin_agent_telegram_enabled: "0",
+  admin_agent_telegram_bot_token: "",
+  admin_agent_telegram_webhook_secret: "",
+  admin_agent_telegram_allowed_chat_ids: "",
   verify_token: "",
   event_name: "",
   event_timezone: DEFAULT_TIMEZONE,
@@ -1423,6 +1449,17 @@ const AI_SETTINGS_KEYS = [
   "llm_model",
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
+const AGENT_SETTINGS_KEYS = [
+  "admin_agent_enabled",
+  "admin_agent_system_prompt",
+  "admin_agent_model",
+  "admin_agent_default_event_id",
+  "admin_agent_telegram_enabled",
+  "admin_agent_telegram_bot_token",
+  "admin_agent_telegram_webhook_secret",
+  "admin_agent_telegram_allowed_chat_ids",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
 const WEBHOOK_SETTINGS_KEYS = ["verify_token"] as const satisfies ReadonlyArray<keyof Settings>;
 
 function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> | Record<string, unknown>) {
@@ -1433,6 +1470,38 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.global_system_prompt === "string" ? data.global_system_prompt : previous.global_system_prompt,
     global_llm_model:
       typeof data.global_llm_model === "string" ? data.global_llm_model : previous.global_llm_model,
+    admin_agent_enabled:
+      typeof data.admin_agent_enabled === "string" && data.admin_agent_enabled.trim()
+        ? data.admin_agent_enabled.trim()
+        : previous.admin_agent_enabled,
+    admin_agent_system_prompt:
+      typeof data.admin_agent_system_prompt === "string"
+        ? data.admin_agent_system_prompt
+        : previous.admin_agent_system_prompt,
+    admin_agent_model:
+      typeof data.admin_agent_model === "string"
+        ? data.admin_agent_model
+        : previous.admin_agent_model,
+    admin_agent_default_event_id:
+      typeof data.admin_agent_default_event_id === "string" && data.admin_agent_default_event_id.trim()
+        ? data.admin_agent_default_event_id.trim()
+        : previous.admin_agent_default_event_id,
+    admin_agent_telegram_enabled:
+      typeof data.admin_agent_telegram_enabled === "string" && data.admin_agent_telegram_enabled.trim()
+        ? data.admin_agent_telegram_enabled.trim()
+        : previous.admin_agent_telegram_enabled,
+    admin_agent_telegram_bot_token:
+      typeof data.admin_agent_telegram_bot_token === "string"
+        ? data.admin_agent_telegram_bot_token
+        : previous.admin_agent_telegram_bot_token,
+    admin_agent_telegram_webhook_secret:
+      typeof data.admin_agent_telegram_webhook_secret === "string"
+        ? data.admin_agent_telegram_webhook_secret
+        : previous.admin_agent_telegram_webhook_secret,
+    admin_agent_telegram_allowed_chat_ids:
+      typeof data.admin_agent_telegram_allowed_chat_ids === "string"
+        ? data.admin_agent_telegram_allowed_chat_ids
+        : previous.admin_agent_telegram_allowed_chat_ids,
     verify_token: typeof data.verify_token === "string" ? data.verify_token : previous.verify_token,
     event_name: typeof data.event_name === "string" ? data.event_name : "",
     event_timezone: normalizeTimeZoneForUi(
@@ -1561,7 +1630,6 @@ export default function App() {
   const [knowledgeResetting, setKnowledgeResetting] = useState(false);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
-  const [testConsoleMode, setTestConsoleMode] = useState<TestConsoleMode>("bot");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -1653,6 +1721,7 @@ export default function App() {
   const role = authUser?.role;
   const canEditSettings = role === "owner" || role === "admin";
   const canRunTest = role === "owner" || role === "admin" || role === "operator";
+  const canRunAgent = role === "owner" || role === "admin" || role === "operator";
   const canViewLogs = role === "owner" || role === "admin" || role === "operator" || role === "viewer";
   const canManageRegistrations = role === "owner" || role === "admin" || role === "operator" || role === "checker";
   const canChangeRegistrationStatus = role === "owner" || role === "admin" || role === "operator";
@@ -1689,7 +1758,7 @@ export default function App() {
   const registeredCount = registrations.filter((reg) => reg.status === "registered").length;
   const cancelledCount = registrations.filter((reg) => reg.status === "cancelled").length;
   const checkedInCount = registrations.filter((reg) => reg.status === "checked-in").length;
-  const activeTestMessageCount = testConsoleMode === "bot" ? testMessages.length : adminAgentMessages.length;
+  const activeAgentMessageCount = adminAgentMessages.length;
   const activeAttendeeCount = registrations.filter((reg) => reg.status !== "cancelled").length;
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
   const canUseQrScanner =
@@ -1706,6 +1775,7 @@ export default function App() {
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
     ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: "Context" }] : []),
     ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: "Test" }] : []),
+    ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: "Agent" }] : []),
   ];
   const setupTabs = [
     ...(canEditSettings ? [{ id: "settings" as const, icon: SettingsIcon, label: "Workspace Setup" }] : []),
@@ -2582,6 +2652,7 @@ export default function App() {
       ...(canEditSettings ? ["event"] : []),
       ...(canEditSettings ? ["design"] : []),
       ...(canRunTest ? ["test"] : []),
+      ...(canRunAgent ? ["agent"] : []),
       ...(canManageRegistrations ? ["registrations", "checkin"] : []),
       ...(canViewLogs ? ["logs"] : []),
       ...(canEditSettings ? ["settings"] : []),
@@ -2591,7 +2662,7 @@ export default function App() {
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || "registrations");
     }
-  }, [activeTab, canEditSettings, canRunTest, canViewLogs, canManageRegistrations, canManageUsers]);
+  }, [activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canManageRegistrations, canManageUsers]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
@@ -3121,8 +3192,10 @@ export default function App() {
   const eventDetailsDirty = areSettingsKeysDirty(EVENT_DETAIL_SETTINGS_KEYS);
   const eventContextDirty = areSettingsKeysDirty(EVENT_CONTEXT_SETTINGS_KEYS);
   const aiSettingsDirty = areSettingsKeysDirty(AI_SETTINGS_KEYS);
+  const agentSettingsDirty = areSettingsKeysDirty(AGENT_SETTINGS_KEYS);
   const webhookSettingsDirty = areSettingsKeysDirty(WEBHOOK_SETTINGS_KEYS);
-  const setupDirty = aiSettingsDirty || webhookSettingsDirty;
+  const workspaceSetupDirty = aiSettingsDirty || webhookSettingsDirty;
+  const setupDirty = workspaceSetupDirty || agentSettingsDirty;
   const hasAnyUnsavedSettings = eventDetailsDirty || eventContextDirty || setupDirty;
 
   const confirmDiscardDirtyChanges = ({
@@ -3138,11 +3211,13 @@ export default function App() {
     if (eventSwitching) {
       if (eventDetailsDirty) dirtySections.add("Event");
       if (eventContextDirty) dirtySections.add("Context");
-      if (setupDirty) dirtySections.add("Setup");
+      if (workspaceSetupDirty) dirtySections.add("Setup");
+      if (agentSettingsDirty) dirtySections.add("Agent");
     } else if (nextTab && nextTab !== activeTab) {
       if (activeTab === "event" && eventDetailsDirty) dirtySections.add("Event");
       if (activeTab === "design" && eventContextDirty) dirtySections.add("Context");
-      if (activeTab === "settings" && setupDirty) dirtySections.add("Setup");
+      if (activeTab === "settings" && workspaceSetupDirty) dirtySections.add("Setup");
+      if (activeTab === "agent" && agentSettingsDirty) dirtySections.add("Agent");
     }
 
     if (!dirtySections.size) return true;
@@ -3257,6 +3332,17 @@ export default function App() {
     "global_llm_model",
     "llm_model",
   ], "AI settings saved");
+
+  const saveAgentSettings = async () => saveSettingsSubset([
+    "admin_agent_enabled",
+    "admin_agent_system_prompt",
+    "admin_agent_model",
+    "admin_agent_default_event_id",
+    "admin_agent_telegram_enabled",
+    "admin_agent_telegram_bot_token",
+    "admin_agent_telegram_webhook_secret",
+    "admin_agent_telegram_allowed_chat_ids",
+  ], "Agent settings saved");
 
   const saveWebhookSettings = async () => saveSettingsSubset(["verify_token"], "Webhook settings saved");
 
@@ -4635,6 +4721,10 @@ export default function App() {
   const instagramWebhookUrl = `${appUrl}/api/webhook/instagram`;
   const whatsappWebhookUrl = `${appUrl}/api/webhook/whatsapp`;
   const telegramWebhookUrl = `${appUrl}/api/webhook/telegram/{botKey}`;
+  const adminAgentTelegramWebhookUrl = `${appUrl}/api/admin-agent/telegram/webhook`;
+  const adminAgentTelegramSetWebhookUrl = settings.admin_agent_telegram_bot_token.trim()
+    ? `https://api.telegram.org/bot${settings.admin_agent_telegram_bot_token.trim()}/setWebhook?url=${encodeURIComponent(adminAgentTelegramWebhookUrl)}${settings.admin_agent_telegram_webhook_secret.trim() ? `&secret_token=${encodeURIComponent(settings.admin_agent_telegram_webhook_secret.trim())}` : ""}`
+    : "";
   const webChatConfigUrl = `${appUrl}/api/webchat/config/{widgetKey}`;
   const webChatMessageUrl = `${appUrl}/api/webchat/messages`;
   const webhookConfigItems: Array<{
@@ -5419,7 +5509,9 @@ export default function App() {
                 >
                   <tab.icon className="h-4 w-4 shrink-0" />
                   <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
-                  {((tab.id === "event" && eventDetailsDirty) || (tab.id === "design" && eventContextDirty)) && (
+                  {((tab.id === "event" && eventDetailsDirty)
+                    || (tab.id === "design" && eventContextDirty)
+                    || (tab.id === "agent" && agentSettingsDirty)) && (
                     <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
                   )}
                 </button>
@@ -5438,7 +5530,7 @@ export default function App() {
                   >
                     <selectedSetupTab.icon className="h-4 w-4 shrink-0" />
                     <span className="sr-only sm:not-sr-only sm:truncate">Setup</span>
-                    {setupDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
+                    {workspaceSetupDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {setupMenuOpen && (
@@ -5458,7 +5550,7 @@ export default function App() {
                         >
                           <tab.icon className="h-4 w-4" />
                           <span className="font-medium">{tab.label}</span>
-                          {tab.id === "settings" && setupDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
+                          {tab.id === "settings" && workspaceSetupDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
                         </button>
                       ))}
                     </div>
@@ -6938,21 +7030,15 @@ export default function App() {
               <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100">
-                    {testConsoleMode === "bot" ? (
-                      <Bot className="h-5 w-5 text-blue-600" />
-                    ) : (
-                      <MonitorCog className="h-5 w-5 text-blue-600" />
-                    )}
+                    <Bot className="h-5 w-5 text-blue-600" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-sm">{testConsoleMode === "bot" ? "Bot Simulator" : "Admin Agent"}</h3>
+                    <h3 className="font-semibold text-sm">Bot Simulator</h3>
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="w-2 h-2 bg-emerald-500 rounded-full" />
                       <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Active</span>
-                      <StatusBadge tone={testConsoleMode === "bot" ? "blue" : "violet"}>
-                        {testConsoleMode === "bot" ? "simulator" : "agent"}
-                      </StatusBadge>
-                      <StatusBadge tone="neutral">{activeTestMessageCount} msgs</StatusBadge>
+                      <StatusBadge tone="blue">simulator</StatusBadge>
+                      <StatusBadge tone="neutral">{testMessages.length} msgs</StatusBadge>
                       {selectedEvent && (
                         <>
                           <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
@@ -6968,148 +7054,76 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
-                    <button
-                      onClick={() => setTestConsoleMode("bot")}
-                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                        testConsoleMode === "bot"
-                          ? "bg-blue-600 text-white"
-                          : "text-slate-600 hover:bg-slate-100"
-                      }`}
-                    >
-                      Simulator
-                    </button>
-                    <button
-                      onClick={() => setTestConsoleMode("admin_agent")}
-                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                        testConsoleMode === "admin_agent"
-                          ? "bg-violet-600 text-white"
-                          : "text-slate-600 hover:bg-slate-100"
-                      }`}
-                    >
-                      Admin Agent
-                    </button>
-                  </div>
-                  <InlineActionsMenu label="Actions" tone="neutral">
-                    <MenuActionItem
-                      onClick={() => {
-                        if (testConsoleMode === "bot") {
-                          setTestMessages([]);
-                        } else {
-                          setAdminAgentMessages([]);
-                        }
-                      }}
-                      disabled={activeTestMessageCount === 0}
-                      tone="neutral"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <span className="font-medium">Clear Chat</span>
-                    </MenuActionItem>
-                  </InlineActionsMenu>
-                </div>
+                <InlineActionsMenu label="Actions" tone="neutral">
+                  <MenuActionItem
+                    onClick={() => setTestMessages([])}
+                    disabled={testMessages.length === 0}
+                    tone="neutral"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="font-medium">Clear Chat</span>
+                  </MenuActionItem>
+                </InlineActionsMenu>
               </div>
 
               <div className="border-b border-slate-100 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
-                {testConsoleMode === "bot" ? (
-                  <CompactGuardBar
-                    title="Simulation Guard"
-                    tone={eventOperatorGuard.tone}
-                    label={eventOperatorGuard.label}
-                    body={eventOperatorGuard.body}
-                  />
-                ) : (
-                  <CompactGuardBar
-                    title="Admin Agent Guard"
-                    tone="amber"
-                    label="live actions"
-                    body="Agent mode executes real operations on the selected event (find/count/resend/retry) and writes audit logs."
-                  />
-                )}
+                <CompactGuardBar
+                  title="Simulation Guard"
+                  tone={eventOperatorGuard.tone}
+                  label={eventOperatorGuard.label}
+                  body={eventOperatorGuard.body}
+                />
               </div>
 
               <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
-                {testConsoleMode === "bot" ? (
-                  <>
-                    {testMessages.length === 0 && (
-                      <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
-                        <MessageSquare className="h-10 w-10" />
-                        <p className="text-sm max-w-xs">Start a conversation to test your bot's custom context.</p>
-                      </div>
-                    )}
-                    {testMessages.map((msg, i) => {
-                      const text = msg.parts.find((p) => p.text)?.text;
-                      const funcCall = msg.parts.find((p) => p.functionCall)?.functionCall;
-                      const funcResp = msg.parts.find((p) => p.functionResponse)?.functionResponse;
-
-                      if (funcCall) return null;
-                      if (funcResp) {
-                        const data = funcResp.response.content;
-                        const reg = registrations.find((r) => r.id === data.id);
-                        if (!reg) return null;
-                        return (
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            key={i}
-                          >
-                            <Ticket
-                              registrationId={reg.id}
-                              firstName={reg.first_name}
-                              lastName={reg.last_name}
-                              phone={reg.phone}
-                              email={reg.email}
-                              timestamp={reg.timestamp}
-                              eventName={settings.event_name}
-                              eventLocation={settings.event_location}
-                              eventDateLabel={timingInfo.eventDateLabel}
-                              eventMapUrl={settings.event_map_url}
-                            />
-                          </motion.div>
-                        );
-                      }
-
-                      return (
-                        <ChatBubble
-                          key={i}
-                          text={text || ""}
-                          type={msg.role === "user" ? "outgoing" : "incoming"}
-                          timestamp={msg.timestamp}
-                        />
-                      );
-                    })}
-                  </>
-                ) : (
-                  <>
-                    {adminAgentMessages.length === 0 && (
-                      <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
-                        <MonitorCog className="h-10 w-10" />
-                        <p className="text-sm max-w-xs">
-                          สั่งงาน Admin Agent เช่น หา registration, นับจำนวน, resend ticket/email, หรือ retry bot
-                        </p>
-                      </div>
-                    )}
-                    {adminAgentMessages.map((msg, index) => (
-                      <div key={`${msg.timestamp}-${index}`} className="space-y-1">
-                        <ChatBubble
-                          text={msg.text}
-                          type={msg.role === "user" ? "outgoing" : "incoming"}
-                          timestamp={msg.timestamp}
-                        />
-                        {msg.role === "agent" && msg.actionName && (
-                          <div className="ml-2 flex flex-wrap items-center gap-2 pb-2">
-                            <StatusBadge tone={msg.actionSource === "rule" ? "amber" : "violet"}>
-                              {formatAdminActionLabel(msg.actionName)}
-                            </StatusBadge>
-                            <StatusBadge tone="neutral">{msg.actionSource || "llm"}</StatusBadge>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </>
+                {testMessages.length === 0 && (
+                  <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
+                    <MessageSquare className="h-10 w-10" />
+                    <p className="text-sm max-w-xs">Start a conversation to test your bot's custom context.</p>
+                  </div>
                 )}
+                {testMessages.map((msg, i) => {
+                  const text = msg.parts.find((p) => p.text)?.text;
+                  const funcCall = msg.parts.find((p) => p.functionCall)?.functionCall;
+                  const funcResp = msg.parts.find((p) => p.functionResponse)?.functionResponse;
 
-                {(testConsoleMode === "bot" ? isTyping : adminAgentTyping) && (
+                  if (funcCall) return null;
+                  if (funcResp) {
+                    const data = funcResp.response.content;
+                    const reg = registrations.find((r) => r.id === data.id);
+                    if (!reg) return null;
+                    return (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        key={i}
+                      >
+                        <Ticket
+                          registrationId={reg.id}
+                          firstName={reg.first_name}
+                          lastName={reg.last_name}
+                          phone={reg.phone}
+                          email={reg.email}
+                          timestamp={reg.timestamp}
+                          eventName={settings.event_name}
+                          eventLocation={settings.event_location}
+                          eventDateLabel={timingInfo.eventDateLabel}
+                          eventMapUrl={settings.event_map_url}
+                        />
+                      </motion.div>
+                    );
+                  }
+
+                  return (
+                    <ChatBubble
+                      key={i}
+                      text={text || ""}
+                      type={msg.role === "user" ? "outgoing" : "incoming"}
+                      timestamp={msg.timestamp}
+                    />
+                  );
+                })}
+                {isTyping && (
                   <div className="flex justify-start mb-4">
                     <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-100 flex gap-1">
                       <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
@@ -7124,39 +7138,327 @@ export default function App() {
                 <div className="flex gap-2 lg:pr-16">
                   <input
                     type="text"
-                    value={testConsoleMode === "bot" ? inputText : adminAgentInputText}
-                    onChange={(e) => {
-                      if (testConsoleMode === "bot") {
-                        setInputText(e.target.value);
-                      } else {
-                        setAdminAgentInputText(e.target.value);
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter") return;
-                      if (testConsoleMode === "bot") {
-                        void handleTestSend();
-                      } else {
-                        void handleAdminAgentSend();
-                      }
-                    }}
-                    placeholder={testConsoleMode === "bot" ? "Type a message..." : "สั่งงาน Admin Agent..."}
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleTestSend()}
+                    placeholder="Type a message..."
                     className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   <ActionButton
-                    onClick={testConsoleMode === "bot" ? handleTestSend : handleAdminAgentSend}
-                    disabled={
-                      testConsoleMode === "bot"
-                        ? (!inputText.trim() || isTyping)
-                        : (!adminAgentInputText.trim() || adminAgentTyping)
-                    }
-                    tone={testConsoleMode === "bot" ? "blue" : "violet"}
+                    onClick={handleTestSend}
+                    disabled={!inputText.trim() || isTyping}
+                    tone="blue"
                     active
                     className="px-3"
                   >
                     <Send className="w-5 h-5" />
                   </ActionButton>
                 </div>
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === "agent" && (
+            <motion.div
+              key="agent"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]"
+            >
+              <div className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]">
+                <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-violet-100">
+                      <MonitorCog className="h-5 w-5 text-violet-700" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-sm">Admin Agent</h3>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"}>
+                          {settings.admin_agent_enabled === "1" ? "enabled" : "disabled"}
+                        </StatusBadge>
+                        <StatusBadge tone="neutral">{activeAgentMessageCount} msgs</StatusBadge>
+                        {selectedEvent && (
+                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                            {getEventStatusLabel(selectedEvent.effective_status)}
+                          </StatusBadge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <InlineActionsMenu label="Actions" tone="neutral">
+                    <MenuActionItem
+                      onClick={() => setAdminAgentMessages([])}
+                      disabled={adminAgentMessages.length === 0}
+                      tone="neutral"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span className="font-medium">Clear Chat</span>
+                    </MenuActionItem>
+                  </InlineActionsMenu>
+                </div>
+
+                <div className="border-b border-slate-100 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
+                  <CompactGuardBar
+                    title="Agent Guard"
+                    tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"}
+                    label={settings.admin_agent_enabled === "1" ? "live actions" : "disabled"}
+                    body={
+                      settings.admin_agent_enabled === "1"
+                        ? "Agent mode executes real actions (find/count/resend/retry) and writes audit logs."
+                        : "Enable Admin Agent in setup before running commands from UI or Telegram."
+                    }
+                  />
+                </div>
+
+                <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
+                  {adminAgentMessages.length === 0 && (
+                    <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
+                      <MonitorCog className="h-10 w-10" />
+                      <p className="text-sm max-w-xs">
+                        สั่งงาน Agent เช่น หา registration, นับจำนวน, resend ticket/email, หรือ retry bot
+                      </p>
+                    </div>
+                  )}
+                  {adminAgentMessages.map((msg, index) => (
+                    <div key={`${msg.timestamp}-${index}`} className="space-y-1">
+                      <ChatBubble
+                        text={msg.text}
+                        type={msg.role === "user" ? "outgoing" : "incoming"}
+                        timestamp={msg.timestamp}
+                      />
+                      {msg.role === "agent" && msg.actionName && (
+                        <div className="ml-2 flex flex-wrap items-center gap-2 pb-2">
+                          <StatusBadge tone={msg.actionSource === "rule" ? "amber" : "violet"}>
+                            {formatAdminActionLabel(msg.actionName)}
+                          </StatusBadge>
+                          <StatusBadge tone="neutral">{msg.actionSource || "llm"}</StatusBadge>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {adminAgentTyping && (
+                    <div className="flex justify-start mb-4">
+                      <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-100 flex gap-1">
+                        <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
+                        <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.2s]" />
+                        <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.4s]" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
+                  <div className="flex gap-2 lg:pr-16">
+                    <input
+                      type="text"
+                      value={adminAgentInputText}
+                      onChange={(e) => setAdminAgentInputText(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleAdminAgentSend()}
+                      placeholder="สั่งงาน Admin Agent..."
+                      className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <ActionButton
+                      onClick={handleAdminAgentSend}
+                      disabled={!adminAgentInputText.trim() || adminAgentTyping || settings.admin_agent_enabled !== "1"}
+                      tone="violet"
+                      active
+                      className="px-3"
+                    >
+                      <Send className="w-5 h-5" />
+                    </ActionButton>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Bot className="w-5 h-5 text-violet-600" />
+                        Agent Runtime
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Separate prompt/model and routing for Admin Agent, independent from event chat bot setup.
+                      </p>
+                    </div>
+                    <ActionButton
+                      onClick={() => void saveAgentSettings()}
+                      disabled={saving || !canEditSettings}
+                      tone="violet"
+                      active
+                      className="w-full text-sm sm:w-auto"
+                    >
+                      {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Save Agent Setup
+                    </ActionButton>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <label className="flex items-start gap-3 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={settings.admin_agent_enabled === "1"}
+                        onChange={(e) => setSettings({ ...settings, admin_agent_enabled: e.target.checked ? "1" : "0" })}
+                        disabled={!canEditSettings}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                      />
+                      <span>
+                        <span className="font-semibold text-slate-800">Enable Admin Agent</span>
+                        <span className="mt-0.5 block text-xs text-slate-500">Controls both in-app Agent console and external Agent endpoints.</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Agent Planner Prompt</label>
+                    <textarea
+                      value={settings.admin_agent_system_prompt}
+                      onChange={(e) => setSettings({ ...settings, admin_agent_system_prompt: e.target.value })}
+                      disabled={!canEditSettings}
+                      className="w-full h-28 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-violet-500"
+                      placeholder="Rules specific to Admin Agent command planning"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Agent Model Override</label>
+                      <input
+                        value={settings.admin_agent_model}
+                        onChange={(e) => setSettings({ ...settings, admin_agent_model: e.target.value })}
+                        disabled={!canEditSettings}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
+                        placeholder="Blank = use event/global model"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Default Event ID (External)</label>
+                      <div className="flex gap-2">
+                        <input
+                          value={settings.admin_agent_default_event_id}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_default_event_id: e.target.value })}
+                          disabled={!canEditSettings}
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
+                          placeholder="evt_default"
+                        />
+                        <ActionButton
+                          onClick={() => setSettings({ ...settings, admin_agent_default_event_id: selectedEventId })}
+                          disabled={!canEditSettings || !selectedEventId}
+                          tone="neutral"
+                          className="shrink-0 px-2.5 text-[11px]"
+                        >
+                          Use Current
+                        </ActionButton>
+                      </div>
+                    </div>
+                  </div>
+
+                  {!canEditSettings && (
+                    <p className="text-xs text-amber-600">Only owner/admin can change Agent settings. Operator can still run commands.</p>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <Link2 className="w-5 h-5 text-violet-600" />
+                      External Agent Channel (Telegram)
+                    </h3>
+                    <p className="text-sm text-slate-500">
+                      Dedicated Telegram webhook for Admin Agent commands, separate from event chat channels.
+                    </p>
+                  </div>
+
+                  <label className="flex items-start gap-3 text-sm rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={settings.admin_agent_telegram_enabled === "1"}
+                      onChange={(e) => setSettings({ ...settings, admin_agent_telegram_enabled: e.target.checked ? "1" : "0" })}
+                      disabled={!canEditSettings}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                    />
+                    <span>
+                      <span className="font-semibold text-slate-800">Enable Telegram Access</span>
+                      <span className="mt-0.5 block text-xs text-slate-500">When enabled, incoming Telegram updates can run Admin Agent commands.</span>
+                    </span>
+                  </label>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Telegram Bot Token</label>
+                      <input
+                        type="password"
+                        value={settings.admin_agent_telegram_bot_token}
+                        onChange={(e) => setSettings({ ...settings, admin_agent_telegram_bot_token: e.target.value })}
+                        disabled={!canEditSettings}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
+                        placeholder="123456:ABC..."
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Webhook Secret Token</label>
+                      <input
+                        type="password"
+                        value={settings.admin_agent_telegram_webhook_secret}
+                        onChange={(e) => setSettings({ ...settings, admin_agent_telegram_webhook_secret: e.target.value })}
+                        disabled={!canEditSettings}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
+                        placeholder="Set same value in Telegram setWebhook secret_token"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Allowed Chat IDs</label>
+                      <textarea
+                        value={settings.admin_agent_telegram_allowed_chat_ids}
+                        onChange={(e) => setSettings({ ...settings, admin_agent_telegram_allowed_chat_ids: e.target.value })}
+                        disabled={!canEditSettings}
+                        className="w-full h-20 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
+                        placeholder="One chat ID per line. Leave blank = allow all."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 space-y-2">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Telegram Webhook URL</p>
+                    <code className="block break-all text-xs text-slate-700">{adminAgentTelegramWebhookUrl}</code>
+                    <div className="flex flex-wrap gap-2">
+                      <ActionButton
+                        onClick={() => copyToClipboard(adminAgentTelegramWebhookUrl)}
+                        tone="neutral"
+                        className="text-xs px-2.5 py-1.5 min-h-0"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        Copy URL
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => copyToClipboard(adminAgentTelegramSetWebhookUrl)}
+                        tone="neutral"
+                        disabled={!adminAgentTelegramSetWebhookUrl}
+                        className="text-xs px-2.5 py-1.5 min-h-0"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        Copy setWebhook
+                      </ActionButton>
+                    </div>
+                    {adminAgentTelegramSetWebhookUrl && (
+                      <code className="block break-all text-[11px] text-slate-500">{adminAgentTelegramSetWebhookUrl}</code>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-slate-500">
+                    Telegram setup: call <code>setWebhook</code> with this URL and the same secret token, then send commands via your allowlisted chat.
+                  </p>
+                </div>
+
+                {settingsMessage && (
+                  <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                    {settingsMessage}
+                  </p>
+                )}
               </div>
             </motion.div>
           )}
