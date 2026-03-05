@@ -236,6 +236,7 @@ Current Event Details:
 - Description: ${settings.event_description || ""}
 - Travel: ${settings.event_travel || ""}
 - Registration Limit: ${settings.reg_limit || ""}
+- Duplicate Name Guard Right Now: ${isTruthySetting(settings.reg_unique_name ?? "1") ? "enabled" : "disabled"}
 - Active Registrations Right Now: ${capacitySnapshot?.activeCount ?? 0}
 - Cancelled Registrations Right Now: ${capacitySnapshot?.cancelledCount ?? 0}
 - Remaining Seats Right Now: ${capacitySnapshot?.remainingCount == null ? "unlimited" : capacitySnapshot.remainingCount}
@@ -266,6 +267,7 @@ function getSystemInstruction(
     "If event status is inactive, explain that the event is currently inactive and registration is temporarily unavailable.",
     "If event status is cancelled, clearly explain that the event has been cancelled.",
     "If event status is closed, clearly explain that the event has already ended.",
+    "Respect the Duplicate Name Guard Right Now field. If it is enabled, do not imply the same first+last name can register multiple times in the same event.",
     "Respect the Registration Status Right Now field. If it is invalid, explain that the registration schedule is misconfigured. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
     "Respect the Registration Availability Right Now field. If it is full, clearly explain that registration is currently unavailable because capacity is full.",
     "Do not volunteer exact remaining seat counts unless the user asks, but never imply registration is still open when capacity is full.",
@@ -284,6 +286,7 @@ function getSystemInstruction(
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
     "Politely ask for any missing information one by one.",
     "If registration fails (e.g. limit reached or period closed), explain why to the user.",
+    "If registration is rejected because the same first+last name already exists, explain that this event blocks duplicate full names and ask for a different attendee name.",
     "If a user wants to cancel, use the cancelRegistration tool with their ID.",
   ].join("\n\n");
 }

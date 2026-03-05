@@ -1344,6 +1344,7 @@ const INITIAL_SETTINGS: Settings = {
   event_travel: "",
   confirmation_email_enabled: "0",
   confirmation_email_subject: "Your registration for {{event_name}}",
+  reg_unique_name: "1",
   reg_limit: "200",
   reg_start: "",
   reg_end: "",
@@ -1363,6 +1364,7 @@ function getBlankEventScopedSettings() {
     event_travel: "",
     confirmation_email_enabled: "0",
     confirmation_email_subject: "Your registration for {{event_name}}",
+    reg_unique_name: "1",
     reg_limit: "200",
     reg_start: "",
     reg_end: "",
@@ -1380,6 +1382,7 @@ function getBlankEventScopedSettings() {
     | "event_travel"
     | "confirmation_email_enabled"
     | "confirmation_email_subject"
+    | "reg_unique_name"
     | "reg_limit"
     | "reg_start"
     | "reg_end"
@@ -1397,6 +1400,7 @@ const EVENT_DETAIL_SETTINGS_KEYS = [
   "event_travel",
   "confirmation_email_enabled",
   "confirmation_email_subject",
+  "reg_unique_name",
   "reg_limit",
   "reg_start",
   "reg_end",
@@ -1439,6 +1443,10 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.confirmation_email_subject === "string" && data.confirmation_email_subject.trim()
         ? data.confirmation_email_subject
         : INITIAL_SETTINGS.confirmation_email_subject,
+    reg_unique_name:
+      typeof data.reg_unique_name === "string" && data.reg_unique_name.trim()
+        ? data.reg_unique_name.trim()
+        : INITIAL_SETTINGS.reg_unique_name,
     reg_limit:
       typeof data.reg_limit === "string" && data.reg_limit.trim() ? data.reg_limit.trim() : INITIAL_SETTINGS.reg_limit,
     reg_start: normalizeDateTimeLocalValue(typeof data.reg_start === "string" ? data.reg_start : ""),
@@ -3198,6 +3206,7 @@ export default function App() {
       "event_travel",
       "confirmation_email_enabled",
       "confirmation_email_subject",
+      "reg_unique_name",
       "reg_limit",
       "reg_start",
       "reg_end",
@@ -5680,6 +5689,30 @@ export default function App() {
                         <p className="mt-1 text-[11px] text-slate-500">
                           Auto-suggested to 17:00 on the day before the event so registration does not stay open into the event itself.
                         </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">Duplicate Name Guard</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Block repeated registrations with the same first and last name in this event. Phone and email can still repeat.
+                          </p>
+                        </div>
+                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={settings.reg_unique_name !== "0"}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                reg_unique_name: e.target.checked ? "1" : "0",
+                              })
+                            }
+                          />
+                          One ticket per full name
+                        </label>
                       </div>
                     </div>
                     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">

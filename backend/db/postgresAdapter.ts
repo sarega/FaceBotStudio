@@ -66,6 +66,21 @@ function parseRegistrationLimit(value: unknown) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+function normalizeRegistrationNamePart(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeRegistrationNameKey(firstName: unknown, lastName: unknown) {
+  return `${normalizeRegistrationNamePart(firstName).toLowerCase()}|${normalizeRegistrationNamePart(lastName).toLowerCase()}`;
+}
+
+function isTruthySettingValue(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function slugifyText(value: string) {
   return String(value || "")
     .toLowerCase()
@@ -418,8 +433,8 @@ export class PostgresAppDatabase implements AppDatabase {
   async createRegistration(input: RegistrationInput): Promise<RegistrationResult> {
     const senderId = String(input.sender_id || "").trim();
     const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-    const firstName = String(input.first_name || "").trim();
-    const lastName = String(input.last_name || "").trim();
+    const firstName = normalizeRegistrationNamePart(input.first_name);
+    const lastName = normalizeRegistrationNamePart(input.last_name);
     const phone = String(input.phone || "").trim();
     const email = input.email == null ? "" : String(input.email).trim();
 
@@ -457,22 +472,39 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const limit = parseRegistrationLimit(settings.reg_limit);
+    const enforceUniqueName = settings.reg_unique_name == null || isTruthySettingValue(settings.reg_unique_name);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("SELECT id FROM events WHERE id = $1 FOR UPDATE", [eventId]);
 
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const countResult = await client.query<{ count: string }>(
-          "SELECT COUNT(*)::text AS count FROM registrations WHERE event_id = $1 AND status != 'cancelled'",
-          [eventId],
-        );
-        const activeCount = Number.parseInt(countResult.rows[0]?.count || "0", 10);
-        if (limit !== null && activeCount >= limit) {
-          await client.query("ROLLBACK");
-          return { statusCode: 400, content: { error: "Registration limit reached" } };
-        }
+      const activeRowsResult = await client.query<{ id: string; first_name: string; last_name: string }>(
+        "SELECT id, first_name, last_name FROM registrations WHERE event_id = $1 AND status != 'cancelled'",
+        [eventId],
+      );
+      const activeRows = activeRowsResult.rows || [];
 
+      if (enforceUniqueName) {
+        const nameKey = normalizeRegistrationNameKey(firstName, lastName);
+        const duplicate = activeRows.find((row) => normalizeRegistrationNameKey(row.first_name, row.last_name) === nameKey);
+        if (duplicate?.id) {
+          await client.query("ROLLBACK");
+          return {
+            statusCode: 409,
+            content: {
+              error: "An attendee with this first and last name is already registered for this event",
+              duplicate_registration_id: String(duplicate.id || "").trim().toUpperCase(),
+            },
+          };
+        }
+      }
+
+      if (limit !== null && activeRows.length >= limit) {
+        await client.query("ROLLBACK");
+        return { statusCode: 400, content: { error: "Registration limit reached" } };
+      }
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
         const id = generateRegistrationId();
         try {
           await client.query(

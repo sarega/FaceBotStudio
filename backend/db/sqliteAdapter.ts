@@ -63,6 +63,21 @@ function parseRegistrationLimit(value: unknown) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+function normalizeRegistrationNamePart(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeRegistrationNameKey(firstName: unknown, lastName: unknown) {
+  return `${normalizeRegistrationNamePart(firstName).toLowerCase()}|${normalizeRegistrationNamePart(lastName).toLowerCase()}`;
+}
+
+function isTruthySettingValue(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function slugifyText(value: string) {
   return String(value || "")
     .toLowerCase()
@@ -644,8 +659,8 @@ export class SqliteAppDatabase implements AppDatabase {
   async createRegistration(input: RegistrationInput): Promise<RegistrationResult> {
     const senderId = String(input.sender_id || "").trim();
     const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-    const firstName = String(input.first_name || "").trim();
-    const lastName = String(input.last_name || "").trim();
+    const firstName = normalizeRegistrationNamePart(input.first_name);
+    const lastName = normalizeRegistrationNamePart(input.last_name);
     const phone = String(input.phone || "").trim();
     const email = input.email == null ? "" : String(input.email).trim();
 
@@ -671,11 +686,26 @@ export class SqliteAppDatabase implements AppDatabase {
     }
 
     const settings = await this.getSettingsMap(eventId);
-    const countRow = this.db.prepare(
-      "SELECT COUNT(*) as count FROM registrations WHERE event_id = ? AND status != 'cancelled'",
-    ).get(eventId) as { count: number };
+    const activeRows = this.db.prepare(
+      "SELECT id, first_name, last_name FROM registrations WHERE event_id = ? AND status != 'cancelled'",
+    ).all(eventId) as Array<{ id: string; first_name: string; last_name: string }>;
+    const enforceUniqueName = settings.reg_unique_name == null || isTruthySettingValue(settings.reg_unique_name);
+    if (enforceUniqueName) {
+      const nameKey = normalizeRegistrationNameKey(firstName, lastName);
+      const duplicate = activeRows.find((row) => normalizeRegistrationNameKey(row.first_name, row.last_name) === nameKey);
+      if (duplicate?.id) {
+        return {
+          statusCode: 409,
+          content: {
+            error: "An attendee with this first and last name is already registered for this event",
+            duplicate_registration_id: String(duplicate.id || "").trim().toUpperCase(),
+          },
+        };
+      }
+    }
+
     const limit = parseRegistrationLimit(settings.reg_limit);
-    if (limit !== null && countRow.count >= limit) {
+    if (limit !== null && activeRows.length >= limit) {
       return { statusCode: 400, content: { error: "Registration limit reached" } };
     }
 
