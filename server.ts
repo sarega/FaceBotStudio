@@ -130,6 +130,34 @@ type ToolExecutionBundle = {
   ticketRegistrationIds: string[];
 };
 
+type AdminAgentActionName =
+  | "find_registration"
+  | "count_registrations"
+  | "resend_ticket"
+  | "resend_email"
+  | "retry_bot";
+
+type AdminAgentToolCall = {
+  name: AdminAgentActionName;
+  args: Record<string, unknown>;
+  source: "llm" | "rule";
+};
+
+type AdminAgentPlannerResult = {
+  toolCall: AdminAgentToolCall | null;
+  assistantText: string;
+  meta?: {
+    model?: string;
+    provider?: string;
+    usage?: {
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      estimated_cost_usd: number;
+    };
+  };
+};
+
 type ManualOutboundTarget = {
   platform: ChannelPlatform;
   eventId: string;
@@ -809,6 +837,76 @@ function extractAssistantText(content: unknown) {
   return "";
 }
 
+const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
+  "find_registration",
+  "count_registrations",
+  "resend_ticket",
+  "resend_email",
+  "retry_bot",
+]);
+
+function normalizeComparableText(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeOptionalText(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  return normalized || "";
+}
+
+function normalizeRegistrationId(value: unknown) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return /^REG-[A-Z0-9]+$/.test(normalized) ? normalized : "";
+}
+
+function extractRegistrationId(value: unknown) {
+  const match = String(value ?? "").toUpperCase().match(/\bREG-[A-Z0-9]{4,}\b/);
+  return match ? match[0] : "";
+}
+
+function normalizeRegistrationStatusInput(value: unknown): RegistrationStatus | null {
+  const normalized = normalizeComparableText(value);
+  if (normalized === "registered" || normalized === "cancelled" || normalized === "checked-in") {
+    return normalized;
+  }
+  return null;
+}
+
+function parsePositiveInteger(value: unknown, fallbackValue: number, maxValue: number) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallbackValue;
+  return Math.min(parsed, maxValue);
+}
+
+function formatRegistrationDisplayName(registration: RegistrationRow) {
+  const fullName = `${registration.first_name || ""} ${registration.last_name || ""}`.trim();
+  return fullName || registration.id;
+}
+
+function serializeAdminRegistration(registration: RegistrationRow) {
+  return {
+    id: registration.id,
+    sender_id: registration.sender_id,
+    first_name: registration.first_name,
+    last_name: registration.last_name,
+    full_name: formatRegistrationDisplayName(registration),
+    phone: registration.phone || "",
+    email: registration.email || "",
+    status: registration.status,
+    timestamp: registration.timestamp,
+  };
+}
+
+function normalizeChannelPlatformArg(value: unknown): ChannelPlatform | null {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  return ALLOWED_CHANNEL_PLATFORMS.includes(raw as ChannelPlatform) ? (raw as ChannelPlatform) : null;
+}
+
 function escapeXml(value: unknown) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -1432,6 +1530,606 @@ async function retryBotReplyForOutboundTarget(target: ManualOutboundTarget) {
       ticket_count: uniqueTicketIds.length,
     };
   });
+}
+
+function formatAdminAgentRegistrationLine(registration: RegistrationRow) {
+  return `${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status}`;
+}
+
+function buildAdminAgentFindReply(matches: RegistrationRow[], totalMatches: number, limit: number, filters: string[]) {
+  if (totalMatches === 0) {
+    return filters.length > 0
+      ? "ไม่พบข้อมูลตามเงื่อนไขที่ระบุในอีเวนต์นี้"
+      : "ยังไม่มีรายชื่อในอีเวนต์นี้";
+  }
+
+  const header = filters.length > 0
+    ? `พบ ${totalMatches} รายการ (${filters.join(", ")})`
+    : `รายชื่อล่าสุด ${Math.min(matches.length, limit)} รายการ`;
+  const lines = matches.slice(0, 5).map((registration, index) => `${index + 1}. ${formatAdminAgentRegistrationLine(registration)}`);
+  const truncatedNote = totalMatches > matches.length
+    ? `\nแสดง ${matches.length} จาก ${totalMatches} รายการ`
+    : "";
+  return `${header}\n${lines.join("\n")}${truncatedNote}`;
+}
+
+function buildRegistrationLookupFilters(args: Record<string, unknown>, rawMessage: string) {
+  const registrationId =
+    normalizeRegistrationId(args.registration_id)
+    || normalizeRegistrationId(args.id)
+    || extractRegistrationId(rawMessage);
+  const senderId = normalizeOptionalText(args.sender_id);
+  const fullName = normalizeComparableText(
+    normalizeOptionalText(args.full_name)
+      || `${normalizeOptionalText(args.first_name)} ${normalizeOptionalText(args.last_name)}`.trim(),
+  );
+  const query = normalizeComparableText(args.query);
+  const phone = normalizeComparableText(args.phone);
+  const email = normalizeComparableText(args.email);
+  const status = normalizeRegistrationStatusInput(args.status);
+  const limit = parsePositiveInteger(args.limit, 8, 30);
+
+  return {
+    registrationId,
+    senderId,
+    fullName,
+    query,
+    phone,
+    email,
+    status,
+    limit,
+  };
+}
+
+async function findRegistrationsForAdminAction(
+  eventId: string,
+  args: Record<string, unknown>,
+  rawMessage: string,
+  options?: { defaultToRecent?: boolean; limit?: number },
+) {
+  const rows = await appDb.listRegistrations(undefined, eventId);
+  const filters = buildRegistrationLookupFilters(args, rawMessage);
+  const limit = options?.limit || filters.limit || 8;
+  let matches = rows.slice();
+  const usedFilters: string[] = [];
+
+  if (filters.registrationId) {
+    matches = matches.filter((row) => String(row.id || "").trim().toUpperCase() === filters.registrationId);
+    usedFilters.push(`id=${filters.registrationId}`);
+  }
+  if (filters.senderId) {
+    matches = matches.filter((row) => String(row.sender_id || "").trim() === filters.senderId);
+    usedFilters.push(`sender=${filters.senderId}`);
+  }
+  if (filters.fullName) {
+    matches = matches.filter((row) =>
+      normalizeComparableText(`${row.first_name || ""} ${row.last_name || ""}`) === filters.fullName,
+    );
+    usedFilters.push(`name="${filters.fullName}"`);
+  }
+  if (filters.phone) {
+    matches = matches.filter((row) => normalizeComparableText(row.phone) === filters.phone);
+    usedFilters.push(`phone=${filters.phone}`);
+  }
+  if (filters.email) {
+    matches = matches.filter((row) => normalizeComparableText(row.email) === filters.email);
+    usedFilters.push(`email=${filters.email}`);
+  }
+  if (filters.status) {
+    matches = matches.filter((row) => row.status === filters.status);
+    usedFilters.push(`status=${filters.status}`);
+  }
+
+  if (filters.query && !filters.registrationId && !filters.fullName && !filters.phone && !filters.email) {
+    const query = filters.query;
+    matches = matches.filter((row) => {
+      const haystack = [
+        row.id,
+        row.first_name,
+        row.last_name,
+        `${row.first_name || ""} ${row.last_name || ""}`,
+        row.phone,
+        row.email,
+        row.sender_id,
+      ]
+        .map((value) => normalizeComparableText(value))
+        .join("\n");
+      return haystack.includes(query);
+    });
+    usedFilters.push(`query="${query}"`);
+  }
+
+  if (usedFilters.length === 0 && options?.defaultToRecent) {
+    return {
+      totalMatches: rows.length,
+      matches: rows.slice(0, Math.min(limit, rows.length)),
+      usedFilters,
+      limit,
+    };
+  }
+
+  return {
+    totalMatches: matches.length,
+    matches: matches.slice(0, Math.min(limit, matches.length)),
+    usedFilters,
+    limit,
+  };
+}
+
+async function resolveSingleRegistrationForAdminAction(eventId: string, args: Record<string, unknown>, rawMessage: string) {
+  const idFromArgs =
+    normalizeRegistrationId(args.registration_id)
+    || normalizeRegistrationId(args.id)
+    || extractRegistrationId(rawMessage);
+
+  if (idFromArgs) {
+    const registration = await getRegistrationById(idFromArgs);
+    if (!registration) {
+      throw new Error(`Registration ${idFromArgs} was not found`);
+    }
+    const registrationEventId = String(registration.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    if (registrationEventId !== eventId) {
+      throw new Error(`Registration ${idFromArgs} does not belong to the selected event`);
+    }
+    return registration;
+  }
+
+  const lookup = await findRegistrationsForAdminAction(eventId, args, rawMessage, { defaultToRecent: false, limit: 25 });
+  if (lookup.totalMatches === 1 && lookup.matches[0]) {
+    return lookup.matches[0];
+  }
+  if (lookup.totalMatches > 1) {
+    throw new Error("Multiple registrations matched. Please specify registration_id");
+  }
+
+  const senderId = normalizeOptionalText(args.sender_id);
+  if (senderId) {
+    const rows = await appDb.listRegistrations(undefined, eventId);
+    const latestFromSender = rows.find((row) => String(row.sender_id || "").trim() === senderId);
+    if (latestFromSender) {
+      return latestFromSender;
+    }
+  }
+
+  throw new Error("Registration ID is required (example: REG-XXXXXX)");
+}
+
+async function resolveManualTargetFromRecentConversation(options: {
+  eventId: string;
+  senderId: string;
+  externalId?: string;
+  platform?: ChannelPlatform | null;
+}) {
+  const eventId = String(options.eventId || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+  const senderId = normalizeOptionalText(options.senderId);
+  const externalId = normalizeOptionalText(options.externalId);
+  const platformHint = options.platform || undefined;
+
+  if (!senderId) {
+    throw new Error("Sender ID is required");
+  }
+
+  if (externalId) {
+    return resolveManualOutboundTarget(eventId, senderId, externalId, platformHint);
+  }
+
+  const rows = await appDb.getConversationRowsForSender(senderId, 30, eventId);
+  const latestDestination = rows.find((row) => normalizeOptionalText(row.page_id));
+  if (!latestDestination) {
+    throw new Error("No recent channel destination found for this sender");
+  }
+
+  const inferredExternalId = normalizeOptionalText(latestDestination.page_id);
+  return resolveManualOutboundTarget(eventId, senderId, inferredExternalId, platformHint);
+}
+
+async function sendRegistrationConfirmationEmailManually(registrationId: string) {
+  const normalizedRegistrationId = normalizeRegistrationId(registrationId);
+  if (!normalizedRegistrationId) {
+    throw new Error("Valid registration ID is required");
+  }
+
+  const registration = await getRegistrationById(normalizedRegistrationId);
+  if (!registration) {
+    throw new Error(`Registration ${normalizedRegistrationId} was not found`);
+  }
+
+  const email = String(registration.email || "").trim();
+  if (!looksLikeEmailAddress(email)) {
+    throw new Error("This registration does not have a valid email");
+  }
+
+  const eventId = String(registration.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+  const settings = await getSettingsMap(eventId);
+  const subject = renderRegistrationConfirmationSubject(settings.confirmation_email_subject, registration, settings);
+  const kind = `manual_confirmation_${Date.now()}`;
+  const delivery = await appDb.createRegistrationEmailDelivery({
+    registration_id: registration.id,
+    event_id: eventId,
+    recipient_email: email,
+    kind,
+    subject,
+    provider: "resend",
+  });
+  if (!delivery) {
+    throw new Error("Failed to create email delivery record");
+  }
+
+  try {
+    const content = buildRegistrationConfirmationEmailContent(registration, settings, subject);
+    await sendResendEmail({
+      to: email,
+      subject,
+      text: content.text,
+      html: content.html,
+    });
+    await appDb.markRegistrationEmailDeliverySent(delivery.id, content.provider);
+    return {
+      registration,
+      recipient_email: email,
+      subject,
+      delivery_id: delivery.id,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await appDb.markRegistrationEmailDeliveryFailed(delivery.id, message, "resend");
+    throw new Error(`Failed to send confirmation email: ${message}`);
+  }
+}
+
+async function requestAdminAgentPlan(
+  message: string,
+  history: ChatHistoryMessage[],
+  settings: Record<string, any>,
+  usageContext?: LlmUsageContext,
+): Promise<AdminAgentPlannerResult> {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured in .env");
+  }
+
+  const model = (typeof settings.llm_model === "string" && settings.llm_model.trim())
+    ? settings.llm_model.trim()
+    : (typeof settings.global_llm_model === "string" && settings.global_llm_model.trim())
+    ? settings.global_llm_model.trim()
+    : DEFAULT_OPENROUTER_MODEL;
+
+  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: openRouterHeaders(),
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are the Admin Agent planner for an event registration operations system.",
+            "Allowed actions only: find_registration, count_registrations, resend_ticket, resend_email, retry_bot.",
+            "When enough information exists, return exactly one tool call.",
+            "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
+            "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
+            "When matching by name, pass full_name or first_name/last_name.",
+            "When asked to continue a stuck chat, use retry_bot.",
+          ].join("\n"),
+        },
+        ...normalizeHistoryForOpenRouter(history),
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "find_registration",
+            description: "Find registrations in the selected event by ID, full name, sender ID, phone, email, or free-text query.",
+            parameters: {
+              type: "object",
+              properties: {
+                registration_id: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                sender_id: { type: "string" },
+                phone: { type: "string" },
+                email: { type: "string" },
+                query: { type: "string" },
+                status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+                limit: { type: "integer", minimum: 1, maximum: 30 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "count_registrations",
+            description: "Count registrations in the selected event, optionally by status.",
+            parameters: {
+              type: "object",
+              properties: {
+                status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "resend_ticket",
+            description: "Resend ticket artifacts to a user on their existing channel.",
+            parameters: {
+              type: "object",
+              properties: {
+                registration_id: { type: "string" },
+                sender_id: { type: "string" },
+                external_id: { type: "string" },
+                platform: { type: "string", enum: ["facebook", "line_oa", "instagram", "whatsapp", "telegram", "web_chat"] },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                query: { type: "string" },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "resend_email",
+            description: "Resend registration confirmation email to the attendee email in the selected event.",
+            parameters: {
+              type: "object",
+              properties: {
+                registration_id: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                sender_id: { type: "string" },
+                query: { type: "string" },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "retry_bot",
+            description: "Retry the bot for a sender, using the latest failed or latest incoming turn.",
+            parameters: {
+              type: "object",
+              properties: {
+                sender_id: { type: "string" },
+                external_id: { type: "string" },
+                platform: { type: "string", enum: ["facebook", "line_oa", "instagram", "whatsapp", "telegram", "web_chat"] },
+                registration_id: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                query: { type: "string" },
+              },
+            },
+          },
+        },
+      ],
+      tool_choice: "auto",
+      parallel_tool_calls: false,
+    }),
+  });
+
+  const payload = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) {
+    throw new Error(payload?.error?.message || "OpenRouter admin planner request failed");
+  }
+
+  const usage = normalizeOpenRouterUsage(payload);
+  const assistantMessage = payload?.choices?.[0]?.message || {};
+  const assistantText = extractAssistantText(assistantMessage.content).trim();
+  const firstToolCall = Array.isArray(assistantMessage.tool_calls) ? assistantMessage.tool_calls[0] : null;
+  const callName = String(firstToolCall?.function?.name || "").trim() as AdminAgentActionName;
+  const callArgs = parseToolArgs(firstToolCall?.function?.arguments);
+
+  if (usageContext) {
+    try {
+      await appDb.recordLlmUsage({
+        event_id: usageContext.eventId || null,
+        actor_user_id: usageContext.actorUserId || null,
+        source: usageContext.source,
+        provider: "openrouter",
+        model: String(payload?.model || model),
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        estimated_cost_usd: usage.estimated_cost_usd,
+        metadata: {
+          history_length: history.length,
+          ...usageContext.metadata,
+        },
+      });
+    } catch (error) {
+      console.warn("Failed to record admin planner LLM usage:", error);
+    }
+  }
+
+  return {
+    toolCall: ADMIN_AGENT_ACTION_SET.has(callName)
+      ? {
+          name: callName,
+          args: callArgs,
+          source: "llm",
+        }
+      : null,
+    assistantText,
+    meta: {
+      model: payload?.model || model,
+      provider: "openrouter",
+      usage,
+    },
+  };
+}
+
+async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCall, rawMessage: string) {
+  switch (call.name) {
+    case "find_registration": {
+      const lookup = await findRegistrationsForAdminAction(eventId, call.args, rawMessage, { defaultToRecent: true });
+      return {
+        reply: buildAdminAgentFindReply(lookup.matches, lookup.totalMatches, lookup.limit, lookup.usedFilters),
+        result: {
+          event_id: eventId,
+          total_matches: lookup.totalMatches,
+          limit: lookup.limit,
+          filters: lookup.usedFilters,
+          matches: lookup.matches.map(serializeAdminRegistration),
+        },
+        targetType: "event",
+        targetId: eventId,
+      };
+    }
+    case "count_registrations": {
+      const rows = await appDb.listRegistrations(undefined, eventId);
+      const totals = {
+        total: rows.length,
+        active: rows.filter((row) => row.status !== "cancelled").length,
+        registered: rows.filter((row) => row.status === "registered").length,
+        checked_in: rows.filter((row) => row.status === "checked-in").length,
+        cancelled: rows.filter((row) => row.status === "cancelled").length,
+      };
+      const status = normalizeRegistrationStatusInput(call.args.status);
+      const statusCount = status ? rows.filter((row) => row.status === status).length : null;
+      return {
+        reply: status
+          ? `จำนวนผู้ลงทะเบียนสถานะ ${status}: ${statusCount ?? 0} คน`
+          : `สรุปผู้ลงทะเบียน: ทั้งหมด ${totals.total} | active ${totals.active} | registered ${totals.registered} | checked-in ${totals.checked_in} | cancelled ${totals.cancelled}`,
+        result: {
+          event_id: eventId,
+          ...totals,
+          ...(status ? { status, count: statusCount } : {}),
+        },
+        targetType: "event",
+        targetId: eventId,
+      };
+    }
+    case "resend_ticket": {
+      const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+      const senderId = normalizeOptionalText(call.args.sender_id) || normalizeOptionalText(registration.sender_id);
+      if (!senderId) {
+        throw new Error("Sender ID is required to resend ticket");
+      }
+      const target = await resolveManualTargetFromRecentConversation({
+        eventId,
+        senderId,
+        externalId: normalizeOptionalText(call.args.external_id),
+        platform: normalizeChannelPlatformArg(call.args.platform),
+      });
+      const resend = await resendTicketArtifactsToOutboundTarget(target, registration.id);
+      return {
+        reply: `ส่งตั๋วใหม่แล้ว: ${formatRegistrationDisplayName(registration)} (${registration.id})`,
+        result: {
+          event_id: eventId,
+          registration: serializeAdminRegistration(registration),
+          target: {
+            platform: target.platform,
+            sender_id: target.senderId,
+            external_id: target.externalId,
+          },
+          steps: resend.steps,
+        },
+        targetType: "registration",
+        targetId: registration.id,
+      };
+    }
+    case "resend_email": {
+      const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+      const emailResult = await sendRegistrationConfirmationEmailManually(registration.id);
+      return {
+        reply: `ส่งอีเมลยืนยันใหม่แล้ว: ${emailResult.recipient_email} (${registration.id})`,
+        result: {
+          event_id: eventId,
+          registration: serializeAdminRegistration(registration),
+          recipient_email: emailResult.recipient_email,
+          subject: emailResult.subject,
+          delivery_id: emailResult.delivery_id,
+        },
+        targetType: "registration",
+        targetId: registration.id,
+      };
+    }
+    case "retry_bot": {
+      let senderId = normalizeOptionalText(call.args.sender_id);
+      if (!senderId) {
+        const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+        senderId = normalizeOptionalText(registration.sender_id);
+      }
+      if (!senderId) {
+        throw new Error("Sender ID is required to retry bot");
+      }
+      const target = await resolveManualTargetFromRecentConversation({
+        eventId,
+        senderId,
+        externalId: normalizeOptionalText(call.args.external_id),
+        platform: normalizeChannelPlatformArg(call.args.platform),
+      });
+      const retry = await retryBotReplyForOutboundTarget(target);
+      return {
+        reply: `กระตุ้นบอทให้ตอบต่อแล้วสำหรับ sender ${senderId}`,
+        result: {
+          event_id: eventId,
+          sender_id: senderId,
+          target: {
+            platform: target.platform,
+            external_id: target.externalId,
+          },
+          ...retry,
+        },
+        targetType: "message_sender",
+        targetId: senderId,
+      };
+    }
+    default:
+      throw new Error("Unsupported admin action");
+  }
+}
+
+function getAdminAgentErrorStatusCode(message: string) {
+  const lower = String(message || "").toLowerCase();
+  if (
+    lower.includes("required")
+    || lower.includes("invalid")
+    || lower.includes("not found")
+    || lower.includes("does not belong")
+    || lower.includes("multiple")
+    || lower.includes("no recent")
+    || lower.includes("missing")
+    || lower.includes("unsupported")
+    || lower.includes("no channel destination")
+  ) {
+    return 400;
+  }
+  return 500;
+}
+
+function summarizeAdminAgentResultForAudit(result: unknown) {
+  const summary: Record<string, unknown> = {};
+  if (!result || typeof result !== "object") return summary;
+  const value = result as Record<string, unknown>;
+  if (typeof value.total_matches === "number") summary.total_matches = value.total_matches;
+  if (typeof value.sender_id === "string" && value.sender_id.trim()) summary.sender_id = value.sender_id.trim();
+  if (value.registration && typeof value.registration === "object") {
+    const registration = value.registration as Record<string, unknown>;
+    if (typeof registration.id === "string" && registration.id.trim()) {
+      summary.registration_id = registration.id.trim();
+    }
+  }
+  if (value.target && typeof value.target === "object") {
+    const target = value.target as Record<string, unknown>;
+    if (typeof target.platform === "string" && target.platform.trim()) {
+      summary.target_platform = target.platform.trim();
+    }
+    if (typeof target.external_id === "string" && target.external_id.trim()) {
+      summary.target_external_id = target.external_id.trim();
+    }
+  }
+  return summary;
 }
 
 async function getWebChatChannel(widgetKey?: string) {
@@ -5313,6 +6011,87 @@ async function startServer() {
       const message = error instanceof Error ? error.message : "Failed to get response from OpenRouter";
       const status = /OPENROUTER_API_KEY/.test(message) ? 400 : 500;
       res.status(status).json({ error: message });
+    }
+  });
+
+  app.post("/api/admin-agent/chat", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const body = req.body || {};
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+      if (!message) {
+        return res.status(400).json({ error: "Message is required" });
+      }
+
+      const history = Array.isArray(body.history) ? (body.history as ChatHistoryMessage[]) : [];
+      const eventId = typeof body.event_id === "string" && body.event_id.trim() ? body.event_id.trim() : DEFAULT_EVENT_ID;
+      const settings = (body.settings && typeof body.settings === "object")
+        ? body.settings as Record<string, any>
+        : await getSettingsMap(eventId);
+
+      const plan = await requestAdminAgentPlan(
+        message,
+        history,
+        settings,
+        {
+          eventId,
+          actorUserId: req.auth?.user.id || null,
+          source: "admin_agent_planner",
+          metadata: { mode: "planning" },
+        },
+      );
+
+      if (!plan.toolCall) {
+        return res.json({
+          reply: plan.assistantText || "ขอรายละเอียดเพิ่มอีกนิด เพื่อให้ผมสั่งงานต่อได้ถูกต้อง",
+          action: null,
+          result: null,
+          meta: plan.meta,
+        });
+      }
+
+      try {
+        const execution = await executeAdminAgentToolCall(eventId, plan.toolCall, message);
+        await recordAudit(
+          req,
+          "admin_agent.action_executed",
+          execution.targetType || "event",
+          execution.targetId || eventId,
+          {
+            event_id: eventId,
+            action: plan.toolCall.name,
+            source: plan.toolCall.source,
+            args: plan.toolCall.args,
+            result: summarizeAdminAgentResultForAudit(execution.result),
+          },
+        );
+        return res.json({
+          reply: execution.reply,
+          action: plan.toolCall,
+          result: execution.result,
+          meta: plan.meta,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to execute admin action";
+        await recordAudit(
+          req,
+          "admin_agent.action_failed",
+          "event",
+          eventId,
+          {
+            event_id: eventId,
+            action: plan.toolCall.name,
+            source: plan.toolCall.source,
+            args: plan.toolCall.args,
+            error: errorMessage,
+          },
+        );
+        return res.status(getAdminAgentErrorStatusCode(errorMessage)).json({ error: errorMessage });
+      }
+    } catch (error) {
+      console.error("Admin agent chat error:", error);
+      const message = error instanceof Error ? error.message : "Failed to process admin agent request";
+      const status = /OPENROUTER_API_KEY/.test(message) ? 400 : 500;
+      return res.status(status).json({ error: message });
     }
   });
 

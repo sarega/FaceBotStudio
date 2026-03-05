@@ -37,7 +37,7 @@ import {
   Power,
   X,
 } from "lucide-react";
-import { getChatResponse } from "./services/gemini";
+import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
 import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
@@ -65,6 +65,7 @@ type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "design" | "test" | "logs" | "settings" | "team" | "registrations" | "checkin";
+type TestConsoleMode = "bot" | "admin_agent";
 type EventWorkspaceFilter = "all" | EventStatus;
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
@@ -81,6 +82,14 @@ type WebhookConfigKey =
   | "telegram"
   | "webchat_config"
   | "webchat_message";
+
+type AdminAgentChatMessage = {
+  role: "user" | "agent";
+  text: string;
+  timestamp: string;
+  actionName?: string;
+  actionSource?: "llm" | "rule";
+};
 
 let qrReaderCtorPromise: Promise<typeof import("@zxing/browser").BrowserQRCodeReader> | null = null;
 
@@ -139,19 +148,19 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
   },
   test: {
     title: "Test Console Help",
-    summary: "Use the test surface to verify prompts, event context, and retrieval before exposing the flow to real users.",
+    summary: "Use this console for two modes: Bot Simulator (prompt testing) and Admin Agent (real operational commands).",
     points: [
       {
         label: "Probe behavior",
-        body: "Ask the bot representative questions and inspect whether the selected event is producing the right operational answers.",
+        body: "Bot Simulator lets you probe replies, prompt tone, and event context behavior before live traffic sees it.",
       },
       {
-        label: "Check retrieval",
-        body: "When debugging, compare the response with the active documents and chunk inspector to confirm the correct knowledge source was used.",
+        label: "Run operations",
+        body: "Admin Agent can execute controlled actions such as find registrations, count attendees, resend ticket/email, and retry stuck bot replies.",
       },
       {
-        label: "Keep it isolated",
-        body: "This tab is for simulation only. It should help verify behavior without changing production registrations or channels.",
+        label: "Choose mode carefully",
+        body: "Simulator is for testing. Admin Agent runs real actions in the selected event and records audit logs.",
       },
     ],
   },
@@ -1484,6 +1493,16 @@ function formatUsdCost(value: number) {
   return `$${numeric.toFixed(2)}`;
 }
 
+function formatAdminActionLabel(value: string | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return "action";
+  return raw
+    .replace(/_/g, " ")
+    .split(" ")
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : ""))
+    .join(" ");
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -1542,9 +1561,13 @@ export default function App() {
   const [knowledgeResetting, setKnowledgeResetting] = useState(false);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
+  const [testConsoleMode, setTestConsoleMode] = useState<TestConsoleMode>("bot");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [adminAgentMessages, setAdminAgentMessages] = useState<AdminAgentChatMessage[]>([]);
+  const [adminAgentInputText, setAdminAgentInputText] = useState("");
+  const [adminAgentTyping, setAdminAgentTyping] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedWebhookConfigKey, setSelectedWebhookConfigKey] = useState<WebhookConfigKey>("facebook");
   const [searchId, setSearchId] = useState("");
@@ -1666,6 +1689,7 @@ export default function App() {
   const registeredCount = registrations.filter((reg) => reg.status === "registered").length;
   const cancelledCount = registrations.filter((reg) => reg.status === "cancelled").length;
   const checkedInCount = registrations.filter((reg) => reg.status === "checked-in").length;
+  const activeTestMessageCount = testConsoleMode === "bot" ? testMessages.length : adminAgentMessages.length;
   const activeAttendeeCount = registrations.filter((reg) => reg.status !== "cancelled").length;
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
   const canUseQrScanner =
@@ -3815,6 +3839,59 @@ export default function App() {
     }
   };
 
+  const handleAdminAgentSend = async () => {
+    if (!adminAgentInputText.trim()) return;
+
+    const outgoingText = adminAgentInputText.trim();
+    const userMsg: AdminAgentChatMessage = {
+      role: "user",
+      text: outgoingText,
+      timestamp: new Date().toISOString(),
+    };
+    setAdminAgentMessages((prev) => [...prev, userMsg]);
+    setAdminAgentInputText("");
+    setAdminAgentTyping(true);
+
+    try {
+      const history = adminAgentMessages.map((msg) => ({
+        role: msg.role === "user" ? "user" as const : "model" as const,
+        parts: [{ text: msg.text }],
+      }));
+      const response = await getAdminAgentResponse(outgoingText, settings, history, selectedEventId);
+      const replyText = String(response.reply || "").trim() || "ดำเนินการแล้ว";
+
+      setAdminAgentMessages((prev) => [
+        ...prev,
+        {
+          role: "agent",
+          text: replyText,
+          timestamp: new Date().toISOString(),
+          actionName: response.action?.name || "",
+          actionSource: response.action?.source || "llm",
+        },
+      ]);
+
+      if (response.action?.name) {
+        void Promise.all([fetchMessages(selectedEventId), fetchRegistrations(selectedEventId), fetchEvents()]);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to run admin agent";
+      setAdminAgentMessages((prev) => [
+        ...prev,
+        {
+          role: "agent",
+          text: `Error: ${message}`,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      if (canEditSettings) {
+        void fetchLlmUsageSummary(selectedEventId);
+      }
+      setAdminAgentTyping(false);
+    }
+  };
+
   const handleLogin = async () => {
     setLoginSubmitting(true);
     setAuthError("");
@@ -3855,6 +3932,12 @@ export default function App() {
       setAuthStatus("unauthenticated");
       setAuthUser(null);
       setMessages([]);
+      setTestMessages([]);
+      setAdminAgentMessages([]);
+      setInputText("");
+      setAdminAgentInputText("");
+      setIsTyping(false);
+      setAdminAgentTyping(false);
       setRegistrations([]);
       setDocuments([]);
       setTeamUsers([]);
@@ -6855,14 +6938,21 @@ export default function App() {
               <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100">
-                    <Bot className="h-5 w-5 text-blue-600" />
+                    {testConsoleMode === "bot" ? (
+                      <Bot className="h-5 w-5 text-blue-600" />
+                    ) : (
+                      <MonitorCog className="h-5 w-5 text-blue-600" />
+                    )}
                   </div>
                   <div>
-                    <h3 className="font-semibold text-sm">Bot Simulator</h3>
+                    <h3 className="font-semibold text-sm">{testConsoleMode === "bot" ? "Bot Simulator" : "Admin Agent"}</h3>
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="w-2 h-2 bg-emerald-500 rounded-full" />
                       <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Active</span>
-                      <StatusBadge tone="neutral">{testMessages.length} msgs</StatusBadge>
+                      <StatusBadge tone={testConsoleMode === "bot" ? "blue" : "violet"}>
+                        {testConsoleMode === "bot" ? "simulator" : "agent"}
+                      </StatusBadge>
+                      <StatusBadge tone="neutral">{activeTestMessageCount} msgs</StatusBadge>
                       {selectedEvent && (
                         <>
                           <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
@@ -6878,76 +6968,148 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <InlineActionsMenu label="Actions" tone="neutral">
-                  <MenuActionItem
-                    onClick={() => setTestMessages([])}
-                    disabled={testMessages.length === 0}
-                    tone="neutral"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <span className="font-medium">Clear Chat</span>
-                  </MenuActionItem>
-                </InlineActionsMenu>
+                <div className="flex items-center gap-2">
+                  <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
+                    <button
+                      onClick={() => setTestConsoleMode("bot")}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                        testConsoleMode === "bot"
+                          ? "bg-blue-600 text-white"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      Simulator
+                    </button>
+                    <button
+                      onClick={() => setTestConsoleMode("admin_agent")}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                        testConsoleMode === "admin_agent"
+                          ? "bg-violet-600 text-white"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      Admin Agent
+                    </button>
+                  </div>
+                  <InlineActionsMenu label="Actions" tone="neutral">
+                    <MenuActionItem
+                      onClick={() => {
+                        if (testConsoleMode === "bot") {
+                          setTestMessages([]);
+                        } else {
+                          setAdminAgentMessages([]);
+                        }
+                      }}
+                      disabled={activeTestMessageCount === 0}
+                      tone="neutral"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span className="font-medium">Clear Chat</span>
+                    </MenuActionItem>
+                  </InlineActionsMenu>
+                </div>
               </div>
 
               <div className="border-b border-slate-100 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
-                <CompactGuardBar
-                  title="Simulation Guard"
-                  tone={eventOperatorGuard.tone}
-                  label={eventOperatorGuard.label}
-                  body={eventOperatorGuard.body}
-                />
+                {testConsoleMode === "bot" ? (
+                  <CompactGuardBar
+                    title="Simulation Guard"
+                    tone={eventOperatorGuard.tone}
+                    label={eventOperatorGuard.label}
+                    body={eventOperatorGuard.body}
+                  />
+                ) : (
+                  <CompactGuardBar
+                    title="Admin Agent Guard"
+                    tone="amber"
+                    label="live actions"
+                    body="Agent mode executes real operations on the selected event (find/count/resend/retry) and writes audit logs."
+                  />
+                )}
               </div>
 
               <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
-                {testMessages.length === 0 && (
-                  <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
-                    <MessageSquare className="h-10 w-10" />
-                    <p className="text-sm max-w-xs">Start a conversation to test your bot's custom context.</p>
-                  </div>
-                )}
-                {testMessages.map((msg, i) => {
-                  const text = msg.parts.find(p => p.text)?.text;
-                  const funcCall = msg.parts.find(p => p.functionCall)?.functionCall;
-                  const funcResp = msg.parts.find(p => p.functionResponse)?.functionResponse;
+                {testConsoleMode === "bot" ? (
+                  <>
+                    {testMessages.length === 0 && (
+                      <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
+                        <MessageSquare className="h-10 w-10" />
+                        <p className="text-sm max-w-xs">Start a conversation to test your bot's custom context.</p>
+                      </div>
+                    )}
+                    {testMessages.map((msg, i) => {
+                      const text = msg.parts.find((p) => p.text)?.text;
+                      const funcCall = msg.parts.find((p) => p.functionCall)?.functionCall;
+                      const funcResp = msg.parts.find((p) => p.functionResponse)?.functionResponse;
 
-                  if (funcCall) return null; // Don't show raw function calls
-                  if (funcResp) {
-                    const data = funcResp.response.content;
-                    const reg = registrations.find(r => r.id === data.id);
-                    if (!reg) return null;
-                    return (
-                      <motion.div 
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        key={i}
-                      >
-                        <Ticket 
-                          registrationId={reg.id}
-                          firstName={reg.first_name}
-                          lastName={reg.last_name}
-                          phone={reg.phone}
-                          email={reg.email}
-                          timestamp={reg.timestamp}
-                          eventName={settings.event_name}
-                          eventLocation={settings.event_location}
-                          eventDateLabel={timingInfo.eventDateLabel}
-                          eventMapUrl={settings.event_map_url}
+                      if (funcCall) return null;
+                      if (funcResp) {
+                        const data = funcResp.response.content;
+                        const reg = registrations.find((r) => r.id === data.id);
+                        if (!reg) return null;
+                        return (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            key={i}
+                          >
+                            <Ticket
+                              registrationId={reg.id}
+                              firstName={reg.first_name}
+                              lastName={reg.last_name}
+                              phone={reg.phone}
+                              email={reg.email}
+                              timestamp={reg.timestamp}
+                              eventName={settings.event_name}
+                              eventLocation={settings.event_location}
+                              eventDateLabel={timingInfo.eventDateLabel}
+                              eventMapUrl={settings.event_map_url}
+                            />
+                          </motion.div>
+                        );
+                      }
+
+                      return (
+                        <ChatBubble
+                          key={i}
+                          text={text || ""}
+                          type={msg.role === "user" ? "outgoing" : "incoming"}
+                          timestamp={msg.timestamp}
                         />
-                      </motion.div>
-                    );
-                  }
+                      );
+                    })}
+                  </>
+                ) : (
+                  <>
+                    {adminAgentMessages.length === 0 && (
+                      <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
+                        <MonitorCog className="h-10 w-10" />
+                        <p className="text-sm max-w-xs">
+                          สั่งงาน Admin Agent เช่น หา registration, นับจำนวน, resend ticket/email, หรือ retry bot
+                        </p>
+                      </div>
+                    )}
+                    {adminAgentMessages.map((msg, index) => (
+                      <div key={`${msg.timestamp}-${index}`} className="space-y-1">
+                        <ChatBubble
+                          text={msg.text}
+                          type={msg.role === "user" ? "outgoing" : "incoming"}
+                          timestamp={msg.timestamp}
+                        />
+                        {msg.role === "agent" && msg.actionName && (
+                          <div className="ml-2 flex flex-wrap items-center gap-2 pb-2">
+                            <StatusBadge tone={msg.actionSource === "rule" ? "amber" : "violet"}>
+                              {formatAdminActionLabel(msg.actionName)}
+                            </StatusBadge>
+                            <StatusBadge tone="neutral">{msg.actionSource || "llm"}</StatusBadge>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
 
-                  return (
-                    <ChatBubble 
-                      key={i} 
-                      text={text || ""} 
-                      type={msg.role === "user" ? "outgoing" : "incoming"} 
-                      timestamp={msg.timestamp}
-                    />
-                  );
-                })}
-                {isTyping && (
+                {(testConsoleMode === "bot" ? isTyping : adminAgentTyping) && (
                   <div className="flex justify-start mb-4">
                     <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-100 flex gap-1">
                       <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
@@ -6962,16 +7124,33 @@ export default function App() {
                 <div className="flex gap-2 lg:pr-16">
                   <input
                     type="text"
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleTestSend()}
-                    placeholder="Type a message..."
+                    value={testConsoleMode === "bot" ? inputText : adminAgentInputText}
+                    onChange={(e) => {
+                      if (testConsoleMode === "bot") {
+                        setInputText(e.target.value);
+                      } else {
+                        setAdminAgentInputText(e.target.value);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      if (testConsoleMode === "bot") {
+                        void handleTestSend();
+                      } else {
+                        void handleAdminAgentSend();
+                      }
+                    }}
+                    placeholder={testConsoleMode === "bot" ? "Type a message..." : "สั่งงาน Admin Agent..."}
                     className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   <ActionButton
-                    onClick={handleTestSend}
-                    disabled={!inputText.trim() || isTyping}
-                    tone="blue"
+                    onClick={testConsoleMode === "bot" ? handleTestSend : handleAdminAgentSend}
+                    disabled={
+                      testConsoleMode === "bot"
+                        ? (!inputText.trim() || isTyping)
+                        : (!adminAgentInputText.trim() || adminAgentTyping)
+                    }
+                    tone={testConsoleMode === "bot" ? "blue" : "violet"}
                     active
                     className="px-3"
                   >
