@@ -8021,16 +8021,40 @@ async function startServer() {
 
         const normalized = normalizeAdminAgentTelegramUpdate(payload);
         if (!normalized) return;
+        const text = normalized.text;
         const allowedChatIds = parseAdminAgentTelegramAllowedChatIds(settings.telegramAllowedChatIdsRaw);
         if (allowedChatIds.size > 0 && !allowedChatIds.has(normalized.chatId)) {
           console.warn("Ignored Admin Agent Telegram message from unauthorized chat", {
             chat_id: normalized.chatId,
             update_id: normalized.updateId,
           });
+          if (/^\/(?:start|help|id|myid)\b/i.test(text)) {
+            await sendTelegramTextWithBotToken(
+              settings.telegramBotToken,
+              normalized.chatId,
+              [
+                "แชทนี้ยังไม่ได้รับอนุญาตให้ใช้ Admin Agent",
+                `chat_id: ${normalized.chatId}`,
+                "ให้นำ chat_id นี้ไปใส่ใน Allowed Chat IDs (หนึ่งบรรทัดต่อหนึ่ง ID)",
+              ].join("\n"),
+            );
+          }
           return;
         }
 
-        const text = normalized.text;
+        if (/^\/(?:id|myid)\b/i.test(text)) {
+          await sendTelegramTextWithBotToken(
+            settings.telegramBotToken,
+            normalized.chatId,
+            [
+              "Admin Agent Chat ID",
+              `chat_id: ${normalized.chatId}`,
+              "คัดลอกค่า chat_id นี้ไปใส่ใน Allowed Chat IDs (หนึ่งบรรทัดต่อหนึ่ง ID)",
+            ].join("\n"),
+          );
+          return;
+        }
+
         if (/^\/start\b/i.test(text) || /^\/help\b/i.test(text)) {
           const helpMessage = [
             "Admin Agent พร้อมใช้งาน",
@@ -8039,8 +8063,9 @@ async function startServer() {
             "1) เปิด Agent tab ในเว็บ แล้ว Enable Telegram Access + Save",
             "2) วาง Bot Token และตั้ง Webhook Secret Token ให้ตรงกัน",
             "3) เรียก setWebhook ด้วย URL /api/admin-agent/telegram/webhook",
-            "4) ใส่ Allowed Chat IDs ของแอดมินที่อนุญาต",
-            "5) กลับมาที่ Telegram แล้วพิมพ์ /agent <คำสั่ง>",
+            `4) พิมพ์ /myid เพื่อดู chat_id ของแชทนี้ (${normalized.chatId})`,
+            "5) ใส่ Allowed Chat IDs ของแอดมินที่อนุญาต",
+            "6) กลับมาที่ Telegram แล้วพิมพ์ /agent <คำสั่ง>",
             "",
             "ตัวอย่างคำสั่ง:",
             "- หาอีเวนต์ สหจะโยคะ 5 สัปดาห์",

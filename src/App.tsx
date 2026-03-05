@@ -8342,8 +8342,11 @@ export default function App() {
                         onChange={(e) => setSettings({ ...settings, admin_agent_telegram_allowed_chat_ids: e.target.value })}
                         disabled={!canEditSettings}
                         className="w-full h-20 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
-                        placeholder="One chat ID per line. Leave blank = allow all."
+                        placeholder="Numeric chat_id only, one per line (e.g. 123456789 or -100...). Leave blank = allow all."
                       />
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Use your own chat_id (not bot name/username). Send <code>/myid</code> to the bot to see it.
+                      </p>
                     </div>
                   </div>
 
