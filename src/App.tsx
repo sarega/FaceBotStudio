@@ -102,6 +102,14 @@ type AdminAgentChatMessage = {
   csvDownloadUrl?: string;
 };
 
+type AdminAgentCommandTemplate = {
+  id: string;
+  label: string;
+  command: string;
+  note: string;
+  keywords: string[];
+};
+
 let qrReaderCtorPromise: Promise<typeof import("@zxing/browser").BrowserQRCodeReader> | null = null;
 
 async function loadQrReaderCtor() {
@@ -284,6 +292,149 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
     ],
   },
 };
+
+const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
+  {
+    id: "find-event",
+    label: "Find Event",
+    command: 'find_event query="โปรแกรมสหจะโยคะ 5 สัปดาห์"',
+    note: "ค้นหาอีเวนต์จากชื่อบางส่วน",
+    keywords: ["event", "find", "search", "อีเวนต์", "ค้นหา"],
+  },
+  {
+    id: "event-overview",
+    label: "Event Overview",
+    command: "get_event_overview",
+    note: "ดูสรุปสถานะงาน เวลา สถานที่ กติกา และยอดลงทะเบียน",
+    keywords: ["overview", "status", "summary", "สรุป", "สถานะงาน"],
+  },
+  {
+    id: "search-system",
+    label: "Search System",
+    command: 'search_system query="สุขุมวิท"',
+    note: "ค้นหาทั้งระบบทุกอีเวนต์",
+    keywords: ["global", "search", "cross", "ระบบ", "ค้นทั้งระบบ"],
+  },
+  {
+    id: "list-registrations",
+    label: "List Registrations",
+    command: "list_registrations limit=50",
+    note: "ดึงรายชื่อผู้ลงทะเบียนล่าสุดตาม event ปัจจุบัน",
+    keywords: ["registration", "list", "attendees", "รายชื่อ", "ลงทะเบียน"],
+  },
+  {
+    id: "list-registrations-offset",
+    label: "List More (Offset)",
+    command: "list_registrations limit=50 offset=50",
+    note: "ดึงรายการถัดไปจากชุดก่อนหน้า",
+    keywords: ["offset", "pagination", "more", "ต่อ", "ถัดไป"],
+  },
+  {
+    id: "count-registrations",
+    label: "Count Registrations",
+    command: "count_registrations",
+    note: "นับจำนวนผู้ลงทะเบียนรวมและแยกสถานะ",
+    keywords: ["count", "totals", "นับ", "จำนวน"],
+  },
+  {
+    id: "find-registration-name",
+    label: "Find By Name",
+    command: 'find_registration full_name="ชื่อ นามสกุล"',
+    note: "ค้นหาผู้ลงทะเบียนจากชื่อ-นามสกุล",
+    keywords: ["find", "name", "registration", "ค้นหา", "ชื่อ"],
+  },
+  {
+    id: "find-registration-id",
+    label: "Find By Registration ID",
+    command: "find_registration registration_id=REG-XXXXXX",
+    note: "ค้นหาจากเลขทะเบียน",
+    keywords: ["reg", "id", "lookup", "เลขทะเบียน"],
+  },
+  {
+    id: "create-registration",
+    label: "Create Registration",
+    command: 'create_registration first_name="สมชาย" last_name="ใจดี" phone="0890000000" email="somchai@example.com"',
+    note: "ลงทะเบียนผู้เข้าร่วมใหม่",
+    keywords: ["create", "register", "ลงทะเบียน", "new attendee"],
+  },
+  {
+    id: "set-registration-status",
+    label: "Set Registration Status",
+    command: "set_registration_status registration_id=REG-XXXXXX status=checked-in",
+    note: "เปลี่ยนสถานะผู้ลงทะเบียน",
+    keywords: ["status", "checkin", "cancel", "สถานะ"],
+  },
+  {
+    id: "timeline",
+    label: "Registration Timeline",
+    command: "get_registration_timeline registration_id=REG-XXXXXX",
+    note: "ดูประวัติแชทของผู้ลงทะเบียนคนนั้น",
+    keywords: ["timeline", "history", "chat", "ประวัติ"],
+  },
+  {
+    id: "view-ticket",
+    label: "View Ticket (Admin)",
+    command: "view_ticket registration_id=REG-XXXXXX",
+    note: "ดูตั๋วสำหรับแอดมิน โดยไม่ส่งไปหา user",
+    keywords: ["ticket", "preview", "admin", "ดูตั๋ว"],
+  },
+  {
+    id: "resend-ticket",
+    label: "Resend Ticket To User",
+    command: "resend_ticket registration_id=REG-XXXXXX sender_id=USER_SENDER_ID",
+    note: "ส่งตั๋วไปยัง user channel เดิม",
+    keywords: ["ticket", "resend", "send user", "ส่งตั๋ว"],
+  },
+  {
+    id: "resend-email",
+    label: "Resend Email",
+    command: "resend_email registration_id=REG-XXXXXX",
+    note: "ส่งอีเมลยืนยันซ้ำ",
+    keywords: ["email", "resend", "ส่งเมล"],
+  },
+  {
+    id: "export-csv",
+    label: "Export CSV",
+    command: "export_registrations_csv",
+    note: "ส่งไฟล์ CSV รายชื่อทั้งหมด",
+    keywords: ["csv", "export", "excel", "ไฟล์"],
+  },
+  {
+    id: "send-message",
+    label: "Send Message To Sender",
+    command: 'send_message_to_sender sender_id=USER_SENDER_ID message="ข้อความที่ต้องการส่ง"',
+    note: "ส่งข้อความ manual ไปยัง user",
+    keywords: ["message", "sender", "manual", "ส่งข้อความ"],
+  },
+  {
+    id: "retry-bot",
+    label: "Retry Bot",
+    command: "retry_bot sender_id=USER_SENDER_ID",
+    note: "กระตุ้นบอทให้ตอบต่อใน thread เดิม",
+    keywords: ["retry", "stuck", "resume", "ค้าง"],
+  },
+  {
+    id: "update-event-status",
+    label: "Update Event Status",
+    command: "update_event_status status=active",
+    note: "เปลี่ยนสถานะงาน เช่น active/inactive/pending/cancelled",
+    keywords: ["event", "status", "active", "inactive"],
+  },
+  {
+    id: "update-event-context",
+    label: "Update Event Context",
+    command: 'update_event_context mode=replace context="รายละเอียดใหม่..."',
+    note: "อัปเดตข้อความ context ของงาน",
+    keywords: ["context", "update", "event", "รายละเอียด"],
+  },
+  {
+    id: "event-override",
+    label: "Cross-Event Scope",
+    command: "/event evt_xxx get_event_overview",
+    note: "สั่งงานข้าม event แบบระบุ event id",
+    keywords: ["event", "override", "scope", "ข้ามงาน"],
+  },
+];
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
@@ -1961,6 +2112,8 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [adminAgentMessages, setAdminAgentMessages] = useState<AdminAgentChatMessage[]>([]);
   const [adminAgentInputText, setAdminAgentInputText] = useState("");
+  const [adminCommandPaletteOpen, setAdminCommandPaletteOpen] = useState(false);
+  const [adminCommandPaletteQuery, setAdminCommandPaletteQuery] = useState("");
   const [adminAgentTyping, setAdminAgentTyping] = useState(false);
   const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useState(false);
   const [desktopNotifyPermission, setDesktopNotifyPermission] = useState<NotificationPermission | "unsupported">(() => {
@@ -2051,6 +2204,9 @@ export default function App() {
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const searchFocusTimeoutRef = useRef<number | null>(null);
   const adminAgentScrollRef = useRef<HTMLDivElement | null>(null);
+  const adminAgentInputRef = useRef<HTMLInputElement | null>(null);
+  const adminCommandPaletteRef = useRef<HTMLDivElement | null>(null);
+  const adminCommandPaletteSearchInputRef = useRef<HTMLInputElement | null>(null);
   const adminAgentHistoryLoadedKeyRef = useRef("");
   const desktopNotifyBootstrappedRef = useRef(false);
   const desktopNotifyLastAuditIdRef = useRef(0);
@@ -2087,6 +2243,7 @@ export default function App() {
   const deferredRegistrationListQuery = useDeferredValue(normalizeSearchQuery(registrationListQuery));
   const deferredDocumentListQuery = useDeferredValue(normalizeSearchQuery(documentListQuery));
   const deferredLogListQuery = useDeferredValue(normalizeSearchQuery(logListQuery));
+  const deferredAdminCommandPaletteQuery = useDeferredValue(normalizeSearchQuery(adminCommandPaletteQuery));
   const adminAgentChatStorageKey = authUser?.id
     ? `${authUser.id}:global`
     : "";
@@ -2129,6 +2286,15 @@ export default function App() {
   const cancelledCount = registrations.filter((reg) => reg.status === "cancelled").length;
   const checkedInCount = registrations.filter((reg) => reg.status === "checked-in").length;
   const activeAgentMessageCount = adminAgentMessages.length;
+  const filteredAdminCommandTemplates = ADMIN_AGENT_COMMAND_TEMPLATES.filter((template) =>
+    matchesSearchQuery(deferredAdminCommandPaletteQuery, [
+      template.id,
+      template.label,
+      template.command,
+      template.note,
+      template.keywords.join(" "),
+    ]),
+  );
   const adminAgentPolicy = {
     readEvent: settings.admin_agent_policy_read_event !== "0",
     manageEventSetup: settings.admin_agent_policy_manage_event_setup === "1",
@@ -3178,6 +3344,8 @@ export default function App() {
     setKnowledgeActionsOpen(false);
     setGlobalSearchOpen(false);
     setHelpOpen(false);
+    setAdminCommandPaletteOpen(false);
+    setAdminCommandPaletteQuery("");
   }, [activeTab]);
 
   useEffect(() => {
@@ -3262,6 +3430,60 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [globalSearchOpen]);
+
+  useEffect(() => {
+    if (!adminCommandPaletteOpen) return;
+
+    const focusInput = window.setTimeout(() => {
+      adminCommandPaletteSearchInputRef.current?.focus();
+      adminCommandPaletteSearchInputRef.current?.select();
+    }, 0);
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!adminCommandPaletteRef.current?.contains(event.target as Node)) {
+        setAdminCommandPaletteOpen(false);
+        setAdminCommandPaletteQuery("");
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setAdminCommandPaletteOpen(false);
+        setAdminCommandPaletteQuery("");
+        adminAgentInputRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusInput);
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [adminCommandPaletteOpen]);
+
+  useEffect(() => {
+    if (activeTab !== "agent") return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== "p") {
+        return;
+      }
+      event.preventDefault();
+      setAdminCommandPaletteOpen((current) => {
+        if (current) {
+          setAdminCommandPaletteQuery("");
+          return false;
+        }
+        return true;
+      });
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [activeTab]);
 
   useEffect(() => {
     if (checkinAccessMode) return;
@@ -4676,10 +4898,36 @@ export default function App() {
     }
   };
 
+  const closeAdminCommandPalette = () => {
+    setAdminCommandPaletteOpen(false);
+    setAdminCommandPaletteQuery("");
+  };
+
+  const handleApplyAdminCommandTemplate = (template: AdminAgentCommandTemplate) => {
+    setAdminAgentInputText(template.command);
+    closeAdminCommandPalette();
+    window.setTimeout(() => {
+      adminAgentInputRef.current?.focus();
+      const nextLength = template.command.length;
+      adminAgentInputRef.current?.setSelectionRange(nextLength, nextLength);
+    }, 0);
+  };
+
+  const handleToggleAdminCommandPalette = () => {
+    setAdminCommandPaletteOpen((current) => {
+      if (current) {
+        setAdminCommandPaletteQuery("");
+        return false;
+      }
+      return true;
+    });
+  };
+
   const handleAdminAgentSend = async () => {
     if (!adminAgentInputText.trim()) return;
 
     const outgoingText = adminAgentInputText.trim();
+    closeAdminCommandPalette();
     const userMsg: AdminAgentChatMessage = {
       role: "user",
       text: outgoingText,
@@ -8223,24 +8471,115 @@ export default function App() {
                 </div>
 
                 <div className="border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
-                  <div className="flex gap-2 lg:pr-16">
-                    <input
-                      type="text"
-                      value={adminAgentInputText}
-                      onChange={(e) => setAdminAgentInputText(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleAdminAgentSend()}
-                      placeholder="สั่งงาน Admin Agent..."
-                      className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
-                    />
-                    <ActionButton
-                      onClick={handleAdminAgentSend}
-                      disabled={!adminAgentInputText.trim() || adminAgentTyping || settings.admin_agent_enabled !== "1"}
-                      tone="violet"
-                      active
-                      className="px-3"
-                    >
-                      <Send className="w-5 h-5" />
-                    </ActionButton>
+                  <div ref={adminCommandPaletteRef} className="relative">
+                    <AnimatePresence>
+                      {adminCommandPaletteOpen && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 6 }}
+                          className="absolute bottom-[calc(100%+0.6rem)] left-0 right-0 z-30 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+                        >
+                          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2">
+                            <Search className="h-3.5 w-3.5 text-slate-400" />
+                            <input
+                              ref={adminCommandPaletteSearchInputRef}
+                              type="text"
+                              value={adminCommandPaletteQuery}
+                              onChange={(event) => setAdminCommandPaletteQuery(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  const firstTemplate = filteredAdminCommandTemplates[0];
+                                  if (firstTemplate) {
+                                    handleApplyAdminCommandTemplate(firstTemplate);
+                                  }
+                                } else if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  closeAdminCommandPalette();
+                                  adminAgentInputRef.current?.focus();
+                                }
+                              }}
+                              placeholder="Search command..."
+                              className="flex-1 border-none bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
+                            />
+                            {adminCommandPaletteQuery && (
+                              <button
+                                type="button"
+                                onClick={() => setAdminCommandPaletteQuery("")}
+                                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:text-slate-700"
+                                aria-label="Clear command search"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                          <div className="mt-2 max-h-72 space-y-1 overflow-y-auto pr-1">
+                            {filteredAdminCommandTemplates.slice(0, 12).map((template) => (
+                              <button
+                                key={template.id}
+                                type="button"
+                                onClick={() => handleApplyAdminCommandTemplate(template)}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-violet-300 hover:bg-violet-50"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-sm font-semibold text-slate-800">{template.label}</span>
+                                  <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                    {template.id}
+                                  </span>
+                                </div>
+                                <p className="mt-0.5 text-xs text-slate-500">{template.note}</p>
+                                <code className="mt-1.5 block rounded-lg bg-slate-100 px-2 py-1 text-[11px] text-slate-700">
+                                  {template.command}
+                                </code>
+                              </button>
+                            ))}
+                            {filteredAdminCommandTemplates.length === 0 && (
+                              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                                No command found. Try keyword like `registration`, `event`, `ticket`, or `search`.
+                              </div>
+                            )}
+                          </div>
+                          <p className="mt-2 px-1 text-[11px] text-slate-500">
+                            Shortcut: <span className="font-semibold">Ctrl/Cmd + Shift + P</span>
+                          </p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <div className="flex gap-2 lg:pr-16">
+                      <ActionButton
+                        onClick={handleToggleAdminCommandPalette}
+                        tone="neutral"
+                        className="px-2.5"
+                        aria-label={adminCommandPaletteOpen ? "Close command palette" : "Open command palette"}
+                        title="Command Palette (Ctrl/Cmd + Shift + P)"
+                      >
+                        <Code className="h-4 w-4" />
+                      </ActionButton>
+                      <input
+                        ref={adminAgentInputRef}
+                        type="text"
+                        value={adminAgentInputText}
+                        onChange={(e) => setAdminAgentInputText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            handleAdminAgentSend();
+                          }
+                        }}
+                        placeholder="สั่งงาน Admin Agent..."
+                        className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                      <ActionButton
+                        onClick={handleAdminAgentSend}
+                        disabled={!adminAgentInputText.trim() || adminAgentTyping || settings.admin_agent_enabled !== "1"}
+                        tone="violet"
+                        active
+                        className="px-3"
+                      >
+                        <Send className="w-5 h-5" />
+                      </ActionButton>
+                    </div>
                   </div>
                 </div>
               </div>
