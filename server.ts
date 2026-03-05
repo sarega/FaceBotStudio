@@ -1647,7 +1647,9 @@ async function retryBotReplyForOutboundTarget(target: ManualOutboundTarget) {
 }
 
 function formatAdminAgentRegistrationLine(registration: RegistrationRow) {
-  return `${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status}`;
+  const phone = normalizeOptionalText(registration.phone) || "-";
+  const email = normalizeOptionalText(registration.email) || "-";
+  return `${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status} • phone ${phone} • email ${email}`;
 }
 
 function buildAdminAgentFindReply(matches: RegistrationRow[], totalMatches: number, limit: number, filters: string[]) {
@@ -1684,7 +1686,7 @@ function buildAdminAgentListReply(
     ? `รายชื่อที่ตรงเงื่อนไข ${totalMatches} รายการ (${filters.join(", ")})`
     : `รายชื่อผู้ลงทะเบียนล่าสุด ${Math.min(matches.length, limit)} รายการ`;
   const lines = matches.slice(0, 8).map((registration, index) => (
-    `${index + 1}. ${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status} • ${formatEventScopedTimestamp(registration.timestamp, timeZone)}`
+    `${index + 1}. ${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status} • phone ${normalizeOptionalText(registration.phone) || "-"} • email ${normalizeOptionalText(registration.email) || "-"} • ${formatEventScopedTimestamp(registration.timestamp, timeZone)}`
   ));
   const truncatedNote = totalMatches > matches.length
     ? `\nแสดง ${matches.length} จาก ${totalMatches} รายการ`
@@ -3174,6 +3176,8 @@ async function executeAdminAgentToolCall(
               event_name: eventNameMap.get(String(row.event_id || "")) || "",
               full_name: formatRegistrationDisplayName(row),
               status: row.status,
+              phone: normalizeOptionalText(row.phone),
+              email: normalizeOptionalText(row.email),
               timestamp: row.timestamp,
             }))
         : [];
@@ -3192,7 +3196,7 @@ async function executeAdminAgentToolCall(
       if (registrationMatches.length > 0) {
         replyLines.push("Registrations:");
         for (const [index, row] of registrationMatches.slice(0, 5).entries()) {
-          replyLines.push(`${index + 1}. ${row.id} • ${row.full_name} • ${row.status} • ${row.event_id}`);
+          replyLines.push(`${index + 1}. ${row.id} • ${row.full_name} • ${row.status} • phone ${row.phone || "-"} • email ${row.email || "-"} • ${row.event_id}`);
         }
       }
 
