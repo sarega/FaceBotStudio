@@ -5462,20 +5462,20 @@ export default function App() {
                             Event Information
                           </h3>
                           {eventDetailsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                          {selectedEvent && (
+                            <>
+                              <StatusBadge tone={getEventStatusTone(selectedEvent.status)}>
+                                mode {getEventStatusLabel(selectedEvent.status)}
+                              </StatusBadge>
+                              {selectedEvent.effective_status !== selectedEvent.status && (
+                                <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                                  now {getEventStatusLabel(selectedEvent.effective_status)}
+                                </StatusBadge>
+                              )}
+                            </>
+                          )}
                         </div>
                         <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
-                        {selectedEvent && (
-                          <div className="mt-3 flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.status)}>
-                              mode {getEventStatusLabel(selectedEvent.status)}
-                            </StatusBadge>
-                            {selectedEvent.effective_status !== selectedEvent.status && (
-                              <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                                now {getEventStatusLabel(selectedEvent.effective_status)}
-                              </StatusBadge>
-                            )}
-                          </div>
-                        )}
                       </div>
                       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
                         <ActionButton
@@ -5570,16 +5570,6 @@ export default function App() {
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
-                        <input
-                          value={settings.event_map_url}
-                          onChange={(e) => setSettings({ ...settings, event_map_url: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="https://maps.app.goo.gl/..."
-                        />
-                      </div>
-
-                      <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Starts</label>
                         <input
                           type="datetime-local"
@@ -5603,6 +5593,16 @@ export default function App() {
                         <p className="mt-1 text-[11px] text-slate-500">
                           Leave the suggested end time if this is a short session, or extend it if the event runs longer.
                         </p>
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
+                        <input
+                          value={settings.event_map_url}
+                          onChange={(e) => setSettings({ ...settings, event_map_url: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="https://maps.app.goo.gl/..."
+                        />
                       </div>
 
                       <div className="md:col-span-2">
@@ -5688,10 +5688,13 @@ export default function App() {
                           onChange={(e) => setSettings({ ...settings, reg_end: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                         />
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          Auto-suggested to 17:00 on the day before the event so registration does not stay open into the event itself.
-                        </p>
                       </div>
+                    </div>
+                    <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+                      <CircleHelp className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      <span>
+                        Auto-suggested to 17:00 on the day before the event so registration does not stay open into the event itself.
+                      </span>
                     </div>
                     <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
