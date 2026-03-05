@@ -31,6 +31,11 @@ export const DEFAULT_SETTINGS_ENTRIES = {
   admin_agent_telegram_bot_token: "",
   admin_agent_telegram_webhook_secret: "",
   admin_agent_telegram_allowed_chat_ids: "",
+  admin_agent_notification_enabled: "0",
+  admin_agent_notification_on_registration_created: "1",
+  admin_agent_notification_on_registration_status_changed: "1",
+  admin_agent_notification_scope: "all",
+  admin_agent_notification_event_id: "",
   verify_token: "my_secret_verify_token",
   event_name: "AI Innovation Summit 2026",
   event_timezone: process.env.EVENT_TIMEZONE || "Asia/Bangkok",
@@ -106,6 +111,11 @@ export const GLOBAL_SETTING_KEYS = [
   "admin_agent_telegram_bot_token",
   "admin_agent_telegram_webhook_secret",
   "admin_agent_telegram_allowed_chat_ids",
+  "admin_agent_notification_enabled",
+  "admin_agent_notification_on_registration_created",
+  "admin_agent_notification_on_registration_status_changed",
+  "admin_agent_notification_scope",
+  "admin_agent_notification_event_id",
 ] as const;
 
 export const DEFAULT_EVENT_ID = "evt_default";

@@ -1337,7 +1337,7 @@ function serializeRegistrationForCheckin(registration: RegistrationRow) {
   };
 }
 
-async function performCheckinForRegistration(registrationId: unknown, eventId?: string) {
+async function performCheckinForRegistration(registrationId: unknown, eventId?: string, options?: { source?: string }) {
   const normalizedId = String(registrationId || "").trim().toUpperCase();
   if (!normalizedId) {
     return { statusCode: 400, body: { error: "Registration ID is required" } };
@@ -1362,6 +1362,15 @@ async function performCheckinForRegistration(registrationId: unknown, eventId?: 
 
   const fresh = await getRegistrationById(normalizedId);
   const registration = fresh || existing;
+  if (!alreadyCheckedIn && registration.status === "checked-in") {
+    void sendAdminAgentRegistrationNotification({
+      kind: "registration_status_changed",
+      registration,
+      previousStatus: existing.status,
+      source: options?.source || "registration_checkin",
+      observedAt: new Date().toISOString(),
+    });
+  }
   return {
     statusCode: 200,
     body: {
@@ -3433,8 +3442,10 @@ async function executeAdminAgentToolCall(
       }
 
       const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
-      const updated = await appDb.updateRegistrationStatus(registration.id, status);
-      if (!updated) {
+      const updated = await updateRegistrationStatusWithNotification(registration.id, status, {
+        source: "admin_agent_action",
+      });
+      if (!updated.updated) {
         throw new Error(`Failed to update status for ${registration.id}`);
       }
       return {
@@ -3626,6 +3637,11 @@ type AdminAgentGlobalSettings = {
   telegramBotToken: string;
   telegramWebhookSecret: string;
   telegramAllowedChatIdsRaw: string;
+  notificationEnabled: boolean;
+  notificationOnRegistrationCreated: boolean;
+  notificationOnRegistrationStatusChanged: boolean;
+  notificationScope: "all" | "event";
+  notificationEventId: string;
 };
 
 async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> {
@@ -3638,6 +3654,11 @@ async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> 
     telegramBotTokenRaw,
     telegramWebhookSecretRaw,
     telegramAllowedChatIdsRaw,
+    notificationEnabledRaw,
+    notificationOnRegistrationCreatedRaw,
+    notificationOnRegistrationStatusChangedRaw,
+    notificationScopeRaw,
+    notificationEventIdRaw,
   ] = await Promise.all([
     appDb.getSettingValue("admin_agent_enabled"),
     appDb.getSettingValue("admin_agent_system_prompt"),
@@ -3647,6 +3668,11 @@ async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> 
     appDb.getSettingValue("admin_agent_telegram_bot_token"),
     appDb.getSettingValue("admin_agent_telegram_webhook_secret"),
     appDb.getSettingValue("admin_agent_telegram_allowed_chat_ids"),
+    appDb.getSettingValue("admin_agent_notification_enabled"),
+    appDb.getSettingValue("admin_agent_notification_on_registration_created"),
+    appDb.getSettingValue("admin_agent_notification_on_registration_status_changed"),
+    appDb.getSettingValue("admin_agent_notification_scope"),
+    appDb.getSettingValue("admin_agent_notification_event_id"),
   ]);
 
   return {
@@ -3658,6 +3684,11 @@ async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> 
     telegramBotToken: normalizeOptionalText(telegramBotTokenRaw),
     telegramWebhookSecret: normalizeOptionalText(telegramWebhookSecretRaw),
     telegramAllowedChatIdsRaw: String(telegramAllowedChatIdsRaw || ""),
+    notificationEnabled: isTruthySetting(notificationEnabledRaw),
+    notificationOnRegistrationCreated: isTruthySetting(notificationOnRegistrationCreatedRaw ?? "1"),
+    notificationOnRegistrationStatusChanged: isTruthySetting(notificationOnRegistrationStatusChangedRaw ?? "1"),
+    notificationScope: normalizeComparableText(notificationScopeRaw) === "event" ? "event" : "all",
+    notificationEventId: normalizeOptionalText(notificationEventIdRaw),
   };
 }
 
@@ -3706,6 +3737,88 @@ async function sendTelegramTextWithBotToken(botToken: string, chatId: string, te
     throw new Error(payload?.description || "Failed to send Telegram message");
   }
   return payload;
+}
+
+function canNotifyAdminAgentForEvent(settings: AdminAgentGlobalSettings, eventId: string) {
+  if (settings.notificationScope !== "event") return true;
+  const targetEventId = normalizeOptionalText(settings.notificationEventId) || settings.defaultEventId || DEFAULT_EVENT_ID;
+  return normalizeOptionalText(targetEventId) === normalizeOptionalText(eventId);
+}
+
+function formatAdminAgentRegistrationNotificationText(options: {
+  kind: "registration_created" | "registration_status_changed";
+  eventId: string;
+  eventName: string;
+  registration: RegistrationRow;
+  previousStatus?: RegistrationStatus | null;
+  source: string;
+  observedAtLabel: string;
+}) {
+  const name = formatRegistrationDisplayName(options.registration);
+  const phone = normalizeOptionalText(options.registration.phone) || "-";
+  const email = normalizeOptionalText(options.registration.email) || "-";
+  const baseLines = [
+    "Admin Agent Notification",
+    options.kind === "registration_created" ? "ประเภท: ลงทะเบียนใหม่" : "ประเภท: เปลี่ยนสถานะลงทะเบียน",
+    `อีเวนต์: ${options.eventName} (${options.eventId})`,
+    `ผู้ลงทะเบียน: ${name}`,
+    `Registration ID: ${options.registration.id}`,
+    `สถานะปัจจุบัน: ${options.registration.status}`,
+    `โทรศัพท์: ${phone}`,
+    `อีเมล: ${email}`,
+  ];
+  if (options.kind === "registration_status_changed" && options.previousStatus) {
+    baseLines.push(`สถานะเดิม: ${options.previousStatus}`);
+  }
+  baseLines.push(`แหล่งที่มา: ${options.source}`);
+  baseLines.push(`เวลา: ${options.observedAtLabel}`);
+  return baseLines.join("\n");
+}
+
+async function sendAdminAgentRegistrationNotification(options: {
+  kind: "registration_created" | "registration_status_changed";
+  registration: RegistrationRow;
+  previousStatus?: RegistrationStatus | null;
+  source?: string;
+  observedAt?: string;
+}) {
+  try {
+    const eventId = normalizeOptionalText(options.registration.event_id) || DEFAULT_EVENT_ID;
+    const settings = await getAdminAgentGlobalSettings();
+    if (!settings.enabled || !settings.notificationEnabled) return;
+    if (options.kind === "registration_created" && !settings.notificationOnRegistrationCreated) return;
+    if (options.kind === "registration_status_changed" && !settings.notificationOnRegistrationStatusChanged) return;
+    if (!canNotifyAdminAgentForEvent(settings, eventId)) return;
+    if (!settings.telegramEnabled || !settings.telegramBotToken) return;
+
+    const recipients = [...parseAdminAgentTelegramAllowedChatIds(settings.telegramAllowedChatIdsRaw)];
+    if (recipients.length === 0) return;
+
+    const [event, eventSettings] = await Promise.all([
+      appDb.getEventById(eventId),
+      getSettingsMap(eventId),
+    ]);
+    const eventName = normalizeOptionalText(event?.name) || eventId;
+    const observedAtRaw = normalizeOptionalText(options.observedAt)
+      || (options.kind === "registration_created" ? normalizeOptionalText(options.registration.timestamp) : "")
+      || new Date().toISOString();
+    const observedAtLabel = formatEventScopedTimestamp(observedAtRaw, eventSettings.event_timezone);
+    const text = formatAdminAgentRegistrationNotificationText({
+      kind: options.kind,
+      eventId,
+      eventName,
+      registration: options.registration,
+      previousStatus: options.previousStatus || null,
+      source: normalizeOptionalText(options.source) || "system",
+      observedAtLabel,
+    });
+
+    await Promise.all(
+      recipients.map((chatId) => sendTelegramTextWithBotToken(settings.telegramBotToken, chatId, text)),
+    );
+  } catch (error) {
+    console.error("Failed to send admin agent registration notification:", error);
+  }
 }
 
 async function runAdminAgentCommand(options: {
@@ -4844,10 +4957,21 @@ async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?
     }));
 }
 
-async function createRegistration(input: RegistrationInput) {
+async function createRegistration(input: RegistrationInput, options?: { source?: string }) {
   const result = await appDb.createRegistration(input);
   if (result.statusCode === 200 && typeof result.content.id === "string") {
     const registrationId = String(result.content.id).trim().toUpperCase();
+    void (async () => {
+      const registration = await getRegistrationById(registrationId);
+      if (!registration) return;
+      await sendAdminAgentRegistrationNotification({
+        kind: "registration_created",
+        registration,
+        source: options?.source || "registration_create",
+      });
+    })().catch((error) => {
+      console.error(`Failed to send registration-created notification for ${registrationId}:`, error);
+    });
     void sendRegistrationConfirmationEmailIfNeeded(registrationId).catch((error) => {
       console.error(`Failed to queue confirmation email for registration ${registrationId}:`, error);
     });
@@ -4855,8 +4979,51 @@ async function createRegistration(input: RegistrationInput) {
   return result;
 }
 
-async function cancelRegistration(id: unknown) {
-  return appDb.cancelRegistration(id);
+async function updateRegistrationStatusWithNotification(
+  id: unknown,
+  status: RegistrationStatus,
+  options?: { source?: string },
+) {
+  const registrationId = String(id || "").trim().toUpperCase();
+  if (!registrationId) {
+    return { updated: false, registration: null as RegistrationRow | null, previousStatus: null as RegistrationStatus | null };
+  }
+
+  const before = await getRegistrationById(registrationId);
+  const updated = await appDb.updateRegistrationStatus(registrationId, status);
+  if (!updated) {
+    return { updated: false, registration: null as RegistrationRow | null, previousStatus: before?.status || null };
+  }
+
+  const after = await getRegistrationById(registrationId);
+  const registration = after || (before ? { ...before, status } : null);
+  const previousStatus = before?.status || null;
+  if (registration && previousStatus && previousStatus !== registration.status) {
+    void sendAdminAgentRegistrationNotification({
+      kind: "registration_status_changed",
+      registration,
+      previousStatus,
+      source: options?.source || "registration_status_update",
+      observedAt: new Date().toISOString(),
+    });
+  }
+
+  return { updated: true, registration, previousStatus };
+}
+
+async function cancelRegistration(id: unknown, options?: { source?: string }) {
+  const registrationId = String(id || "").trim().toUpperCase();
+  if (!registrationId) {
+    return { statusCode: 400, content: { error: "Registration ID is required" } };
+  }
+
+  const result = await updateRegistrationStatusWithNotification(registrationId, "cancelled", {
+    source: options?.source || "registration_cancel",
+  });
+  if (result.updated) {
+    return { statusCode: 200, content: { status: "success" } };
+  }
+  return { statusCode: 404, content: { error: "Registration not found" } };
 }
 
 function normalizeOpenRouterUsage(payload: any) {
@@ -5042,20 +5209,23 @@ async function buildToolResponseMessages(
     let content: Record<string, unknown>;
 
     if (call.name === "registerUser") {
-      const result = await createRegistration({
-        sender_id: senderId,
-        event_id: eventId,
-        first_name: call.args.first_name,
-        last_name: call.args.last_name,
-        phone: call.args.phone,
-        email: call.args.email,
-      });
+      const result = await createRegistration(
+        {
+          sender_id: senderId,
+          event_id: eventId,
+          first_name: call.args.first_name,
+          last_name: call.args.last_name,
+          phone: call.args.phone,
+          email: call.args.email,
+        },
+        { source: "attendee_bot_tool" },
+      );
       content = result.content;
       if (result.statusCode === 200 && typeof result.content.id === "string") {
         ticketRegistrationIds.push(result.content.id);
       }
     } else if (call.name === "cancelRegistration") {
-      const result = await cancelRegistration(call.args.registration_id);
+      const result = await cancelRegistration(call.args.registration_id, { source: "attendee_bot_tool" });
       content = result.content;
     } else {
       content = { error: `Unknown tool: ${call.name}` };
@@ -6655,7 +6825,9 @@ async function startServer() {
         return res.status(401).json({ error: "Check-in session not found or expired" });
       }
 
-      const result = await performCheckinForRegistration(req.body?.id, session.event_id);
+      const result = await performCheckinForRegistration(req.body?.id, session.event_id, {
+        source: "checkin_access",
+      });
       await appDb.touchCheckinSession(session.id);
 
       if (result.statusCode === 200) {
@@ -7017,7 +7189,9 @@ async function startServer() {
   app.post("/api/registrations", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-      const result = await createRegistration({ ...(req.body || {}), event_id: eventId });
+      const result = await createRegistration({ ...(req.body || {}), event_id: eventId }, {
+        source: "registrations_create_api",
+      });
       if (result.statusCode === 200 && typeof result.content.id === "string") {
         await recordAudit(req, "registration.created", "registration", String(result.content.id), {
           sender_id: req.body?.sender_id || null,
@@ -7033,7 +7207,9 @@ async function startServer() {
 
   app.post("/api/registrations/checkin", requireRoles(["owner", "admin", "operator", "checker"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const result = await performCheckinForRegistration(req.body?.id);
+      const result = await performCheckinForRegistration(req.body?.id, undefined, {
+        source: "registrations_checkin_api",
+      });
       if (result.statusCode === 200) {
         await recordAudit(req, result.body.already_checked_in ? "registration.checkin_repeated" : "registration.checked_in", "registration", String(req.body?.id || "").trim().toUpperCase());
       }
@@ -7045,7 +7221,7 @@ async function startServer() {
 
   app.post("/api/registrations/cancel", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const result = await cancelRegistration(req.body?.id);
+      const result = await cancelRegistration(req.body?.id, { source: "registrations_cancel_api" });
       if (result.statusCode === 200) {
         await recordAudit(req, "registration.cancelled", "registration", String(req.body?.id || "").trim().toUpperCase());
       }
@@ -7065,8 +7241,10 @@ async function startServer() {
         return res.status(400).json({ error: "Invalid registration ID or status" });
       }
 
-      const updated = await appDb.updateRegistrationStatus(id, status as RegistrationStatus);
-      if (updated) {
+      const updated = await updateRegistrationStatusWithNotification(id, status as RegistrationStatus, {
+        source: "registrations_status_api",
+      });
+      if (updated.updated) {
         await recordAudit(req, "registration.status_updated", "registration", id, {
           status,
         });

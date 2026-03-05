@@ -1442,6 +1442,11 @@ const INITIAL_SETTINGS: Settings = {
   admin_agent_telegram_bot_token: "",
   admin_agent_telegram_webhook_secret: "",
   admin_agent_telegram_allowed_chat_ids: "",
+  admin_agent_notification_enabled: "0",
+  admin_agent_notification_on_registration_created: "1",
+  admin_agent_notification_on_registration_status_changed: "1",
+  admin_agent_notification_scope: "all",
+  admin_agent_notification_event_id: "",
   verify_token: "",
   event_name: "",
   event_timezone: DEFAULT_TIMEZONE,
@@ -1540,6 +1545,11 @@ const AGENT_SETTINGS_KEYS = [
   "admin_agent_telegram_bot_token",
   "admin_agent_telegram_webhook_secret",
   "admin_agent_telegram_allowed_chat_ids",
+  "admin_agent_notification_enabled",
+  "admin_agent_notification_on_registration_created",
+  "admin_agent_notification_on_registration_status_changed",
+  "admin_agent_notification_scope",
+  "admin_agent_notification_event_id",
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 const WEBHOOK_SETTINGS_KEYS = ["verify_token"] as const satisfies ReadonlyArray<keyof Settings>;
@@ -1616,6 +1626,26 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.admin_agent_telegram_allowed_chat_ids === "string"
         ? data.admin_agent_telegram_allowed_chat_ids
         : previous.admin_agent_telegram_allowed_chat_ids,
+    admin_agent_notification_enabled:
+      typeof data.admin_agent_notification_enabled === "string" && data.admin_agent_notification_enabled.trim()
+        ? data.admin_agent_notification_enabled.trim()
+        : previous.admin_agent_notification_enabled,
+    admin_agent_notification_on_registration_created:
+      typeof data.admin_agent_notification_on_registration_created === "string" && data.admin_agent_notification_on_registration_created.trim()
+        ? data.admin_agent_notification_on_registration_created.trim()
+        : previous.admin_agent_notification_on_registration_created,
+    admin_agent_notification_on_registration_status_changed:
+      typeof data.admin_agent_notification_on_registration_status_changed === "string" && data.admin_agent_notification_on_registration_status_changed.trim()
+        ? data.admin_agent_notification_on_registration_status_changed.trim()
+        : previous.admin_agent_notification_on_registration_status_changed,
+    admin_agent_notification_scope:
+      typeof data.admin_agent_notification_scope === "string" && data.admin_agent_notification_scope.trim()
+        ? (data.admin_agent_notification_scope.trim() === "event" ? "event" : "all")
+        : previous.admin_agent_notification_scope,
+    admin_agent_notification_event_id:
+      typeof data.admin_agent_notification_event_id === "string"
+        ? data.admin_agent_notification_event_id.trim()
+        : previous.admin_agent_notification_event_id,
     verify_token: typeof data.verify_token === "string" ? data.verify_token : previous.verify_token,
     event_name: typeof data.event_name === "string" ? data.event_name : "",
     event_timezone: normalizeTimeZoneForUi(
@@ -3525,6 +3555,11 @@ export default function App() {
     "admin_agent_telegram_bot_token",
     "admin_agent_telegram_webhook_secret",
     "admin_agent_telegram_allowed_chat_ids",
+    "admin_agent_notification_enabled",
+    "admin_agent_notification_on_registration_created",
+    "admin_agent_notification_on_registration_status_changed",
+    "admin_agent_notification_scope",
+    "admin_agent_notification_event_id",
   ], "Agent settings saved");
 
   const saveWebhookSettings = async () => saveSettingsSubset(["verify_token"], "Webhook settings saved");
@@ -7649,6 +7684,99 @@ export default function App() {
                         />
                         <span><span className="font-medium">Search Whole System</span> <span className="text-xs text-slate-500">allow cross-event search/override</span></span>
                       </label>
+                    </div>
+                  </details>
+
+                  <details className="rounded-xl border border-slate-200 bg-slate-50">
+                    <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-semibold text-slate-800">
+                      Notification Automation
+                    </summary>
+                    <div className="space-y-3 border-t border-slate-200 px-3 py-3 text-sm">
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_notification_enabled === "1"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_notification_enabled: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span>
+                          <span className="font-medium">Enable Auto Notifications</span>
+                          <span className="text-xs text-slate-500">Send registration activity updates to admin automatically.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_notification_on_registration_created !== "0"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_notification_on_registration_created: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1"}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span>
+                          <span className="font-medium">Notify On New Registration</span>
+                          <span className="text-xs text-slate-500">Trigger when a new attendee is created.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.admin_agent_notification_on_registration_status_changed !== "0"}
+                          onChange={(e) => setSettings({ ...settings, admin_agent_notification_on_registration_status_changed: e.target.checked ? "1" : "0" })}
+                          disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1"}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span>
+                          <span className="font-medium">Notify On Status Changes</span>
+                          <span className="text-xs text-slate-500">Trigger when status changes (registered/cancelled/checked-in).</span>
+                        </span>
+                      </label>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Notification Scope</label>
+                          <select
+                            value={settings.admin_agent_notification_scope}
+                            onChange={(e) => setSettings({ ...settings, admin_agent_notification_scope: e.target.value === "event" ? "event" : "all" })}
+                            disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1"}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-violet-500"
+                          >
+                            <option value="all">All Events</option>
+                            <option value="event">One Event Only</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Target Event ID</label>
+                          <div className="flex gap-2">
+                            <input
+                              value={settings.admin_agent_notification_event_id}
+                              onChange={(e) => setSettings({ ...settings, admin_agent_notification_event_id: e.target.value })}
+                              disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1" || settings.admin_agent_notification_scope !== "event"}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500 disabled:bg-slate-100"
+                              placeholder="evt_default"
+                            />
+                            <ActionButton
+                              onClick={() => setSettings({ ...settings, admin_agent_notification_event_id: selectedEventId })}
+                              disabled={
+                                !canEditSettings
+                                || settings.admin_agent_notification_enabled !== "1"
+                                || settings.admin_agent_notification_scope !== "event"
+                                || !selectedEventId
+                              }
+                              tone="neutral"
+                              className="shrink-0 px-2.5 text-[11px]"
+                            >
+                              Use Current
+                            </ActionButton>
+                          </div>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-slate-500">
+                        Delivery channel uses Admin Agent Telegram Bot + Allowed Chat IDs. If Telegram access is disabled or no chat IDs are configured, notifications will be skipped.
+                      </p>
                     </div>
                   </details>
 

@@ -253,6 +253,11 @@ export interface Settings {
   admin_agent_telegram_bot_token: string;
   admin_agent_telegram_webhook_secret: string;
   admin_agent_telegram_allowed_chat_ids: string;
+  admin_agent_notification_enabled: string;
+  admin_agent_notification_on_registration_created: string;
+  admin_agent_notification_on_registration_status_changed: string;
+  admin_agent_notification_scope: string;
+  admin_agent_notification_event_id: string;
   verify_token: string;
   event_name: string;
   event_timezone: string;
