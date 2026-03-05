@@ -2200,6 +2200,8 @@ type AdminAgentEventCandidate = {
   displayName: string;
   effectiveStatus: string;
   registrationAvailability: string;
+  searchableCore: string;
+  searchableExtended: string;
   searchable: string;
 };
 
@@ -2287,18 +2289,17 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
     const configuredName = normalizeOptionalText(settings.event_name);
     const configuredLocation = normalizeOptionalText(settings.event_location);
     const configuredMapUrl = normalizeOptionalText(settings.event_map_url);
-    const configuredDescription = normalizeOptionalText(settings.event_description).slice(0, 400);
-    const configuredTravel = normalizeOptionalText(settings.event_travel).slice(0, 400);
+    const configuredDescription = normalizeOptionalText(settings.event_description);
+    const configuredTravel = normalizeOptionalText(settings.event_travel);
+    const configuredContext = normalizeOptionalText(settings.context);
     const displayName = configuredName || normalizeOptionalText(event.name) || event.id;
-    const searchableParts = [
+    const searchableCoreParts = [
       normalizeComparableText(event.id),
       normalizeComparableText(event.slug),
       normalizeComparableText(event.name),
       normalizeComparableText(configuredName),
       normalizeComparableText(configuredLocation),
       normalizeComparableText(configuredMapUrl),
-      normalizeComparableText(configuredDescription),
-      normalizeComparableText(configuredTravel),
       normalizeComparableText(event.effective_status || ""),
       normalizeComparableText(event.registration_availability || ""),
       event.effective_status === "active" ? "open เปิด เปิดอยู่ กำลังเปิด" : "",
@@ -2311,6 +2312,14 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
       event.registration_availability === "closed" ? "registration closed ปิดรับสมัคร" : "",
       event.registration_availability === "full" ? "registration full เต็ม" : "",
     ].filter(Boolean);
+    const searchableExtendedParts = [
+      normalizeComparableText(configuredDescription),
+      normalizeComparableText(configuredTravel),
+      normalizeComparableText(configuredContext),
+    ].filter(Boolean);
+    const searchableCore = searchableCoreParts.join("\n");
+    const searchableExtended = searchableExtendedParts.join("\n");
+    const searchable = [searchableCore, searchableExtended].filter(Boolean).join("\n");
     return {
       id: event.id,
       slug: event.slug,
@@ -2318,7 +2327,9 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
       displayName,
       effectiveStatus: String(event.effective_status || ""),
       registrationAvailability: String(event.registration_availability || ""),
-      searchable: searchableParts.join("\n"),
+      searchableCore,
+      searchableExtended,
+      searchable,
     };
   }));
 
@@ -2360,12 +2371,23 @@ function scoreAdminAgentEventCandidate(candidate: AdminAgentEventCandidate, norm
   const normalizedId = normalizeComparableText(candidate.id);
   const normalizedSlug = normalizeComparableText(candidate.slug);
   const normalizedDisplayName = normalizeComparableText(candidate.displayName);
+  const searchableCore = normalizeComparableText(candidate.searchableCore);
+  const searchableExtended = normalizeComparableText(candidate.searchableExtended);
   const searchable = normalizeComparableText(candidate.searchable);
   let score = 0;
 
   if (normalizedId === normalizedQuery) score = Math.max(score, 260);
   if (normalizedSlug === normalizedQuery) score = Math.max(score, 240);
   if (normalizedDisplayName === normalizedQuery) score = Math.max(score, 220);
+  if (normalizedId.includes(normalizedQuery)) score = Math.max(score, 236);
+  if (normalizedSlug.includes(normalizedQuery)) score = Math.max(score, 216);
+  if (normalizedDisplayName.includes(normalizedQuery)) score = Math.max(score, 206 + Math.min(16, normalizedQuery.length));
+  if (searchableCore.includes(normalizedQuery)) {
+    score = Math.max(score, 190 + Math.min(22, normalizedQuery.length));
+  }
+  if (searchableExtended.includes(normalizedQuery)) {
+    score = Math.max(score, 160 + Math.min(20, normalizedQuery.length));
+  }
   if (searchable.includes(normalizedQuery)) {
     score = Math.max(score, 170 + Math.min(30, normalizedQuery.length));
   }
@@ -2373,10 +2395,28 @@ function scoreAdminAgentEventCandidate(candidate: AdminAgentEventCandidate, norm
   const tokens = normalizedQuery.split(" ").filter(Boolean);
   if (tokens.length > 0) {
     let hitCount = 0;
+    let coreHitCount = 0;
+    let titleHitCount = 0;
     for (const token of tokens) {
       if (searchable.includes(token)) {
         hitCount += 1;
       }
+      if (searchableCore.includes(token)) {
+        coreHitCount += 1;
+      }
+      if (normalizedDisplayName.includes(token)) {
+        titleHitCount += 1;
+      }
+    }
+    if (titleHitCount === tokens.length) {
+      score = Math.max(score, 206 + titleHitCount * 8);
+    } else if (titleHitCount > 0) {
+      score = Math.max(score, 162 + titleHitCount * 7);
+    }
+    if (coreHitCount === tokens.length) {
+      score = Math.max(score, 176 + coreHitCount * 7);
+    } else if (coreHitCount > 0) {
+      score = Math.max(score, 136 + coreHitCount * 7);
     }
     if (hitCount === tokens.length) {
       score = Math.max(score, 130 + hitCount * 6);
@@ -2769,6 +2809,7 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
   const mapUrl = normalizeOptionalText(settings.event_map_url);
   const description = normalizeOptionalText(settings.event_description);
   const travel = normalizeOptionalText(settings.event_travel);
+  const context = normalizeOptionalText(settings.context);
   const confirmationEmailEnabled = isTruthySetting(settings.confirmation_email_enabled);
   const recent = registrations.slice(0, Math.min(Math.max(0, includeRecentRegistrations), 10)).map((row) => ({
     id: row.id,
@@ -2794,6 +2835,9 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
   if (travel) {
     summaryLines.push(`การเดินทาง: ${truncateText(travel, 320)}`);
   }
+  if (context) {
+    summaryLines.push(`context: ${truncateText(context, 320)}`);
+  }
   if (recent.length > 0) {
     summaryLines.push("รายชื่อล่าสุด:");
     for (const row of recent) {
@@ -2818,6 +2862,8 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
       map_url: mapUrl,
       description,
       travel,
+      context,
+      context_chars: context.length,
       rules: {
         registration_limit: registrationLimit,
         unique_full_name: duplicateNameGuard,
