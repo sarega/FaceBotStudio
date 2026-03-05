@@ -1358,6 +1358,7 @@ const RECOMMENDED_ADMIN_AGENT_PROMPT = [
   "You are an internal Admin Operations Agent for FB Bot Studio.",
   "Your user is an admin/operator, not an attendee.",
   "Use concise operational Thai.",
+  "Respect event scope: operate on the selected event unless admin explicitly specifies another event ID.",
   "Prioritize safety and accuracy:",
   "- Ask one short clarification when required fields are missing.",
   "- Never invent IDs, names, counts, or delivery results.",
@@ -7217,7 +7218,7 @@ export default function App() {
                     label={settings.admin_agent_enabled === "1" ? "live actions" : "disabled"}
                     body={
                       settings.admin_agent_enabled === "1"
-                        ? "Agent mode executes real actions (find/count/resend/retry) and writes audit logs."
+                        ? "Agent mode executes real actions (overview/find/list/timeline/count/resend/retry) and writes audit logs."
                         : "Enable Admin Agent in setup before running commands from UI or Telegram."
                     }
                   />
@@ -7228,7 +7229,7 @@ export default function App() {
                     <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                       <MonitorCog className="h-10 w-10" />
                       <p className="text-sm max-w-xs">
-                        สั่งงาน Agent เช่น หา registration, นับจำนวน, resend ticket/email, หรือ retry bot
+                        สั่งงาน Agent เช่น สรุป event, list/find registration, ดู timeline, resend ticket/email, หรือ retry bot
                       </p>
                     </div>
                   )}

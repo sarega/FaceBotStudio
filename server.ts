@@ -131,8 +131,11 @@ type ToolExecutionBundle = {
 };
 
 type AdminAgentActionName =
+  | "get_event_overview"
   | "find_registration"
+  | "list_registrations"
   | "count_registrations"
+  | "get_registration_timeline"
   | "resend_ticket"
   | "resend_email"
   | "retry_bot";
@@ -838,8 +841,11 @@ function extractAssistantText(content: unknown) {
 }
 
 const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
+  "get_event_overview",
   "find_registration",
+  "list_registrations",
   "count_registrations",
+  "get_registration_timeline",
   "resend_ticket",
   "resend_email",
   "retry_bot",
@@ -1553,6 +1559,31 @@ function buildAdminAgentFindReply(matches: RegistrationRow[], totalMatches: numb
   return `${header}\n${lines.join("\n")}${truncatedNote}`;
 }
 
+function buildAdminAgentListReply(
+  matches: RegistrationRow[],
+  totalMatches: number,
+  limit: number,
+  filters: string[],
+  timeZone?: string,
+) {
+  if (totalMatches === 0) {
+    return filters.length > 0
+      ? "ไม่พบรายชื่อที่ตรงเงื่อนไขในอีเวนต์นี้"
+      : "ยังไม่มีรายชื่อลงทะเบียนในอีเวนต์นี้";
+  }
+
+  const header = filters.length > 0
+    ? `รายชื่อที่ตรงเงื่อนไข ${totalMatches} รายการ (${filters.join(", ")})`
+    : `รายชื่อผู้ลงทะเบียนล่าสุด ${Math.min(matches.length, limit)} รายการ`;
+  const lines = matches.slice(0, 8).map((registration, index) => (
+    `${index + 1}. ${registration.id} • ${formatRegistrationDisplayName(registration)} • ${registration.status} • ${formatEventScopedTimestamp(registration.timestamp, timeZone)}`
+  ));
+  const truncatedNote = totalMatches > matches.length
+    ? `\nแสดง ${matches.length} จาก ${totalMatches} รายการ`
+    : "";
+  return `${header}\n${lines.join("\n")}${truncatedNote}`;
+}
+
 function buildRegistrationLookupFilters(args: Record<string, unknown>, rawMessage: string) {
   const registrationId =
     normalizeRegistrationId(args.registration_id)
@@ -1568,6 +1599,12 @@ function buildRegistrationLookupFilters(args: Record<string, unknown>, rawMessag
   const email = normalizeComparableText(args.email);
   const status = normalizeRegistrationStatusInput(args.status);
   const limit = parsePositiveInteger(args.limit, 8, 30);
+  const fromTimestampRaw = normalizeOptionalText(args.from_timestamp) || normalizeOptionalText(args.since);
+  const toTimestampRaw = normalizeOptionalText(args.to_timestamp) || normalizeOptionalText(args.until);
+  const fromTimestamp = fromTimestampRaw ? Date.parse(fromTimestampRaw) : NaN;
+  const toTimestamp = toTimestampRaw ? Date.parse(toTimestampRaw) : NaN;
+  const fromMs = Number.isFinite(fromTimestamp) ? fromTimestamp : null;
+  const toMs = Number.isFinite(toTimestamp) ? toTimestamp : null;
 
   return {
     registrationId,
@@ -1578,6 +1615,8 @@ function buildRegistrationLookupFilters(args: Record<string, unknown>, rawMessag
     email,
     status,
     limit,
+    fromMs,
+    toMs,
   };
 }
 
@@ -1618,6 +1657,20 @@ async function findRegistrationsForAdminAction(
   if (filters.status) {
     matches = matches.filter((row) => row.status === filters.status);
     usedFilters.push(`status=${filters.status}`);
+  }
+  if (filters.fromMs !== null) {
+    matches = matches.filter((row) => {
+      const value = Date.parse(String(row.timestamp || ""));
+      return Number.isFinite(value) && value >= filters.fromMs!;
+    });
+    usedFilters.push(`from=${new Date(filters.fromMs).toISOString()}`);
+  }
+  if (filters.toMs !== null) {
+    matches = matches.filter((row) => {
+      const value = Date.parse(String(row.timestamp || ""));
+      return Number.isFinite(value) && value <= filters.toMs!;
+    });
+    usedFilters.push(`to=${new Date(filters.toMs).toISOString()}`);
   }
 
   if (filters.query && !filters.registrationId && !filters.fullName && !filters.phone && !filters.email) {
@@ -1777,6 +1830,129 @@ async function sendRegistrationConfirmationEmailManually(registrationId: string)
   }
 }
 
+async function resolveAdminAgentEventId(eventId: string) {
+  const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
+  const event = await appDb.getEventById(normalizedEventId);
+  if (!event) {
+    throw new Error(`Event ${normalizedEventId} was not found`);
+  }
+  return normalizedEventId;
+}
+
+function parseAdminAgentEventOverride(text: string, fallbackEventId: string) {
+  const raw = String(text || "").trim();
+  const normalized = raw.replace(/^\/agent\b/i, "").trim();
+  const overrideWithSlash = normalized.match(/^\/event\s+([a-zA-Z0-9_-]+)\s+([\s\S]+)$/i);
+  if (overrideWithSlash) {
+    return {
+      eventId: String(overrideWithSlash[1] || "").trim() || fallbackEventId,
+      command: String(overrideWithSlash[2] || "").trim(),
+    };
+  }
+  const overrideWithPrefix = normalized.match(/^event\s*:\s*([a-zA-Z0-9_-]+)\s+([\s\S]+)$/i);
+  if (overrideWithPrefix) {
+    return {
+      eventId: String(overrideWithPrefix[1] || "").trim() || fallbackEventId,
+      command: String(overrideWithPrefix[2] || "").trim(),
+    };
+  }
+  return {
+    eventId: fallbackEventId,
+    command: normalized,
+  };
+}
+
+function formatEventScopedTimestamp(value: string, timeZone?: string) {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  try {
+    return new Intl.DateTimeFormat("th-TH", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: normalizeTimeZone(timeZone),
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
+function formatAdminTimelineMessage(text: string) {
+  const normalized = normalizeMessageTextForHistory(text);
+  if (normalized) return normalized;
+  const raw = String(text || "").trim();
+  return raw.length > 220 ? `${raw.slice(0, 217)}...` : raw;
+}
+
+function getAdminTimelineActor(row: MessageRow) {
+  if (row.type === "incoming") return "user";
+  const markerMatch = String(row.text || "").trim().match(/^\[([a-z-]+)\]/i);
+  const marker = String(markerMatch?.[1] || "").toLowerCase();
+  if (marker.startsWith("manual-")) return "admin";
+  return "bot";
+}
+
+async function buildAdminAgentEventOverview(eventId: string, includeRecentRegistrations = 5) {
+  const settings = await getSettingsMap(eventId);
+  const event = await appDb.getEventById(eventId);
+  if (!event) {
+    throw new Error(`Event ${eventId} was not found`);
+  }
+  const state = getEventState(settings);
+  const registrations = await appDb.listRegistrations(undefined, eventId);
+  const total = registrations.length;
+  const active = registrations.filter((row) => row.status !== "cancelled").length;
+  const cancelled = registrations.filter((row) => row.status === "cancelled").length;
+  const checkedIn = registrations.filter((row) => row.status === "checked-in").length;
+  const recent = registrations.slice(0, Math.min(Math.max(0, includeRecentRegistrations), 10)).map((row) => ({
+    id: row.id,
+    full_name: formatRegistrationDisplayName(row),
+    status: row.status,
+    timestamp: row.timestamp,
+    timestamp_label: formatEventScopedTimestamp(row.timestamp, settings.event_timezone),
+  }));
+
+  const summaryLines = [
+    `Event ${event.id}: ${settings.event_name || event.name || "-"}`,
+    `สถานะงาน: ${event.effective_status} | สถานะลงทะเบียน: ${event.registration_availability || state.registrationStatus}`,
+    `เวลา: ${formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", state.timeZone)}`,
+    `สถานที่: ${settings.event_location || "-"}`,
+    `ลงทะเบียน: ทั้งหมด ${total} | active ${active} | checked-in ${checkedIn} | cancelled ${cancelled}`,
+  ];
+  if (recent.length > 0) {
+    summaryLines.push("รายชื่อล่าสุด:");
+    for (const row of recent) {
+      summaryLines.push(`- ${row.id} • ${row.full_name} • ${row.status} • ${row.timestamp_label}`);
+    }
+  }
+
+  return {
+    reply: summaryLines.join("\n"),
+    result: {
+      event_id: eventId,
+      event_name: settings.event_name || event.name || "",
+      effective_status: event.effective_status,
+      registration_availability: event.registration_availability || state.registrationStatus,
+      timezone: state.timeZone,
+      event_date: settings.event_date || "",
+      event_end_date: settings.event_end_date || "",
+      event_date_label: formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", state.timeZone),
+      location: settings.event_location || "",
+      map_url: settings.event_map_url || "",
+      registration: {
+        total,
+        active,
+        checked_in: checkedIn,
+        cancelled,
+        remaining_seats: event.remaining_seats ?? null,
+        capacity_limit: event.registration_limit ?? null,
+      },
+      recent_registrations: recent,
+    },
+    targetType: "event",
+    targetId: eventId,
+  };
+}
+
 async function requestAdminAgentPlan(
   message: string,
   history: ChatHistoryMessage[],
@@ -1799,11 +1975,14 @@ async function requestAdminAgentPlan(
     "You are the Admin Agent planner for an event registration operations system.",
     "Your user is an admin/operator, not an attendee.",
     "Use concise operational Thai when asking follow-up questions.",
-    "Allowed actions only: find_registration, count_registrations, resend_ticket, resend_email, retry_bot.",
+    "Allowed actions only: get_event_overview, find_registration, list_registrations, count_registrations, get_registration_timeline, resend_ticket, resend_email, retry_bot.",
+    "Default to the selected event scope unless the admin explicitly asks for another event.",
     "When enough information exists, return exactly one tool call.",
     "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
     "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
     "When matching by name, pass full_name or first_name/last_name.",
+    "Use get_event_overview when asked for event status/time/place/capacity summary.",
+    "Use list_registrations for list requests, and get_registration_timeline for sender chat history.",
     "When asked to continue a stuck chat, use retry_bot.",
   ].join("\n");
   const plannerPrompt = customPlannerPrompt
@@ -1830,11 +2009,26 @@ async function requestAdminAgentPlan(
         {
           type: "function",
           function: {
+            name: "get_event_overview",
+            description: "Get event-level overview including status, date/time, location, and registration totals.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                recent_limit: { type: "integer", minimum: 0, maximum: 10 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
             name: "find_registration",
             description: "Find registrations in the selected event by ID, full name, sender ID, phone, email, or free-text query.",
             parameters: {
               type: "object",
               properties: {
+                event_id: { type: "string" },
                 registration_id: { type: "string" },
                 full_name: { type: "string" },
                 first_name: { type: "string" },
@@ -1844,7 +2038,37 @@ async function requestAdminAgentPlan(
                 email: { type: "string" },
                 query: { type: "string" },
                 status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+                from_timestamp: { type: "string" },
+                to_timestamp: { type: "string" },
+                since: { type: "string" },
+                until: { type: "string" },
                 limit: { type: "integer", minimum: 1, maximum: 30 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "list_registrations",
+            description: "List recent registrations in the selected event, optionally filtered by status/date/search.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+                from_timestamp: { type: "string" },
+                to_timestamp: { type: "string" },
+                since: { type: "string" },
+                until: { type: "string" },
+                query: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                sender_id: { type: "string" },
+                phone: { type: "string" },
+                email: { type: "string" },
+                limit: { type: "integer", minimum: 1, maximum: 50 },
               },
             },
           },
@@ -1857,7 +2081,32 @@ async function requestAdminAgentPlan(
             parameters: {
               type: "object",
               properties: {
+                event_id: { type: "string" },
                 status: { type: "string", enum: ["registered", "cancelled", "checked-in"] },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "get_registration_timeline",
+            description: "Get recent message timeline for one registration/sender in the selected event.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                registration_id: { type: "string" },
+                sender_id: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                query: { type: "string" },
+                from_timestamp: { type: "string" },
+                to_timestamp: { type: "string" },
+                since: { type: "string" },
+                until: { type: "string" },
+                limit: { type: "integer", minimum: 1, maximum: 120 },
               },
             },
           },
@@ -1870,6 +2119,7 @@ async function requestAdminAgentPlan(
             parameters: {
               type: "object",
               properties: {
+                event_id: { type: "string" },
                 registration_id: { type: "string" },
                 sender_id: { type: "string" },
                 external_id: { type: "string" },
@@ -1890,6 +2140,7 @@ async function requestAdminAgentPlan(
             parameters: {
               type: "object",
               properties: {
+                event_id: { type: "string" },
                 registration_id: { type: "string" },
                 full_name: { type: "string" },
                 first_name: { type: "string" },
@@ -1908,6 +2159,7 @@ async function requestAdminAgentPlan(
             parameters: {
               type: "object",
               properties: {
+                event_id: { type: "string" },
                 sender_id: { type: "string" },
                 external_id: { type: "string" },
                 platform: { type: "string", enum: ["facebook", "line_oa", "instagram", "whatsapp", "telegram", "web_chat"] },
@@ -1979,6 +2231,10 @@ async function requestAdminAgentPlan(
 
 async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCall, rawMessage: string) {
   switch (call.name) {
+    case "get_event_overview": {
+      const recentLimit = parsePositiveInteger(call.args.recent_limit, 5, 10);
+      return buildAdminAgentEventOverview(eventId, recentLimit);
+    }
     case "find_registration": {
       const lookup = await findRegistrationsForAdminAction(eventId, call.args, rawMessage, { defaultToRecent: true });
       return {
@@ -1989,6 +2245,31 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
           limit: lookup.limit,
           filters: lookup.usedFilters,
           matches: lookup.matches.map(serializeAdminRegistration),
+        },
+        targetType: "event",
+        targetId: eventId,
+      };
+    }
+    case "list_registrations": {
+      const settings = await getSettingsMap(eventId);
+      const lookup = await findRegistrationsForAdminAction(eventId, call.args, rawMessage, {
+        defaultToRecent: true,
+        limit: parsePositiveInteger(call.args.limit, 15, 50),
+      });
+      return {
+        reply: buildAdminAgentListReply(
+          lookup.matches,
+          lookup.totalMatches,
+          lookup.limit,
+          lookup.usedFilters,
+          settings.event_timezone,
+        ),
+        result: {
+          event_id: eventId,
+          total_matches: lookup.totalMatches,
+          limit: lookup.limit,
+          filters: lookup.usedFilters,
+          registrations: lookup.matches.map(serializeAdminRegistration),
         },
         targetType: "event",
         targetId: eventId,
@@ -2016,6 +2297,80 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
         },
         targetType: "event",
         targetId: eventId,
+      };
+    }
+    case "get_registration_timeline": {
+      const settings = await getSettingsMap(eventId);
+      const lookupFilters = buildRegistrationLookupFilters(call.args, rawMessage);
+      const limit = parsePositiveInteger(call.args.limit, 30, 120);
+      const senderIdFromArgs = normalizeOptionalText(call.args.sender_id);
+      let registration: RegistrationRow | null = null;
+      let senderId = senderIdFromArgs;
+
+      if (!senderId) {
+        registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+        senderId = normalizeOptionalText(registration.sender_id);
+      }
+      if (!senderId) {
+        throw new Error("Sender ID is required to load timeline");
+      }
+
+      let rows = await appDb.getConversationRowsForSender(senderId, limit, eventId);
+      if (lookupFilters.fromMs !== null) {
+        rows = rows.filter((row) => {
+          const value = Date.parse(String(row.timestamp || ""));
+          return Number.isFinite(value) && value >= lookupFilters.fromMs!;
+        });
+      }
+      if (lookupFilters.toMs !== null) {
+        rows = rows.filter((row) => {
+          const value = Date.parse(String(row.timestamp || ""));
+          return Number.isFinite(value) && value <= lookupFilters.toMs!;
+        });
+      }
+
+      const timeline = rows
+        .slice()
+        .sort((left, right) => left.id - right.id)
+        .map((row) => ({
+          id: row.id,
+          sender_id: row.sender_id,
+          direction: row.type,
+          actor: getAdminTimelineActor(row),
+          timestamp: row.timestamp,
+          timestamp_label: formatEventScopedTimestamp(row.timestamp, settings.event_timezone),
+          text: formatAdminTimelineMessage(row.text || ""),
+        }))
+        .filter((row) => row.text);
+
+      const filters: string[] = [];
+      if (lookupFilters.fromMs !== null) filters.push(`from=${new Date(lookupFilters.fromMs).toISOString()}`);
+      if (lookupFilters.toMs !== null) filters.push(`to=${new Date(lookupFilters.toMs).toISOString()}`);
+
+      const targetLabel = registration
+        ? `${formatRegistrationDisplayName(registration)} (${registration.id})`
+        : `sender ${senderId}`;
+      const replyLines = timeline.slice(-8).map((entry, index) => (
+        `${index + 1}. [${entry.direction.toUpperCase()}|${entry.actor}] ${entry.timestamp_label} ${truncateText(entry.text, 140)}`
+      ));
+      const filterSuffix = filters.length > 0 ? ` (${filters.join(", ")})` : "";
+      const reply = timeline.length > 0
+        ? `Timeline สำหรับ ${targetLabel}${filterSuffix}\n${replyLines.join("\n")}`
+        : `ไม่พบข้อความใน timeline สำหรับ ${targetLabel}${filterSuffix}`;
+
+      return {
+        reply,
+        result: {
+          event_id: eventId,
+          sender_id: senderId,
+          registration: registration ? serializeAdminRegistration(registration) : null,
+          message_count: timeline.length,
+          limit,
+          filters,
+          messages: timeline,
+        },
+        targetType: registration ? "registration" : "message_sender",
+        targetId: registration?.id || senderId,
       };
     }
     case "resend_ticket": {
@@ -2121,7 +2476,10 @@ function summarizeAdminAgentResultForAudit(result: unknown) {
   const summary: Record<string, unknown> = {};
   if (!result || typeof result !== "object") return summary;
   const value = result as Record<string, unknown>;
+  if (typeof value.event_id === "string" && value.event_id.trim()) summary.event_id = value.event_id.trim();
+  if (typeof value.message_count === "number") summary.message_count = value.message_count;
   if (typeof value.total_matches === "number") summary.total_matches = value.total_matches;
+  if (typeof value.total === "number") summary.total = value.total;
   if (typeof value.sender_id === "string" && value.sender_id.trim()) summary.sender_id = value.sender_id.trim();
   if (value.registration && typeof value.registration === "object") {
     const registration = value.registration as Record<string, unknown>;
@@ -2232,28 +2590,6 @@ async function sendTelegramTextWithBotToken(botToken: string, chatId: string, te
   return payload;
 }
 
-function parseAdminAgentTelegramEventOverride(text: string, fallbackEventId: string) {
-  const raw = String(text || "").trim();
-  const overrideWithSlash = raw.match(/^\/event\s+([a-zA-Z0-9_-]+)\s+([\s\S]+)$/i);
-  if (overrideWithSlash) {
-    return {
-      eventId: String(overrideWithSlash[1] || "").trim() || fallbackEventId,
-      command: String(overrideWithSlash[2] || "").trim(),
-    };
-  }
-  const overrideWithPrefix = raw.match(/^event\s*:\s*([a-zA-Z0-9_-]+)\s+([\s\S]+)$/i);
-  if (overrideWithPrefix) {
-    return {
-      eventId: String(overrideWithPrefix[1] || "").trim() || fallbackEventId,
-      command: String(overrideWithPrefix[2] || "").trim(),
-    };
-  }
-  return {
-    eventId: fallbackEventId,
-    command: raw.replace(/^\/agent\s+/i, "").trim(),
-  };
-}
-
 async function runAdminAgentCommand(options: {
   message: string;
   eventId: string;
@@ -2263,22 +2599,44 @@ async function runAdminAgentCommand(options: {
   source: string;
   metadata?: Record<string, unknown>;
 }) {
-  const eventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
-  const message = normalizeOptionalText(options.message);
+  const requestedEventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
+  const parsedCommand = parseAdminAgentEventOverride(options.message, requestedEventId);
+  const message = normalizeOptionalText(parsedCommand.command);
   if (!message) {
     throw new Error("Message is required");
   }
 
-  const settings = options.settings || await getSettingsMap(eventId);
+  const scopedEventId = await resolveAdminAgentEventId(parsedCommand.eventId || requestedEventId);
+  const providedSettings = options.settings && typeof options.settings === "object"
+    ? options.settings as Record<string, any>
+    : null;
+  const shouldReuseProvidedSettings = Boolean(providedSettings) && scopedEventId === requestedEventId;
+  const eventSettings = shouldReuseProvidedSettings
+    ? (providedSettings as Record<string, any>)
+    : await getSettingsMap(scopedEventId);
+  const settings = {
+    ...eventSettings,
+    ...(providedSettings && normalizeOptionalText(providedSettings.admin_agent_system_prompt)
+      ? { admin_agent_system_prompt: providedSettings.admin_agent_system_prompt }
+      : {}),
+    ...(providedSettings && normalizeOptionalText(providedSettings.admin_agent_model)
+      ? { admin_agent_model: providedSettings.admin_agent_model }
+      : {}),
+  };
+
   const plan = await requestAdminAgentPlan(
     message,
     options.history || [],
     settings,
     {
-      eventId,
+      eventId: scopedEventId,
       actorUserId: options.actorUserId || null,
       source: options.source,
-      metadata: options.metadata,
+      metadata: {
+        request_event_id: requestedEventId,
+        parsed_event_id: parsedCommand.eventId || requestedEventId,
+        ...options.metadata,
+      },
     },
   );
 
@@ -2288,19 +2646,35 @@ async function runAdminAgentCommand(options: {
       action: null as AdminAgentToolCall | null,
       result: null as Record<string, unknown> | null,
       meta: plan.meta,
+      eventId: scopedEventId,
       targetType: "event",
-      targetId: eventId,
+      targetId: scopedEventId,
     };
   }
 
-  const execution = await executeAdminAgentToolCall(eventId, plan.toolCall, message);
+  let executionEventId = scopedEventId;
+  const actionEventId = normalizeOptionalText(plan.toolCall.args.event_id);
+  if (actionEventId) {
+    executionEventId = await resolveAdminAgentEventId(actionEventId);
+  }
+
+  const action: AdminAgentToolCall = {
+    ...plan.toolCall,
+    args: {
+      ...plan.toolCall.args,
+      event_id: executionEventId,
+    },
+  };
+
+  const execution = await executeAdminAgentToolCall(executionEventId, action, message);
   return {
     reply: execution.reply,
-    action: plan.toolCall,
+    action,
     result: execution.result as Record<string, unknown>,
     meta: plan.meta,
+    eventId: executionEventId,
     targetType: execution.targetType || "event",
-    targetId: execution.targetId || eventId,
+    targetId: execution.targetId || executionEventId,
   };
 }
 
@@ -6199,6 +6573,8 @@ async function startServer() {
       const settings = (body.settings && typeof body.settings === "object")
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
+      const parsedScope = parseAdminAgentEventOverride(message, eventId);
+      const requestedEventId = normalizeOptionalText(parsedScope.eventId) || eventId;
       const globalAgentSettings = await getAdminAgentGlobalSettings();
       if (!globalAgentSettings.enabled) {
         return res.status(403).json({ error: "Admin Agent is disabled. Enable it in Agent Setup first." });
@@ -6218,14 +6594,15 @@ async function startServer() {
           source: "admin_agent_planner",
           metadata: { mode: "ui" },
         });
+        const effectiveEventId = normalizeOptionalText(execution.eventId) || requestedEventId;
 
         await recordAudit(
           req,
           execution.action ? "admin_agent.action_executed" : "admin_agent.clarification_requested",
           execution.targetType || "event",
-          execution.targetId || eventId,
+          execution.targetId || effectiveEventId,
           {
-            event_id: eventId,
+            event_id: effectiveEventId,
             action: execution.action?.name || null,
             source: execution.action?.source || "llm",
             args: execution.action?.args || {},
@@ -6237,6 +6614,7 @@ async function startServer() {
           action: execution.action,
           result: execution.result,
           meta: execution.meta,
+          event_id: effectiveEventId,
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Failed to execute admin action";
@@ -6244,9 +6622,9 @@ async function startServer() {
           req,
           "admin_agent.action_failed",
           "event",
-          eventId,
+          requestedEventId,
           {
-            event_id: eventId,
+            event_id: requestedEventId,
             action: null,
             source: "llm",
             args: {},
@@ -6298,8 +6676,11 @@ async function startServer() {
           const helpMessage = [
             "Admin Agent พร้อมใช้งาน",
             "ตัวอย่างคำสั่ง:",
+            "- สรุปอีเวนต์นี้",
             "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
+            "- list registrations status registered",
             "- หาชื่อ สมชาย ใจดี",
+            "- timeline REG-XXXXXX",
             "- resend ticket REG-XXXXXX",
             "- resend email REG-XXXXXX",
             "- retry bot sender 123456",
@@ -6309,7 +6690,7 @@ async function startServer() {
           return;
         }
 
-        const parsedCommand = parseAdminAgentTelegramEventOverride(text, settings.defaultEventId || DEFAULT_EVENT_ID);
+        const parsedCommand = parseAdminAgentEventOverride(text, settings.defaultEventId || DEFAULT_EVENT_ID);
         const eventId = normalizeOptionalText(parsedCommand.eventId) || DEFAULT_EVENT_ID;
         const command = normalizeOptionalText(parsedCommand.command);
         if (!command) {
@@ -6322,13 +6703,11 @@ async function startServer() {
         }
 
         try {
-          const eventSettings = await getSettingsMap(eventId);
           const execution = await runAdminAgentCommand({
             message: command,
             eventId,
             history: [],
             settings: {
-              ...eventSettings,
               ...(settings.systemPrompt ? { admin_agent_system_prompt: settings.systemPrompt } : {}),
               ...(settings.model ? { admin_agent_model: settings.model } : {}),
             },
@@ -6343,6 +6722,7 @@ async function startServer() {
           const replyText = execution.action
             ? `[${execution.action.name}] ${execution.reply}`
             : execution.reply;
+          const effectiveEventId = normalizeOptionalText(execution.eventId) || eventId;
 
           await sendTelegramTextWithBotToken(settings.telegramBotToken, normalized.chatId, replyText);
 
@@ -6350,9 +6730,9 @@ async function startServer() {
             actor_user_id: null,
             action: execution.action ? "admin_agent.telegram_action_executed" : "admin_agent.telegram_clarification",
             target_type: execution.targetType || "event",
-            target_id: execution.targetId || eventId,
+            target_id: execution.targetId || effectiveEventId,
             metadata: {
-              event_id: eventId,
+              event_id: effectiveEventId,
               chat_id: normalized.chatId,
               action: execution.action?.name || null,
               args: execution.action?.args || {},
