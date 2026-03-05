@@ -365,6 +365,13 @@ html.theme-dark .ring-offset-2 {
   background: #cbd5e1;
 }
 
+.log-list-preview-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 html.theme-dark .chat-scroll::-webkit-scrollbar-thumb {
   background: #334155;
 }

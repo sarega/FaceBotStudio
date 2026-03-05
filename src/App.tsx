@@ -4780,11 +4780,11 @@ export default function App() {
 
   const logStatusMessages = [manualOverrideMessage, logRegistrationMessage].filter(Boolean);
   const logManualOverridePanel = canSendManualOverride && selectedLogMessage ? (
-    <div className="log-tools-surface rounded-3xl border-2 border-amber-200 p-4">
+    <div className="log-tools-surface max-h-[56vh] overflow-y-auto rounded-2xl border-2 border-amber-200 p-3 sm:p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Manual Override</p>
-          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+          <p className="mt-1 hidden text-xs leading-relaxed text-slate-500 sm:block">
             Send a human reply or create and issue a ticket directly from this sender thread.
           </p>
         </div>
@@ -5086,13 +5086,13 @@ export default function App() {
       Select a log row to inspect the full message and sender history.
     </div>
   ) : (
-    <div className="log-inspector-surface flex h-full min-h-[38rem] flex-col">
-      <div className="border-b border-slate-100 bg-white px-6 py-5">
+    <div className="log-inspector-surface flex h-full min-h-[34rem] flex-col">
+      <div className="border-b border-slate-100 bg-white px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender History</p>
-            <p className="mt-1 break-all font-mono text-sm text-blue-600">{selectedLogMessage.sender_id}</p>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-0.5 break-all font-mono text-xs text-blue-600">{selectedLogMessage.sender_id}</p>
+            <p className="mt-0.5 text-[11px] text-slate-500">
               {selectedSenderThread.length} message{selectedSenderThread.length === 1 ? "" : "s"} in the current event log
             </p>
           </div>
@@ -5113,22 +5113,22 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mt-4 space-y-4">
+        <div className="mt-3 space-y-3">
           {logToolsOpen && logManualOverridePanel}
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-100 p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-slate-100 p-3 shadow-sm">
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
-            <p className="mt-1 text-[11px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
             {(() => {
               const selectedTrace = parseLineTraceMessage(selectedLogMessage.text);
               if (selectedTrace) {
                 return (
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-2 space-y-1.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge tone="emerald">line</StatusBadge>
                       <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
                     </div>
-                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                    <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                       {selectedTrace.detail || "-"}
                     </p>
                   </div>
@@ -5136,19 +5136,19 @@ export default function App() {
               }
               if (selectedLogAuditMarker && selectedLogAuditMarker.marker !== "manual-reply") {
                 return (
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-2 space-y-1.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.actor}</StatusBadge>
                       <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.label}</StatusBadge>
                     </div>
-                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                    <p className="whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                       {selectedLogAuditMarker.summary}
                     </p>
                   </div>
                 );
               }
               return (
-                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                   {selectedLogAuditMarker?.detail || selectedLogMessage.text}
                 </p>
               );
@@ -5157,46 +5157,48 @@ export default function App() {
         </div>
       </div>
 
-      <div className="log-history-surface chat-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-5">
+      <div className="log-history-surface chat-scroll min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
         {selectedSenderThread.map((threadMessage) => {
           const lineTrace = parseLineTraceMessage(threadMessage.text);
           const auditMarker = lineTrace ? null : parseInternalLogMarker(threadMessage.text);
           const isCurrentMessage = threadMessage.id === selectedLogMessage.id;
+          const alignClass = lineTrace || auditMarker || threadMessage.type === "incoming" ? "justify-start" : "justify-end";
           return (
-            <div
-              key={threadMessage.id}
-              className={`rounded-2xl border px-4 py-3 shadow-sm ${
-                isCurrentMessage
-                  ? "border-blue-200 bg-blue-50"
-                  : lineTrace
-                  ? "border-amber-100 bg-amber-50"
-                  : auditMarker
-                  ? "border-violet-100 bg-violet-50"
-                  : threadMessage.type === "incoming"
-                  ? "border-emerald-100 bg-emerald-50"
-                  : "border-slate-200 bg-white"
-              }`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                  {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
-                  <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : threadMessage.type === "incoming" ? "emerald" : "blue"}>
-                    {lineTrace ? "trace" : auditMarker ? auditMarker.label : threadMessage.type}
-                  </StatusBadge>
-                  {isCurrentMessage && <StatusBadge tone="blue">selected</StatusBadge>}
+            <div key={threadMessage.id} className={`flex ${alignClass}`}>
+              <div
+                className={`w-full max-w-[86%] rounded-2xl border px-3 py-2.5 shadow-sm ${
+                  isCurrentMessage
+                    ? "border-blue-200 bg-blue-50"
+                    : lineTrace
+                    ? "border-amber-100 bg-amber-50"
+                    : auditMarker
+                    ? "border-violet-100 bg-violet-50"
+                    : threadMessage.type === "incoming"
+                    ? "border-emerald-100 bg-emerald-50"
+                    : "border-slate-200 bg-white"
+                } ${isCurrentMessage ? "ring-1 ring-blue-200" : ""}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
+                    {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
+                    <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : threadMessage.type === "incoming" ? "emerald" : "blue"}>
+                      {lineTrace ? "trace" : auditMarker ? auditMarker.label : threadMessage.type}
+                    </StatusBadge>
+                    {isCurrentMessage && <StatusBadge tone="blue">selected</StatusBadge>}
+                  </div>
+                  <p className="text-[10px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
                 </div>
-                <p className="text-[11px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
+                <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
+                  {lineTrace
+                    ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
+                    : auditMarker
+                    ? auditMarker.marker === "manual-reply"
+                      ? auditMarker.detail
+                      : auditMarker.summary
+                    : threadMessage.text}
+                </p>
               </div>
-              <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                {lineTrace
-                  ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
-                  : auditMarker
-                  ? auditMarker.marker === "manual-reply"
-                    ? auditMarker.detail
-                    : auditMarker.summary
-                  : threadMessage.text}
-              </p>
             </div>
           );
         })}
@@ -6985,17 +6987,17 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-6">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)]">
+                <div className="space-y-4">
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+                    <div className="flex flex-col gap-2 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <div className="mb-1 flex items-center gap-2">
-                          <h2 className="text-lg font-semibold">Registered Attendees</h2>
+                        <div className="mb-0.5 flex items-center gap-2">
+                          <h2 className="text-base font-semibold">Registered Attendees</h2>
                           <StatusBadge tone="neutral">{filteredRegistrations.length}</StatusBadge>
                           <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
                         </div>
-                        <p className="text-sm text-slate-500">
+                        <p className="text-xs text-slate-500">
                           {registrationCapacity.limit === null
                             ? `${activeAttendeeCount} active attendees. Search fast, then progressively load more rows when this event gets large.`
                             : registrationCapacity.remaining === 0
@@ -7013,13 +7015,13 @@ export default function App() {
                         </MenuActionLink>
                       </InlineActionsMenu>
                     </div>
-                    <div className="border-b border-slate-100 px-4 py-3 sm:px-6">
+                    <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <input
                           value={registrationListQuery}
                           onChange={(e) => setRegistrationListQuery(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
                           placeholder="Search by name, registration ID, phone, or email"
                         />
                         {registrationListQuery && (
@@ -7033,7 +7035,7 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                    <div className="max-h-[34rem] space-y-3 overflow-y-auto p-4 md:hidden">
+                    <div className="max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden">
                       {filteredRegistrations.length === 0 ? (
                         <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
                           {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
@@ -7044,7 +7046,7 @@ export default function App() {
                             key={reg.id}
                             id={getSearchTargetDomId("registration", reg.id)}
                             onClick={() => setSelectedRegistrationId(reg.id)}
-                            className={`w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
+                            className={`w-full rounded-2xl border px-3 py-2.5 text-left transition-colors ${
                               selectedRegistrationId === reg.id
                                 ? "border-blue-200 bg-blue-50"
                                 : "border-slate-200 bg-white hover:bg-slate-50"
@@ -7052,9 +7054,9 @@ export default function App() {
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="truncate font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
-                                <p className="mt-1 font-mono text-xs font-bold text-blue-600">{reg.id}</p>
-                                <p className="mt-1 truncate text-[11px] text-slate-500">
+                                <p className="truncate text-sm font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
+                                <p className="mt-0.5 font-mono text-[11px] font-bold text-blue-600">{reg.id}</p>
+                                <p className="mt-0.5 truncate text-[10px] text-slate-500">
                                   {reg.phone || reg.email || "No contact info"}
                                 </p>
                               </div>
@@ -7063,28 +7065,28 @@ export default function App() {
                                 {selectedRegistrationId === reg.id && <StatusBadge tone="blue">selected</StatusBadge>}
                               </div>
                             </div>
-                            <p className="mt-2 text-[11px] text-slate-500">{new Date(reg.timestamp).toLocaleString()}</p>
+                            <p className="mt-1 text-[10px] text-slate-500">{new Date(reg.timestamp).toLocaleString()}</p>
                           </button>
                         ))
                       )}
                     </div>
-                    <div className="hidden max-h-[46rem] overflow-auto md:block">
+                    <div className="hidden max-h-[38rem] overflow-auto md:block">
                       <table className="w-full text-left text-sm">
                         <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                           <tr>
-                            <th className="px-6 py-3">ID</th>
-                            <th className="px-6 py-3">Name</th>
-                            <th className="px-6 py-3">Contact</th>
-                            <th className="px-6 py-3">Status</th>
+                            <th className="px-4 py-2.5">ID</th>
+                            <th className="px-4 py-2.5">Name</th>
+                            <th className="px-4 py-2.5">Contact</th>
+                            <th className="px-4 py-2.5">Status</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {filteredRegistrations.length === 0 ? (
                             <tr>
-                              <td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">
-                                {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
-                              </td>
-                            </tr>
+                                <td colSpan={4} className="px-4 py-10 text-center text-slate-400 italic">
+                                  {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
+                                </td>
+                              </tr>
                           ) : (
                             visibleRegistrations.map((reg) => (
                               <tr
@@ -7097,18 +7099,18 @@ export default function App() {
                                   isSearchFocused("registration", reg.id) ? "bg-blue-50" : ""
                                 }`}
                               >
-                                <td className="px-6 py-4 font-mono text-xs font-bold text-blue-600">
+                                <td className="px-4 py-2.5 font-mono text-[11px] font-bold text-blue-600">
                                   {reg.id}
                                 </td>
-                                <td className="px-6 py-4">
-                                  <p className="font-medium">{reg.first_name} {reg.last_name}</p>
+                                <td className="px-4 py-2.5">
+                                  <p className="text-sm font-medium">{reg.first_name} {reg.last_name}</p>
                                   <p className="text-[10px] text-slate-400">{new Date(reg.timestamp).toLocaleString()}</p>
                                 </td>
-                                <td className="px-6 py-4">
-                                  <p className="text-xs">{reg.phone}</p>
+                                <td className="px-4 py-2.5">
+                                  <p className="text-[11px]">{reg.phone}</p>
                                   <p className="text-[10px] text-slate-400">{reg.email}</p>
                                 </td>
-                                <td className="px-6 py-4">
+                                <td className="px-4 py-2.5">
                                   <StatusBadge tone={getRegistrationStatusTone(reg.status)}>
                                     {reg.status}
                                   </StatusBadge>
@@ -7122,7 +7124,7 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
-                    <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                    <div className="flex flex-col gap-2 border-t border-slate-100 px-3 py-2.5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-4">
                       <p>
                         Showing {visibleRegistrations.length} of {filteredRegistrations.length} attendees
                       </p>
@@ -7139,11 +7141,11 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-6">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                <div className="space-y-4">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
                     <div className="mb-3 flex items-start justify-between gap-3">
                       <div>
-                        <h3 className="text-base font-semibold flex items-center gap-2">
+                        <h3 className="text-sm font-semibold flex items-center gap-2">
                           <Activity className="w-4 h-4 text-blue-600" />
                           Event Stats
                         </h3>
@@ -7151,8 +7153,8 @@ export default function App() {
                       </div>
                       <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
                     </div>
-                    <div className="space-y-3">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="space-y-2.5">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Seat Capacity</p>
@@ -7215,10 +7217,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+                  <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
                     <div className="flex items-center justify-between mb-3">
                       <div>
-                        <h3 className="text-lg font-semibold">Selected Ticket</h3>
+                        <h3 className="text-base font-semibold">Selected Ticket</h3>
                         <p className="text-xs text-slate-500">Click a registration row to preview, download, and edit status.</p>
                       </div>
                       {selectedRegistration && (
@@ -7233,8 +7235,8 @@ export default function App() {
                         No attendee selected yet.
                       </div>
                     ) : (
-                      <div className="space-y-4">
-                        <div className="max-h-[30rem] overflow-auto rounded-2xl bg-slate-50 p-2">
+                      <div className="space-y-3">
+                        <div className="max-h-[23rem] overflow-auto rounded-2xl bg-slate-50 p-1.5">
                           <Ticket
                             registrationId={selectedRegistration.id}
                             firstName={selectedRegistration.first_name}
@@ -7249,7 +7251,7 @@ export default function App() {
                           />
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-1.5">
                           <a
                             href={selectedTicketPngUrl}
                             target="_blank"
@@ -7293,7 +7295,7 @@ export default function App() {
                         </div>
 
                         {canChangeRegistrationStatus && (
-                        <div className="border-t border-slate-100 pt-4">
+                        <div className="border-t border-slate-100 pt-3">
                           <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Admin Status Override</p>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             {(["registered", "checked-in", "cancelled"] as RegistrationStatus[]).map((statusOption) => {
@@ -7720,7 +7722,7 @@ export default function App() {
               className="space-y-6"
             >
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="border-b border-slate-100 p-5 sm:p-6">
+                <div className="border-b border-slate-100 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -7747,13 +7749,13 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                  <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center">
+                  <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-center">
                     <div className="relative min-w-0 flex-1">
                       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                       <input
                         value={logListQuery}
                         onChange={(e) => setLogListQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
                         placeholder="Search logs by sender, message, type, or trace detail"
                       />
                       {logListQuery && (
@@ -7776,7 +7778,7 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <div className="space-y-3 p-4 md:hidden">
+                <div className="space-y-2 p-3 md:hidden">
                   {filteredMessages.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
                       {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
@@ -7785,61 +7787,49 @@ export default function App() {
                     filteredMessages.map((msg) => {
                       const lineTrace = parseLineTraceMessage(msg.text);
                       const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
+                      const isSelected = selectedLogMessageId === msg.id;
                       return (
-                        <div
-                          key={msg.id}
-                          id={getSearchTargetDomId("log", String(msg.id))}
-                          className={`rounded-2xl border border-slate-200 bg-white p-4 space-y-3 ${
-                            isSearchFocused("log", String(msg.id)) ? "ring-2 ring-blue-200 ring-offset-2" : ""
-                          }`}
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-slate-900">
-                                {lineTrace
-                                  ? "Delivery Trace"
-                                  : auditMarker
-                                  ? formatTraceStatusLabel(auditMarker.label)
-                                  : msg.type === "incoming"
-                                  ? "Incoming Message"
-                                  : "Outgoing Message"}
-                              </p>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
+                        <div key={msg.id} id={getSearchTargetDomId("log", String(msg.id))}>
+                          <button
+                            onClick={() => setSelectedLogMessageId(msg.id)}
+                            className={`w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left transition-colors ${
+                              isSelected
+                                ? "border-blue-200 bg-blue-50"
+                                : isSearchFocused("log", String(msg.id))
+                                ? "bg-blue-50/70"
+                                : "hover:bg-slate-50"
+                            } ${isSearchFocused("log", String(msg.id)) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
+                          >
+                            <div className="flex flex-wrap items-center gap-1.5">
                               {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
                               {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
                               <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
                                 {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                               </StatusBadge>
+                              {isSelected && <StatusBadge tone="blue">selected</StatusBadge>}
                             </div>
-                          </div>
-                          <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
-                              <p className="mt-1 break-all font-mono text-[11px] text-blue-600">{msg.sender_id}</p>
-                            </div>
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Time</p>
-                              <p className="mt-1 text-[11px] text-slate-700">{new Date(msg.timestamp).toLocaleString()}</p>
-                            </div>
-                          </div>
-                          {lineTrace ? (
-                            <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-700">Trace Status</p>
-                              <p className="mt-1 text-sm font-semibold text-slate-900">{formatTraceStatusLabel(lineTrace.status)}</p>
-                              <p className="mt-2 text-sm break-words text-slate-700">{lineTrace.detail || "-"}</p>
-                            </div>
-                          ) : auditMarker ? (
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Audit</p>
-                              <p className="mt-2 text-sm break-words text-slate-700">
-                                {auditMarker.marker === "manual-reply" ? auditMarker.detail : auditMarker.summary}
+                            <div className="mt-1.5 flex items-start justify-between gap-2">
+                              <p className="log-list-preview-2 min-w-0 text-sm leading-5 text-slate-700">
+                                {getLogMessageDisplayText(msg)}
+                              </p>
+                              <p className="shrink-0 text-[10px] text-slate-500">
+                                {new Date(msg.timestamp).toLocaleString()}
                               </p>
                             </div>
-                          ) : (
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Message</p>
-                              <p className="mt-2 text-sm break-words text-slate-700">{msg.text}</p>
+                            <p className="mt-1 truncate font-mono text-[10px] text-blue-600">{msg.sender_id}</p>
+                          </button>
+                          {isSelected && (
+                            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
+                              <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
+                                {lineTrace
+                                  ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
+                                  : auditMarker
+                                  ? auditMarker.marker === "manual-reply"
+                                    ? auditMarker.detail
+                                    : auditMarker.summary
+                                  : msg.text}
+                              </p>
                             </div>
                           )}
                         </div>
@@ -7926,14 +7916,14 @@ export default function App() {
                 <div className="hidden border-t border-slate-100 bg-slate-50 md:block xl:hidden">
                   {logInspectorPanel}
                 </div>
-                <div className="hidden xl:grid xl:min-h-[38rem] xl:grid-cols-[minmax(0,1.05fr)_minmax(26rem,0.95fr)]">
+                <div className="hidden xl:grid xl:min-h-[34rem] xl:grid-cols-[minmax(0,1.25fr)_minmax(22rem,0.75fr)]">
                   <div className="min-w-0 border-r border-slate-100">
                     {filteredMessages.length === 0 ? (
                       <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
                         {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
                       </div>
                     ) : (
-                      <div className="max-h-[38rem] overflow-y-auto">
+                      <div className="max-h-[34rem] overflow-y-auto">
                         {filteredMessages.map((msg) => {
                           const lineTrace = parseLineTraceMessage(msg.text);
                           const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
@@ -7943,7 +7933,7 @@ export default function App() {
                               key={msg.id}
                               id={getSearchTargetDomId("log", String(msg.id))}
                               onClick={() => setSelectedLogMessageId(msg.id)}
-                              className={`grid h-[6.5rem] w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-4 overflow-hidden border-b border-slate-100 px-6 py-4 text-left transition-colors ${
+                              className={`grid min-h-[5.1rem] w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2 overflow-hidden border-b border-slate-100 px-4 py-2.5 text-left transition-colors ${
                                 isSelected
                                   ? "bg-blue-50"
                                   : isSearchFocused("log", String(msg.id))
@@ -7958,13 +7948,13 @@ export default function App() {
                                   <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
                                     {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                                   </StatusBadge>
-                                  <p className="min-w-0 truncate text-[11px] font-mono text-blue-600">{msg.sender_id}</p>
+                                  <p className="min-w-0 truncate text-[10px] font-mono text-blue-600">{msg.sender_id}</p>
                                 </div>
-                                <p className="mt-2 truncate text-sm leading-6 text-slate-700">
+                                <p className="log-list-preview-2 mt-1 text-[13px] leading-5 text-slate-700">
                                   {getLogMessageDisplayText(msg)}
                                 </p>
                               </div>
-                              <p className="shrink-0 whitespace-nowrap pl-3 text-[11px] text-slate-500">
+                              <p className="shrink-0 whitespace-nowrap pl-2 text-[10px] text-slate-500">
                                 {new Date(msg.timestamp).toLocaleString()}
                               </p>
                             </button>
