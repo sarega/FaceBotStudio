@@ -43,7 +43,13 @@ import {
   verifyPassword,
   type UserRole,
 } from "./backend/auth";
-import { formatStoredDateRangeForDisplay, getEventState, normalizeTimeZone, type RegistrationWindowState } from "./backend/datetime";
+import {
+  formatStoredDateForDisplay,
+  formatStoredDateRangeForDisplay,
+  getEventState,
+  normalizeTimeZone,
+  type RegistrationWindowState,
+} from "./backend/datetime";
 import {
   createAppDatabase,
   type AuthUserRow,
@@ -137,6 +143,7 @@ type AdminAgentActionName =
   | "list_registrations"
   | "count_registrations"
   | "get_registration_timeline"
+  | "send_message_to_sender"
   | "resend_ticket"
   | "resend_email"
   | "retry_bot";
@@ -848,6 +855,7 @@ const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
   "list_registrations",
   "count_registrations",
   "get_registration_timeline",
+  "send_message_to_sender",
   "resend_ticket",
   "resend_email",
   "retry_bot",
@@ -2152,6 +2160,16 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
   const active = registrations.filter((row) => row.status !== "cancelled").length;
   const cancelled = registrations.filter((row) => row.status === "cancelled").length;
   const checkedIn = registrations.filter((row) => row.status === "checked-in").length;
+  const duplicateNameGuard = isTruthySetting(settings.reg_unique_name ?? "1");
+  const registrationLimit = parseRegistrationLimit(settings.reg_limit);
+  const registrationStartLabel = formatStoredDateForDisplay(settings.reg_start || "", state.timeZone);
+  const registrationEndLabel = formatStoredDateForDisplay(settings.reg_end || "", state.timeZone);
+  const eventStartLabel = formatStoredDateForDisplay(settings.event_date || "", state.timeZone);
+  const eventEndLabel = formatStoredDateForDisplay(settings.event_end_date || "", state.timeZone);
+  const mapUrl = normalizeOptionalText(settings.event_map_url);
+  const description = normalizeOptionalText(settings.event_description);
+  const travel = normalizeOptionalText(settings.event_travel);
+  const confirmationEmailEnabled = isTruthySetting(settings.confirmation_email_enabled);
   const recent = registrations.slice(0, Math.min(Math.max(0, includeRecentRegistrations), 10)).map((row) => ({
     id: row.id,
     full_name: formatRegistrationDisplayName(row),
@@ -2165,8 +2183,17 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
     `สถานะงาน: ${event.effective_status} | สถานะลงทะเบียน: ${event.registration_availability || state.registrationStatus}`,
     `เวลา: ${formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", state.timeZone)}`,
     `สถานที่: ${settings.event_location || "-"}`,
+    `แผนที่: ${mapUrl || "-"}`,
     `ลงทะเบียน: ทั้งหมด ${total} | active ${active} | checked-in ${checkedIn} | cancelled ${cancelled}`,
+    `กติกาลงทะเบียน: limit ${registrationLimit ?? "unlimited"} | unique-full-name ${duplicateNameGuard ? "on" : "off"} | เปิด ${registrationStartLabel} | ปิด ${registrationEndLabel}`,
+    `อีเมลยืนยัน: ${confirmationEmailEnabled ? "on" : "off"}`,
   ];
+  if (description) {
+    summaryLines.push(`รายละเอียด: ${truncateText(description, 320)}`);
+  }
+  if (travel) {
+    summaryLines.push(`การเดินทาง: ${truncateText(travel, 320)}`);
+  }
   if (recent.length > 0) {
     summaryLines.push("รายชื่อล่าสุด:");
     for (const row of recent) {
@@ -2185,8 +2212,25 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
       event_date: settings.event_date || "",
       event_end_date: settings.event_end_date || "",
       event_date_label: formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", state.timeZone),
+      event_start_label: eventStartLabel,
+      event_end_label: eventEndLabel,
       location: settings.event_location || "",
-      map_url: settings.event_map_url || "",
+      map_url: mapUrl,
+      description,
+      travel,
+      rules: {
+        registration_limit: registrationLimit,
+        unique_full_name: duplicateNameGuard,
+        registration_start: settings.reg_start || "",
+        registration_end: settings.reg_end || "",
+        registration_start_label: registrationStartLabel,
+        registration_end_label: registrationEndLabel,
+        registration_window_state: state.registrationStatus,
+      },
+      confirmation_email: {
+        enabled: confirmationEmailEnabled,
+        subject: normalizeOptionalText(settings.confirmation_email_subject),
+      },
       registration: {
         total,
         active,
@@ -2224,7 +2268,7 @@ async function requestAdminAgentPlan(
     "You are the Admin Agent planner for an event registration operations system.",
     "Your user is an admin/operator, not an attendee.",
     "Use concise operational Thai when asking follow-up questions.",
-    "Allowed actions only: find_event, get_event_overview, find_registration, list_registrations, count_registrations, get_registration_timeline, resend_ticket, resend_email, retry_bot.",
+    "Allowed actions only: find_event, get_event_overview, find_registration, list_registrations, count_registrations, get_registration_timeline, send_message_to_sender, resend_ticket, resend_email, retry_bot.",
     "Default to the selected event scope unless the admin explicitly asks for another event.",
     "Use conversation history for follow-up intent; do not ignore prior turns in the same chat session.",
     "When enough information exists, return exactly one tool call.",
@@ -2232,8 +2276,9 @@ async function requestAdminAgentPlan(
     "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
     "When matching by name, pass full_name or first_name/last_name.",
     "Use find_event when asked to check whether an event exists, or when event name is partial.",
-    "Use get_event_overview when asked for event status/time/place/capacity summary.",
+    "Use get_event_overview when asked for event status/time/place/map/description/travel/registration-rules summary.",
     "Use list_registrations for list requests, and get_registration_timeline for sender chat history.",
+    "Use send_message_to_sender when admin asks to send a custom message to a specific user sender_id.",
     "Do not call find_registration without at least one attendee filter (registration_id, full_name, sender_id, phone, email, or query).",
     "When asked to continue a stuck chat, use retry_bot.",
   ].join("\n");
@@ -2379,6 +2424,29 @@ async function requestAdminAgentPlan(
                 since: { type: "string" },
                 until: { type: "string" },
                 limit: { type: "integer", minimum: 1, maximum: 120 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "send_message_to_sender",
+            description: "Send a custom outbound text message to a user sender ID on their most recent active channel in the selected event.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                sender_id: { type: "string" },
+                registration_id: { type: "string" },
+                external_id: { type: "string" },
+                platform: { type: "string", enum: ["facebook", "line_oa", "instagram", "whatsapp", "telegram", "web_chat"] },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                query: { type: "string" },
+                message: { type: "string" },
+                text: { type: "string" },
               },
             },
           },
@@ -2677,6 +2745,47 @@ async function executeAdminAgentToolCall(eventId: string, call: AdminAgentToolCa
           limit,
           filters,
           messages: timeline,
+        },
+        targetType: registration ? "registration" : "message_sender",
+        targetId: registration?.id || senderId,
+      };
+    }
+    case "send_message_to_sender": {
+      const customMessage = normalizeOptionalText(call.args.message) || normalizeOptionalText(call.args.text);
+      if (!customMessage) {
+        throw new Error("Message text is required to send outbound message");
+      }
+
+      let senderId = normalizeOptionalText(call.args.sender_id);
+      let registration: RegistrationRow | null = null;
+      if (!senderId) {
+        registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+        senderId = normalizeOptionalText(registration.sender_id);
+      }
+      if (!senderId) {
+        throw new Error("Sender ID is required to send outbound message");
+      }
+
+      const target = await resolveManualTargetFromRecentConversation({
+        eventId,
+        senderId,
+        externalId: normalizeOptionalText(call.args.external_id),
+        platform: normalizeChannelPlatformArg(call.args.platform),
+      });
+      const delivery = await sendManualOutboundText(target, customMessage);
+
+      return {
+        reply: `ส่งข้อความถึง sender ${senderId} แล้ว`,
+        result: {
+          event_id: eventId,
+          sender_id: senderId,
+          registration: registration ? serializeAdminRegistration(registration) : null,
+          text: customMessage,
+          target: {
+            platform: target.platform,
+            external_id: target.externalId,
+          },
+          steps: delivery.steps,
         },
         targetType: registration ? "registration" : "message_sender",
         targetId: registration?.id || senderId,
@@ -6992,9 +7101,11 @@ async function startServer() {
             "ตัวอย่างคำสั่ง:",
             "- หาอีเวนต์ สหจะโยคะ 5 สัปดาห์",
             "- สรุปอีเวนต์นี้",
+            "- ขอรายละเอียดอีเวนต์นี้ทั้งหมด",
             "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
             "- list registrations status registered",
             "- หาชื่อ สมชาย ใจดี",
+            "- ส่งข้อความถึง sender 123456 ว่า ติดตามรายละเอียดได้ที่ลิงก์นี้",
             "- timeline REG-XXXXXX",
             "- resend ticket REG-XXXXXX",
             "- resend email REG-XXXXXX",
