@@ -7211,7 +7211,15 @@ async function startServer() {
         source: "registrations_checkin_api",
       });
       if (result.statusCode === 200) {
-        await recordAudit(req, result.body.already_checked_in ? "registration.checkin_repeated" : "registration.checked_in", "registration", String(req.body?.id || "").trim().toUpperCase());
+        await recordAudit(
+          req,
+          result.body.already_checked_in ? "registration.checkin_repeated" : "registration.checked_in",
+          "registration",
+          String(req.body?.id || "").trim().toUpperCase(),
+          {
+            event_id: result.body?.registration?.event_id || null,
+          },
+        );
       }
       res.status(result.statusCode).json(result.body);
     } catch (error) {
@@ -7221,9 +7229,13 @@ async function startServer() {
 
   app.post("/api/registrations/cancel", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
+      const registrationId = String(req.body?.id || "").trim().toUpperCase();
+      const existing = registrationId ? await getRegistrationById(registrationId) : null;
       const result = await cancelRegistration(req.body?.id, { source: "registrations_cancel_api" });
       if (result.statusCode === 200) {
-        await recordAudit(req, "registration.cancelled", "registration", String(req.body?.id || "").trim().toUpperCase());
+        await recordAudit(req, "registration.cancelled", "registration", registrationId, {
+          event_id: existing?.event_id || null,
+        });
       }
       res.status(result.statusCode).json(result.content);
     } catch (error) {
@@ -7247,6 +7259,7 @@ async function startServer() {
       if (updated.updated) {
         await recordAudit(req, "registration.status_updated", "registration", id, {
           status,
+          event_id: updated.registration?.event_id || null,
         });
         return res.json({ status: "success", id, registration_status: status });
       }

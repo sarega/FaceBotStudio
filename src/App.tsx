@@ -60,6 +60,15 @@ interface LlmModelOption {
   context_length?: number;
 }
 
+interface AuditLogEntry {
+  id: number;
+  action: string;
+  target_type?: string | null;
+  target_id?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
 type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
@@ -276,6 +285,18 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
+const COLLAPSIBLE_SECTION_KEYS = {
+  contextEvent: "context-event",
+  contextKnowledgeDocuments: "context-knowledge-documents",
+  contextAttachedDocuments: "context-attached-documents",
+  contextChunkInspector: "context-chunk-inspector",
+  agentRuntime: "agent-runtime",
+  agentExternalChannel: "agent-external-channel",
+  setupChannels: "setup-channels",
+  setupWebhookConfig: "setup-webhook-config",
+} as const;
+const ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-pref-v1";
+const ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-last-audit-v1";
 const INITIAL_CHECKIN_TOKEN =
   typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("checkin_token")?.trim() || ""
@@ -329,6 +350,52 @@ function writeAdminAgentChatStore(store: Record<string, AdminAgentChatMessage[]>
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(ADMIN_AGENT_CHAT_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function getDesktopNotifyPrefStorageKey(userId: string) {
+  return `${ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY}:${userId}`;
+}
+
+function getDesktopNotifyLastAuditStorageKey(userId: string) {
+  return `${ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY}:${userId}`;
+}
+
+function readDesktopNotifyPreference(userId: string) {
+  if (typeof window === "undefined" || !userId) return false;
+  try {
+    return window.localStorage.getItem(getDesktopNotifyPrefStorageKey(userId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDesktopNotifyPreference(userId: string, enabled: boolean) {
+  if (typeof window === "undefined" || !userId) return;
+  try {
+    window.localStorage.setItem(getDesktopNotifyPrefStorageKey(userId), enabled ? "1" : "0");
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function readDesktopNotifyLastAuditId(userId: string) {
+  if (typeof window === "undefined" || !userId) return 0;
+  try {
+    const raw = window.localStorage.getItem(getDesktopNotifyLastAuditStorageKey(userId));
+    const parsed = Number.parseInt(String(raw || ""), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeDesktopNotifyLastAuditId(userId: string, id: number) {
+  if (typeof window === "undefined" || !userId) return;
+  try {
+    window.localStorage.setItem(getDesktopNotifyLastAuditStorageKey(userId), String(Math.max(0, Math.trunc(id || 0))));
   } catch {
     // ignore storage write failures
   }
@@ -1095,6 +1162,33 @@ function ActionButton({
   );
 }
 
+function CollapseIconButton({
+  collapsed,
+  onClick,
+  label = "section",
+  tone = "neutral",
+  className = "",
+}: {
+  collapsed: boolean;
+  onClick: () => void;
+  label?: string;
+  tone?: ActionTone;
+  className?: string;
+}) {
+  const action = collapsed ? "Expand" : "Collapse";
+  return (
+    <ActionButton
+      onClick={onClick}
+      aria-label={`${action} ${label}`}
+      title={`${action} ${label}`}
+      tone={tone}
+      className={`h-8 w-8 min-h-0 rounded-full p-0 text-sm font-bold leading-none ${className}`.trim()}
+    >
+      <span aria-hidden="true">{collapsed ? "v" : "^"}</span>
+    </ActionButton>
+  );
+}
+
 function HelpPopover({
   label,
   children,
@@ -1780,6 +1874,13 @@ export default function App() {
   const [adminAgentMessages, setAdminAgentMessages] = useState<AdminAgentChatMessage[]>([]);
   const [adminAgentInputText, setAdminAgentInputText] = useState("");
   const [adminAgentTyping, setAdminAgentTyping] = useState(false);
+  const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useState(false);
+  const [desktopNotifyPermission, setDesktopNotifyPermission] = useState<NotificationPermission | "unsupported">(() => {
+    if (typeof window === "undefined" || typeof Notification === "undefined") {
+      return "unsupported";
+    }
+    return Notification.permission;
+  });
   const [copied, setCopied] = useState(false);
   const [selectedWebhookConfigKey, setSelectedWebhookConfigKey] = useState<WebhookConfigKey>("facebook");
   const [searchId, setSearchId] = useState("");
@@ -1825,6 +1926,8 @@ export default function App() {
   const [logToolsOpen, setLogToolsOpen] = useState(false);
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
   const [channelDetailsOpenIds, setChannelDetailsOpenIds] = useState<string[]>([]);
+  const [collapsedSectionMap, setCollapsedSectionMap] = useState<Record<string, boolean>>({});
+  const [collapsedContextDocumentIds, setCollapsedContextDocumentIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
@@ -1860,6 +1963,8 @@ export default function App() {
   const searchFocusTimeoutRef = useRef<number | null>(null);
   const adminAgentScrollRef = useRef<HTMLDivElement | null>(null);
   const adminAgentHistoryLoadedKeyRef = useRef("");
+  const desktopNotifyBootstrappedRef = useRef(false);
+  const desktopNotifyLastAuditIdRef = useRef(0);
   selectedEventIdRef.current = selectedEventId;
   settingsRef.current = settings;
 
@@ -1896,6 +2001,30 @@ export default function App() {
   const adminAgentChatStorageKey = authUser?.id
     ? `${authUser.id}:global`
     : "";
+  const isSectionCollapsed = (key: string) => Boolean(collapsedSectionMap[key]);
+  const toggleSectionCollapsed = (key: string) => {
+    setCollapsedSectionMap((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  };
+  const isContextDocumentCollapsed = (documentId: string) => collapsedContextDocumentIds.includes(documentId);
+  const toggleContextDocumentCollapsed = (documentId: string) => {
+    setCollapsedContextDocumentIds((current) =>
+      current.includes(documentId)
+        ? current.filter((id) => id !== documentId)
+        : [...current, documentId],
+    );
+  };
+  const desktopNotificationSupported = typeof window !== "undefined" && typeof Notification !== "undefined";
+  const desktopNotifyPermissionLabel =
+    desktopNotifyPermission === "granted"
+      ? "granted"
+      : desktopNotifyPermission === "denied"
+      ? "blocked"
+      : desktopNotifyPermission === "default"
+      ? "not requested"
+      : "unsupported";
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
   const latestCheckinRegistration = checkinLatestResult || selectedRegistration;
@@ -2315,6 +2444,63 @@ export default function App() {
     return res;
   };
 
+  const normalizeAuditLogEntry = (value: unknown): AuditLogEntry | null => {
+    if (!value || typeof value !== "object") return null;
+    const row = value as Record<string, unknown>;
+    const id = Number(row.id);
+    const action = String(row.action || "").trim();
+    const createdAt = String(row.created_at || "").trim();
+    if (!Number.isFinite(id) || id <= 0 || !action || !createdAt) {
+      return null;
+    }
+    const metadata = row.metadata && typeof row.metadata === "object"
+      ? row.metadata as Record<string, unknown>
+      : {};
+    return {
+      id: Math.trunc(id),
+      action,
+      target_type: row.target_type == null ? null : String(row.target_type),
+      target_id: row.target_id == null ? null : String(row.target_id),
+      metadata,
+      created_at: createdAt,
+    };
+  };
+
+  const fetchAuditLogs = async () => {
+    const res = await apiFetch("/api/audit-logs");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error || "Failed to fetch audit logs");
+    }
+    const data = await res.json().catch(() => ([]));
+    if (!Array.isArray(data)) return [] as AuditLogEntry[];
+    return data
+      .map((row) => normalizeAuditLogEntry(row))
+      .filter(Boolean) as AuditLogEntry[];
+  };
+
+  const requestDesktopNotificationPermission = async () => {
+    if (!desktopNotificationSupported) {
+      setSettingsMessage("Desktop notifications are not supported in this browser");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setDesktopNotifyPermission(permission);
+      if (permission === "granted") {
+        setSettingsMessage("Desktop notifications enabled for this browser");
+      } else if (permission === "denied") {
+        setSettingsMessage("Desktop notifications are blocked by browser/system settings");
+      } else {
+        setSettingsMessage("Desktop notifications remain in not requested state");
+      }
+      window.setTimeout(() => setSettingsMessage(""), 2500);
+    } catch (err) {
+      console.error("Failed to request notification permission", err);
+      setSettingsMessage("Failed to request desktop notification permission");
+    }
+  };
+
   const fetchCurrentUser = async () => {
     const res = await fetch("/api/auth/me");
     if (!res.ok) {
@@ -2541,6 +2727,173 @@ export default function App() {
   }, [adminAgentMessages, adminAgentChatStorageKey]);
 
   useEffect(() => {
+    if (!desktopNotificationSupported) {
+      setDesktopNotifyPermission("unsupported");
+      return;
+    }
+    const syncPermission = () => {
+      setDesktopNotifyPermission(Notification.permission);
+    };
+    syncPermission();
+    window.addEventListener("focus", syncPermission);
+    document.addEventListener("visibilitychange", syncPermission);
+    return () => {
+      window.removeEventListener("focus", syncPermission);
+      document.removeEventListener("visibilitychange", syncPermission);
+    };
+  }, [desktopNotificationSupported]);
+
+  useEffect(() => {
+    const userId = authUser?.id || "";
+    desktopNotifyBootstrappedRef.current = false;
+    desktopNotifyLastAuditIdRef.current = 0;
+    if (!userId) {
+      setDesktopNotifyEnabled(false);
+      return;
+    }
+    setDesktopNotifyEnabled(readDesktopNotifyPreference(userId));
+    desktopNotifyLastAuditIdRef.current = readDesktopNotifyLastAuditId(userId);
+  }, [authUser?.id]);
+
+  useEffect(() => {
+    const userId = authUser?.id || "";
+    if (!userId) return;
+    writeDesktopNotifyPreference(userId, desktopNotifyEnabled);
+  }, [authUser?.id, desktopNotifyEnabled]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || checkinAccessMode) return;
+    if (!(role === "owner" || role === "admin")) return;
+    if (settings.admin_agent_notification_enabled !== "1") return;
+    if (!desktopNotifyEnabled || desktopNotifyPermission !== "granted" || !desktopNotificationSupported) return;
+
+    let cancelled = false;
+    const allowedStatusActions = new Set([
+      "registration.status_updated",
+      "registration.cancelled",
+      "registration.checked_in",
+      "registration.checked_in_via_token",
+    ]);
+    const userId = authUser?.id || "";
+
+    const pollAuditNotifications = async () => {
+      try {
+        const logs = await fetchAuditLogs();
+        if (cancelled || logs.length === 0) return;
+
+        const sortedAsc = logs
+          .slice()
+          .sort((left, right) => left.id - right.id);
+        const newestId = sortedAsc[sortedAsc.length - 1]?.id || desktopNotifyLastAuditIdRef.current;
+        if (!desktopNotifyBootstrappedRef.current) {
+          desktopNotifyBootstrappedRef.current = true;
+          desktopNotifyLastAuditIdRef.current = newestId;
+          if (userId) writeDesktopNotifyLastAuditId(userId, newestId);
+          return;
+        }
+
+        const freshRows = sortedAsc.filter((row) => row.id > desktopNotifyLastAuditIdRef.current);
+        if (freshRows.length === 0) {
+          desktopNotifyLastAuditIdRef.current = newestId;
+          if (userId) writeDesktopNotifyLastAuditId(userId, newestId);
+          return;
+        }
+
+        const maxId = freshRows[freshRows.length - 1]?.id || newestId;
+        const scopeMode = settings.admin_agent_notification_scope === "event" ? "event" : "all";
+        const scopeEventId = scopeMode === "event"
+          ? String(
+              settings.admin_agent_notification_event_id
+              || settings.admin_agent_default_event_id
+              || selectedEventId
+              || "",
+            ).trim()
+          : "";
+
+        for (const row of freshRows.slice(-12)) {
+          const metadata = row.metadata || {};
+          const eventId = String(metadata.event_id || "").trim();
+          if (scopeMode === "event") {
+            if (!scopeEventId) continue;
+            if (!eventId || eventId !== scopeEventId) continue;
+          }
+
+          const isCreated = row.action === "registration.created";
+          const isStatus = allowedStatusActions.has(row.action);
+          if (!isCreated && !isStatus) continue;
+          if (isCreated && settings.admin_agent_notification_on_registration_created === "0") continue;
+          if (isStatus && settings.admin_agent_notification_on_registration_status_changed === "0") continue;
+
+          const registrationId = String(row.target_id || "").trim().toUpperCase();
+          const eventName = events.find((event) => event.id === eventId)?.name || eventId || "Unknown Event";
+          const statusFromMetadata = String(metadata.status || "").trim();
+          const statusLabel = statusFromMetadata
+            || (row.action === "registration.checked_in" || row.action === "registration.checked_in_via_token"
+              ? "checked-in"
+              : row.action === "registration.cancelled"
+              ? "cancelled"
+              : "");
+          const title = isCreated
+            ? "ลงทะเบียนใหม่"
+            : "อัปเดตสถานะลงทะเบียน";
+          const timeLabel = new Date(row.created_at).toLocaleString("th-TH", {
+            dateStyle: "short",
+            timeStyle: "short",
+          });
+          const body = [
+            eventName,
+            registrationId ? `ID ${registrationId}` : "",
+            statusLabel ? `status ${statusLabel}` : "",
+            timeLabel,
+          ]
+            .filter(Boolean)
+            .join(" • ");
+
+          try {
+            new Notification(title, {
+              body,
+              tag: `reg-audit-${row.id}`,
+              silent: false,
+            });
+          } catch (notifyError) {
+            console.error("Failed to show desktop notification", notifyError);
+          }
+        }
+
+        desktopNotifyLastAuditIdRef.current = maxId;
+        if (userId) writeDesktopNotifyLastAuditId(userId, maxId);
+      } catch (err) {
+        console.error("Failed to poll desktop notifications from audit logs", err);
+      }
+    };
+
+    void pollAuditNotifications();
+    const timer = window.setInterval(() => {
+      void pollAuditNotifications();
+    }, 12000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    authStatus,
+    checkinAccessMode,
+    role,
+    authUser?.id,
+    desktopNotifyEnabled,
+    desktopNotifyPermission,
+    desktopNotificationSupported,
+    settings.admin_agent_notification_enabled,
+    settings.admin_agent_notification_on_registration_created,
+    settings.admin_agent_notification_on_registration_status_changed,
+    settings.admin_agent_notification_scope,
+    settings.admin_agent_notification_event_id,
+    settings.admin_agent_default_event_id,
+    selectedEventId,
+    events,
+  ]);
+
+  useEffect(() => {
     let cancelled = false;
     if (checkinAccessMode) {
       setLoading(false);
@@ -2633,6 +2986,7 @@ export default function App() {
     setDocumentContent("");
     setDocumentChunks([]);
     setSelectedDocumentForChunksId("");
+    setCollapsedContextDocumentIds([]);
     setRetrievalQuery("");
     setRetrievalDebug(null);
     setRetrievalMessage("");
@@ -6461,74 +6815,88 @@ export default function App() {
                         <div className="flex items-center gap-2">
                           <h2 className="text-lg font-semibold">Event Context</h2>
                           {eventContextDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
-                          <HelpPopover label="Open note for Event Context">
-                            Per-event FAQ, source text, and response guidance for the selected workspace.
-                          </HelpPopover>
+                          {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
+                            <HelpPopover label="Open note for Event Context">
+                              Per-event FAQ, source text, and response guidance for the selected workspace.
+                            </HelpPopover>
+                          )}
                         </div>
                         <div className="flex w-full items-stretch gap-2 sm:w-auto lg:justify-end">
-                          <ActionButton
-                            onClick={() => void saveEventContext()}
-                            disabled={saving || !canManageKnowledge}
-                            tone="blue"
-                            active
-                            className="min-w-0 flex-1 text-sm sm:flex-none"
-                          >
-                            {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                            Save Event Context
-                          </ActionButton>
-                          <div className="relative shrink-0" ref={knowledgeActionsRef}>
-                            <ActionButton
-                              onClick={() => setKnowledgeActionsOpen((open) => !open)}
-                              disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
-                              tone="rose"
-                              className="min-h-full min-w-[3rem] px-3 text-sm"
-                              aria-expanded={knowledgeActionsOpen}
-                              aria-haspopup="menu"
-                            >
-                              {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
-                              <span className="sr-only sm:not-sr-only">Danger</span>
-                              <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${knowledgeActionsOpen ? "rotate-180" : ""}`} />
-                            </ActionButton>
-                            {knowledgeActionsOpen && (
-                              <div className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                                <button
-                                  onClick={() => {
-                                    setKnowledgeActionsOpen(false);
-                                    void handleResetEventKnowledge(false);
-                                  }}
-                                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-amber-700 transition-colors hover:bg-amber-50"
-                                  role="menuitem"
+                          {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
+                            <>
+                              <ActionButton
+                                onClick={() => void saveEventContext()}
+                                disabled={saving || !canManageKnowledge}
+                                tone="blue"
+                                active
+                                className="min-w-0 flex-1 text-sm sm:flex-none"
+                              >
+                                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                Save Event Context
+                              </ActionButton>
+                              <div className="relative shrink-0" ref={knowledgeActionsRef}>
+                                <ActionButton
+                                  onClick={() => setKnowledgeActionsOpen((open) => !open)}
+                                  disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
+                                  tone="rose"
+                                  className="min-h-full min-w-[3rem] px-3 text-sm"
+                                  aria-expanded={knowledgeActionsOpen}
+                                  aria-haspopup="menu"
                                 >
-                                  <AlertCircle className="h-4 w-4 shrink-0" />
-                                  <span className="font-medium">Clear Knowledge Docs</span>
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setKnowledgeActionsOpen(false);
-                                    void handleResetEventKnowledge(true);
-                                  }}
-                                  className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-rose-700 transition-colors hover:bg-rose-50"
-                                  role="menuitem"
-                                >
-                                  <AlertCircle className="h-4 w-4 shrink-0" />
-                                  <span className="font-medium">Reset All Knowledge</span>
-                                </button>
+                                  {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
+                                  <span className="sr-only sm:not-sr-only">Danger</span>
+                                  <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${knowledgeActionsOpen ? "rotate-180" : ""}`} />
+                                </ActionButton>
+                                {knowledgeActionsOpen && (
+                                  <div className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                                    <button
+                                      onClick={() => {
+                                        setKnowledgeActionsOpen(false);
+                                        void handleResetEventKnowledge(false);
+                                      }}
+                                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-amber-700 transition-colors hover:bg-amber-50"
+                                      role="menuitem"
+                                    >
+                                      <AlertCircle className="h-4 w-4 shrink-0" />
+                                      <span className="font-medium">Clear Knowledge Docs</span>
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setKnowledgeActionsOpen(false);
+                                        void handleResetEventKnowledge(true);
+                                      }}
+                                      className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-rose-700 transition-colors hover:bg-rose-50"
+                                      role="menuitem"
+                                    >
+                                      <AlertCircle className="h-4 w-4 shrink-0" />
+                                      <span className="font-medium">Reset All Knowledge</span>
+                                    </button>
+                                  </div>
+                                )}
                               </div>
-                            )}
-                          </div>
+                            </>
+                          )}
+                          <CollapseIconButton
+                            collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
+                            onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
+                          />
                         </div>
                       </div>
                     </div>
-                    <textarea
-                      value={settings.context}
-                      onChange={(e) => setSettings({ ...settings, context: e.target.value })}
-                      className="w-full h-80 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono text-sm resize-none"
-                      placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
-                    />
-                    {settingsMessage && (
-                      <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {settingsMessage}
-                      </p>
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
+                      <>
+                        <textarea
+                          value={settings.context}
+                          onChange={(e) => setSettings({ ...settings, context: e.target.value })}
+                          className="w-full h-80 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono text-sm resize-none"
+                          placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
+                        />
+                        {settingsMessage && (
+                          <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                            {settingsMessage}
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
 
@@ -6536,100 +6904,114 @@ export default function App() {
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex items-center gap-2">
                         <h3 className="text-lg font-semibold">Knowledge Documents</h3>
-                        <HelpPopover label="Open note for Knowledge Documents">
-                          Attach reusable notes, FAQ fragments, policy text, URLs, or import text-based files into the selected event.
-                        </HelpPopover>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          ref={documentFileInputRef}
-                          type="file"
-                          accept=".txt,.md,.markdown,.csv,.json,.html,.htm,.xml,text/plain,text/markdown,text/csv,application/json,application/xml,text/html"
-                          className="hidden"
-                          onChange={(e) => void handleImportDocumentFile(e.target.files?.[0] || null)}
-                        />
-                        <ActionButton
-                          onClick={() => documentFileInputRef.current?.click()}
-                          disabled={documentsLoading}
-                          tone="neutral"
-                          className="text-sm"
-                        >
-                          Import File
-                        </ActionButton>
-                        {editingDocumentId && (
-                          <ActionButton
-                            onClick={resetDocumentForm}
-                            tone="neutral"
-                            className="text-sm"
-                          >
-                            Cancel Edit
-                          </ActionButton>
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
+                          <HelpPopover label="Open note for Knowledge Documents">
+                            Attach reusable notes, FAQ fragments, policy text, URLs, or import text-based files into the selected event.
+                          </HelpPopover>
                         )}
                       </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Title</label>
-                        <input
-                          value={documentTitle}
-                          onChange={(e) => setDocumentTitle(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. Venue parking rules"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source Type</label>
-                        <select
-                          value={documentSourceType}
-                          onChange={(e) => setDocumentSourceType(e.target.value as "note" | "document" | "url")}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="note">Note</option>
-                          <option value="document">Document</option>
-                          <option value="url">URL</option>
-                        </select>
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source URL (Optional)</label>
-                        <input
-                          value={documentSourceUrl}
-                          onChange={(e) => setDocumentSourceUrl(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="https://example.com/reference"
-                        />
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Document Content</label>
-                        <textarea
-                          value={documentContent}
-                          onChange={(e) => setDocumentContent(e.target.value)}
-                          className="w-full h-56 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-none"
-                          placeholder="Paste FAQ answers, rules, agenda details, speaker notes, or any event-specific reference content here."
+                      <div className="flex flex-wrap items-center gap-2">
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
+                          <>
+                            <input
+                              ref={documentFileInputRef}
+                              type="file"
+                              accept=".txt,.md,.markdown,.csv,.json,.html,.htm,.xml,text/plain,text/markdown,text/csv,application/json,application/xml,text/html"
+                              className="hidden"
+                              onChange={(e) => void handleImportDocumentFile(e.target.files?.[0] || null)}
+                            />
+                            <ActionButton
+                              onClick={() => documentFileInputRef.current?.click()}
+                              disabled={documentsLoading}
+                              tone="neutral"
+                              className="text-sm"
+                            >
+                              Import File
+                            </ActionButton>
+                            {editingDocumentId && (
+                              <ActionButton
+                                onClick={resetDocumentForm}
+                                tone="neutral"
+                                className="text-sm"
+                              >
+                                Cancel Edit
+                              </ActionButton>
+                            )}
+                          </>
+                        )}
+                        <CollapseIconButton
+                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments)}
+                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments)}
                         />
                       </div>
                     </div>
 
-                    <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                      <ActionButton
-                        onClick={() => void handleSaveDocument()}
-                        disabled={!selectedEventId || documentsLoading || !documentTitle.trim() || !documentContent.trim()}
-                        tone="blue"
-                        active
-                        className="w-full text-sm sm:w-auto"
-                      >
-                        {documentsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        {editingDocumentId ? "Update Document" : "Save Document"}
-                      </ActionButton>
-                      <p className="text-xs text-slate-500">
-                        Imported text is chunked after save so the same document store stays clean and reusable.
-                      </p>
-                    </div>
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Title</label>
+                            <input
+                              value={documentTitle}
+                              onChange={(e) => setDocumentTitle(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="e.g. Venue parking rules"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source Type</label>
+                            <select
+                              value={documentSourceType}
+                              onChange={(e) => setDocumentSourceType(e.target.value as "note" | "document" | "url")}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="note">Note</option>
+                              <option value="document">Document</option>
+                              <option value="url">URL</option>
+                            </select>
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source URL (Optional)</label>
+                            <input
+                              value={documentSourceUrl}
+                              onChange={(e) => setDocumentSourceUrl(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="https://example.com/reference"
+                            />
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Document Content</label>
+                            <textarea
+                              value={documentContent}
+                              onChange={(e) => setDocumentContent(e.target.value)}
+                              className="w-full h-56 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-none"
+                              placeholder="Paste FAQ answers, rules, agenda details, speaker notes, or any event-specific reference content here."
+                            />
+                          </div>
+                        </div>
 
-                    {documentsMessage && (
-                      <p className={`mt-3 text-xs ${documentsMessage.toLowerCase().includes("failed") || documentsMessage.toLowerCase().includes("error") || documentsMessage.toLowerCase().includes("required") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {documentsMessage}
-                      </p>
+                        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                          <ActionButton
+                            onClick={() => void handleSaveDocument()}
+                            disabled={!selectedEventId || documentsLoading || !documentTitle.trim() || !documentContent.trim()}
+                            tone="blue"
+                            active
+                            className="w-full text-sm sm:w-auto"
+                          >
+                            {documentsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            {editingDocumentId ? "Update Document" : "Save Document"}
+                          </ActionButton>
+                          <p className="text-xs text-slate-500">
+                            Imported text is chunked after save so the same document store stays clean and reusable.
+                          </p>
+                        </div>
+
+                        {documentsMessage && (
+                          <p className={`mt-3 text-xs ${documentsMessage.toLowerCase().includes("failed") || documentsMessage.toLowerCase().includes("error") || documentsMessage.toLowerCase().includes("required") ? "text-rose-600" : "text-emerald-600"}`}>
+                            {documentsMessage}
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -6640,191 +7022,232 @@ export default function App() {
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-lg font-semibold">Attached Documents</h3>
                         <StatusBadge tone="neutral">{filteredDocuments.length}</StatusBadge>
-                        <HelpPopover label="Open note for Attached Documents">
-                          Only active documents are used during retrieval.
-                        </HelpPopover>
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
+                          <HelpPopover label="Open note for Attached Documents">
+                            Only active documents are used during retrieval.
+                          </HelpPopover>
+                        )}
                       </div>
-                      <button
-                        onClick={() => void fetchDocuments(selectedEventId)}
-                        disabled={documentsLoading || !selectedEventId}
-                        className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
-                        title="Refresh documents"
-                      >
-                        <RefreshCw className={`w-4 h-4 text-slate-500 ${documentsLoading ? "animate-spin" : ""}`} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
+                          <button
+                            onClick={() => void fetchDocuments(selectedEventId)}
+                            disabled={documentsLoading || !selectedEventId}
+                            className="rounded-xl p-2 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                            title="Refresh documents"
+                          >
+                            <RefreshCw className={`w-4 h-4 text-slate-500 ${documentsLoading ? "animate-spin" : ""}`} />
+                          </button>
+                        )}
+                        <CollapseIconButton
+                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
+                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
+                        />
+                      </div>
                     </div>
 
-                    <div className="mb-4 relative">
-                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={documentListQuery}
-                        onChange={(e) => setDocumentListQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Search documents by title, content, source, or status"
-                      />
-                      {documentListQuery && (
-                        <button
-                          onClick={() => setDocumentListQuery("")}
-                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                          aria-label="Clear document search"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="space-y-3">
-                      {filteredDocuments.length === 0 && (
-                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                          {deferredDocumentListQuery ? "No documents match this search." : "No documents attached to this event yet."}
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
+                      <>
+                        <div className="mb-4 relative">
+                          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            value={documentListQuery}
+                            onChange={(e) => setDocumentListQuery(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Search documents by title, content, source, or status"
+                          />
+                          {documentListQuery && (
+                            <button
+                              onClick={() => setDocumentListQuery("")}
+                              className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                              aria-label="Clear document search"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
-                      )}
-                      {filteredDocuments.map((document) => (
-                        <div
-                          key={document.id}
-                          id={getSearchTargetDomId("document", document.id)}
-                          className={`rounded-2xl border p-4 space-y-3 ${
-                            selectedDocumentForChunksId === document.id
-                              ? "border-blue-200 bg-blue-50"
-                              : "border-slate-200 bg-slate-50"
-                          } ${
-                            isSearchFocused("document", document.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
-                          }`}
-                        >
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="min-w-0">
-                              <p className="font-semibold text-slate-900 truncate">{document.title}</p>
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <StatusBadge tone="neutral">{document.source_type}</StatusBadge>
-                                <StatusBadge tone="blue">
-                                  {document.chunk_count || 0} chunks
-                                </StatusBadge>
-                                <StatusBadge tone={document.is_active ? "emerald" : "neutral"}>
-                                  {document.is_active ? "active" : "inactive"}
-                                </StatusBadge>
-                                <StatusBadge tone={getDocumentEmbeddingTone(document.embedding_status)}>
-                                  embed {document.embedding_status || "pending"}
-                                </StatusBadge>
-                                {selectedDocumentForChunksId === document.id && <StatusBadge tone="blue">selected</StatusBadge>}
-                              </div>
+
+                        <div className="space-y-3">
+                          {filteredDocuments.length === 0 && (
+                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                              {deferredDocumentListQuery ? "No documents match this search." : "No documents attached to this event yet."}
                             </div>
-                          </div>
-                          <p className="text-sm text-slate-600 whitespace-pre-wrap">
-                            {document.content.length > 180 ? `${document.content.slice(0, 180)}...` : document.content}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <ActionButton
-                              onClick={() => loadDocumentIntoForm(document)}
-                              tone="neutral"
-                              className="px-3"
-                            >
-                              <PencilLine className="h-3.5 w-3.5" />
-                              Edit
-                            </ActionButton>
-                            <InlineActionsMenu
-                              label="Actions"
-                              tone={document.is_active ? "amber" : "neutral"}
-                            >
-                              <MenuActionItem
-                                onClick={() => selectDocumentForChunks(document.id)}
-                                tone={selectedDocumentForChunksId === document.id ? "blue" : "neutral"}
+                          )}
+                          {filteredDocuments.map((document) => {
+                            const documentCollapsed = isContextDocumentCollapsed(document.id);
+                            return (
+                              <div
+                                key={document.id}
+                                id={getSearchTargetDomId("document", document.id)}
+                                className={`rounded-2xl border p-4 ${
+                                  documentCollapsed ? "space-y-0" : "space-y-3"
+                                } ${
+                                  selectedDocumentForChunksId === document.id
+                                    ? "border-blue-200 bg-blue-50"
+                                    : "border-slate-200 bg-slate-50"
+                                } ${
+                                  isSearchFocused("document", document.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
+                                }`}
                               >
-                                <Eye className="h-3.5 w-3.5" />
-                                <span className="font-medium">
-                                  {selectedDocumentForChunksId === document.id ? "Viewing Chunks" : "View Chunks"}
-                                </span>
-                              </MenuActionItem>
-                              {document.source_url && (
-                                <MenuActionLink
-                                  href={document.source_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  tone="neutral"
-                                  className="mt-1"
-                                >
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                  <span className="font-medium">Open Source URL</span>
-                                </MenuActionLink>
-                              )}
-                              <MenuActionItem
-                                onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
-                                disabled={documentsLoading}
-                                tone={document.is_active ? "amber" : "emerald"}
-                                className="mt-1"
-                              >
-                                <Power className="h-3.5 w-3.5" />
-                                <span className="font-medium">
-                                  {document.is_active ? "Disable Document" : "Enable Document"}
-                                </span>
-                              </MenuActionItem>
-                            </InlineActionsMenu>
-                          </div>
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                  <div className="min-w-0">
+                                    <p className="font-semibold text-slate-900 truncate">{document.title}</p>
+                                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                                      <StatusBadge tone="neutral">{document.source_type}</StatusBadge>
+                                      <StatusBadge tone="blue">
+                                        {document.chunk_count || 0} chunks
+                                      </StatusBadge>
+                                      <StatusBadge tone={document.is_active ? "emerald" : "neutral"}>
+                                        {document.is_active ? "active" : "inactive"}
+                                      </StatusBadge>
+                                      <StatusBadge tone={getDocumentEmbeddingTone(document.embedding_status)}>
+                                        embed {document.embedding_status || "pending"}
+                                      </StatusBadge>
+                                      {selectedDocumentForChunksId === document.id && <StatusBadge tone="blue">selected</StatusBadge>}
+                                    </div>
+                                  </div>
+                                  <CollapseIconButton
+                                    collapsed={documentCollapsed}
+                                    onClick={() => toggleContextDocumentCollapsed(document.id)}
+                                    label="document"
+                                    className="self-start"
+                                  />
+                                </div>
+                                {!documentCollapsed && (
+                                  <>
+                                    <p className="text-sm text-slate-600 whitespace-pre-wrap">
+                                      {document.content.length > 180 ? `${document.content.slice(0, 180)}...` : document.content}
+                                    </p>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <ActionButton
+                                        onClick={() => loadDocumentIntoForm(document)}
+                                        tone="neutral"
+                                        className="px-3"
+                                      >
+                                        <PencilLine className="h-3.5 w-3.5" />
+                                        Edit
+                                      </ActionButton>
+                                      <InlineActionsMenu
+                                        label="Actions"
+                                        tone={document.is_active ? "amber" : "neutral"}
+                                      >
+                                        <MenuActionItem
+                                          onClick={() => selectDocumentForChunks(document.id)}
+                                          tone={selectedDocumentForChunksId === document.id ? "blue" : "neutral"}
+                                        >
+                                          <Eye className="h-3.5 w-3.5" />
+                                          <span className="font-medium">
+                                            {selectedDocumentForChunksId === document.id ? "Viewing Chunks" : "View Chunks"}
+                                          </span>
+                                        </MenuActionItem>
+                                        {document.source_url && (
+                                          <MenuActionLink
+                                            href={document.source_url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            tone="neutral"
+                                            className="mt-1"
+                                          >
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                            <span className="font-medium">Open Source URL</span>
+                                          </MenuActionLink>
+                                        )}
+                                        <MenuActionItem
+                                          onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
+                                          disabled={documentsLoading}
+                                          tone={document.is_active ? "amber" : "emerald"}
+                                          className="mt-1"
+                                        >
+                                          <Power className="h-3.5 w-3.5" />
+                                          <span className="font-medium">
+                                            {document.is_active ? "Disable Document" : "Enable Document"}
+                                          </span>
+                                        </MenuActionItem>
+                                      </InlineActionsMenu>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
-                      ))}
-                    </div>
+                      </>
+                    )}
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 shadow-sm sm:p-5">
-                    <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold text-slate-900">Chunk Inspector</h3>
-                        <HelpPopover label="Open note for Chunk Inspector">
-                          Preview the exact chunks available for retrieval from the selected document.
-                        </HelpPopover>
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && (
+                          <HelpPopover label="Open note for Chunk Inspector">
+                            Preview the exact chunks available for retrieval from the selected document.
+                          </HelpPopover>
+                        )}
                       </div>
-                      {selectedDocumentForChunks && (
-                        <button
-                          onClick={() => void fetchDocumentChunks(selectedDocumentForChunks.id, selectedEventId)}
-                          disabled={documentChunksLoading}
-                          className="p-2 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
-                          title="Refresh chunks"
-                        >
-                          <RefreshCw className={`w-4 h-4 text-slate-500 ${documentChunksLoading ? "animate-spin" : ""}`} />
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && selectedDocumentForChunks && (
+                          <button
+                            onClick={() => void fetchDocumentChunks(selectedDocumentForChunks.id, selectedEventId)}
+                            disabled={documentChunksLoading}
+                            className="rounded-xl p-2 transition-colors hover:bg-slate-200 disabled:opacity-50"
+                            title="Refresh chunks"
+                          >
+                            <RefreshCw className={`w-4 h-4 text-slate-500 ${documentChunksLoading ? "animate-spin" : ""}`} />
+                          </button>
+                        )}
+                        <CollapseIconButton
+                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
+                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
+                        />
+                      </div>
                     </div>
 
-                    {!selectedDocumentForChunks ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500 mb-4">
-                        Select a document to inspect its chunks.
-                      </div>
-                    ) : (
-                      <div className="space-y-3 mb-4">
-                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                          <p className="font-semibold text-slate-900">{selectedDocumentForChunks.title}</p>
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <StatusBadge tone="neutral">{selectedDocumentForChunks.source_type}</StatusBadge>
-                            <StatusBadge tone="blue">{selectedDocumentForChunks.chunk_count || 0} chunks</StatusBadge>
-                            <StatusBadge tone={selectedDocumentForChunks.is_active ? "emerald" : "neutral"}>
-                              {selectedDocumentForChunks.is_active ? "active" : "inactive"}
-                            </StatusBadge>
-                            <StatusBadge tone={getDocumentEmbeddingTone(selectedDocumentForChunks.embedding_status)}>
-                              embed {selectedDocumentForChunks.embedding_status || "pending"}
-                            </StatusBadge>
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && (
+                      <>
+                        {!selectedDocumentForChunks ? (
+                          <div className="mb-4 rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                            Select a document to inspect its chunks.
                           </div>
-                        </div>
+                        ) : (
+                          <div className="mb-4 space-y-3">
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <p className="font-semibold text-slate-900">{selectedDocumentForChunks.title}</p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <StatusBadge tone="neutral">{selectedDocumentForChunks.source_type}</StatusBadge>
+                                <StatusBadge tone="blue">{selectedDocumentForChunks.chunk_count || 0} chunks</StatusBadge>
+                                <StatusBadge tone={selectedDocumentForChunks.is_active ? "emerald" : "neutral"}>
+                                  {selectedDocumentForChunks.is_active ? "active" : "inactive"}
+                                </StatusBadge>
+                                <StatusBadge tone={getDocumentEmbeddingTone(selectedDocumentForChunks.embedding_status)}>
+                                  embed {selectedDocumentForChunks.embedding_status || "pending"}
+                                </StatusBadge>
+                              </div>
+                            </div>
 
-                        <div className="space-y-2 max-h-[24rem] overflow-y-auto pr-1">
-                          {documentChunksLoading && (
-                            <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-500">
-                              Loading chunks...
+                            <div className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
+                              {documentChunksLoading && (
+                                <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-500">
+                                  Loading chunks...
+                                </div>
+                              )}
+                              {!documentChunksLoading && documentChunks.length === 0 && (
+                                <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                                  No chunks generated for this document yet.
+                                </div>
+                              )}
+                              {!documentChunksLoading && documentChunks.map((chunk) => (
+                                <div key={chunk.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                                    Chunk {chunk.chunk_index + 1}
+                                  </p>
+                                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{chunk.content}</p>
+                                </div>
+                              ))}
                             </div>
-                          )}
-                          {!documentChunksLoading && documentChunks.length === 0 && (
-                            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
-                              No chunks generated for this document yet.
-                            </div>
-                          )}
-                          {!documentChunksLoading && documentChunks.map((chunk) => (
-                            <div key={chunk.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
-                                Chunk {chunk.chunk_index + 1}
-                              </p>
-                              <p className="text-sm text-slate-700 whitespace-pre-wrap">{chunk.content}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                          </div>
+                        )}
+                      </>
                     )}
 
                   </div>
@@ -7512,22 +7935,34 @@ export default function App() {
                         <Bot className="w-5 h-5 text-violet-600" />
                         Agent Runtime
                       </h3>
-                      <p className="text-sm text-slate-500">
-                        Separate prompt/model and routing for Admin Agent, independent from event chat bot setup.
-                      </p>
+                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) && (
+                        <p className="text-sm text-slate-500">
+                          Separate prompt/model and routing for Admin Agent, independent from event chat bot setup.
+                        </p>
+                      )}
                     </div>
-                    <ActionButton
-                      onClick={() => void saveAgentSettings()}
-                      disabled={saving || !canEditSettings}
-                      tone="violet"
-                      active
-                      className="w-full text-sm sm:w-auto"
-                    >
-                      {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                      Save Agent Setup
-                    </ActionButton>
+                    <div className="flex items-center gap-2">
+                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) && (
+                        <ActionButton
+                          onClick={() => void saveAgentSettings()}
+                          disabled={saving || !canEditSettings}
+                          tone="violet"
+                          active
+                          className="w-full text-sm sm:w-auto"
+                        >
+                          {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                          Save Agent Setup
+                        </ActionButton>
+                      )}
+                      <CollapseIconButton
+                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
+                      />
+                    </div>
                   </div>
 
+                  {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) && (
+                  <>
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                     <label className="flex items-start gap-3 text-sm">
                       <input
@@ -7706,6 +8141,46 @@ export default function App() {
                         </span>
                       </label>
 
+                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <label className="flex items-start gap-2">
+                            <input
+                              type="checkbox"
+                              checked={desktopNotifyEnabled}
+                              onChange={(e) => setDesktopNotifyEnabled(e.target.checked)}
+                              disabled={!canEditSettings || !desktopNotificationSupported || settings.admin_agent_notification_enabled !== "1"}
+                              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                            />
+                            <span>
+                              <span className="font-medium">Desktop Notifications (This Browser)</span>
+                              <span className="text-xs text-slate-500">Show native browser notifications from registration changes.</span>
+                            </span>
+                          </label>
+                          <ActionButton
+                            onClick={() => void requestDesktopNotificationPermission()}
+                            disabled={!canEditSettings || !desktopNotificationSupported || desktopNotifyPermission === "granted"}
+                            tone="neutral"
+                            className="px-2.5 py-1.5 text-xs"
+                          >
+                            Request Permission
+                          </ActionButton>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <StatusBadge
+                            tone={
+                              desktopNotifyPermission === "granted"
+                                ? "emerald"
+                                : desktopNotifyPermission === "denied"
+                                ? "rose"
+                                : "neutral"
+                            }
+                          >
+                            {desktopNotifyPermissionLabel}
+                          </StatusBadge>
+                          <span className="text-[11px] text-slate-500">Requires browser permission and an active web session.</span>
+                        </div>
+                      </div>
+
                       <label className="flex items-start gap-2">
                         <input
                           type="checkbox"
@@ -7779,6 +8254,8 @@ export default function App() {
                       </p>
                     </div>
                   </details>
+                  </>
+                  )}
 
                   {!canEditSettings && (
                     <p className="text-xs text-amber-600">Only owner/admin can change Agent settings. Operator can still run commands.</p>
@@ -7792,23 +8269,35 @@ export default function App() {
                         <Link2 className="w-5 h-5 text-violet-600" />
                         External Agent Channel (Telegram)
                       </h3>
-                      <p className="text-sm text-slate-500">
-                        Dedicated Telegram webhook for Admin Agent commands, separate from event chat channels.
-                      </p>
+                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) && (
+                        <p className="text-sm text-slate-500">
+                          Dedicated Telegram webhook for Admin Agent commands, separate from event chat channels.
+                        </p>
+                      )}
                     </div>
-                    <HelpPopover label="Open note for Admin Agent Telegram setup">
-                      <p className="font-semibold text-slate-700">Telegram setup (step by step)</p>
-                      <ol className="mt-2 list-decimal space-y-1 pl-4">
-                        <li>สร้าง bot ด้วย BotFather และคัดลอก Bot Token</li>
-                        <li>วาง Bot Token และตั้ง Webhook Secret Token ใน section นี้</li>
-                        <li>เปิด Enable Telegram Access แล้วกด Save Agent Setup</li>
-                        <li>กด Copy setWebhook แล้วเปิด URL เพื่อผูก webhook</li>
-                        <li>ใส่ Allowed Chat IDs ของแอดมินที่อนุญาต</li>
-                        <li>ทดสอบใน Telegram ด้วย /start, /help หรือ /agent สรุปอีเวนต์นี้</li>
-                      </ol>
-                    </HelpPopover>
+                    <div className="flex items-center gap-2">
+                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) && (
+                        <HelpPopover label="Open note for Admin Agent Telegram setup">
+                          <p className="font-semibold text-slate-700">Telegram setup (step by step)</p>
+                          <ol className="mt-2 list-decimal space-y-1 pl-4">
+                            <li>สร้าง bot ด้วย BotFather และคัดลอก Bot Token</li>
+                            <li>วาง Bot Token และตั้ง Webhook Secret Token ใน section นี้</li>
+                            <li>เปิด Enable Telegram Access แล้วกด Save Agent Setup</li>
+                            <li>กด Copy setWebhook แล้วเปิด URL เพื่อผูก webhook</li>
+                            <li>ใส่ Allowed Chat IDs ของแอดมินที่อนุญาต</li>
+                            <li>ทดสอบใน Telegram ด้วย /start, /help หรือ /agent สรุปอีเวนต์นี้</li>
+                          </ol>
+                        </HelpPopover>
+                      )}
+                      <CollapseIconButton
+                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
+                      />
+                    </div>
                   </div>
 
+                  {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) && (
+                  <>
                   <label className="flex items-start gap-3 text-sm rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                     <input
                       type="checkbox"
@@ -7884,6 +8373,8 @@ export default function App() {
                       <code className="block break-all text-[11px] text-slate-500">{adminAgentTelegramSetWebhookUrl}</code>
                     )}
                   </div>
+                  </>
+                  )}
 
                 </div>
 
@@ -9022,29 +9513,39 @@ export default function App() {
 
                 <div className="space-y-4 xl:col-span-5">
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Link2 className="w-5 h-5 text-blue-600" />
-                          Channels
-                        </h3>
-                        <StatusBadge tone="neutral">{filteredSelectedEventChannels.length}</StatusBadge>
-                        {selectedEvent && (
-                          <>
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                              {getEventStatusLabel(selectedEvent.effective_status)}
-                            </StatusBadge>
-                            {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
-                              <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
-                                {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <Link2 className="w-5 h-5 text-blue-600" />
+                            Channels
+                          </h3>
+                          <StatusBadge tone="neutral">{filteredSelectedEventChannels.length}</StatusBadge>
+                          {selectedEvent && (
+                            <>
+                              <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                                {getEventStatusLabel(selectedEvent.effective_status)}
                               </StatusBadge>
-                            )}
-                          </>
+                              {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
+                                <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
+                                  {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                                </StatusBadge>
+                              )}
+                            </>
+                          )}
+                        </div>
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
+                          <p className="text-sm text-slate-500">Compact channel list for the selected event. Open details only when needed.</p>
                         )}
                       </div>
-                      <p className="text-sm text-slate-500">Compact channel list for the selected event. Open details only when needed.</p>
+                      <CollapseIconButton
+                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+                      />
                     </div>
 
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
+                    <>
                     <CompactGuardBar
                       title="Channel Guard"
                       tone={eventOperatorGuard.tone}
@@ -9363,86 +9864,96 @@ export default function App() {
                         Facebook, LINE OA, Instagram, WhatsApp, Telegram, and Web Chat are wired into live message handling right now.
                       </p>
                     </div>
+                    </>
+                    )}
                   </div>
 
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 flex flex-wrap items-center gap-2">
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <SettingsIcon className="w-5 h-5 text-blue-600" />
-                        Webhook Configuration
-                      </h3>
-                      {webhookSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                    <div className="mb-4 flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <SettingsIcon className="w-5 h-5 text-blue-600" />
+                          Webhook Configuration
+                        </h3>
+                        {webhookSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                      </div>
+                      <CollapseIconButton
+                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig)}
+                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig)}
+                      />
                     </div>
-                    <div className="space-y-4">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                          <div className="min-w-0 flex-1">
-                            <label className="block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
-                              Webhook Endpoint
-                            </label>
-                            <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                              <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
-                              <select
-                                value={selectedWebhookConfigKey}
-                                onChange={(e) => setSelectedWebhookConfigKey(e.target.value as WebhookConfigKey)}
-                                className="min-w-0 w-full bg-transparent text-sm font-medium outline-none"
-                              >
-                                {webhookConfigItems.map((item) => (
-                                  <option key={item.key} value={item.key}>
-                                    {item.label}
-                                  </option>
-                                ))}
-                              </select>
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) && (
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                            <div className="min-w-0 flex-1">
+                              <label className="block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                                Webhook Endpoint
+                              </label>
+                              <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
+                                <select
+                                  value={selectedWebhookConfigKey}
+                                  onChange={(e) => setSelectedWebhookConfigKey(e.target.value as WebhookConfigKey)}
+                                  className="min-w-0 w-full bg-transparent text-sm font-medium outline-none"
+                                >
+                                  {webhookConfigItems.map((item) => (
+                                    <option key={item.key} value={item.key}>
+                                      {item.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
                             </div>
+                            <button
+                              onClick={() => copyToClipboard(selectedWebhookConfigItem.value)}
+                              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                              aria-label={`Copy ${selectedWebhookConfigItem.label}`}
+                            >
+                              {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4 text-slate-400" />}
+                              <span>Copy URL</span>
+                            </button>
                           </div>
-                          <button
-                            onClick={() => copyToClipboard(selectedWebhookConfigItem.value)}
-                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                            aria-label={`Copy ${selectedWebhookConfigItem.label}`}
-                          >
-                            {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4 text-slate-400" />}
-                            <span>Copy URL</span>
-                          </button>
-                        </div>
-                        <div className="mt-4">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Selected Endpoint</p>
-                          <p className="mt-2 text-sm font-semibold text-slate-900">{selectedWebhookConfigItem.label}</p>
-                        </div>
-                        <textarea
-                          readOnly
-                          value={selectedWebhookConfigItem.value}
-                          rows={4}
-                          className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-mono leading-relaxed outline-none"
-                        />
-                        {selectedWebhookConfigItem.help ? (
-                          <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-600">
-                            {selectedWebhookConfigItem.help}
+                          <div className="mt-4">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Selected Endpoint</p>
+                            <p className="mt-2 text-sm font-semibold text-slate-900">{selectedWebhookConfigItem.label}</p>
                           </div>
-                        ) : null}
-                        <p className="mt-3 text-xs text-slate-500">
-                          Select one endpoint at a time to keep the card readable. Copy always uses the full URL.
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-[0.18em] mb-2">Verify Token</label>
-                        <div className="flex gap-2">
-                          <input
-                            value={settings.verify_token}
-                            onChange={(e) => setSettings({ ...settings, verify_token: e.target.value })}
-                            className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                          <textarea
+                            readOnly
+                            value={selectedWebhookConfigItem.value}
+                            rows={4}
+                            className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-mono leading-relaxed outline-none"
                           />
-                          <ActionButton 
-                            onClick={() => void saveWebhookSettings()}
-                            tone="blue"
-                            active
-                            className="px-3"
-                          >
-                            <Save className="w-5 h-5" />
-                            Save
-                          </ActionButton>
+                          {selectedWebhookConfigItem.help ? (
+                            <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-600">
+                              {selectedWebhookConfigItem.help}
+                            </div>
+                          ) : null}
+                          <p className="mt-3 text-xs text-slate-500">
+                            Select one endpoint at a time to keep the card readable. Copy always uses the full URL.
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <label className="mb-2 block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Verify Token</label>
+                          <div className="flex gap-2">
+                            <input
+                              value={settings.verify_token}
+                              onChange={(e) => setSettings({ ...settings, verify_token: e.target.value })}
+                              className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <ActionButton
+                              onClick={() => void saveWebhookSettings()}
+                              tone="blue"
+                              active
+                              className="px-3"
+                            >
+                              <Save className="w-5 h-5" />
+                              Save
+                            </ActionButton>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
                 </div>
