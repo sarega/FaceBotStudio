@@ -2204,6 +2204,7 @@ export default function App() {
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const searchFocusTimeoutRef = useRef<number | null>(null);
   const adminAgentScrollRef = useRef<HTMLDivElement | null>(null);
+  const adminAgentBottomRef = useRef<HTMLDivElement | null>(null);
   const adminAgentInputRef = useRef<HTMLInputElement | null>(null);
   const adminCommandPaletteRef = useRef<HTMLDivElement | null>(null);
   const adminCommandPaletteSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -3534,10 +3535,25 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab !== "agent") return;
-    const panel = adminAgentScrollRef.current;
-    if (!panel) return;
-    panel.scrollTop = panel.scrollHeight;
-  }, [activeTab, adminAgentMessages, adminAgentTyping]);
+
+    const scrollToBottom = () => {
+      const panel = adminAgentScrollRef.current;
+      if (panel) {
+        panel.scrollTop = panel.scrollHeight;
+      }
+      adminAgentBottomRef.current?.scrollIntoView({ block: "end" });
+    };
+
+    scrollToBottom();
+    const rafId = window.requestAnimationFrame(scrollToBottom);
+    const timeoutId = window.setTimeout(scrollToBottom, 90);
+    const lateTimeoutId = window.setTimeout(scrollToBottom, 220);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(timeoutId);
+      window.clearTimeout(lateTimeoutId);
+    };
+  }, [activeTab, adminAgentMessages.length, adminAgentTyping]);
 
   useEffect(() => {
     setManualOverrideText("");
@@ -8468,6 +8484,7 @@ export default function App() {
                       </div>
                     </div>
                   )}
+                  <div ref={adminAgentBottomRef} className="h-px w-full" aria-hidden />
                 </div>
 
                 <div className="border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
