@@ -1182,9 +1182,9 @@ function CollapseIconButton({
       aria-label={`${action} ${label}`}
       title={`${action} ${label}`}
       tone={tone}
-      className={`h-8 w-8 min-h-0 rounded-full p-0 text-sm font-bold leading-none ${className}`.trim()}
+      className={`h-8 w-8 min-h-0 rounded-xl p-0 text-base font-semibold leading-none ${className}`.trim()}
     >
-      <span aria-hidden="true">{collapsed ? "v" : "^"}</span>
+      <span aria-hidden="true">{collapsed ? "▾" : "▴"}</span>
     </ActionButton>
   );
 }
@@ -7841,16 +7841,28 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-                  <InlineActionsMenu label="Actions" tone="neutral">
-                    <MenuActionItem
-                      onClick={() => void handleAdminAgentClearChat()}
-                      disabled={adminAgentMessages.length === 0}
-                      tone="neutral"
+                  <div className="flex items-center gap-2">
+                    <ActionButton
+                      onClick={() => void saveAgentSettings()}
+                      disabled={saving || !canEditSettings}
+                      tone="violet"
+                      active
+                      className="text-sm"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      <span className="font-medium">Clear Chat</span>
-                    </MenuActionItem>
-                  </InlineActionsMenu>
+                      {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Save Agent Setup
+                    </ActionButton>
+                    <InlineActionsMenu label="Actions" tone="neutral">
+                      <MenuActionItem
+                        onClick={() => void handleAdminAgentClearChat()}
+                        disabled={adminAgentMessages.length === 0}
+                        tone="neutral"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span className="font-medium">Clear Chat</span>
+                      </MenuActionItem>
+                    </InlineActionsMenu>
+                  </div>
                 </div>
 
                 <div className="border-b border-slate-100 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
@@ -7930,7 +7942,12 @@ export default function App() {
               <div className="space-y-4">
                 <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
+                    <button
+                      type="button"
+                      onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
+                      className="min-w-0 flex-1 text-left"
+                      aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "Expand" : "Collapse"} Agent Runtime`}
+                    >
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <Bot className="w-5 h-5 text-violet-600" />
                         Agent Runtime
@@ -7940,25 +7957,12 @@ export default function App() {
                           Separate prompt/model and routing for Admin Agent, independent from event chat bot setup.
                         </p>
                       )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) && (
-                        <ActionButton
-                          onClick={() => void saveAgentSettings()}
-                          disabled={saving || !canEditSettings}
-                          tone="violet"
-                          active
-                          className="w-full text-sm sm:w-auto"
-                        >
-                          {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                          Save Agent Setup
-                        </ActionButton>
-                      )}
-                      <CollapseIconButton
-                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
-                      />
-                    </div>
+                    </button>
+                    <CollapseIconButton
+                      collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
+                      onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
+                      label="Agent Runtime"
+                    />
                   </div>
 
                   {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) && (
@@ -8264,7 +8268,12 @@ export default function App() {
 
                 <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
+                    <button
+                      type="button"
+                      onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
+                      className="min-w-0 flex-1 text-left"
+                      aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "Expand" : "Collapse"} External Agent Channel`}
+                    >
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <Link2 className="w-5 h-5 text-violet-600" />
                         External Agent Channel (Telegram)
@@ -8274,24 +8283,30 @@ export default function App() {
                           Dedicated Telegram webhook for Admin Agent commands, separate from event chat channels.
                         </p>
                       )}
-                    </div>
+                    </button>
                     <div className="flex items-center gap-2">
                       {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) && (
                         <HelpPopover label="Open note for Admin Agent Telegram setup">
                           <p className="font-semibold text-slate-700">Telegram setup (step by step)</p>
                           <ol className="mt-2 list-decimal space-y-1 pl-4">
-                            <li>สร้าง bot ด้วย BotFather และคัดลอก Bot Token</li>
-                            <li>วาง Bot Token และตั้ง Webhook Secret Token ใน section นี้</li>
+                            <li>สร้าง bot ด้วย BotFather แล้วคัดลอก Bot Token</li>
                             <li>เปิด Enable Telegram Access แล้วกด Save Agent Setup</li>
-                            <li>กด Copy setWebhook แล้วเปิด URL เพื่อผูก webhook</li>
-                            <li>ใส่ Allowed Chat IDs ของแอดมินที่อนุญาต</li>
-                            <li>ทดสอบใน Telegram ด้วย /start, /help หรือ /agent สรุปอีเวนต์นี้</li>
+                            <li>กด Copy setWebhook แล้วเปิด URL เพื่อตั้ง webhook</li>
+                            <li>เปิด Telegram แล้วส่ง <code>/myid</code> ไปหาบอทเพื่อดู <code>chat_id</code> (ตัวเลข)</li>
+                            <li>นำเลข <code>chat_id</code> ที่ได้ ไปใส่ใน Allowed Chat IDs (หนึ่งบรรทัดต่อหนึ่ง ID)</li>
                           </ol>
+                          <p className="mt-2 text-[11px] text-slate-500">
+                            สำคัญ: Allowed Chat IDs ต้องใช้เลข chat_id ของผู้ใช้/กลุ่ม ไม่ใช่ชื่อบอทหรือ username เช่น <code>@fb_bot</code>
+                          </p>
+                          <p className="mt-2 text-[11px] text-slate-500">
+                            Webhook Secret Token เป็นตัวเลือกเสริมเพื่อเพิ่มความปลอดภัย ถ้าใช้ ให้ตั้งค่าเดียวกันทั้งในแอพและตอน setWebhook
+                          </p>
                         </HelpPopover>
                       )}
                       <CollapseIconButton
                         collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
                         onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
+                        label="External Agent Channel"
                       />
                     </div>
                   </div>
