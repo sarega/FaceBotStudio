@@ -306,6 +306,7 @@ export interface AppDatabase {
   upsertSettings(entries: Record<string, string>, eventId?: string): Promise<void>;
   getRegistrationById(id: string): Promise<RegistrationRow | undefined>;
   listRegistrations(limit?: number, eventId?: string): Promise<RegistrationRow[]>;
+  listRegistrationsBySenderIds(senderIds: string[], eventId?: string): Promise<RegistrationRow[]>;
   exportRegistrations(eventId?: string): Promise<RegistrationRow[]>;
   createRegistration(input: RegistrationInput): Promise<RegistrationResult>;
   createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput): Promise<RegistrationEmailDeliveryRow | null>;
@@ -316,7 +317,7 @@ export interface AppDatabase {
   updateRegistrationStatus(id: string, status: RegistrationStatus): Promise<boolean>;
   deleteRegistration(id: string): Promise<boolean>;
   saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string): Promise<void>;
-  listMessages(limit: number, eventId?: string): Promise<MessageRow[]>;
+  listMessages(limit: number, eventId?: string, beforeId?: number): Promise<MessageRow[]>;
   getMessageHistoryRows(senderId: string, limit: number, eventId?: string): Promise<Array<{ text: string; type: MessageType }>>;
   getConversationRowsForSender(senderId: string, limit: number, eventId?: string): Promise<MessageRow[]>;
   listEvents(): Promise<EventRow[]>;

@@ -3,6 +3,12 @@ export interface Message {
   sender_id: string;
   event_id?: string | null;
   page_id?: string | null;
+  platform?: ChannelPlatform | null;
+  channel_display_name?: string | null;
+  sender_name?: string | null;
+  sender_phone?: string | null;
+  sender_email?: string | null;
+  registration_id?: string | null;
   text: string;
   timestamp: string;
   type: "incoming" | "outgoing";

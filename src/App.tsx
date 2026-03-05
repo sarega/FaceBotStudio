@@ -97,6 +97,9 @@ type AdminAgentChatMessage = {
   timestamp: string;
   actionName?: string;
   actionSource?: "llm" | "rule";
+  ticketPngUrl?: string;
+  ticketSvgUrl?: string;
+  csvDownloadUrl?: string;
 };
 
 let qrReaderCtorPromise: Promise<typeof import("@zxing/browser").BrowserQRCodeReader> | null = null;
@@ -285,6 +288,7 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
+const LOG_PAGE_SIZE = 200;
 const COLLAPSED_SECTION_STORAGE_KEY = "facebotstudio-collapsed-sections-v1";
 const COLLAPSIBLE_SECTION_KEYS = {
   contextEvent: "context-event",
@@ -338,12 +342,18 @@ function readAdminAgentChatStore() {
           const timestamp = typeof row.timestamp === "string" ? row.timestamp : "";
           if (!role || !text || !timestamp) return null;
           const actionSource = row.actionSource === "rule" ? "rule" : "llm";
+          const ticketPngUrl = typeof row.ticketPngUrl === "string" ? row.ticketPngUrl : "";
+          const ticketSvgUrl = typeof row.ticketSvgUrl === "string" ? row.ticketSvgUrl : "";
+          const csvDownloadUrl = typeof row.csvDownloadUrl === "string" ? row.csvDownloadUrl : "";
           return {
             role,
             text,
             timestamp,
             actionName: typeof row.actionName === "string" ? row.actionName : "",
             actionSource,
+            ticketPngUrl,
+            ticketSvgUrl,
+            csvDownloadUrl,
           } satisfies AdminAgentChatMessage;
         })
         .filter(Boolean) as AdminAgentChatMessage[];
@@ -1848,6 +1858,44 @@ function formatAdminActionLabel(value: string | undefined) {
     .join(" ");
 }
 
+function extractAdminAgentTicketUrls(result: Record<string, unknown> | null | undefined) {
+  const ticket = result?.ticket;
+  if (!ticket || typeof ticket !== "object") {
+    return { pngUrl: "", svgUrl: "" };
+  }
+  const ticketRecord = ticket as Record<string, unknown>;
+  return {
+    pngUrl: typeof ticketRecord.png_url === "string" ? ticketRecord.png_url.trim() : "",
+    svgUrl: typeof ticketRecord.svg_url === "string" ? ticketRecord.svg_url.trim() : "",
+  };
+}
+
+function extractAdminAgentCsvDownloadUrl(result: Record<string, unknown> | null | undefined) {
+  const raw = typeof result?.download_url === "string" ? result.download_url.trim() : "";
+  return raw || "";
+}
+
+function normalizeMessageId(value: unknown) {
+  const id = Number(value);
+  return Number.isFinite(id) && id > 0 ? Math.trunc(id) : null;
+}
+
+function mergeLogMessageRows(latestFirst: Message[], olderRows: Message[]) {
+  const merged = [...latestFirst];
+  const seen = new Set<number>();
+  for (const row of merged) {
+    const id = normalizeMessageId(row.id);
+    if (id !== null) seen.add(id);
+  }
+  for (const row of olderRows) {
+    const id = normalizeMessageId(row.id);
+    if (id !== null && seen.has(id)) continue;
+    merged.push(row);
+    if (id !== null) seen.add(id);
+  }
+  return merged;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -1863,6 +1911,8 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [messages, setMessages] = useState<Message[]>([]);
+  const [logsHasMore, setLogsHasMore] = useState(false);
+  const [logsLoadingMore, setLogsLoadingMore] = useState(false);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
@@ -2371,6 +2421,12 @@ export default function App() {
   const filteredMessages = messages.filter((message) =>
     matchesSearchQuery(deferredLogListQuery, [
       message.sender_id,
+      message.sender_name,
+      message.sender_phone,
+      message.sender_email,
+      message.registration_id,
+      message.platform,
+      message.channel_display_name,
       message.text,
       message.type,
       parseLineTraceMessage(message.text)?.status,
@@ -3046,6 +3102,8 @@ export default function App() {
     setSettings(nextSettings);
     setSavedSettings(nextSettings);
     setMessages([]);
+    setLogsHasMore(false);
+    setLogsLoadingMore(false);
     setRegistrations([]);
     setSelectedRegistrationId("");
     setCheckinLatestResult(null);
@@ -3552,18 +3610,65 @@ export default function App() {
     }
   };
 
-  const fetchMessages = async (eventId = selectedEventId) => {
+  const fetchMessages = async (
+    eventId = selectedEventId,
+    options?: { beforeId?: number | null; append?: boolean },
+  ) => {
+    const append = Boolean(options?.append);
+    const beforeId = normalizeMessageId(options?.beforeId);
+    if (append) {
+      setLogsLoadingMore(true);
+    }
     try {
-      const res = await apiFetch(`/api/messages?event_id=${encodeURIComponent(eventId)}`);
+      const params = new URLSearchParams();
+      params.set("event_id", eventId);
+      params.set("limit", String(LOG_PAGE_SIZE));
+      if (beforeId) {
+        params.set("before_id", String(beforeId));
+      }
+
+      const res = await apiFetch(`/api/messages?${params.toString()}`);
       if (!res.ok) {
         throw new Error("Failed to fetch messages");
       }
       const data = await res.json();
       if (selectedEventIdRef.current !== eventId) return;
-      setMessages(data);
+
+      const items = Array.isArray(data)
+        ? data as Message[]
+        : Array.isArray((data as Record<string, unknown>)?.items)
+        ? (data as Record<string, unknown>).items as Message[]
+        : [];
+      const hasMore = !Array.isArray(data) && Boolean((data as Record<string, unknown>)?.has_more);
+
+      if (append) {
+        setMessages((prev) => mergeLogMessageRows(prev, items));
+        setLogsHasMore(hasMore);
+      } else {
+        setMessages((prev) => mergeLogMessageRows(items, prev));
+        if (messages.length === 0) {
+          setLogsHasMore(hasMore);
+        }
+      }
     } catch (err) {
       console.error("Failed to fetch messages", err);
+    } finally {
+      if (append) {
+        setLogsLoadingMore(false);
+      }
     }
+  };
+
+  const handleLoadOlderLogs = async () => {
+    if (logsLoadingMore || !logsHasMore) return;
+    const oldestId = messages.reduce<number | null>((minId, row) => {
+      const currentId = normalizeMessageId(row.id);
+      if (currentId == null) return minId;
+      if (minId == null) return currentId;
+      return currentId < minId ? currentId : minId;
+    }, null);
+    if (!oldestId) return;
+    await fetchMessages(selectedEventId, { append: true, beforeId: oldestId });
   };
 
   const sendManualOverride = async (mode: "text" | "ticket") => {
@@ -4595,6 +4700,8 @@ export default function App() {
       }));
       const response = await getAdminAgentResponse(outgoingText, settings, history, selectedEventId);
       const replyText = String(response.reply || "").trim() || "ดำเนินการแล้ว";
+      const ticketUrls = extractAdminAgentTicketUrls(response.result || null);
+      const csvDownloadUrl = extractAdminAgentCsvDownloadUrl(response.result || null);
 
       setAdminAgentMessages((prev) => [
         ...prev,
@@ -4604,6 +4711,9 @@ export default function App() {
           timestamp: new Date().toISOString(),
           actionName: response.action?.name || "",
           actionSource: response.action?.source || "llm",
+          ticketPngUrl: ticketUrls.pngUrl,
+          ticketSvgUrl: ticketUrls.svgUrl,
+          csvDownloadUrl,
         },
       ]);
 
@@ -4687,6 +4797,8 @@ export default function App() {
       setAuthStatus("unauthenticated");
       setAuthUser(null);
       setMessages([]);
+      setLogsHasMore(false);
+      setLogsLoadingMore(false);
       setTestMessages([]);
       setAdminAgentMessages([]);
       setInputText("");
@@ -5962,12 +6074,21 @@ export default function App() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender History</p>
+            {(selectedLogMessage.sender_name || selectedLogMessage.registration_id) && (
+              <p className="mt-0.5 truncate text-xs font-medium text-slate-700">
+                {selectedLogMessage.sender_name || "-"}
+                {selectedLogMessage.registration_id ? ` • ${selectedLogMessage.registration_id}` : ""}
+              </p>
+            )}
             <p className="mt-0.5 break-all font-mono text-xs text-blue-600">{selectedLogMessage.sender_id}</p>
             <p className="mt-0.5 text-[11px] text-slate-500">
               {selectedSenderThread.length} message{selectedSenderThread.length === 1 ? "" : "s"} in the current event log
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {selectedLogMessage.platform && (
+              <StatusBadge tone="neutral">{selectedLogMessage.platform}</StatusBadge>
+            )}
             <StatusBadge tone={parseLineTraceMessage(selectedLogMessage.text) ? "amber" : selectedLogAuditMarker ? selectedLogAuditMarker.tone : selectedLogMessage.type === "incoming" ? "emerald" : "blue"}>
               {parseLineTraceMessage(selectedLogMessage.text) ? "trace" : selectedLogAuditMarker ? selectedLogAuditMarker.label : selectedLogMessage.type}
             </StatusBadge>
@@ -8040,6 +8161,45 @@ export default function App() {
                         type={msg.role === "user" ? "outgoing" : "incoming"}
                         timestamp={msg.timestamp}
                       />
+                      {msg.role === "agent" && (msg.ticketPngUrl || msg.ticketSvgUrl || msg.csvDownloadUrl) && (
+                        <div className="ml-2 space-y-2 pb-1">
+                          {msg.ticketPngUrl && (
+                            <a
+                              href={msg.ticketPngUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-block rounded-xl border border-slate-200 bg-white p-1"
+                            >
+                              <img
+                                src={msg.ticketPngUrl}
+                                alt="Ticket preview"
+                                className="max-h-56 w-auto rounded-lg"
+                                loading="lazy"
+                              />
+                            </a>
+                          )}
+                          {!msg.ticketPngUrl && msg.ticketSvgUrl && (
+                            <a
+                              href={msg.ticketSvgUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                            >
+                              Open ticket (SVG)
+                            </a>
+                          )}
+                          {msg.csvDownloadUrl && (
+                            <a
+                              href={msg.csvDownloadUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                            >
+                              Download CSV
+                            </a>
+                          )}
+                        </div>
+                      )}
                       {msg.role === "agent" && msg.actionName && (
                         <div className="ml-2 flex flex-wrap items-center gap-2 pb-2">
                           <StatusBadge tone={msg.actionSource === "rule" ? "amber" : "violet"}>
@@ -9299,7 +9459,12 @@ export default function App() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
-                        <StatusBadge tone="neutral">{filteredMessages.length} items</StatusBadge>
+                        <StatusBadge tone="neutral">
+                          {messages.length}{logsHasMore ? "+" : ""} items
+                        </StatusBadge>
+                        {deferredLogListQuery && (
+                          <StatusBadge tone="blue">{filteredMessages.length} match</StatusBadge>
+                        )}
                         {selectedEvent && (
                           <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
                             {getEventStatusLabel(selectedEvent.effective_status)}
@@ -9316,6 +9481,14 @@ export default function App() {
                           </HelpPopover>
                         </>
                       )}
+                      <button
+                        onClick={() => void handleLoadOlderLogs()}
+                        disabled={!logsHasMore || logsLoadingMore || messages.length === 0}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {logsLoadingMore ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                        Older
+                      </button>
                       <button onClick={() => void fetchMessages(selectedEventId)} className="rounded-lg p-2 transition-colors hover:bg-slate-100">
                         <RefreshCw className="h-4 w-4 text-slate-400" />
                       </button>
@@ -9346,6 +9519,7 @@ export default function App() {
                           {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
                         </StatusBadge>
                       )}
+                      {logsHasMore && <span>older logs available</span>}
                       <span>full message opens on the right</span>
                     </div>
                   </div>
@@ -9375,6 +9549,7 @@ export default function App() {
                             <div className="flex flex-wrap items-center gap-1.5">
                               {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
                               {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
+                              {msg.platform && <StatusBadge tone="neutral">{msg.platform}</StatusBadge>}
                               <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
                                 {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                               </StatusBadge>
@@ -9389,6 +9564,11 @@ export default function App() {
                               </p>
                             </div>
                             <p className="mt-1 truncate font-mono text-[10px] text-blue-600">{msg.sender_id}</p>
+                            {(msg.sender_name || msg.registration_id) && (
+                              <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                                {msg.sender_name || "-"}{msg.registration_id ? ` • ${msg.registration_id}` : ""}
+                              </p>
+                            )}
                           </button>
                           {isSelected && (
                             <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
@@ -9442,8 +9622,13 @@ export default function App() {
                               <td className="px-6 py-4 whitespace-nowrap text-slate-500">
                                 {new Date(msg.timestamp).toLocaleString()}
                               </td>
-                              <td className="px-6 py-4 font-mono text-xs text-blue-600">
-                                {msg.sender_id}
+                              <td className="px-6 py-4">
+                                <p className="font-mono text-xs text-blue-600">{msg.sender_id}</p>
+                                {(msg.sender_name || msg.registration_id) && (
+                                  <p className="mt-0.5 text-[11px] text-slate-500">
+                                    {msg.sender_name || "-"}{msg.registration_id ? ` • ${msg.registration_id}` : ""}
+                                  </p>
+                                )}
                               </td>
                               <td className="px-6 py-4 max-w-md">
                                 {lineTrace ? (
@@ -9474,9 +9659,14 @@ export default function App() {
                                 )}
                               </td>
                               <td className="px-6 py-4">
+                                <div className="flex flex-wrap items-center gap-2">
+                                {msg.platform && (
+                                  <StatusBadge tone="neutral">{msg.platform}</StatusBadge>
+                                )}
                                 <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
                                   {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                                 </StatusBadge>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -9517,11 +9707,17 @@ export default function App() {
                                 <div className="flex min-w-0 items-center gap-2 overflow-hidden">
                                   {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
                                   {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
+                                  {msg.platform && <StatusBadge tone="neutral">{msg.platform}</StatusBadge>}
                                   <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
                                     {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
                                   </StatusBadge>
                                   <p className="min-w-0 truncate text-[10px] font-mono text-blue-600">{msg.sender_id}</p>
                                 </div>
+                                {(msg.sender_name || msg.registration_id) && (
+                                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                                    {msg.sender_name || "-"}{msg.registration_id ? ` • ${msg.registration_id}` : ""}
+                                  </p>
+                                )}
                                 <p className="chat-selectable log-list-preview-2 mt-1 text-[13px] leading-5 text-slate-700">
                                   {getLogMessageDisplayText(msg)}
                                 </p>

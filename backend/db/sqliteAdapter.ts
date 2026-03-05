@@ -652,6 +652,36 @@ export class SqliteAppDatabase implements AppDatabase {
     ).all() as RegistrationRow[];
   }
 
+  async listRegistrationsBySenderIds(senderIds: string[], eventId?: string) {
+    const normalizedSenderIds = [...new Set(
+      senderIds
+        .map((senderId) => String(senderId || "").trim())
+        .filter(Boolean),
+    )];
+    if (normalizedSenderIds.length === 0) {
+      return [] as RegistrationRow[];
+    }
+
+    const placeholders = normalizedSenderIds.map(() => "?").join(", ");
+    if (eventId) {
+      const statement = this.db.prepare(
+        `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status
+         FROM registrations
+         WHERE event_id = ? AND sender_id IN (${placeholders})
+         ORDER BY timestamp DESC, id DESC`,
+      );
+      return statement.all(eventId, ...normalizedSenderIds) as RegistrationRow[];
+    }
+
+    const statement = this.db.prepare(
+      `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status
+       FROM registrations
+       WHERE sender_id IN (${placeholders})
+       ORDER BY timestamp DESC, id DESC`,
+    );
+    return statement.all(...normalizedSenderIds) as RegistrationRow[];
+  }
+
   async exportRegistrations(eventId?: string) {
     return this.listRegistrations(undefined, eventId);
   }
@@ -833,14 +863,26 @@ export class SqliteAppDatabase implements AppDatabase {
     ).run(senderId, eventId || DEFAULT_EVENT_ID, pageId || null, text, type);
   }
 
-  async listMessages(limit: number, eventId?: string) {
+  async listMessages(limit: number, eventId?: string, beforeId?: number) {
+    const hasBeforeId = Number.isFinite(beforeId) && Number(beforeId) > 0;
+    const normalizedBeforeId = hasBeforeId ? Math.trunc(Number(beforeId)) : 0;
     if (eventId) {
+      if (hasBeforeId) {
+        return this.db.prepare(
+          "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages WHERE event_id = ? AND id < ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+        ).all(eventId, normalizedBeforeId, limit) as MessageRow[];
+      }
       return this.db.prepare(
         "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages WHERE event_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
       ).all(eventId, limit) as MessageRow[];
     }
+    if (hasBeforeId) {
+      return this.db.prepare(
+        "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages WHERE id < ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+      ).all(normalizedBeforeId, limit) as MessageRow[];
+    }
     return this.db.prepare(
-      "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages ORDER BY timestamp DESC LIMIT ?",
+      "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages ORDER BY timestamp DESC, id DESC LIMIT ?",
     ).all(limit) as MessageRow[];
   }
 

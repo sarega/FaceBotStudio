@@ -426,6 +426,37 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows;
   }
 
+  async listRegistrationsBySenderIds(senderIds: string[], eventId?: string) {
+    const normalizedSenderIds = [...new Set(
+      senderIds
+        .map((senderId) => String(senderId || "").trim())
+        .filter(Boolean),
+    )];
+    if (normalizedSenderIds.length === 0) {
+      return [] as RegistrationRow[];
+    }
+
+    if (eventId) {
+      const result = await this.pool.query<RegistrationRow>(
+        `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status
+         FROM registrations
+         WHERE event_id = $1 AND sender_id = ANY($2::text[])
+         ORDER BY timestamp DESC, id DESC`,
+        [eventId, normalizedSenderIds],
+      );
+      return result.rows;
+    }
+
+    const result = await this.pool.query<RegistrationRow>(
+      `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status
+       FROM registrations
+       WHERE sender_id = ANY($1::text[])
+       ORDER BY timestamp DESC, id DESC`,
+      [normalizedSenderIds],
+    );
+    return result.rows;
+  }
+
   async exportRegistrations(eventId?: string) {
     return this.listRegistrations(undefined, eventId);
   }
@@ -619,11 +650,27 @@ export class PostgresAppDatabase implements AppDatabase {
     );
   }
 
-  async listMessages(limit: number, eventId?: string) {
+  async listMessages(limit: number, eventId?: string, beforeId?: number) {
+    const hasBeforeId = Number.isFinite(beforeId) && Number(beforeId) > 0;
+    const normalizedBeforeId = hasBeforeId ? Math.trunc(Number(beforeId)) : 0;
     if (eventId) {
+      if (hasBeforeId) {
+        const result = await this.pool.query<MessageRow>(
+          "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE event_id = $1 AND id < $2 ORDER BY timestamp DESC, id DESC LIMIT $3",
+          [eventId, normalizedBeforeId, limit],
+        );
+        return result.rows;
+      }
       const result = await this.pool.query<MessageRow>(
         "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE event_id = $1 ORDER BY timestamp DESC, id DESC LIMIT $2",
         [eventId, limit],
+      );
+      return result.rows;
+    }
+    if (hasBeforeId) {
+      const result = await this.pool.query<MessageRow>(
+        "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE id < $1 ORDER BY timestamp DESC, id DESC LIMIT $2",
+        [normalizedBeforeId, limit],
       );
       return result.rows;
     }

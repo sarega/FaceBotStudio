@@ -146,6 +146,7 @@ type AdminAgentActionName =
   | "search_system"
   | "get_event_overview"
   | "find_registration"
+  | "view_ticket"
   | "list_registrations"
   | "export_registrations_csv"
   | "count_registrations"
@@ -879,6 +880,7 @@ const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
   "search_system",
   "get_event_overview",
   "find_registration",
+  "view_ticket",
   "list_registrations",
   "export_registrations_csv",
   "count_registrations",
@@ -900,6 +902,7 @@ const ADMIN_AGENT_ACTION_POLICY_LABEL: Record<AdminAgentActionName, string> = {
   search_system: "search system",
   get_event_overview: "event overview",
   find_registration: "find registration",
+  view_ticket: "view ticket",
   list_registrations: "list registrations",
   export_registrations_csv: "export registrations csv",
   count_registrations: "count registrations",
@@ -945,6 +948,7 @@ function getAllowedAdminAgentActions(policy: AdminAgentPolicy): AdminAgentAction
   }
   if (policy.readRegistration) {
     allowed.add("find_registration");
+    allowed.add("view_ticket");
     allowed.add("list_registrations");
     allowed.add("export_registrations_csv");
     allowed.add("count_registrations");
@@ -2544,6 +2548,54 @@ function parseAdminAgentEventOverride(text: string, fallbackEventId: string) {
   };
 }
 
+function inferAdminAgentRuleToolCall(
+  message: string,
+  allowedActions: Set<AdminAgentActionName>,
+): AdminAgentToolCall | null {
+  if (!allowedActions.has("view_ticket")) {
+    return null;
+  }
+
+  const normalized = normalizeComparableText(message);
+  if (!normalized) return null;
+  const hasTicketKeyword = normalized.includes("ticket") || normalized.includes("ตั๋ว");
+  if (!hasTicketKeyword) return null;
+
+  const asksPreview =
+    normalized.includes("ขอดู")
+    || normalized.includes("ดูตั๋ว")
+    || normalized.includes("ขอตั๋ว")
+    || normalized.includes("เอาตั๋ว")
+    || normalized.includes("แสดงตั๋ว")
+    || normalized.includes("show ticket")
+    || normalized.includes("preview ticket")
+    || normalized.includes("ให้ดู");
+
+  const explicitSendToUser =
+    normalized.includes("resend")
+    || normalized.includes("ส่งให้ user")
+    || normalized.includes("ส่งให้user")
+    || normalized.includes("send to user")
+    || normalized.includes("sender")
+    || normalized.includes("ไปให้")
+    || normalized.includes("ไปหา")
+    || normalized.includes("ให้เขา")
+    || normalized.includes("ให้ลูกค้า")
+    || normalized.includes("ถึงผู้ใช้")
+    || normalized.includes("ถึง user")
+    || normalized.includes("ถึงuser");
+
+  if (asksPreview && !explicitSendToUser) {
+    return {
+      name: "view_ticket",
+      args: {},
+      source: "rule",
+    };
+  }
+
+  return null;
+}
+
 function normalizeAdminEventStatusInput(value: unknown): "pending" | "active" | "inactive" | "cancelled" | null {
   const normalized = normalizeComparableText(value);
   if (normalized === "pending" || normalized === "active" || normalized === "inactive" || normalized === "cancelled") {
@@ -2843,11 +2895,13 @@ async function requestAdminAgentPlan(
     "Use search_system only when admin asks to search across the whole system.",
     "Use get_event_overview when asked for event status/time/place/map/description/travel/registration-rules summary.",
     "Use create_registration when admin asks to register a new attendee.",
+    "Use view_ticket when admin asks to preview/show ticket image for admin only.",
     "Use list_registrations for list requests, and get_registration_timeline for sender chat history.",
     "Use export_registrations_csv when admin asks for CSV/Excel export or full attendee export file.",
     "If admin asks for remaining rows after a previous list, call list_registrations with offset.",
     "Use set_registration_status only when admin asks to change status of an existing registration (registered/cancelled/checked-in).",
     "Do not use set_registration_status to create a new attendee record.",
+    "Use resend_ticket only when admin explicitly asks to send ticket to attendee channel; do not use it for admin preview.",
     "If admin says email should be optional for attendee input, do not auto-disable confirmation email. confirmation_email_enabled controls delivery behavior, not whether email field is optional.",
     "Use send_message_to_sender when admin asks to send a custom message to a specific user sender_id.",
     "Do not call find_registration without at least one attendee filter (registration_id, full_name, sender_id, phone, email, or query).",
@@ -3060,6 +3114,27 @@ async function requestAdminAgentPlan(
                 since: { type: "string" },
                 until: { type: "string" },
                 limit: { type: "integer", minimum: 1, maximum: 30 },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "view_ticket",
+            description: "Get ticket URLs (PNG/SVG) for one registration without sending anything to attendee channels.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                registration_id: { type: "string" },
+                full_name: { type: "string" },
+                first_name: { type: "string" },
+                last_name: { type: "string" },
+                sender_id: { type: "string" },
+                phone: { type: "string" },
+                email: { type: "string" },
+                query: { type: "string" },
               },
             },
           },
@@ -3601,6 +3676,24 @@ async function executeAdminAgentToolCall(
         targetId: eventId,
       };
     }
+    case "view_ticket": {
+      const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
+      const ticketPngUrl = buildTicketImageUrl(registration.id, "png");
+      const ticketSvgUrl = buildTicketImageUrl(registration.id, "svg");
+      return {
+        reply: `ตั๋วของ ${formatRegistrationDisplayName(registration)} (${registration.id})`,
+        result: {
+          event_id: eventId,
+          registration: serializeAdminRegistration(registration),
+          ticket: {
+            png_url: ticketPngUrl,
+            svg_url: ticketSvgUrl,
+          },
+        },
+        targetType: "registration",
+        targetId: registration.id,
+      };
+    }
     case "create_registration": {
       const draft = parseAdminRegistrationDraft(call.args, rawMessage);
       const missing: string[] = [];
@@ -3947,6 +4040,8 @@ async function executeAdminAgentToolCall(
         platform: normalizeChannelPlatformArg(call.args.platform),
       });
       const resend = await resendTicketArtifactsToOutboundTarget(target, registration.id);
+      const ticketPngUrl = buildTicketImageUrl(registration.id, "png");
+      const ticketSvgUrl = buildTicketImageUrl(registration.id, "svg");
       return {
         reply: `ส่งตั๋วใหม่แล้ว: ${formatRegistrationDisplayName(registration)} (${registration.id})`,
         result: {
@@ -3958,6 +4053,10 @@ async function executeAdminAgentToolCall(
             external_id: target.externalId,
           },
           steps: resend.steps,
+          ticket: {
+            png_url: ticketPngUrl,
+            svg_url: ticketSvgUrl,
+          },
         },
         targetType: "registration",
         targetId: registration.id,
@@ -4059,6 +4158,16 @@ function summarizeAdminAgentResultForAudit(result: unknown) {
     }
   }
   return summary;
+}
+
+function extractAdminAgentTicketUrls(result: unknown) {
+  if (!result || typeof result !== "object") return { pngUrl: "", svgUrl: "" };
+  const ticket = (result as Record<string, unknown>).ticket;
+  if (!ticket || typeof ticket !== "object") return { pngUrl: "", svgUrl: "" };
+  const ticketData = ticket as Record<string, unknown>;
+  const pngUrl = typeof ticketData.png_url === "string" ? ticketData.png_url.trim() : "";
+  const svgUrl = typeof ticketData.svg_url === "string" ? ticketData.svg_url.trim() : "";
+  return { pngUrl, svgUrl };
 }
 
 type AdminAgentGlobalSettings = {
@@ -4168,6 +4277,34 @@ async function sendTelegramTextWithBotToken(botToken: string, chatId: string, te
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(payload?.description || "Failed to send Telegram message");
+  }
+  return payload;
+}
+
+async function sendTelegramPhotoWithBotToken(botToken: string, chatId: string, photoUrl: string, caption?: string) {
+  const token = normalizeOptionalText(botToken);
+  if (!token) {
+    throw new Error("Admin Agent Telegram bot token is missing");
+  }
+
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    photo: normalizeOptionalText(photoUrl),
+  };
+  const safeCaption = normalizeOptionalText(caption);
+  if (safeCaption) {
+    body.caption = normalizeLineText(safeCaption);
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.description || "Failed to send Telegram photo");
   }
   return payload;
 }
@@ -4333,6 +4470,34 @@ async function runAdminAgentCommand(options: {
   if (allowedActions.length === 0) {
     throw new Error("Admin Agent has no allowed actions. Enable at least one action in Advanced Policy.");
   }
+  const allowedActionSet = new Set<AdminAgentActionName>(allowedActions);
+  const ruleToolCall = inferAdminAgentRuleToolCall(message, allowedActionSet);
+  if (ruleToolCall) {
+    const action: AdminAgentToolCall = {
+      ...ruleToolCall,
+      args: {
+        ...ruleToolCall.args,
+        event_id: scopedEventId,
+      },
+    };
+    const execution = await executeAdminAgentToolCall(scopedEventId, action, message, {
+      policy,
+    });
+    appendAdminAgentSharedHistory("user", message);
+    appendAdminAgentSharedHistory("model", `[${action.name}] ${execution.reply}`);
+    return {
+      reply: execution.reply,
+      action,
+      result: execution.result as Record<string, unknown>,
+      meta: {
+        model: "rule-based",
+        provider: "rule",
+      },
+      eventId: scopedEventId,
+      targetType: execution.targetType || "event",
+      targetId: execution.targetId || scopedEventId,
+    };
+  }
 
   mergeAdminAgentSharedHistory(options.history || []);
   const plannerHistory = getAdminAgentPlannerHistory();
@@ -4370,7 +4535,6 @@ async function runAdminAgentCommand(options: {
     };
   }
 
-  const allowedActionSet = new Set<AdminAgentActionName>(allowedActions);
   ensureAdminActionAllowed(plan.toolCall.name, allowedActionSet);
 
   const actionUsesEventScope = !new Set<AdminAgentActionName>(["find_event", "search_system", "create_event"]).has(plan.toolCall.name);
@@ -8142,8 +8306,65 @@ async function startServer() {
   app.get("/api/messages", requireRoles(["owner", "admin", "operator", "viewer"]), async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
-      const messages = await appDb.listMessages(100, eventId);
-      res.json(messages);
+      const pageSize = parsePositiveInteger(req.query?.limit, 200, 1000);
+      const beforeIdParsed = Number.parseInt(String(req.query?.before_id || "").trim(), 10);
+      const beforeId = Number.isFinite(beforeIdParsed) && beforeIdParsed > 0
+        ? Math.trunc(beforeIdParsed)
+        : undefined;
+
+      const rows = await appDb.listMessages(pageSize + 1, eventId, beforeId);
+      const hasMore = rows.length > pageSize;
+      const items = hasMore ? rows.slice(0, pageSize) : rows;
+      const senderIds = [...new Set(items.map((row) => normalizeOptionalText(row.sender_id)).filter(Boolean))];
+      const externalIds = [...new Set(items.map((row) => normalizeOptionalText(row.page_id)).filter(Boolean))];
+      const [channels, senderRegistrations] = await Promise.all([
+        externalIds.length > 0 ? appDb.listChannelAccounts() : Promise.resolve([]),
+        senderIds.length > 0 ? appDb.listRegistrationsBySenderIds(senderIds, eventId) : Promise.resolve([]),
+      ]);
+      const channelByExternalId = new Map<string, { platform: ChannelPlatform; display_name: string }>();
+      for (const channel of channels) {
+        const channelEventId = normalizeOptionalText(channel.event_id) || DEFAULT_EVENT_ID;
+        if (channelEventId !== eventId) continue;
+        const externalId = normalizeOptionalText(channel.external_id);
+        if (!externalId) continue;
+        if (!channelByExternalId.has(externalId)) {
+          channelByExternalId.set(externalId, {
+            platform: channel.platform,
+            display_name: normalizeOptionalText(channel.display_name),
+          });
+        }
+      }
+      const registrationBySenderId = new Map<string, RegistrationRow>();
+      for (const registration of senderRegistrations) {
+        const senderId = normalizeOptionalText(registration.sender_id);
+        if (!senderId || registrationBySenderId.has(senderId)) continue;
+        registrationBySenderId.set(senderId, registration);
+      }
+      const enrichedItems = items.map((row) => {
+        const senderId = normalizeOptionalText(row.sender_id);
+        const pageId = normalizeOptionalText(row.page_id);
+        const channel = pageId ? channelByExternalId.get(pageId) : undefined;
+        const registration = senderId ? registrationBySenderId.get(senderId) : undefined;
+        return {
+          ...row,
+          platform: channel?.platform || null,
+          channel_display_name: channel?.display_name || null,
+          sender_name: registration ? formatRegistrationDisplayName(registration) : null,
+          sender_phone: registration ? normalizeOptionalText(registration.phone) : null,
+          sender_email: registration ? normalizeOptionalText(registration.email) : null,
+          registration_id: registration?.id || null,
+        };
+      });
+      const nextBeforeId = items.length > 0
+        ? Math.min(...items.map((row) => Number(row.id || 0)).filter((id) => Number.isFinite(id) && id > 0))
+        : null;
+
+      res.json({
+        items: enrichedItems,
+        has_more: hasMore,
+        next_before_id: nextBeforeId,
+        page_size: pageSize,
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch messages" });
     }
@@ -8527,6 +8748,7 @@ async function startServer() {
             "- นับจำนวนผู้ลงทะเบียนทั้งหมด",
             "- list registrations status registered",
             "- export registrations csv",
+            "- ดูตั๋ว REG-XXXXXX",
             "- ลงทะเบียนใหม่ ชื่อ สมชาย ใจดี เบอร์ 0895551234 อีเมล somchai@example.com",
             "- ตั้งสถานะ REG-XXXXXX เป็น checked-in",
             "- หาชื่อ สมชาย ใจดี",
@@ -8576,6 +8798,30 @@ async function startServer() {
           const effectiveEventId = normalizeOptionalText(execution.eventId) || eventId;
 
           await sendTelegramTextWithBotToken(settings.telegramBotToken, normalized.chatId, replyText);
+          const ticketUrls = extractAdminAgentTicketUrls(execution.result);
+          if (ticketUrls.pngUrl) {
+            try {
+              await sendTelegramPhotoWithBotToken(
+                settings.telegramBotToken,
+                normalized.chatId,
+                ticketUrls.pngUrl,
+                "Ticket preview",
+              );
+            } catch (error) {
+              console.warn("Failed to send admin ticket PNG preview to Telegram:", error);
+              await sendTelegramTextWithBotToken(
+                settings.telegramBotToken,
+                normalized.chatId,
+                `Ticket PNG: ${ticketUrls.pngUrl}`,
+              );
+            }
+          } else if (ticketUrls.svgUrl) {
+            await sendTelegramTextWithBotToken(
+              settings.telegramBotToken,
+              normalized.chatId,
+              `Ticket SVG: ${ticketUrls.svgUrl}`,
+            );
+          }
           if (execution.action?.name === "export_registrations_csv") {
             const exportBundle = await buildAdminAgentRegistrationCsvBundle(
               effectiveEventId,
