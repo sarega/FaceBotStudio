@@ -236,6 +236,8 @@ const inboundHandledMessageIds = new Map<string, number>();
 const inboundConversationActivity = new Map<string, number>();
 const inboundReservedMessageIds = new Map<string, { messageId: number; expiresAt: number }>();
 const failedInboundTurns = new Map<string, FailedInboundTurn>();
+const ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES = 120;
+let adminAgentSharedHistory: ChatHistoryMessage[] = [];
 
 function parseRegistrationLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
@@ -970,6 +972,58 @@ function normalizeComparableText(value: unknown) {
 function normalizeOptionalText(value: unknown) {
   const normalized = String(value ?? "").trim();
   return normalized || "";
+}
+
+function normalizeAdminAgentHistory(history: ChatHistoryMessage[] = []) {
+  const normalized: ChatHistoryMessage[] = [];
+
+  for (const item of history) {
+    const role = item?.role === "user" ? "user" : "model";
+    const parts = Array.isArray(item?.parts) ? item.parts : [];
+    const text = parts
+      .map((part) => (typeof part?.text === "string" ? normalizeOptionalText(part.text) : ""))
+      .filter(Boolean)
+      .join("\n");
+    if (!text) continue;
+    normalized.push({
+      role,
+      parts: [{ text: truncateText(text, 1800) }],
+    });
+  }
+
+  return normalized.slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES);
+}
+
+function mergeAdminAgentSharedHistory(incomingHistory: ChatHistoryMessage[] = []) {
+  const incoming = normalizeAdminAgentHistory(incomingHistory);
+  if (incoming.length === 0) return;
+  if (incoming.length > adminAgentSharedHistory.length) {
+    adminAgentSharedHistory = incoming.slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES);
+  }
+}
+
+function getAdminAgentPlannerHistory() {
+  return normalizeAdminAgentHistory(adminAgentSharedHistory);
+}
+
+function appendAdminAgentSharedHistory(role: "user" | "model", text: string) {
+  const normalizedText = normalizeOptionalText(text);
+  if (!normalizedText) return;
+
+  const candidate: ChatHistoryMessage = {
+    role,
+    parts: [{ text: truncateText(normalizedText, 1800) }],
+  };
+  const last = adminAgentSharedHistory[adminAgentSharedHistory.length - 1];
+  const lastText = last?.parts?.map((part) => (typeof part?.text === "string" ? normalizeOptionalText(part.text) : "")).filter(Boolean).join("\n") || "";
+  if (last && last.role === candidate.role && lastText === candidate.parts[0]?.text) {
+    return;
+  }
+
+  adminAgentSharedHistory = [
+    ...adminAgentSharedHistory,
+    candidate,
+  ].slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES);
 }
 
 function normalizeRegistrationId(value: unknown) {
@@ -3702,9 +3756,12 @@ async function runAdminAgentCommand(options: {
     throw new Error("Admin Agent has no allowed actions. Enable at least one action in Advanced Policy.");
   }
 
+  mergeAdminAgentSharedHistory(options.history || []);
+  const plannerHistory = getAdminAgentPlannerHistory();
+
   const plan = await requestAdminAgentPlan(
     message,
-    options.history || [],
+    plannerHistory,
     settings,
     allowedActions,
     policy,
@@ -3721,8 +3778,11 @@ async function runAdminAgentCommand(options: {
   );
 
   if (!plan.toolCall) {
+    const clarificationReply = plan.assistantText || "ขอรายละเอียดเพิ่มอีกนิด เพื่อให้ผมสั่งงานต่อได้ถูกต้อง";
+    appendAdminAgentSharedHistory("user", message);
+    appendAdminAgentSharedHistory("model", clarificationReply);
     return {
-      reply: plan.assistantText || "ขอรายละเอียดเพิ่มอีกนิด เพื่อให้ผมสั่งงานต่อได้ถูกต้อง",
+      reply: clarificationReply,
       action: null as AdminAgentToolCall | null,
       result: null as Record<string, unknown> | null,
       meta: plan.meta,
@@ -3760,6 +3820,8 @@ async function runAdminAgentCommand(options: {
   const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
     policy,
   });
+  appendAdminAgentSharedHistory("user", message);
+  appendAdminAgentSharedHistory("model", action ? `[${action.name}] ${execution.reply}` : execution.reply);
   return {
     reply: execution.reply,
     action,
@@ -7650,6 +7712,19 @@ async function startServer() {
       const message = error instanceof Error ? error.message : "Failed to get response from OpenRouter";
       const status = /OPENROUTER_API_KEY/.test(message) ? 400 : 500;
       res.status(status).json({ error: message });
+    }
+  });
+
+  app.post("/api/admin-agent/history/reset", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      adminAgentSharedHistory = [];
+      await recordAudit(req, "admin_agent.history_reset", "workspace", "admin_agent", {
+        source: "ui",
+      });
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Admin agent history reset error:", error);
+      return res.status(500).json({ error: "Failed to reset admin agent history" });
     }
   });
 

@@ -1863,8 +1863,8 @@ export default function App() {
   const deferredRegistrationListQuery = useDeferredValue(normalizeSearchQuery(registrationListQuery));
   const deferredDocumentListQuery = useDeferredValue(normalizeSearchQuery(documentListQuery));
   const deferredLogListQuery = useDeferredValue(normalizeSearchQuery(logListQuery));
-  const adminAgentChatStorageKey = authUser?.id && selectedEventId
-    ? `${authUser.id}:${selectedEventId}`
+  const adminAgentChatStorageKey = authUser?.id
+    ? `${authUser.id}:global`
     : "";
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
@@ -4162,6 +4162,15 @@ export default function App() {
         void fetchLlmUsageSummary(selectedEventId);
       }
       setAdminAgentTyping(false);
+    }
+  };
+
+  const handleAdminAgentClearChat = async () => {
+    setAdminAgentMessages([]);
+    try {
+      await apiFetch("/api/admin-agent/history/reset", { method: "POST" });
+    } catch (err) {
+      console.error("Failed to reset shared admin agent history", err);
     }
   };
 
@@ -7376,7 +7385,7 @@ export default function App() {
                   </div>
                   <InlineActionsMenu label="Actions" tone="neutral">
                     <MenuActionItem
-                      onClick={() => setAdminAgentMessages([])}
+                      onClick={() => void handleAdminAgentClearChat()}
                       disabled={adminAgentMessages.length === 0}
                       tone="neutral"
                     >
