@@ -127,6 +127,19 @@ export interface CheckinSessionRow {
   created_at: string;
   expires_at: string;
   last_used_at: string | null;
+  exchanged_at: string | null;
+  revoked_at: string | null;
+  is_active: boolean;
+}
+
+export interface CheckinAccessSessionRow {
+  id: string;
+  checkin_session_id: string;
+  event_id: string;
+  label: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
   revoked_at: string | null;
   is_active: boolean;
 }
@@ -262,6 +275,12 @@ export interface CreateCheckinSessionInput {
   token_hash: string;
 }
 
+export interface ExchangeCheckinSessionTokenInput {
+  checkin_token_hash: string;
+  access_token_hash: string;
+  max_session_ttl_ms: number;
+}
+
 export interface RecordLlmUsageInput {
   event_id?: string | null;
   actor_user_id?: string | null;
@@ -378,7 +397,11 @@ export interface AppDatabase {
   listCheckinSessions(eventId: string): Promise<CheckinSessionRow[]>;
   createCheckinSession(input: CreateCheckinSessionInput): Promise<CheckinSessionRow>;
   getCheckinSessionByTokenHash(tokenHash: string): Promise<CheckinSessionRow | undefined>;
+  exchangeCheckinSessionToken(input: ExchangeCheckinSessionTokenInput): Promise<CheckinAccessSessionRow | undefined>;
+  getCheckinAccessSessionByTokenHash(tokenHash: string): Promise<CheckinAccessSessionRow | undefined>;
+  touchCheckinAccessSession(sessionId: string): Promise<void>;
   touchCheckinSession(sessionId: string): Promise<void>;
   revokeCheckinSession(sessionId: string): Promise<boolean>;
   deleteExpiredCheckinSessions(): Promise<void>;
+  deleteExpiredCheckinAccessSessions(): Promise<void>;
 }

@@ -51,6 +51,11 @@ Recommended for low-traffic demos with SQLite:
    - `OPENROUTER_DEFAULT_MODEL=google/gemini-3-flash-preview`
    - `OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small` (optional, for queued document vectors + retrieval)
    - `EMBEDDING_HOOK_URL=https://your-worker-or-api.example.com/embeddings` (optional, receives a copy of embedding jobs after local vectors are stored)
+   - `SESSION_TTL_DAYS=14`
+   - `CHECKIN_ACCESS_SESSION_TTL_MINUTES=120` (scoped check-in cookie lifetime)
+   - `JSON_BODY_LIMIT=256kb` (API payload cap)
+   - `CSRF_ALLOWED_ORIGINS=https://admin.example.com` (optional extra trusted origins)
+   - `TRUST_PROXY=1` (set explicitly in production; use `false` if direct/no proxy)
    - `DB_PATH=/data/bot.db`
    - `APP_URL=https://YOUR_APP.up.railway.app`
 4. Build command: `npm run build`

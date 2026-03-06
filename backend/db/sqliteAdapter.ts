@@ -12,10 +12,12 @@ import type {
   AuthUserRow,
   ChannelAccountRow,
   ChannelPlatform,
+  CheckinAccessSessionRow,
   CheckinSessionRow,
   CreateRegistrationEmailDeliveryInput,
   CreateEventInput,
   CreateCheckinSessionInput,
+  ExchangeCheckinSessionTokenInput,
   EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
   EventDocumentRow,
@@ -246,6 +248,7 @@ function mapEventDocumentChunkEmbeddingRow(row: Record<string, unknown>) {
 
 function mapCheckinSessionRow(row: Record<string, unknown>) {
   const revokedAt = typeof row.revoked_at === "string" ? row.revoked_at : null;
+  const exchangedAt = typeof row.exchanged_at === "string" ? row.exchanged_at : null;
   const expiresAt = String(row.expires_at || "");
   const expiresAtMs = Number.isFinite(Date.parse(expiresAt)) ? Date.parse(expiresAt) : 0;
   return {
@@ -256,9 +259,27 @@ function mapCheckinSessionRow(row: Record<string, unknown>) {
     created_at: String(row.created_at || ""),
     expires_at: expiresAt,
     last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
+    exchanged_at: exchangedAt,
+    revoked_at: revokedAt,
+    is_active: !revokedAt && !exchangedAt && expiresAtMs > Date.now(),
+  } satisfies CheckinSessionRow;
+}
+
+function mapCheckinAccessSessionRow(row: Record<string, unknown>) {
+  const revokedAt = typeof row.revoked_at === "string" ? row.revoked_at : null;
+  const expiresAt = String(row.expires_at || "");
+  const expiresAtMs = Number.isFinite(Date.parse(expiresAt)) ? Date.parse(expiresAt) : 0;
+  return {
+    id: String(row.id),
+    checkin_session_id: String(row.checkin_session_id || ""),
+    event_id: String(row.event_id || ""),
+    label: String(row.label || ""),
+    created_at: String(row.created_at || ""),
+    expires_at: expiresAt,
+    last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
     revoked_at: revokedAt,
     is_active: !revokedAt && expiresAtMs > Date.now(),
-  } satisfies CheckinSessionRow;
+  } satisfies CheckinAccessSessionRow;
 }
 
 export class SqliteAppDatabase implements AppDatabase {
@@ -357,9 +378,23 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         expires_at DATETIME NOT NULL,
         last_used_at DATETIME,
+        exchanged_at DATETIME,
         revoked_at DATETIME,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
         FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE TABLE IF NOT EXISTS checkin_access_sessions (
+        id TEXT PRIMARY KEY,
+        checkin_session_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME NOT NULL,
+        last_used_at DATETIME,
+        revoked_at DATETIME,
+        FOREIGN KEY (checkin_session_id) REFERENCES checkin_sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -456,6 +491,12 @@ export class SqliteAppDatabase implements AppDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions (token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
+      CREATE INDEX IF NOT EXISTS idx_checkin_sessions_token_hash ON checkin_sessions (token_hash);
+      CREATE INDEX IF NOT EXISTS idx_checkin_sessions_expires_at ON checkin_sessions (expires_at);
+      CREATE INDEX IF NOT EXISTS idx_checkin_sessions_event_id ON checkin_sessions (event_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_checkin_access_sessions_token_hash ON checkin_access_sessions (token_hash);
+      CREATE INDEX IF NOT EXISTS idx_checkin_access_sessions_session_id ON checkin_access_sessions (checkin_session_id);
+      CREATE INDEX IF NOT EXISTS idx_checkin_access_sessions_expires_at ON checkin_access_sessions (expires_at);
       CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_event_created_at ON llm_usage_events (event_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_created_at ON llm_usage_events (created_at DESC);
@@ -494,6 +535,7 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("event_document_chunks", "embedding_vector", "TEXT");
     this.ensureColumn("event_document_chunks", "embedding_dimensions", "INTEGER");
     this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
+    this.ensureColumn("checkin_sessions", "exchanged_at", "DATETIME");
     this.db.exec(`
       UPDATE events
       SET status = CASE
@@ -535,6 +577,7 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
     await this.deleteExpiredCheckinSessions();
+    await this.deleteExpiredCheckinAccessSessions();
 
     this.initialized = true;
   }
@@ -1745,6 +1788,7 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at,
         expires_at,
         last_used_at,
+        exchanged_at,
         revoked_at
        FROM checkin_sessions
        WHERE event_id = ?
@@ -1776,6 +1820,7 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at,
         expires_at,
         last_used_at,
+        exchanged_at,
         revoked_at
        FROM checkin_sessions
        WHERE id = ?`,
@@ -1797,15 +1842,123 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at,
         expires_at,
         last_used_at,
+        exchanged_at,
         revoked_at
        FROM checkin_sessions
        WHERE token_hash = ?
          AND revoked_at IS NULL
+         AND exchanged_at IS NULL
          AND expires_at > CURRENT_TIMESTAMP
        LIMIT 1`,
     ).get(String(tokenHash || "").trim()) as Record<string, unknown> | undefined;
 
     return row ? mapCheckinSessionRow(row) : undefined;
+  }
+
+  async exchangeCheckinSessionToken(input: ExchangeCheckinSessionTokenInput) {
+    const checkinTokenHash = String(input.checkin_token_hash || "").trim();
+    const accessTokenHash = String(input.access_token_hash || "").trim();
+    const maxSessionTtlMs = Math.max(60_000, Number(input.max_session_ttl_ms || 0));
+    if (!checkinTokenHash || !accessTokenHash) {
+      return undefined;
+    }
+
+    const selectCheckinStatement = this.db.prepare(
+      `SELECT
+        id,
+        event_id,
+        label,
+        expires_at
+       FROM checkin_sessions
+       WHERE token_hash = ?
+         AND revoked_at IS NULL
+         AND exchanged_at IS NULL
+         AND expires_at > CURRENT_TIMESTAMP
+       LIMIT 1`,
+    );
+    const markExchangedStatement = this.db.prepare(
+      `UPDATE checkin_sessions
+       SET exchanged_at = CURRENT_TIMESTAMP,
+           last_used_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND revoked_at IS NULL
+         AND exchanged_at IS NULL`,
+    );
+    const insertAccessSessionStatement = this.db.prepare(
+      `INSERT INTO checkin_access_sessions (
+        id, checkin_session_id, event_id, label, token_hash, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const getAccessSessionStatement = this.db.prepare(
+      `SELECT
+        id,
+        checkin_session_id,
+        event_id,
+        label,
+        created_at,
+        expires_at,
+        last_used_at,
+        revoked_at
+       FROM checkin_access_sessions
+       WHERE id = ?
+       LIMIT 1`,
+    );
+
+    const exchangeTransaction = this.db.transaction((sourceTokenHash: string, nextTokenHash: string, ttlMs: number) => {
+      const source = selectCheckinStatement.get(sourceTokenHash) as Record<string, unknown> | undefined;
+      if (!source) return undefined;
+
+      const now = Date.now();
+      const sourceExpiresAtMs = Date.parse(String(source.expires_at || ""));
+      if (!Number.isFinite(sourceExpiresAtMs) || sourceExpiresAtMs <= now) {
+        return undefined;
+      }
+
+      const accessExpiresAtMs = Math.min(sourceExpiresAtMs, now + ttlMs);
+      if (accessExpiresAtMs <= now) {
+        return undefined;
+      }
+
+      const marked = markExchangedStatement.run(String(source.id || "").trim());
+      if (marked.changes <= 0) {
+        return undefined;
+      }
+
+      const accessSessionId = generateEntityId("cas");
+      insertAccessSessionStatement.run(
+        accessSessionId,
+        String(source.id || "").trim(),
+        String(source.event_id || "").trim(),
+        String(source.label || "").trim(),
+        nextTokenHash,
+        new Date(accessExpiresAtMs).toISOString(),
+      );
+
+      const row = getAccessSessionStatement.get(accessSessionId) as Record<string, unknown> | undefined;
+      return row ? mapCheckinAccessSessionRow(row) : undefined;
+    });
+
+    return exchangeTransaction(checkinTokenHash, accessTokenHash, maxSessionTtlMs);
+  }
+
+  async getCheckinAccessSessionByTokenHash(tokenHash: string) {
+    const row = this.db.prepare(
+      `SELECT
+        id,
+        checkin_session_id,
+        event_id,
+        label,
+        created_at,
+        expires_at,
+        last_used_at,
+        revoked_at
+       FROM checkin_access_sessions
+       WHERE token_hash = ?
+         AND revoked_at IS NULL
+         AND expires_at > CURRENT_TIMESTAMP
+       LIMIT 1`,
+    ).get(String(tokenHash || "").trim()) as Record<string, unknown> | undefined;
+    return row ? mapCheckinAccessSessionRow(row) : undefined;
   }
 
   async touchCheckinSession(sessionId: string) {
@@ -1814,15 +1967,33 @@ export class SqliteAppDatabase implements AppDatabase {
     ).run(String(sessionId || "").trim());
   }
 
-  async revokeCheckinSession(sessionId: string) {
-    const result = this.db.prepare(
-      "UPDATE checkin_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL",
+  async touchCheckinAccessSession(sessionId: string) {
+    this.db.prepare(
+      "UPDATE checkin_access_sessions SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?",
     ).run(String(sessionId || "").trim());
-    return result.changes > 0;
+  }
+
+  async revokeCheckinSession(sessionId: string) {
+    const revokeTransaction = this.db.transaction((normalizedSessionId: string) => {
+      const result = this.db.prepare(
+        "UPDATE checkin_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND revoked_at IS NULL",
+      ).run(normalizedSessionId);
+      if (result.changes > 0) {
+        this.db.prepare(
+          "UPDATE checkin_access_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE checkin_session_id = ? AND revoked_at IS NULL",
+        ).run(normalizedSessionId);
+      }
+      return result.changes > 0;
+    });
+    return revokeTransaction(String(sessionId || "").trim());
   }
 
   async deleteExpiredCheckinSessions() {
     this.db.prepare("DELETE FROM checkin_sessions WHERE expires_at <= CURRENT_TIMESTAMP").run();
+  }
+
+  async deleteExpiredCheckinAccessSessions() {
+    this.db.prepare("DELETE FROM checkin_access_sessions WHERE expires_at <= CURRENT_TIMESTAMP").run();
   }
 
   private ensureColumn(tableName: string, columnName: string, definition: string) {

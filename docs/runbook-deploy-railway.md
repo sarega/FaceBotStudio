@@ -12,10 +12,14 @@
 - `PAGE_ACCESS_TOKEN`
 - `FACEBOOK_APP_SECRET` (recommended)
 - `APP_URL`
+- `TRUST_PROXY` (explicit in production, for example `1`)
 - `ADMIN_USER`
 - `ADMIN_PASS`
 - `DB_PATH` (temporary fallback during SQLite -> Postgres transition)
 - `APP_RUNTIME` (optional; default is `all`)
+- `CHECKIN_ACCESS_SESSION_TTL_MINUTES` (optional; default `120`)
+- `JSON_BODY_LIMIT` (optional; default `256kb`)
+- `CSRF_ALLOWED_ORIGINS` (optional comma-separated origin allow-list)
 
 ## Database migration
 Run after pulling a new version that changes the schema:
@@ -57,6 +61,7 @@ When ready to separate web and worker services:
 - Facebook inbound webhook events are deduplicated before processing.
 - If Redis is unavailable, the app falls back to inline processing.
 - Document embedding jobs generate local vectors through OpenRouter; `EMBEDDING_HOOK_URL` is optional and only mirrors payloads outward.
+- In `NODE_ENV=production`, startup now fails fast for invalid security config (for example missing `TRUST_PROXY`, invalid `APP_URL`, invalid `SESSION_TTL_DAYS`, or missing worker `OPENROUTER_API_KEY`).
 
 ## Rollback notes
 - Keep the SQLite volume in place during Sprint 1.

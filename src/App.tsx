@@ -75,6 +75,7 @@ type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin";
+type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceFilter = "all" | EventStatus;
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
@@ -468,6 +469,16 @@ const INITIAL_CHECKIN_TOKEN =
   typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("checkin_token")?.trim() || ""
     : "";
+
+function stripCheckinTokenFromUrl() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("checkin_token")) return;
+  url.searchParams.delete("checkin_token");
+  const query = url.searchParams.toString();
+  const nextUrl = `${url.pathname}${query ? `?${query}` : ""}${url.hash || ""}`;
+  window.history.replaceState({}, document.title, nextUrl);
+}
 
 function getStoredThemeMode(): ThemeMode {
   if (typeof window === "undefined") return "system";
@@ -2146,6 +2157,7 @@ export default function App() {
   const [channelConfigDialogOpen, setChannelConfigDialogOpen] = useState(false);
   const [searchId, setSearchId] = useState("");
   const [checkinAccessToken] = useState(INITIAL_CHECKIN_TOKEN);
+  const [checkinAccessMode, setCheckinAccessMode] = useState(Boolean(INITIAL_CHECKIN_TOKEN));
   const [checkinAccessSession, setCheckinAccessSession] = useState<CheckinAccessSession | null>(null);
   const [checkinAccessLoading, setCheckinAccessLoading] = useState(Boolean(INITIAL_CHECKIN_TOKEN));
   const [checkinAccessError, setCheckinAccessError] = useState("");
@@ -2201,9 +2213,12 @@ export default function App() {
   const [lastScannedValue, setLastScannedValue] = useState("");
   const [operationsMenuOpen, setOperationsMenuOpen] = useState(false);
   const [setupMenuOpen, setSetupMenuOpen] = useState(false);
+  const [agentWorkspaceView, setAgentWorkspaceView] = useState<AgentWorkspaceView>("console");
+  const [agentWorkspaceMenuOpen, setAgentWorkspaceMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [knowledgeActionsOpen, setKnowledgeActionsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [hoverDropdownEnabled, setHoverDropdownEnabled] = useState(false);
   const [registrationVisibleCount, setRegistrationVisibleCount] = useState(120);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -2217,6 +2232,10 @@ export default function App() {
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
   const setupMenuRef = useRef<HTMLDivElement | null>(null);
+  const agentWorkspaceMenuRef = useRef<HTMLDivElement | null>(null);
+  const operationsMenuCloseTimerRef = useRef<number | null>(null);
+  const setupMenuCloseTimerRef = useRef<number | null>(null);
+  const agentWorkspaceMenuCloseTimerRef = useRef<number | null>(null);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const knowledgeActionsRef = useRef<HTMLDivElement | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -2232,7 +2251,6 @@ export default function App() {
   selectedEventIdRef.current = selectedEventId;
   settingsRef.current = settings;
 
-  const checkinAccessMode = Boolean(checkinAccessToken);
   const role = authUser?.role;
   const canEditSettings = role === "owner" || role === "admin";
   const canRunTest = role === "owner" || role === "admin" || role === "operator";
@@ -2363,6 +2381,10 @@ export default function App() {
     ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: "Team Access" }] : []),
   ];
   const selectedSetupTab = setupTabs.find((tab) => tab.id === activeTab) || setupTabs[0] || null;
+  const agentWorkspaceTabs = [
+    { id: "console" as const, icon: MonitorCog, label: "Agent Chat", description: "Operational command chat" },
+    { id: "setup" as const, icon: SettingsIcon, label: "Runtime Setup", description: "Runtime policy and external channel setup" },
+  ];
   const operationsTabs = [
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
     ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: "Check-in" }] : []),
@@ -2821,27 +2843,58 @@ export default function App() {
     };
   };
 
-  const fetchCheckinAccessSession = async (token = checkinAccessToken) => {
-    if (!token) return null;
-    setCheckinAccessLoading(true);
-    setCheckinAccessError("");
+  const fetchCheckinAccessSession = async (token = checkinAccessToken, options?: { silentNoSession?: boolean }) => {
+    const silentNoSession = Boolean(options?.silentNoSession);
+    if (!silentNoSession) {
+      setCheckinAccessLoading(true);
+      setCheckinAccessError("");
+    }
     try {
-      const res = await fetch(`/api/checkin-access/session?token=${encodeURIComponent(token)}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error || "Failed to load check-in session");
+      const sessionRes = await fetch("/api/checkin-access/session");
+      const sessionData = await sessionRes.json().catch(() => ({}));
+      if (sessionRes.ok) {
+        const session = sessionData?.session as CheckinAccessSession;
+        setCheckinAccessSession(session);
+        setSelectedEventId(session?.event_id || "");
+        setCheckinAccessMode(true);
+        stripCheckinTokenFromUrl();
+        return session;
       }
-      const session = data?.session as CheckinAccessSession;
+
+      if (silentNoSession && sessionRes.status === 401 && !token) {
+        return null;
+      }
+
+      if (!token) {
+        throw new Error(sessionData?.error || "Failed to load check-in session");
+      }
+
+      const exchangeRes = await fetch("/api/checkin-access/exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const exchangeData = await exchangeRes.json().catch(() => ({}));
+      if (!exchangeRes.ok) {
+        throw new Error(exchangeData?.error || "Failed to exchange check-in token");
+      }
+      const session = exchangeData?.session as CheckinAccessSession;
       setCheckinAccessSession(session);
       setSelectedEventId(session?.event_id || "");
+      setCheckinAccessMode(true);
+      stripCheckinTokenFromUrl();
       return session;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load check-in session";
-      setCheckinAccessError(message);
+      if (!silentNoSession) {
+        setCheckinAccessError(message);
+      }
       setCheckinAccessSession(null);
       return null;
     } finally {
-      setCheckinAccessLoading(false);
+      if (!silentNoSession) {
+        setCheckinAccessLoading(false);
+      }
     }
   };
 
@@ -2965,6 +3018,27 @@ export default function App() {
     } finally {
     }
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      setHoverDropdownEnabled(false);
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(hover: hover) and (pointer: fine) and (min-width: 640px)");
+    const update = () => {
+      setHoverDropdownEnabled(mediaQuery.matches);
+    };
+    update();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", update);
+      return () => mediaQuery.removeEventListener("change", update);
+    }
+
+    mediaQuery.addListener(update);
+    return () => mediaQuery.removeListener(update);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -3210,15 +3284,24 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    if (checkinAccessMode) {
-      setLoading(false);
-      setAuthStatus("unauthenticated");
-      void fetchCheckinAccessSession();
-      return () => {
-        cancelled = true;
-      };
-    }
     void (async () => {
+      if (checkinAccessMode) {
+        setLoading(false);
+        setAuthStatus("unauthenticated");
+        await fetchCheckinAccessSession();
+        return;
+      }
+
+      void fetchCheckinAccessSession("", { silentNoSession: true })
+        .then((existingCheckinSession) => {
+          if (cancelled || !existingCheckinSession) return;
+          setLoading(false);
+          setAuthStatus("unauthenticated");
+        })
+        .catch(() => {
+          // Ignore silent probe failures and continue normal auth bootstrap.
+        });
+
       try {
         const user = await fetchCurrentUser();
         if (cancelled) return;
@@ -3359,6 +3442,10 @@ export default function App() {
   useEffect(() => {
     setOperationsMenuOpen(false);
     setSetupMenuOpen(false);
+    setAgentWorkspaceMenuOpen(false);
+    clearMenuCloseTimer(operationsMenuCloseTimerRef);
+    clearMenuCloseTimer(setupMenuCloseTimerRef);
+    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
     setUserMenuOpen(false);
     setKnowledgeActionsOpen(false);
     setGlobalSearchOpen(false);
@@ -3381,6 +3468,14 @@ export default function App() {
   }, [operationsMenuOpen]);
 
   useEffect(() => {
+    return () => {
+      clearMenuCloseTimer(operationsMenuCloseTimerRef);
+      clearMenuCloseTimer(setupMenuCloseTimerRef);
+      clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!setupMenuOpen) return;
 
     const handlePointerDown = (event: MouseEvent) => {
@@ -3392,6 +3487,19 @@ export default function App() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [setupMenuOpen]);
+
+  useEffect(() => {
+    if (!agentWorkspaceMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!agentWorkspaceMenuRef.current?.contains(event.target as Node)) {
+        setAgentWorkspaceMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [agentWorkspaceMenuOpen]);
 
   useEffect(() => {
     if (!userMenuOpen) return;
@@ -3484,7 +3592,7 @@ export default function App() {
   }, [adminCommandPaletteOpen]);
 
   useEffect(() => {
-    if (activeTab !== "agent") return;
+    if (activeTab !== "agent" || agentWorkspaceView !== "console") return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== "p") {
@@ -3502,7 +3610,13 @@ export default function App() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [activeTab]);
+  }, [activeTab, agentWorkspaceView]);
+
+  useEffect(() => {
+    if (agentWorkspaceView === "console") return;
+    setAdminCommandPaletteOpen(false);
+    setAdminCommandPaletteQuery("");
+  }, [agentWorkspaceView]);
 
   useEffect(() => {
     if (checkinAccessMode) return;
@@ -3552,7 +3666,7 @@ export default function App() {
   }, [filteredMessages, selectedLogMessageId]);
 
   useEffect(() => {
-    if (activeTab !== "agent") return;
+    if (activeTab !== "agent" || agentWorkspaceView !== "console") return;
 
     const scrollToBottom = () => {
       const panel = adminAgentScrollRef.current;
@@ -3597,7 +3711,7 @@ export default function App() {
       mutationObserver?.disconnect();
       panel?.removeEventListener("load", handlePanelAssetLoad, true);
     };
-  }, [activeTab, selectedEventId, adminAgentMessages.length, adminAgentTyping]);
+  }, [activeTab, agentWorkspaceView, selectedEventId, adminAgentMessages.length, adminAgentTyping]);
 
   useEffect(() => {
     setManualOverrideText("");
@@ -4244,12 +4358,76 @@ export default function App() {
     return window.confirm(`You have unsaved ${Array.from(dirtySections).join(", ")} changes. Leave without saving?`);
   };
 
+  const forceScrollAdminAgentToBottom = () => {
+    const runScroll = () => {
+      const panel = adminAgentScrollRef.current;
+      if (panel) {
+        panel.scrollTop = panel.scrollHeight;
+      }
+      adminAgentBottomRef.current?.scrollIntoView({ block: "end" });
+    };
+
+    const schedule = (delayMs: number) => {
+      window.setTimeout(() => {
+        window.requestAnimationFrame(runScroll);
+      }, delayMs);
+    };
+
+    window.requestAnimationFrame(runScroll);
+    schedule(60);
+    schedule(180);
+    schedule(360);
+  };
+
+  const clearMenuCloseTimer = (timerRef: { current: number | null }) => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const scheduleSetupMenuClose = () => {
+    if (!hoverDropdownEnabled) return;
+    clearMenuCloseTimer(setupMenuCloseTimerRef);
+    setupMenuCloseTimerRef.current = window.setTimeout(() => {
+      setSetupMenuOpen(false);
+      setupMenuCloseTimerRef.current = null;
+    }, 180);
+  };
+
+  const scheduleOperationsMenuClose = () => {
+    if (!hoverDropdownEnabled) return;
+    clearMenuCloseTimer(operationsMenuCloseTimerRef);
+    operationsMenuCloseTimerRef.current = window.setTimeout(() => {
+      setOperationsMenuOpen(false);
+      operationsMenuCloseTimerRef.current = null;
+    }, 180);
+  };
+
+  const scheduleAgentWorkspaceMenuClose = () => {
+    if (!hoverDropdownEnabled) return;
+    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+    agentWorkspaceMenuCloseTimerRef.current = window.setTimeout(() => {
+      setAgentWorkspaceMenuOpen(false);
+      agentWorkspaceMenuCloseTimerRef.current = null;
+    }, 180);
+  };
+
   const handleNavigateToTab = (nextTab: AppTab) => {
-    if (nextTab === activeTab) return true;
+    if (nextTab === activeTab) {
+      if (nextTab === "agent") {
+        forceScrollAdminAgentToBottom();
+      }
+      return true;
+    }
     if (!confirmDiscardDirtyChanges({ nextTab })) return false;
     setActiveTab(nextTab);
+    if (nextTab === "agent") {
+      forceScrollAdminAgentToBottom();
+    }
     setSetupMenuOpen(false);
     setOperationsMenuOpen(false);
+    setAgentWorkspaceMenuOpen(false);
     return true;
   };
 
@@ -4555,7 +4733,10 @@ export default function App() {
       const res = await apiFetch(`/api/documents/${encodeURIComponent(documentId)}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_active: !isActive }),
+        body: JSON.stringify({
+          event_id: selectedEventId,
+          is_active: !isActive,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -4605,9 +4786,7 @@ export default function App() {
     setCheckinStatus("loading");
     setCheckinErrorMessage("");
     try {
-      const requestBody = checkinAccessMode
-        ? { id: normalizedId, token: checkinAccessToken }
-        : { id: normalizedId };
+      const requestBody = { id: normalizedId };
       const res = await (checkinAccessMode ? fetch("/api/checkin-access/checkin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6623,30 +6802,134 @@ export default function App() {
 
           <div className="mt-1.5 flex items-center gap-2">
             <div className="app-toolbar-surface grid flex-1 grid-flow-col auto-cols-fr gap-1 rounded-xl bg-slate-100 p-1 sm:flex sm:flex-wrap sm:gap-1 sm:rounded-2xl">
-              {primaryTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => handleNavigateToTab(tab.id)}
-                  className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                    activeTab === tab.id
-                      ? "bg-white text-blue-600 shadow-sm"
-                      : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                  }`}
-                  aria-current={activeTab === tab.id ? "page" : undefined}
-                >
-                  <tab.icon className="h-4 w-4 shrink-0" />
-                  <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
-                  {((tab.id === "event" && eventDetailsDirty)
-                    || (tab.id === "design" && eventContextDirty)
-                    || (tab.id === "agent" && agentSettingsDirty)) && (
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
-                  )}
-                </button>
-              ))}
-              {setupTabs.length > 0 && selectedSetupTab && (
-                <div className="relative min-w-0" ref={setupMenuRef}>
+              {primaryTabs.map((tab) => {
+                if (tab.id === "agent") {
+                  return (
+                    <div
+                      key={tab.id}
+                      className="relative min-w-0"
+                      ref={agentWorkspaceMenuRef}
+                      onMouseEnter={() => {
+                        if (!hoverDropdownEnabled) return;
+                        clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+                        setAgentWorkspaceMenuOpen(true);
+                        clearMenuCloseTimer(setupMenuCloseTimerRef);
+                        setSetupMenuOpen(false);
+                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                        setOperationsMenuOpen(false);
+                      }}
+                      onMouseLeave={() => {
+                        scheduleAgentWorkspaceMenuClose();
+                      }}
+                    >
+                      <button
+                        onClick={() => {
+                          if (hoverDropdownEnabled) {
+                            setAgentWorkspaceMenuOpen(true);
+                            return;
+                          }
+                          setAgentWorkspaceMenuOpen((open) => !open);
+                        }}
+                        className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
+                          activeTab === "agent" || agentWorkspaceMenuOpen
+                            ? "bg-white text-blue-600 shadow-sm"
+                            : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                        }`}
+                        aria-expanded={agentWorkspaceMenuOpen}
+                        aria-haspopup="menu"
+                        aria-current={activeTab === "agent" ? "page" : undefined}
+                      >
+                        <tab.icon className="h-4 w-4 shrink-0" />
+                        <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
+                        {agentSettingsDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
+                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${agentWorkspaceMenuOpen ? "rotate-180" : ""}`} />
+                      </button>
+                      {agentWorkspaceMenuOpen && (
+                        <div
+                          className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[13rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+                          onMouseEnter={() => {
+                            if (!hoverDropdownEnabled) return;
+                            clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+                          }}
+                          onMouseLeave={() => {
+                            scheduleAgentWorkspaceMenuClose();
+                          }}
+                        >
+                          {agentWorkspaceTabs.map((agentViewTab) => (
+                            <button
+                              key={agentViewTab.id}
+                              onClick={() => {
+                                if (!handleNavigateToTab("agent")) return;
+                                setAgentWorkspaceView(agentViewTab.id);
+                                setAgentWorkspaceMenuOpen(false);
+                                clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+                                if (agentViewTab.id === "console") {
+                                  forceScrollAdminAgentToBottom();
+                                }
+                              }}
+                              className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
+                                activeTab === "agent" && agentWorkspaceView === agentViewTab.id
+                                  ? "bg-blue-50 text-blue-700"
+                                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                              }`}
+                              role="menuitem"
+                            >
+                              <agentViewTab.icon className="h-4 w-4" />
+                              <span className="font-medium">{agentViewTab.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
                   <button
-                    onClick={() => setSetupMenuOpen((open) => !open)}
+                    key={tab.id}
+                    onClick={() => handleNavigateToTab(tab.id)}
+                    className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
+                      activeTab === tab.id
+                        ? "bg-white text-blue-600 shadow-sm"
+                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                    }`}
+                    aria-current={activeTab === tab.id ? "page" : undefined}
+                  >
+                    <tab.icon className="h-4 w-4 shrink-0" />
+                    <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
+                    {((tab.id === "event" && eventDetailsDirty)
+                      || (tab.id === "design" && eventContextDirty)) && (
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
+                    )}
+                  </button>
+                );
+              })}
+              {setupTabs.length > 0 && selectedSetupTab && (
+                <div
+                  className="relative min-w-0"
+                  ref={setupMenuRef}
+                  onMouseEnter={() => {
+                    if (!hoverDropdownEnabled) return;
+                    clearMenuCloseTimer(setupMenuCloseTimerRef);
+                    setSetupMenuOpen(true);
+                    clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                    setOperationsMenuOpen(false);
+                    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+                    setAgentWorkspaceMenuOpen(false);
+                  }}
+                  onMouseLeave={() => {
+                    scheduleSetupMenuClose();
+                  }}
+                >
+                  <button
+                    onClick={() => {
+                      setAgentWorkspaceMenuOpen(false);
+                      if (hoverDropdownEnabled) {
+                        setSetupMenuOpen(true);
+                        return;
+                      }
+                      setSetupMenuOpen((open) => !open);
+                    }}
                     className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
                       isSetupTab || setupMenuOpen
                         ? "bg-white text-blue-600 shadow-sm"
@@ -6661,17 +6944,26 @@ export default function App() {
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {setupMenuOpen && (
-                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div
+                      className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+                      onMouseEnter={() => {
+                        if (!hoverDropdownEnabled) return;
+                        clearMenuCloseTimer(setupMenuCloseTimerRef);
+                      }}
+                      onMouseLeave={() => {
+                        scheduleSetupMenuClose();
+                      }}
+                    >
                       {setupTabs.map((tab) => (
                         <button
                           key={tab.id}
                           onClick={() => {
                             handleNavigateToTab(tab.id);
                           }}
-                          className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
+                          className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
                             activeTab === tab.id
                               ? "bg-blue-50 text-blue-700"
-                              : "text-slate-600 hover:bg-slate-50"
+                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                           }`}
                           role="menuitem"
                         >
@@ -6685,9 +6977,31 @@ export default function App() {
                 </div>
               )}
               {operationsTabs.length > 0 && (
-                <div className="relative min-w-0" ref={operationsMenuRef}>
+                <div
+                  className="relative min-w-0"
+                  ref={operationsMenuRef}
+                  onMouseEnter={() => {
+                    if (!hoverDropdownEnabled) return;
+                    clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                    setOperationsMenuOpen(true);
+                    clearMenuCloseTimer(setupMenuCloseTimerRef);
+                    setSetupMenuOpen(false);
+                    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+                    setAgentWorkspaceMenuOpen(false);
+                  }}
+                  onMouseLeave={() => {
+                    scheduleOperationsMenuClose();
+                  }}
+                >
                   <button
-                    onClick={() => setOperationsMenuOpen((open) => !open)}
+                    onClick={() => {
+                      setAgentWorkspaceMenuOpen(false);
+                      if (hoverDropdownEnabled) {
+                        setOperationsMenuOpen(true);
+                        return;
+                      }
+                      setOperationsMenuOpen((open) => !open);
+                    }}
                     className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
                       isOperationsTab || operationsMenuOpen
                         ? "bg-white text-blue-600 shadow-sm"
@@ -6701,17 +7015,26 @@ export default function App() {
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {operationsMenuOpen && (
-                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div
+                      className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+                      onMouseEnter={() => {
+                        if (!hoverDropdownEnabled) return;
+                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                      }}
+                      onMouseLeave={() => {
+                        scheduleOperationsMenuClose();
+                      }}
+                    >
                       {operationsTabs.map((tab) => (
                         <button
                           key={tab.id}
                           onClick={() => {
                             handleNavigateToTab(tab.id);
                           }}
-                          className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
+                          className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
                             activeTab === tab.id
                               ? "bg-blue-50 text-blue-700"
-                              : "text-slate-600 hover:bg-slate-50"
+                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                           }`}
                           role="menuitem"
                         >
@@ -8402,8 +8725,9 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]"
+              className="space-y-4"
             >
+              {agentWorkspaceView === "console" && (
               <div className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]">
                 <div className="border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                   <div className="flex min-w-0 items-start gap-2.5">
@@ -8638,8 +8962,10 @@ export default function App() {
                   </div>
                 </div>
               </div>
+              )}
 
-              <div className="space-y-4">
+              {agentWorkspaceView !== "console" && (
+              <div className="space-y-4 xl:max-w-4xl">
                 <div className="flex items-center justify-end">
                   <ActionButton
                     onClick={() => void saveAgentSettings()}
@@ -8652,6 +8978,7 @@ export default function App() {
                     Save Agent Setup
                   </ActionButton>
                 </div>
+                {agentWorkspaceView === "setup" && (
                 <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "p-3" : "space-y-4 p-4"}`}>
                   <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "items-center" : "items-start"}`}>
                     <button
@@ -8977,7 +9304,9 @@ export default function App() {
                     <p className="text-xs text-amber-600">Only owner/admin can change Agent settings. Operator can still run commands.</p>
                   )}
                 </div>
+                )}
 
+                {agentWorkspaceView === "setup" && (
                 <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "p-3" : "space-y-4 p-4"}`}>
                   <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "items-center" : "items-start"}`}>
                     <button
@@ -9107,6 +9436,7 @@ export default function App() {
                   )}
 
                 </div>
+                )}
 
                 {settingsMessage && (
                   <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
@@ -9114,6 +9444,7 @@ export default function App() {
                   </p>
                 )}
               </div>
+              )}
             </motion.div>
           )}
 

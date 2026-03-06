@@ -17,6 +17,7 @@ import { enqueueTelegramInboundJob, startEmbeddedTelegramWorker, acquireTelegram
 import { enqueueWhatsAppInboundJob, startEmbeddedWhatsAppWorker, acquireWhatsAppWebhookDedup, buildWhatsAppWebhookDedupKey, canUseWhatsAppWebhookQueue, type WhatsAppInboundJob } from "./backend/runtime/whatsappQueue";
 import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
+import { resolveStartupSecurityConfig } from "./backend/runtime/startupSecurity";
 import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
 import {
   ALLOWED_CHANNEL_PLATFORMS,
@@ -31,15 +32,20 @@ import {
 } from "./backend/channelPlatforms";
 import {
   ALL_USER_ROLES,
+  CHECKIN_ACCESS_COOKIE_NAME,
   SESSION_COOKIE_NAME,
-  cookieSerialize,
   createSessionToken,
+  getCheckinAccessSessionTtlMs,
   getSessionTtlMs,
   hashPassword,
   hashSessionToken,
   isValidUsername,
   normalizeUsername,
   parseCookies,
+  serializeAdminSessionCookie,
+  serializeCheckinAccessSessionCookie,
+  serializeClearedCheckinAccessSessionCookie,
+  serializeClearedAdminSessionCookie,
   verifyPassword,
   type UserRole,
 } from "./backend/auth";
@@ -68,10 +74,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview";
+const startupSecurityConfig = resolveStartupSecurityConfig(process.env);
+for (const warning of startupSecurityConfig.warnings) {
+  console.warn(`[startup] ${warning}`);
+}
 const appDb = createAppDatabase();
-const APP_RUNTIME = String(process.env.APP_RUNTIME || "all").trim().toLowerCase();
-const RUN_WEB_SERVER = APP_RUNTIME !== "worker";
-const RUN_EMBEDDED_WORKER = APP_RUNTIME === "all" || APP_RUNTIME === "worker";
+const APP_RUNTIME = startupSecurityConfig.appRuntime;
+const RUN_WEB_SERVER = startupSecurityConfig.runWebServer;
+const RUN_EMBEDDED_WORKER = startupSecurityConfig.runEmbeddedWorker;
+const TRUST_PROXY = startupSecurityConfig.trustProxy;
 const INBOUND_BURST_WINDOW_MS = Math.max(250, Number.parseInt(process.env.INBOUND_BURST_WINDOW_MS || "1400", 10) || 1400);
 const DEFAULT_FACEBOOK_INBOUND_BURST_WINDOW_MS = Math.max(INBOUND_BURST_WINDOW_MS, 2200);
 const FACEBOOK_INBOUND_BURST_WINDOW_MS = Math.max(
@@ -87,6 +98,9 @@ const FAILED_INBOUND_TURN_TTL_MS = Math.max(
   Number.parseInt(process.env.FAILED_INBOUND_TURN_TTL_MS || String(1000 * 60 * 60 * 6), 10) || 1000 * 60 * 60 * 6,
 );
 const BOT_TEMPORARY_FAILURE_MESSAGE = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+const IS_PRODUCTION = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+const JSON_BODY_LIMIT = String(process.env.JSON_BODY_LIMIT || "256kb").trim() || "256kb";
+const CSRF_ALLOWED_ORIGINS_RAW = String(process.env.CSRF_ALLOWED_ORIGINS || "").trim();
 
 type ChatPart = {
   text?: string;
@@ -226,8 +240,40 @@ type AuthContext = {
   user: AuthUserRow;
 };
 
+type CheckinAccessContext = {
+  sessionId: string;
+  checkinSessionId: string;
+  tokenHash: string;
+  eventId: string;
+  label: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+};
+
+type EventScopeSource = "query" | "body" | "params" | "default" | "checkin_access";
+
+type EventScopeContext = {
+  eventId: string;
+  source: EventScopeSource;
+};
+
+type ValidationIssue = {
+  field: string;
+  message: string;
+};
+
+type EventScopeOptions = {
+  queryKey?: string | null;
+  bodyKey?: string | null;
+  paramKey?: string | null;
+  allowDefault?: boolean;
+  allowCheckinAccess?: boolean;
+};
+
 type AuthenticatedRequest = Request & {
   auth?: AuthContext;
+  checkinAccess?: CheckinAccessContext;
+  eventScope?: EventScopeContext;
 };
 
 type RawBodyRequest = Request & {
@@ -1068,6 +1114,116 @@ function parseNonNegativeInteger(value: unknown, fallbackValue: number, maxValue
   return Math.min(parsed, maxValue);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readObjectBody(req: Request) {
+  return isRecord(req.body) ? req.body : {} as Record<string, unknown>;
+}
+
+function trimStringInput(value: unknown, maxLength = 4096) {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function readRequiredString(
+  source: Record<string, unknown>,
+  field: string,
+  issues: ValidationIssue[],
+  options?: {
+    label?: string;
+    maxLength?: number;
+    minLength?: number;
+    pattern?: RegExp;
+    patternMessage?: string;
+  },
+) {
+  const label = options?.label || field;
+  const maxLength = options?.maxLength ?? 4096;
+  const minLength = options?.minLength ?? 1;
+  const value = trimStringInput(source[field], maxLength);
+
+  if (value.length < minLength) {
+    issues.push({ field, message: `${label} is required` });
+    return "";
+  }
+  if (options?.pattern && !options.pattern.test(value)) {
+    issues.push({ field, message: options.patternMessage || `${label} is invalid` });
+    return "";
+  }
+  return value;
+}
+
+function readOptionalString(source: Record<string, unknown>, field: string, maxLength = 4096) {
+  if (source[field] == null) return "";
+  return trimStringInput(source[field], maxLength);
+}
+
+function readBooleanWithDefault(source: Record<string, unknown>, field: string, fallbackValue: boolean, issues: ValidationIssue[]) {
+  const raw = source[field];
+  if (raw == null) return fallbackValue;
+  if (typeof raw === "boolean") return raw;
+  const normalized = String(raw).trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") return true;
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") return false;
+  issues.push({ field, message: `${field} must be a boolean` });
+  return fallbackValue;
+}
+
+function readIntegerInRange(
+  source: Record<string, unknown>,
+  field: string,
+  minValue: number,
+  maxValue: number,
+  issues: ValidationIssue[],
+  options?: { fallbackValue?: number; label?: string },
+) {
+  const label = options?.label || field;
+  const fallbackValue = typeof options?.fallbackValue === "number" ? options.fallbackValue : minValue;
+  const raw = source[field];
+  if (raw == null || String(raw).trim() === "") {
+    return fallbackValue;
+  }
+
+  const parsed = Number.parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < minValue || parsed > maxValue) {
+    issues.push({ field, message: `${label} must be between ${minValue} and ${maxValue}` });
+    return fallbackValue;
+  }
+  return parsed;
+}
+
+function readEnumValue<T extends readonly string[]>(
+  source: Record<string, unknown>,
+  field: string,
+  allowedValues: T,
+  issues: ValidationIssue[],
+  options?: { required?: boolean; label?: string },
+) {
+  const raw = trimStringInput(source[field], 128);
+  const label = options?.label || field;
+  if (!raw) {
+    if (options?.required) {
+      issues.push({ field, message: `${label} is required` });
+    }
+    return "";
+  }
+  if (!allowedValues.includes(raw as T[number])) {
+    issues.push({ field, message: `${label} is invalid` });
+    return "";
+  }
+  return raw as T[number];
+}
+
+function respondValidationError(res: Response, issues: ValidationIssue[], statusCode = 400) {
+  const filteredIssues = issues.filter((issue) => Boolean(issue.field) && Boolean(issue.message));
+  const fallback = filteredIssues.length > 0 ? filteredIssues[0]?.message : "Request validation failed";
+  return res.status(statusCode).json({
+    error: fallback || "Request validation failed",
+    validation_errors: filteredIssues,
+  });
+}
+
 function formatRegistrationDisplayName(registration: RegistrationRow) {
   const fullName = `${registration.first_name || ""} ${registration.last_name || ""}`.trim();
   return fullName || registration.id;
@@ -1152,11 +1308,281 @@ function userHasRole(role: UserRole, allowedRoles: UserRole[]) {
 }
 
 function getRequestIp(req: Request) {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim()) {
-    return forwarded.split(",")[0].trim();
+  const raw = typeof req.ip === "string" && req.ip.trim()
+    ? req.ip.trim()
+    : String(req.socket.remoteAddress || "").trim();
+
+  if (!raw) return "";
+  if (raw.startsWith("::ffff:")) {
+    return raw.slice("::ffff:".length);
   }
-  return req.socket.remoteAddress || "";
+  return raw;
+}
+
+function sanitizeRateLimitKeyPart(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "unknown";
+  return normalized.slice(0, 160);
+}
+
+function buildRateLimitKey(...parts: unknown[]) {
+  return parts.map((part) => sanitizeRateLimitKeyPart(part)).join(":");
+}
+
+function getAuthenticatedUserId(req: Request) {
+  return (req as AuthenticatedRequest).auth?.user?.id || "";
+}
+
+function getRequesterRateLimitScope(req: Request) {
+  return buildRateLimitKey(getRequestIp(req) || "unknown", getAuthenticatedUserId(req) || "anonymous");
+}
+
+function getRateLimitTokenHash(rawToken: unknown) {
+  const normalized = String(rawToken ?? "").trim();
+  if (!normalized) return "missing";
+  return hashSessionToken(normalized.slice(0, 2048));
+}
+
+function getCheckinExchangeTokenHashFromRequest(req: Request) {
+  const bodyToken = (req as Request & { body?: Record<string, unknown> }).body?.token;
+  const queryToken = (req as Request & { query?: Record<string, unknown> }).query?.token;
+  return getRateLimitTokenHash(typeof bodyToken === "string" && bodyToken.trim() ? bodyToken : queryToken);
+}
+
+function getCheckinAccessRateLimitScope(req: Request) {
+  const authReq = req as AuthenticatedRequest;
+  const bodyToken = (req as Request & { body?: Record<string, unknown> }).body?.token;
+  const queryToken = (req as Request & { query?: Record<string, unknown> }).query?.token;
+  const fallbackTokenHash = getRateLimitTokenHash(typeof bodyToken === "string" && bodyToken.trim() ? bodyToken : queryToken);
+  return buildRateLimitKey(getRequestIp(req) || "unknown", authReq.checkinAccess?.sessionId || fallbackTokenHash);
+}
+
+function normalizeOrigin(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "null") return "";
+  try {
+    return new URL(raw).origin.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function resolveTrustedCsrfOrigins() {
+  const origins = new Set<string>();
+  const appUrlOrigin = normalizeOrigin(process.env.APP_URL || "");
+  if (appUrlOrigin) {
+    origins.add(appUrlOrigin);
+  }
+
+  for (const segment of CSRF_ALLOWED_ORIGINS_RAW.split(",")) {
+    const origin = normalizeOrigin(segment);
+    if (origin) {
+      origins.add(origin);
+    }
+  }
+
+  if (!IS_PRODUCTION) {
+    origins.add("http://localhost:3000");
+    origins.add("http://127.0.0.1:3000");
+    origins.add("http://localhost:5173");
+    origins.add("http://127.0.0.1:5173");
+  }
+
+  return origins;
+}
+
+const TRUSTED_CSRF_ORIGINS = resolveTrustedCsrfOrigins();
+const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
+const SECURITY_RESPONSE_CSP = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "form-action 'self'",
+].join("; ");
+
+function getOriginFromHeaders(req: Request) {
+  const originHeader = req.headers.origin;
+  if (typeof originHeader === "string" && originHeader.trim()) {
+    return normalizeOrigin(originHeader);
+  }
+
+  const refererHeader = req.headers.referer;
+  if (typeof refererHeader === "string" && refererHeader.trim()) {
+    return normalizeOrigin(refererHeader);
+  }
+
+  return "";
+}
+
+function getRequestHostOrigin(req: Request) {
+  const hostHeader = String(req.headers["x-forwarded-host"] || req.headers.host || "")
+    .split(",")[0]
+    .trim();
+  const protoHeader = String(req.headers["x-forwarded-proto"] || req.protocol || (req.secure ? "https" : "http"))
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+
+  if (!hostHeader || !protoHeader) return "";
+  return normalizeOrigin(`${protoHeader}://${hostHeader}`);
+}
+
+function hasSessionCookieContext(req: Request) {
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies.has(SESSION_COOKIE_NAME) || cookies.has(CHECKIN_ACCESS_COOKIE_NAME);
+}
+
+function isCsrfProtectedApiRequest(req: Request) {
+  if (!UNSAFE_HTTP_METHODS.has(String(req.method || "").toUpperCase())) return false;
+  if (!String(req.path || "").startsWith("/api/")) return false;
+  if (String(req.path || "").startsWith("/api/webhook")) return false;
+  if (String(req.path || "").startsWith("/api/admin-agent/telegram/webhook")) return false;
+  if (String(req.path || "").startsWith("/api/webchat")) return false;
+  return hasSessionCookieContext(req);
+}
+
+async function recordSecurityEvent(req: AuthenticatedRequest, action: string, metadata?: Record<string, unknown>) {
+  try {
+    await appDb.recordAuditLog({
+      actor_user_id: req.auth?.user.id || null,
+      action,
+      target_type: "security",
+      target_id: String(req.path || "").slice(0, 200) || null,
+      metadata: {
+        ip: getRequestIp(req),
+        method: req.method,
+        ...metadata,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to persist security audit log:", error);
+  }
+}
+
+async function csrfProtectionMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  if (!isCsrfProtectedApiRequest(req)) {
+    return next();
+  }
+
+  const requestOrigin = getOriginFromHeaders(req);
+  const hostOrigin = getRequestHostOrigin(req);
+  const originAllowed = Boolean(requestOrigin) && (
+    requestOrigin === hostOrigin
+    || TRUSTED_CSRF_ORIGINS.has(requestOrigin)
+  );
+
+  if (!originAllowed) {
+    await recordSecurityEvent(req, "security.csrf_blocked", {
+      origin: requestOrigin || null,
+      host_origin: hostOrigin || null,
+      referer: typeof req.headers.referer === "string" ? req.headers.referer : null,
+    });
+    return res.status(403).json({
+      error: "CSRF validation failed",
+    });
+  }
+
+  return next();
+}
+
+function applySecurityHeaders(req: Request, res: Response, next: NextFunction) {
+  res.removeHeader("X-Powered-By");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-DNS-Prefetch-Control", "off");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=()");
+  if (IS_PRODUCTION) {
+    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    res.setHeader("Content-Security-Policy", SECURITY_RESPONSE_CSP);
+  }
+  return next();
+}
+
+function readEventIdFromSourceValue(value: unknown) {
+  return String(value || "").trim();
+}
+
+function resolveEventScopeContext(req: AuthenticatedRequest, options?: EventScopeOptions): EventScopeContext | null {
+  if (options?.allowCheckinAccess !== false && req.checkinAccess?.eventId) {
+    return {
+      eventId: req.checkinAccess.eventId,
+      source: "checkin_access",
+    };
+  }
+
+  const paramKey = options?.paramKey === undefined ? null : options.paramKey;
+  if (paramKey) {
+    const eventId = readEventIdFromSourceValue(req.params?.[paramKey]);
+    if (eventId) {
+      return { eventId, source: "params" };
+    }
+  }
+
+  const bodyKey = options?.bodyKey === undefined ? null : options.bodyKey;
+  if (bodyKey) {
+    const body = readObjectBody(req);
+    const eventId = readEventIdFromSourceValue(body[bodyKey]);
+    if (eventId) {
+      return { eventId, source: "body" };
+    }
+  }
+
+  const queryKey = options?.queryKey === undefined ? "event_id" : options.queryKey;
+  if (queryKey) {
+    const raw = req.query?.[queryKey];
+    const eventId = Array.isArray(raw)
+      ? readEventIdFromSourceValue(raw[0])
+      : readEventIdFromSourceValue(raw);
+    if (eventId) {
+      return { eventId, source: "query" };
+    }
+  }
+
+  if (options?.allowDefault !== false) {
+    return { eventId: DEFAULT_EVENT_ID, source: "default" };
+  }
+
+  return null;
+}
+
+function requireEventScope(options?: EventScopeOptions) {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.auth?.user && !req.checkinAccess) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const scope = resolveEventScopeContext(req, options);
+    if (!scope?.eventId) {
+      return respondValidationError(res, [{ field: "event_id", message: "event_id is required" }]);
+    }
+
+    if (req.checkinAccess?.eventId && req.checkinAccess.eventId !== scope.eventId) {
+      return res.status(403).json({ error: "Check-in scope cannot access another event" });
+    }
+
+    if (req.auth?.user && !userHasRole(req.auth.user.role, EVENT_SCOPED_USER_ROLES)) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+
+    const event = await appDb.getEventById(scope.eventId);
+    if (!event) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+
+    req.eventScope = scope;
+    return next();
+  };
 }
 
 function verifyFacebookWebhookSignature(req: RawBodyRequest) {
@@ -1189,35 +1615,50 @@ function verifyFacebookWebhookSignature(req: RawBodyRequest) {
   }
 }
 
-function getCookieSecurity(req: Request) {
-  const forwardedProto = String(req.headers["x-forwarded-proto"] || "");
-  return process.env.NODE_ENV === "production" || forwardedProto.includes("https");
-}
-
 function setSessionCookie(res: Response, token: string, req: Request) {
-  res.setHeader(
-    "Set-Cookie",
-    cookieSerialize(SESSION_COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: getCookieSecurity(req),
-      sameSite: "Lax",
-      path: "/",
-      maxAgeSeconds: Math.floor(getSessionTtlMs() / 1000),
-    }),
-  );
+  appendSetCookieHeader(res, serializeAdminSessionCookie(token, req));
 }
 
 function clearSessionCookie(res: Response, req: Request) {
-  res.setHeader(
-    "Set-Cookie",
-    cookieSerialize(SESSION_COOKIE_NAME, "", {
-      httpOnly: true,
-      secure: getCookieSecurity(req),
-      sameSite: "Lax",
-      path: "/",
-      maxAgeSeconds: 0,
-    }),
-  );
+  appendSetCookieHeader(res, serializeClearedAdminSessionCookie(req));
+}
+
+function setCheckinAccessCookie(res: Response, token: string, req: Request, expiresAt?: string) {
+  const expiresAtMs = Number.isFinite(Date.parse(String(expiresAt || ""))) ? Date.parse(String(expiresAt || "")) : 0;
+  const maxAgeSeconds = expiresAtMs > Date.now()
+    ? Math.max(1, Math.floor((expiresAtMs - Date.now()) / 1000))
+    : Math.floor(getCheckinAccessSessionTtlMs() / 1000);
+  appendSetCookieHeader(res, serializeCheckinAccessSessionCookie(token, req, { maxAgeSeconds }));
+}
+
+function clearCheckinAccessCookie(res: Response, req: Request) {
+  appendSetCookieHeader(res, serializeClearedCheckinAccessSessionCookie(req));
+}
+
+function appendSetCookieHeader(res: Response, cookieValue: string) {
+  const current = res.getHeader("Set-Cookie");
+  if (!current) {
+    res.setHeader("Set-Cookie", cookieValue);
+    return;
+  }
+  if (Array.isArray(current)) {
+    res.setHeader("Set-Cookie", [...current, cookieValue]);
+    return;
+  }
+  res.setHeader("Set-Cookie", [String(current), cookieValue]);
+}
+
+function toCheckinAccessContext(session: Awaited<ReturnType<typeof appDb.getCheckinAccessSessionByTokenHash>>, tokenHash: string): CheckinAccessContext | null {
+  if (!session) return null;
+  return {
+    sessionId: session.id,
+    checkinSessionId: session.checkin_session_id,
+    tokenHash,
+    eventId: session.event_id,
+    label: session.label,
+    expiresAt: session.expires_at,
+    lastUsedAt: session.last_used_at,
+  };
 }
 
 function toPublicAuthUser(user: AuthUserRow) {
@@ -1262,6 +1703,59 @@ async function attachSession(req: AuthenticatedRequest, res: Response, next: Nex
   }
 }
 
+async function attachCheckinAccessSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const cookies = parseCookies(req.headers.cookie);
+    const accessToken = cookies.get(CHECKIN_ACCESS_COOKIE_NAME);
+    if (!accessToken) {
+      return next();
+    }
+
+    const tokenHash = hashSessionToken(accessToken);
+    const accessSession = await appDb.getCheckinAccessSessionByTokenHash(tokenHash);
+    if (!accessSession) {
+      clearCheckinAccessCookie(res, req);
+      return next();
+    }
+
+    const context = toCheckinAccessContext(accessSession, tokenHash);
+    if (!context) {
+      clearCheckinAccessCookie(res, req);
+      return next();
+    }
+
+    req.checkinAccess = context;
+    await appDb.touchCheckinAccessSession(accessSession.id);
+    return next();
+  } catch (error) {
+    console.error("Failed to attach check-in access session:", error);
+    return res.status(500).json({ error: "Failed to validate check-in access session" });
+  }
+}
+
+async function exchangeCheckinAccessToken(rawToken: string, req: AuthenticatedRequest, res: Response) {
+  const normalizedToken = String(rawToken || "").trim();
+  if (!normalizedToken) return null;
+
+  const accessToken = createSessionToken();
+  const accessTokenHash = hashSessionToken(accessToken);
+  const accessSession = await appDb.exchangeCheckinSessionToken({
+    checkin_token_hash: hashSessionToken(normalizedToken),
+    access_token_hash: accessTokenHash,
+    max_session_ttl_ms: getCheckinAccessSessionTtlMs(),
+  });
+  if (!accessSession) {
+    return null;
+  }
+
+  setCheckinAccessCookie(res, accessToken, req, accessSession.expires_at);
+  const context = toCheckinAccessContext(accessSession, accessTokenHash);
+  if (context) {
+    req.checkinAccess = context;
+  }
+  return accessSession;
+}
+
 function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   if (req.auth?.user) {
     return next();
@@ -1298,8 +1792,18 @@ function canManageTargetUser(actor: AuthUserRow, target: AuthUserRow, action: "s
 }
 
 function getRequestedEventId(req: Request) {
-  const raw = typeof req.query.event_id === "string" ? req.query.event_id : "";
-  return raw.trim() || DEFAULT_EVENT_ID;
+  const scopedRequest = req as AuthenticatedRequest;
+  if (scopedRequest.eventScope?.eventId) {
+    return scopedRequest.eventScope.eventId;
+  }
+  const queryRaw = typeof req.query.event_id === "string" ? req.query.event_id : "";
+  if (queryRaw.trim()) {
+    return queryRaw.trim();
+  }
+  if (isRecord(scopedRequest.body) && typeof scopedRequest.body.event_id === "string" && scopedRequest.body.event_id.trim()) {
+    return scopedRequest.body.event_id.trim();
+  }
+  return DEFAULT_EVENT_ID;
 }
 
 async function getSettingsMap(eventId?: string) {
@@ -1322,7 +1826,15 @@ async function getRegistrationById(id: string) {
   return appDb.getRegistrationById(id);
 }
 
-async function buildCheckinSessionAccessPayload(session: Awaited<ReturnType<typeof appDb.getCheckinSessionByTokenHash>>) {
+type CheckinAccessPayloadSource = {
+  id: string;
+  label: string;
+  event_id: string;
+  expires_at: string;
+  last_used_at: string | null;
+};
+
+async function buildCheckinSessionAccessPayload(session: CheckinAccessPayloadSource | null | undefined) {
   if (!session) return null;
   const event = await appDb.getEventById(session.event_id);
   if (!event) return null;
@@ -7093,22 +7605,128 @@ async function startServer() {
   }
 
   const app = express();
-  app.set("trust proxy", true);
+  app.disable("x-powered-by");
+  app.set("trust proxy", TRUST_PROXY);
+  app.use(applySecurityHeaders);
   app.use(express.json({
+    limit: JSON_BODY_LIMIT,
     verify: (req, _res, buf) => {
       (req as RawBodyRequest).rawBody = Buffer.from(buf);
     },
   }));
+  app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+    const bodyParserError = error as { type?: string; status?: number; message?: string };
+    if (bodyParserError?.type === "entity.too.large" || bodyParserError?.status === 413) {
+      return res.status(413).json({ error: "Payload too large" });
+    }
+    if (bodyParserError instanceof SyntaxError && /json/i.test(String(bodyParserError.message || ""))) {
+      return res.status(400).json({ error: "Malformed JSON payload" });
+    }
+    return next(error);
+  });
   app.use(express.static(path.join(__dirname, "public")));
   app.use(attachSession);
+  app.use("/api/checkin-access", attachCheckinAccessSession);
+  app.use(csrfProtectionMiddleware);
 
   const PORT = Number(process.env.PORT || 3000);
+  const loginIpRateLimit = createRateLimitMiddleware({
+    name: "auth-login-ip",
+    windowMs: 10 * 60 * 1000,
+    max: 60,
+    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown"),
+    errorMessage: "Too many login attempts from this IP. Please wait and try again.",
+  });
   const loginRateLimit = createRateLimitMiddleware({
     name: "auth-login",
     windowMs: 10 * 60 * 1000,
     max: 10,
-    keyFn: (req) => `${getRequestIp(req)}:${normalizeUsername(req.body?.username) || "unknown"}`,
+    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown", normalizeUsername(req.body?.username) || "unknown"),
     errorMessage: "Too many login attempts. Please wait and try again.",
+  });
+  const checkinAccessIpRateLimit = createRateLimitMiddleware({
+    name: "checkin-access-ip",
+    windowMs: 60 * 1000,
+    max: 300,
+    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown"),
+    errorMessage: "Too many check-in access requests. Please retry shortly.",
+  });
+  const checkinAccessExchangeRateLimit = createRateLimitMiddleware({
+    name: "checkin-access-exchange",
+    windowMs: 10 * 60 * 1000,
+    max: 24,
+    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown", getCheckinExchangeTokenHashFromRequest(req)),
+    errorMessage: "Too many check-in exchange attempts. Please retry later.",
+  });
+  const checkinAccessSessionReadRateLimit = createRateLimitMiddleware({
+    name: "checkin-access-session-read",
+    windowMs: 60 * 1000,
+    max: 120,
+    keyFn: (req) => getCheckinAccessRateLimitScope(req),
+    errorMessage: "Too many check-in session requests. Please retry shortly.",
+  });
+  const checkinAccessCheckinRateLimit = createRateLimitMiddleware({
+    name: "checkin-access-checkin",
+    windowMs: 60 * 1000,
+    max: 300,
+    keyFn: (req) => getCheckinAccessRateLimitScope(req),
+    errorMessage: "Too many check-in attempts. Please retry shortly.",
+  });
+  const auditLogsReadRateLimit = createRateLimitMiddleware({
+    name: "audit-logs-read",
+    windowMs: 60 * 1000,
+    max: 45,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many audit log requests. Please retry shortly.",
+  });
+  const registrationsExportRateLimit = createRateLimitMiddleware({
+    name: "registrations-export",
+    windowMs: 10 * 60 * 1000,
+    max: 12,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many export requests. Please wait and try again.",
+  });
+  const retrievalDebugRateLimit = createRateLimitMiddleware({
+    name: "documents-retrieval-debug",
+    windowMs: 60 * 1000,
+    max: 20,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many retrieval debug requests. Please retry later.",
+  });
+  const embeddingEnqueueRateLimit = createRateLimitMiddleware({
+    name: "documents-embedding-enqueue",
+    windowMs: 10 * 60 * 1000,
+    max: 60,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many embedding enqueue requests. Please retry later.",
+  });
+  const manualOutboundActionRateLimit = createRateLimitMiddleware({
+    name: "manual-outbound-action",
+    windowMs: 60 * 1000,
+    max: 50,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many manual outbound actions. Please retry shortly.",
+  });
+  const llmModelsRateLimit = createRateLimitMiddleware({
+    name: "llm-models",
+    windowMs: 60 * 1000,
+    max: 20,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many model list requests. Please retry shortly.",
+  });
+  const llmChatRateLimit = createRateLimitMiddleware({
+    name: "llm-chat",
+    windowMs: 60 * 1000,
+    max: 60,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many chat requests. Please slow down and retry.",
+  });
+  const adminAgentRateLimit = createRateLimitMiddleware({
+    name: "admin-agent-chat",
+    windowMs: 60 * 1000,
+    max: 30,
+    keyFn: (req) => getRequesterRateLimitScope(req),
+    errorMessage: "Too many admin agent requests. Please retry shortly.",
   });
   const webhookRateLimit = createRateLimitMiddleware({
     name: "facebook-webhook",
@@ -7156,17 +7774,23 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/login", loginRateLimit, async (req, res) => {
+  app.post("/api/auth/login", loginIpRateLimit, loginRateLimit, async (req, res) => {
     try {
-      const username = normalizeUsername(req.body?.username);
-      const password = String(req.body?.password || "");
-
-      if (!username || !password) {
-        return res.status(400).json({ error: "Username and password are required" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const usernameRaw = readRequiredString(body, "username", issues, { label: "Username", maxLength: 128 });
+      const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
+      const username = normalizeUsername(usernameRaw);
 
       const user = await appDb.getUserByUsername(username);
       if (!user || !user.is_active) {
+        await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_failed", {
+          username,
+          reason: "invalid_user",
+        });
         return res.status(401).json({ error: "Invalid username or password" });
       }
 
@@ -7174,7 +7798,16 @@ async function startServer() {
       const valid = typeof passwordHash === "string" && verifyPassword(password, passwordHash);
 
       if (!valid) {
+        await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_failed", {
+          username,
+          reason: "invalid_password",
+        });
         return res.status(401).json({ error: "Invalid username or password" });
+      }
+
+      const existingSessionToken = parseCookies(req.headers.cookie).get(SESSION_COOKIE_NAME);
+      if (existingSessionToken) {
+        await appDb.deleteSession(hashSessionToken(existingSessionToken));
       }
 
       const sessionToken = createSessionToken();
@@ -7243,10 +7876,16 @@ async function startServer() {
 
   app.post("/api/auth/users", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const username = normalizeUsername(req.body?.username);
-      const password = String(req.body?.password || "");
-      const displayName = String(req.body?.display_name || username).trim();
-      const role = String(req.body?.role || "").trim() as UserRole;
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const username = normalizeUsername(readRequiredString(body, "username", issues, { label: "Username", maxLength: 128 }));
+      const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
+      const role = readEnumValue(body, "role", ALL_USER_ROLES, issues, { required: true, label: "role" }) as UserRole | "";
+      const displayName = readOptionalString(body, "display_name", 180) || username;
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+      const normalizedRole = role as UserRole;
 
       if (!username || !isValidUsername(username)) {
         return res.status(400).json({ error: "Username must be 3-32 chars and use only a-z, 0-9, dot, dash, or underscore" });
@@ -7254,13 +7893,10 @@ async function startServer() {
       if (password.length < 8) {
         return res.status(400).json({ error: "Password must be at least 8 characters" });
       }
-      if (!ALL_USER_ROLES.includes(role)) {
-        return res.status(400).json({ error: "Invalid role" });
-      }
-      if (role === "owner") {
+      if (normalizedRole === "owner") {
         return res.status(400).json({ error: "Create owners manually in the database only" });
       }
-      if (req.auth?.user.role === "admin" && role === "admin") {
+      if (req.auth?.user.role === "admin" && normalizedRole === "admin") {
         return res.status(403).json({ error: "Admins can only create operator, checker, or viewer accounts" });
       }
 
@@ -7268,7 +7904,7 @@ async function startServer() {
         username,
         display_name: displayName,
         password_hash: hashPassword(password),
-        role,
+        role: normalizedRole,
       });
       await recordAudit(req, "auth.user_created", "user", user.id, {
         username: user.username,
@@ -7285,10 +7921,16 @@ async function startServer() {
   app.post("/api/auth/users/:id/role", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const userId = String(req.params.id || "").trim();
-      const role = String(req.body?.role || "").trim() as UserRole;
-      if (!userId || !ALL_USER_ROLES.includes(role)) {
-        return res.status(400).json({ error: "Invalid user or role" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const role = readEnumValue(body, "role", ALL_USER_ROLES, issues, { required: true, label: "role" }) as UserRole | "";
+      if (!userId) {
+        issues.push({ field: "id", message: "User ID is required" });
       }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+      const normalizedRole = role as UserRole;
 
       const targetUser = await appDb.getUserById(userId);
       if (!targetUser) {
@@ -7297,14 +7939,14 @@ async function startServer() {
       if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "role")) {
         return res.status(403).json({ error: "You cannot change this user's role" });
       }
-      if (req.auth.user.role === "admin" && (role === "owner" || role === "admin")) {
+      if (req.auth.user.role === "admin" && (normalizedRole === "owner" || normalizedRole === "admin")) {
         return res.status(403).json({ error: "Admins can only assign operator, checker, or viewer roles" });
       }
 
-      const updated = await appDb.updateUserRole(userId, role);
+      const updated = await appDb.updateUserRole(userId, normalizedRole);
       if (!updated) return res.status(404).json({ error: "User not found" });
 
-      await recordAudit(req, "auth.role_updated", "user", userId, { role });
+      await recordAudit(req, "auth.role_updated", "user", userId, { role: normalizedRole });
       return res.json({ status: "ok" });
     } catch (error) {
       console.error("Failed to update user role:", error);
@@ -7315,7 +7957,15 @@ async function startServer() {
   app.post("/api/auth/users/:id/status", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const userId = String(req.params.id || "").trim();
-      const isActive = Boolean(req.body?.is_active);
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const isActive = readBooleanWithDefault(body, "is_active", false, issues);
+      if (!userId) {
+        issues.push({ field: "id", message: "User ID is required" });
+      }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       const targetUser = await appDb.getUserById(userId);
       if (!targetUser) {
         return res.status(404).json({ error: "User not found" });
@@ -7374,7 +8024,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/audit-logs", requireRoles(["owner", "admin"]), async (_req: AuthenticatedRequest, res) => {
+  app.get("/api/audit-logs", requireRoles(["owner", "admin"]), auditLogsReadRateLimit, async (_req: AuthenticatedRequest, res) => {
     try {
       const logs = await appDb.listAuditLogs(100);
       return res.json(logs);
@@ -7384,7 +8034,11 @@ async function startServer() {
     }
   });
 
-  app.get("/api/checkin-sessions", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.get(
+    "/api/checkin-sessions",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const sessions = await appDb.listCheckinSessions(eventId);
@@ -7393,19 +8047,22 @@ async function startServer() {
       console.error("Failed to fetch check-in sessions:", error);
       return res.status(500).json({ error: "Failed to fetch check-in sessions" });
     }
-  });
+    },
+  );
 
-  app.post("/api/checkin-sessions", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/checkin-sessions",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const eventId = String(req.body?.event_id || "").trim() || DEFAULT_EVENT_ID;
-      const label = String(req.body?.label || "").trim();
-      const expiresHours = Number.parseInt(String(req.body?.expires_hours || "8"), 10);
-
-      if (!label) {
-        return res.status(400).json({ error: "Session label is required" });
-      }
-      if (!Number.isFinite(expiresHours) || expiresHours < 1 || expiresHours > 168) {
-        return res.status(400).json({ error: "Expiry must be between 1 and 168 hours" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const eventId = getRequestedEventId(req);
+      const label = readRequiredString(body, "label", issues, { label: "Session label", maxLength: 160 });
+      const expiresHours = readIntegerInRange(body, "expires_hours", 1, 24, issues, { fallbackValue: 8, label: "Expiry" });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       const event = await appDb.getEventById(eventId);
@@ -7449,13 +8106,14 @@ async function startServer() {
       console.error("Failed to create check-in session:", error);
       return res.status(500).json({ error: "Failed to create check-in session" });
     }
-  });
+    },
+  );
 
   app.post("/api/checkin-sessions/:id/revoke", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const sessionId = String(req.params.id || "").trim();
+      const sessionId = String(req.params.id || "").trim().slice(0, 120);
       if (!sessionId) {
-        return res.status(400).json({ error: "Session ID is required" });
+        return respondValidationError(res, [{ field: "id", message: "Session ID is required" }]);
       }
       const revoked = await appDb.revokeCheckinSession(sessionId);
       if (!revoked) {
@@ -7469,51 +8127,155 @@ async function startServer() {
     }
   });
 
-  app.get("/api/checkin-access/session", async (req, res) => {
+  app.post("/api/checkin-access/exchange", checkinAccessIpRateLimit, checkinAccessExchangeRateLimit, async (req: AuthenticatedRequest, res) => {
     try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const rawToken = readRequiredString(body, "token", issues, {
+        label: "Check-in token",
+        maxLength: 4096,
+      });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+      const tokenHash = getRateLimitTokenHash(rawToken);
+
+      const exchangedSession = await exchangeCheckinAccessToken(rawToken, req, res);
+      if (!exchangedSession) {
+        await recordSecurityEvent(req, "checkin.exchange_failed", {
+          reason: "invalid_or_expired",
+          token_hash: tokenHash,
+        });
+        return res.status(401).json({ error: "Check-in token is invalid, expired, or already used" });
+      }
+
+      const payload = await buildCheckinSessionAccessPayload(exchangedSession);
+      if (!payload) {
+        clearCheckinAccessCookie(res, req);
+        await recordSecurityEvent(req, "checkin.exchange_failed", {
+          reason: "event_not_found",
+          token_hash: tokenHash,
+          checkin_session_id: exchangedSession.id,
+          event_id: exchangedSession.event_id,
+        });
+        return res.status(404).json({ error: "Check-in event not found" });
+      }
+
+      await recordSecurityEvent(req, "checkin.exchange_succeeded", {
+        token_hash: tokenHash,
+        event_id: payload.event_id,
+        checkin_access_session_id: payload.id,
+      });
+      return res.json({ session: payload });
+    } catch (error) {
+      console.error("Failed to exchange check-in token:", error);
+      return res.status(500).json({ error: "Failed to exchange check-in token" });
+    }
+  });
+
+  app.get("/api/checkin-access/session", checkinAccessIpRateLimit, checkinAccessSessionReadRateLimit, async (req: AuthenticatedRequest, res) => {
+    try {
+      if (req.checkinAccess) {
+        const payload = await buildCheckinSessionAccessPayload({
+          id: req.checkinAccess.sessionId,
+          label: req.checkinAccess.label,
+          event_id: req.checkinAccess.eventId,
+          expires_at: req.checkinAccess.expiresAt,
+          last_used_at: new Date().toISOString(),
+        });
+        if (payload) {
+          return res.json({ session: payload });
+        }
+        clearCheckinAccessCookie(res, req);
+      }
+
       const rawToken = String(req.query.token || "").trim();
       if (!rawToken) {
-        return res.status(400).json({ error: "Check-in token is required" });
+        return res.status(401).json({ error: "Check-in access session is required" });
       }
-      const session = await appDb.getCheckinSessionByTokenHash(hashSessionToken(rawToken));
-      const payload = await buildCheckinSessionAccessPayload(session);
+
+      const exchangedSession = await exchangeCheckinAccessToken(rawToken, req, res);
+      if (!exchangedSession) {
+        await recordSecurityEvent(req, "checkin.exchange_failed", {
+          reason: "invalid_or_expired_legacy",
+          token_hash: getRateLimitTokenHash(rawToken),
+          legacy_path: true,
+        });
+        return res.status(401).json({ error: "Check-in token is invalid, expired, or already used" });
+      }
+
+      const payload = await buildCheckinSessionAccessPayload(exchangedSession);
       if (!payload) {
-        return res.status(404).json({ error: "Check-in session not found or expired" });
+        clearCheckinAccessCookie(res, req);
+        await recordSecurityEvent(req, "checkin.exchange_failed", {
+          reason: "event_not_found_legacy",
+          token_hash: getRateLimitTokenHash(rawToken),
+          legacy_path: true,
+        });
+        return res.status(404).json({ error: "Check-in event not found" });
       }
-      await appDb.touchCheckinSession(session.id);
-      return res.json({ session: payload });
+      await recordSecurityEvent(req, "checkin.exchange_succeeded", {
+        token_hash: getRateLimitTokenHash(rawToken),
+        event_id: payload.event_id,
+        checkin_access_session_id: payload.id,
+        legacy_path: true,
+      });
+      return res.json({
+        session: payload,
+        deprecated_token_exchange: true,
+      });
     } catch (error) {
       console.error("Failed to resolve check-in session:", error);
       return res.status(500).json({ error: "Failed to resolve check-in session" });
     }
   });
 
-  app.post("/api/checkin-access/checkin", async (req, res) => {
+  app.post(
+    "/api/checkin-access/checkin",
+    checkinAccessIpRateLimit,
+    checkinAccessCheckinRateLimit,
+    requireEventScope({
+      allowDefault: false,
+      allowCheckinAccess: true,
+      queryKey: null,
+      bodyKey: null,
+      paramKey: null,
+    }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const rawToken = String(req.body?.token || "").trim();
-      if (!rawToken) {
-        return res.status(400).json({ error: "Check-in token is required" });
+      if (!req.checkinAccess) {
+        await recordSecurityEvent(req, "checkin.access_denied", {
+          reason: "missing_access_session",
+        });
+        return res.status(401).json({ error: "Check-in access session not found or expired" });
       }
 
-      const session = await appDb.getCheckinSessionByTokenHash(hashSessionToken(rawToken));
-      if (!session) {
-        return res.status(401).json({ error: "Check-in session not found or expired" });
+      const accessContext = req.checkinAccess;
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const registrationId = readRequiredString(body, "id", issues, {
+        label: "Registration ID",
+        maxLength: 64,
+      }).toUpperCase();
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
-      const result = await performCheckinForRegistration(req.body?.id, session.event_id, {
+      const result = await performCheckinForRegistration(registrationId, accessContext.eventId, {
         source: "checkin_access",
       });
-      await appDb.touchCheckinSession(session.id);
+      await appDb.touchCheckinAccessSession(accessContext.sessionId);
 
       if (result.statusCode === 200) {
         await appDb.recordAuditLog({
           actor_user_id: null,
           action: result.body.already_checked_in ? "registration.checkin_repeated" : "registration.checked_in_via_token",
           target_type: "registration",
-          target_id: String(req.body?.id || "").trim().toUpperCase(),
+          target_id: registrationId,
           metadata: {
-            event_id: session.event_id,
-            checkin_session_id: session.id,
+            event_id: accessContext.eventId,
+            checkin_session_id: accessContext.checkinSessionId,
+            checkin_access_session_id: accessContext.sessionId,
             ip: getRequestIp(req),
           },
         });
@@ -7524,7 +8286,8 @@ async function startServer() {
       console.error("Failed to check in via token:", error);
       return res.status(500).json({ error: "Failed to check in attendee" });
     }
-  });
+    },
+  );
 
   app.get("/api/events", requireAuth, async (_req, res) => {
     try {
@@ -7538,9 +8301,11 @@ async function startServer() {
 
   app.post("/api/events", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const name = String(req.body?.name || "").trim();
-      if (!name) {
-        return res.status(400).json({ error: "Event name is required" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const name = readRequiredString(body, "name", issues, { label: "Event name", maxLength: 180 });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
       const event = await appDb.createEvent({ name });
       await recordAudit(req, "event.created", "event", event.id, { name: event.name });
@@ -7551,29 +8316,50 @@ async function startServer() {
     }
   });
 
-  app.post("/api/events/:id", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/events/:id",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ paramKey: "id", allowDefault: false, allowCheckinAccess: false, queryKey: null }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const eventId = String(req.params.id || "").trim();
-      const name = typeof req.body?.name === "string" ? req.body.name : undefined;
-      const status = typeof req.body?.status === "string" ? req.body.status : undefined;
-      const allowedStatuses = new Set(["pending", "active", "inactive", "cancelled"]);
-      if (!eventId) {
-        return res.status(400).json({ error: "Event ID is required" });
+      const eventId = getRequestedEventId(req);
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const nameRaw = readOptionalString(body, "name", 180);
+      const statusRaw = readOptionalString(body, "status", 24);
+      const status = statusRaw
+        ? readEnumValue(
+            { status: statusRaw },
+            "status",
+            ["pending", "active", "inactive", "cancelled"] as const,
+            issues,
+            { required: false, label: "Event status" },
+          )
+        : "";
+      if (!nameRaw && !statusRaw) {
+        issues.push({ field: "name", message: "name or status is required" });
       }
-      if (status && !allowedStatuses.has(status)) {
-        return res.status(400).json({ error: "Invalid event status" });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
-      const updated = await appDb.updateEvent(eventId, { name, status: status as any });
+      const updated = await appDb.updateEvent(eventId, {
+        name: nameRaw || undefined,
+        status: status ? status as any : undefined,
+      });
       if (!updated) {
         return res.status(404).json({ error: "Event not found" });
       }
-      await recordAudit(req, "event.updated", "event", eventId, { name, status });
+      await recordAudit(req, "event.updated", "event", eventId, {
+        name: nameRaw || null,
+        status: status || null,
+      });
       return res.json({ status: "ok" });
     } catch (error) {
       console.error("Failed to update event:", error);
       return res.status(500).json({ error: "Failed to update event" });
     }
-  });
+    },
+  );
 
   app.get("/api/facebook-pages", requireAuth, async (_req, res) => {
     try {
@@ -7642,16 +8428,21 @@ async function startServer() {
     }
   });
 
-  app.post("/api/facebook-pages", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/facebook-pages",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false, queryKey: null }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const pageId = String(req.body?.page_id || "").trim();
-      const pageName = String(req.body?.page_name || "").trim();
-      const eventId = String(req.body?.event_id || "").trim();
-      const pageAccessToken = String(req.body?.page_access_token || "").trim();
-      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
-
-      if (!pageId || !eventId) {
-        return res.status(400).json({ error: "page_id and event_id are required" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const pageId = readRequiredString(body, "page_id", issues, { label: "page_id", maxLength: 256 });
+      const pageName = readOptionalString(body, "page_name", 256);
+      const eventId = getRequestedEventId(req);
+      const pageAccessToken = readOptionalString(body, "page_access_token", 4096);
+      const isActive = readBooleanWithDefault(body, "is_active", true, issues);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       const page = await appDb.upsertFacebookPage({
@@ -7680,18 +8471,28 @@ async function startServer() {
       console.error("Failed to upsert Facebook page:", error);
       return res.status(500).json({ error: "Failed to save Facebook page" });
     }
-  });
+    },
+  );
 
-  app.post("/api/channels", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/channels",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false, queryKey: null }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const platform = String(req.body?.platform || "facebook").trim() as ChannelPlatform;
-      const requestedExternalId = String(req.body?.external_id || "").trim();
-      const displayName = String(req.body?.display_name || "").trim();
-      const eventId = String(req.body?.event_id || "").trim();
-      const accessToken = String(req.body?.access_token || "").trim();
-      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
-      const originalPlatformRaw = String(req.body?.original_platform || "").trim();
-      const originalExternalId = String(req.body?.original_external_id || "").trim();
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const platform = readOptionalString(body, "platform", 40) as ChannelPlatform || "facebook";
+      const requestedExternalId = readOptionalString(body, "external_id", 300);
+      const displayName = readOptionalString(body, "display_name", 300);
+      const eventId = getRequestedEventId(req);
+      const accessToken = readOptionalString(body, "access_token", 4096);
+      const isActive = readBooleanWithDefault(body, "is_active", true, issues);
+      const originalPlatformRaw = readOptionalString(body, "original_platform", 40);
+      const originalExternalId = readOptionalString(body, "original_external_id", 300);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       if (!ALLOWED_CHANNEL_PLATFORMS.includes(platform)) {
         return res.status(400).json({ error: "Invalid channel platform" });
       }
@@ -7722,7 +8523,7 @@ async function startServer() {
         originalChannel && originalChannel.platform === platform
           ? originalChannel
           : undefined;
-      const nextConfig = sanitizeChannelConfig(platform, req.body?.config);
+      const nextConfig = sanitizeChannelConfig(platform, body.config);
       const provisionalAccessToken = accessToken || String(initialCredentialSource?.access_token || "").trim();
       let resolvedExternalId = requestedExternalId;
       let resolvedDisplayName = displayName || requestedExternalId;
@@ -7849,9 +8650,14 @@ async function startServer() {
       console.error("Failed to upsert channel:", error);
       return res.status(500).json({ error: "Failed to save channel" });
     }
-  });
+    },
+  );
 
-  app.get("/api/registrations", requireAuth, async (req, res) => {
+  app.get(
+    "/api/registrations",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const rows = await appDb.listRegistrations(undefined, eventId);
@@ -7859,17 +8665,31 @@ async function startServer() {
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch registrations" });
     }
-  });
+    },
+  );
 
-  app.post("/api/registrations", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/registrations",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-      const result = await createRegistration({ ...(req.body || {}), event_id: eventId }, {
+      const eventId = getRequestedEventId(req);
+      const body = readObjectBody(req);
+      const registrationInput: RegistrationInput = {
+        sender_id: readOptionalString(body, "sender_id", 255),
+        event_id: eventId,
+        first_name: body.first_name,
+        last_name: body.last_name,
+        phone: body.phone,
+        email: body.email,
+      };
+      const result = await createRegistration(registrationInput, {
         source: "registrations_create_api",
       });
       if (result.statusCode === 200 && typeof result.content.id === "string") {
         await recordAudit(req, "registration.created", "registration", String(result.content.id), {
-          sender_id: req.body?.sender_id || null,
+          sender_id: body.sender_id || null,
           event_id: eventId,
         });
       }
@@ -7878,11 +8698,18 @@ async function startServer() {
       console.error(error);
       res.status(500).json({ error: "Failed to register user" });
     }
-  });
+    },
+  );
 
   app.post("/api/registrations/checkin", requireRoles(["owner", "admin", "operator", "checker"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const result = await performCheckinForRegistration(req.body?.id, undefined, {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const registrationId = readRequiredString(body, "id", issues, { label: "Registration ID", maxLength: 64 }).toUpperCase();
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+      const result = await performCheckinForRegistration(registrationId, undefined, {
         source: "registrations_checkin_api",
       });
       if (result.statusCode === 200) {
@@ -7890,7 +8717,7 @@ async function startServer() {
           req,
           result.body.already_checked_in ? "registration.checkin_repeated" : "registration.checked_in",
           "registration",
-          String(req.body?.id || "").trim().toUpperCase(),
+          registrationId,
           {
             event_id: result.body?.registration?.event_id || null,
           },
@@ -7904,9 +8731,14 @@ async function startServer() {
 
   app.post("/api/registrations/cancel", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const registrationId = String(req.body?.id || "").trim().toUpperCase();
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const registrationId = readRequiredString(body, "id", issues, { label: "Registration ID", maxLength: 64 }).toUpperCase();
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       const existing = registrationId ? await getRegistrationById(registrationId) : null;
-      const result = await cancelRegistration(req.body?.id, { source: "registrations_cancel_api" });
+      const result = await cancelRegistration(registrationId, { source: "registrations_cancel_api" });
       if (result.statusCode === 200) {
         await recordAudit(req, "registration.cancelled", "registration", registrationId, {
           event_id: existing?.event_id || null,
@@ -7920,12 +8752,18 @@ async function startServer() {
 
   app.post("/api/registrations/status", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const id = String(req.body?.id || "").trim().toUpperCase();
-      const status = String(req.body?.status || "").trim();
-      const allowedStatuses = new Set(["registered", "cancelled", "checked-in"]);
-
-      if (!id || !allowedStatuses.has(status)) {
-        return res.status(400).json({ error: "Invalid registration ID or status" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const id = readRequiredString(body, "id", issues, { label: "Registration ID", maxLength: 64 }).toUpperCase();
+      const status = readEnumValue(
+        body,
+        "status",
+        ["registered", "cancelled", "checked-in"] as const,
+        issues,
+        { required: true, label: "status" },
+      );
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       const updated = await updateRegistrationStatusWithNotification(id, status as RegistrationStatus, {
@@ -7948,9 +8786,11 @@ async function startServer() {
 
   app.post("/api/registrations/delete", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const id = String(req.body?.id || "").trim().toUpperCase();
-      if (!id) {
-        return res.status(400).json({ error: "Registration ID is required" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const id = readRequiredString(body, "id", issues, { label: "Registration ID", maxLength: 64 }).toUpperCase();
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       const deleted = await appDb.deleteRegistration(id);
@@ -7966,13 +8806,23 @@ async function startServer() {
     }
   });
 
-  app.get("/api/registrations/export", requireAuth, async (req, res) => {
+  app.get(
+    "/api/registrations/export",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    registrationsExportRateLimit,
+    async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const rows = await appDb.exportRegistrations(eventId);
       const eventName = (await appDb.getSettingValue("event_name", eventId)) || "event";
       const filename = buildRegistrationExportFilename(eventName);
       const csvWithBOM = buildRegistrationsCsvWithBom(rows);
+      await recordSecurityEvent(req, "registration.export_downloaded", {
+        event_id: eventId,
+        rows: rows.length,
+        filename,
+      });
 
       res.header("Content-Type", "text/csv; charset=utf-8");
       res.attachment(filename);
@@ -7980,7 +8830,8 @@ async function startServer() {
     } catch (error) {
       res.status(500).json({ error: "Failed to export CSV" });
     }
-  });
+    },
+  );
 
   app.get("/api/tickets/:id.png", async (req, res) => {
     try {
@@ -8040,23 +8891,36 @@ async function startServer() {
     }
   });
 
-  app.get("/api/settings", requireAuth, async (req, res) => {
+  app.get(
+    "/api/settings",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       res.json(await getSettingsMap(eventId));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
-  });
+    },
+  );
 
-  app.post("/api/settings", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/settings",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+      const eventId = getRequestedEventId(req);
+      const input = readObjectBody(req);
       const body = Object.fromEntries(
-        Object.entries(req.body || {})
+        Object.entries(input)
           .filter(([key]) => key !== "event_id")
           .map(([key, value]) => [key, String(value)]),
       ) as Record<string, string>;
+      if (Object.keys(body).length === 0) {
+        return respondValidationError(res, [{ field: "body", message: "No settings payload provided" }]);
+      }
       const mergedSettings = {
         ...(await getSettingsMap(eventId)),
         ...body,
@@ -8077,12 +8941,22 @@ async function startServer() {
     } catch (error) {
       res.status(500).json({ error: "Failed to update settings" });
     }
-  });
+    },
+  );
 
-  app.post("/api/event-knowledge/reset", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/event-knowledge/reset",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-      const clearContext = req.body?.clear_context !== false;
+      const body = readObjectBody(req);
+      const eventId = getRequestedEventId(req);
+      const issues: ValidationIssue[] = [];
+      const clearContext = readBooleanWithDefault(body, "clear_context", true, issues);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       const event = await appDb.getEventById(eventId);
       if (!event) {
         return res.status(404).json({ error: "Event not found" });
@@ -8108,9 +8982,14 @@ async function startServer() {
       console.error("Failed to reset event knowledge:", error);
       return res.status(500).json({ error: "Failed to reset event knowledge" });
     }
-  });
+    },
+  );
 
-  app.get("/api/documents", requireAuth, async (req, res) => {
+  app.get(
+    "/api/documents",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const rows = await getEventDocuments(eventId);
@@ -8119,9 +8998,14 @@ async function startServer() {
       console.error("Failed to fetch documents:", error);
       res.status(500).json({ error: "Failed to fetch documents" });
     }
-  });
+    },
+  );
 
-  app.get("/api/documents/:id/chunks", requireAuth, async (req, res) => {
+  app.get(
+    "/api/documents/:id/chunks",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const documentId = String(req.params.id || "").trim();
@@ -8141,9 +9025,14 @@ async function startServer() {
       console.error("Failed to fetch document chunks:", error);
       return res.status(500).json({ error: "Failed to fetch document chunks" });
     }
-  });
+    },
+  );
 
-  app.get("/api/documents/:id/embedding-preview", requireAuth, async (req, res) => {
+  app.get(
+    "/api/documents/:id/embedding-preview",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const documentId = String(req.params.id || "").trim();
@@ -8170,9 +9059,15 @@ async function startServer() {
       console.error("Failed to fetch embedding preview:", error);
       return res.status(500).json({ error: "Failed to fetch embedding preview" });
     }
-  });
+    },
+  );
 
-  app.post("/api/documents/:id/embedding-enqueue", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/documents/:id/embedding-enqueue",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    embeddingEnqueueRateLimit,
+    async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const documentId = String(req.params.id || "").trim();
@@ -8235,9 +9130,15 @@ async function startServer() {
       console.error("Failed to enqueue embedding job:", error);
       return res.status(500).json({ error: "Failed to enqueue embedding job" });
     }
-  });
+    },
+  );
 
-  app.get("/api/documents/retrieval-debug", requireAuth, async (req, res) => {
+  app.get(
+    "/api/documents/retrieval-debug",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    retrievalDebugRateLimit,
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const query = String(req.query?.query || "").trim();
@@ -8286,30 +9187,38 @@ async function startServer() {
       console.error("Failed to fetch retrieval debug:", error);
       return res.status(500).json({ error: "Failed to fetch retrieval debug" });
     }
-  });
+    },
+  );
 
-  app.post("/api/documents", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/documents",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-      const title = String(req.body?.title || "").trim();
-      const content = String(req.body?.content || "").trim();
-      const sourceType = String(req.body?.source_type || "note").trim() || "note";
-      const sourceUrl = String(req.body?.source_url || "").trim();
-      const isActive = typeof req.body?.is_active === "boolean" ? req.body.is_active : true;
-      const allowedSourceTypes = new Set(["note", "document", "url"]);
-
-      if (!title || !content) {
-        return res.status(400).json({ error: "title and content are required" });
-      }
-      if (!allowedSourceTypes.has(sourceType)) {
-        return res.status(400).json({ error: "Invalid source_type" });
+      const body = readObjectBody(req);
+      const eventId = getRequestedEventId(req);
+      const issues: ValidationIssue[] = [];
+      const title = readRequiredString(body, "title", issues, { label: "title", maxLength: 255 });
+      const content = readRequiredString(body, "content", issues, { label: "content", maxLength: 200000 });
+      const sourceType = readEnumValue(
+        body,
+        "source_type",
+        ["note", "document", "url"] as const,
+        issues,
+        { required: false, label: "source_type" },
+      ) || "note";
+      const sourceUrl = readOptionalString(body, "source_url", 1000);
+      const isActive = readBooleanWithDefault(body, "is_active", true, issues);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       const document = await appDb.upsertEventDocument({
-        id: typeof req.body?.id === "string" ? req.body.id : undefined,
+        id: typeof body.id === "string" ? body.id : undefined,
         event_id: eventId,
         title,
-        source_type: sourceType as "note" | "document" | "url",
+        source_type: sourceType,
         source_url: sourceUrl,
         content,
         is_active: isActive,
@@ -8324,14 +9233,29 @@ async function startServer() {
       console.error("Failed to save document:", error);
       res.status(500).json({ error: "Failed to save document" });
     }
-  });
+    },
+  );
 
-  app.post("/api/documents/:id/status", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/documents/:id/status",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false, queryKey: null }),
+    async (req: AuthenticatedRequest, res) => {
     try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
       const documentId = String(req.params.id || "").trim();
-      const isActive = Boolean(req.body?.is_active);
+      const isActive = readBooleanWithDefault(body, "is_active", false, issues);
+      const eventId = getRequestedEventId(req);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       if (!documentId) {
         return res.status(400).json({ error: "Document ID is required" });
+      }
+      const eventDocuments = await getEventDocuments(eventId);
+      if (!eventDocuments.some((row) => row.id === documentId)) {
+        return res.status(404).json({ error: "Document not found for this event" });
       }
 
       const updated = await appDb.setEventDocumentActive(documentId, isActive);
@@ -8340,6 +9264,7 @@ async function startServer() {
       }
 
       await recordAudit(req, "document.status_updated", "event_document", documentId, {
+        event_id: eventId,
         is_active: isActive,
       });
       res.json({ status: "ok", id: documentId, is_active: isActive });
@@ -8347,9 +9272,14 @@ async function startServer() {
       console.error("Failed to update document status:", error);
       res.status(500).json({ error: "Failed to update document status" });
     }
-  });
+    },
+  );
 
-  app.get("/api/messages", requireRoles(["owner", "admin", "operator", "viewer"]), async (req, res) => {
+  app.get(
+    "/api/messages",
+    requireRoles(["owner", "admin", "operator", "viewer"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const pageSize = parsePositiveInteger(req.query?.limit, 200, 1000);
@@ -8414,29 +9344,34 @@ async function startServer() {
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch messages" });
     }
-  });
+    },
+  );
 
-  app.post("/api/messages/manual-send", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/messages/manual-send",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    manualOutboundActionRateLimit,
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const mode = String(req.body?.mode || "").trim();
-      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-      const senderId = String(req.body?.sender_id || "").trim();
-      const pageId = String(req.body?.page_id || "").trim();
-      const platform = String(req.body?.platform || "").trim();
-      const text = String(req.body?.text || "").trim();
-      const registrationId = String(req.body?.registration_id || "").trim().toUpperCase();
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const mode = readEnumValue(body, "mode", ["text", "ticket"] as const, issues, { required: true, label: "mode" });
+      const eventId = getRequestedEventId(req);
+      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 255 });
+      const pageId = readRequiredString(body, "page_id", issues, { label: "page_id", maxLength: 255 });
+      const platform = readOptionalString(body, "platform", 64);
+      const text = readOptionalString(body, "text", 5000);
+      const registrationId = readOptionalString(body, "registration_id", 64).toUpperCase();
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
 
-      if (mode !== "text" && mode !== "ticket") {
-        return res.status(400).json({ error: "Invalid manual send mode" });
-      }
-      if (!senderId || !pageId || !eventId) {
-        return res.status(400).json({ error: "event_id, sender_id, and page_id are required" });
-      }
       if (mode === "text" && !text) {
-        return res.status(400).json({ error: "Manual reply text is required" });
+        return respondValidationError(res, [{ field: "text", message: "Manual reply text is required" }]);
       }
       if (mode === "ticket" && !registrationId) {
-        return res.status(400).json({ error: "Registration ID is required to resend a ticket" });
+        return respondValidationError(res, [{ field: "registration_id", message: "Registration ID is required to resend a ticket" }]);
       }
 
       const target = await resolveManualOutboundTarget(eventId, senderId, pageId, platform);
@@ -8483,17 +9418,24 @@ async function startServer() {
         error: message,
       });
     }
-  });
+    },
+  );
 
-  app.post("/api/messages/manual-retry-bot", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/messages/manual-retry-bot",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    manualOutboundActionRateLimit,
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const eventId = String(req.body?.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
-      const senderId = String(req.body?.sender_id || "").trim();
-      const pageId = String(req.body?.page_id || "").trim();
-      const platform = String(req.body?.platform || "").trim();
-
-      if (!senderId || !pageId || !eventId) {
-        return res.status(400).json({ error: "event_id, sender_id, and page_id are required" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const eventId = getRequestedEventId(req);
+      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 255 });
+      const pageId = readRequiredString(body, "page_id", issues, { label: "page_id", maxLength: 255 });
+      const platform = readOptionalString(body, "platform", 64);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       const target = await resolveManualOutboundTarget(eventId, senderId, pageId, platform);
@@ -8535,9 +9477,10 @@ async function startServer() {
           : 500;
       return res.status(statusCode).json({ error: message });
     }
-  });
+    },
+  );
 
-  app.get("/api/llm/models", requireRoles(["owner", "admin", "operator"]), async (req, res) => {
+  app.get("/api/llm/models", requireRoles(["owner", "admin", "operator"]), llmModelsRateLimit, async (req, res) => {
     if (!process.env.OPENROUTER_API_KEY) {
       return res.status(400).json({ error: "OPENROUTER_API_KEY is not configured in .env" });
     }
@@ -8573,7 +9516,11 @@ async function startServer() {
     }
   });
 
-  app.get("/api/llm/usage-summary", requireRoles(["owner", "admin"]), async (req, res) => {
+  app.get(
+    "/api/llm/usage-summary",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const summary = await appDb.getLlmUsageSummary(eventId);
@@ -8582,14 +9529,24 @@ async function startServer() {
       console.error("LLM usage summary error:", error);
       res.status(500).json({ error: "Failed to fetch LLM usage summary" });
     }
-  });
+    },
+  );
 
-  app.post("/api/llm/chat", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/llm/chat",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    llmChatRateLimit,
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const body = req.body || {};
-      const message = typeof body.message === "string" ? body.message : "";
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const message = readRequiredString(body, "message", issues, { label: "message", maxLength: 8000 });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       const history = Array.isArray(body.history) ? (body.history as ChatHistoryMessage[]) : [];
-      const eventId = typeof body.event_id === "string" && body.event_id.trim() ? body.event_id.trim() : DEFAULT_EVENT_ID;
+      const eventId = getRequestedEventId(req);
       const settings = (body.settings && typeof body.settings === "object")
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
@@ -8621,9 +9578,10 @@ async function startServer() {
       const status = /OPENROUTER_API_KEY/.test(message) ? 400 : 500;
       res.status(status).json({ error: message });
     }
-  });
+    },
+  );
 
-  app.post("/api/admin-agent/history/reset", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/admin-agent/history/reset", requireRoles(["owner", "admin", "operator"]), adminAgentRateLimit, async (req: AuthenticatedRequest, res) => {
     try {
       adminAgentSharedHistory = [];
       await recordAudit(req, "admin_agent.history_reset", "workspace", "admin_agent", {
@@ -8636,16 +9594,22 @@ async function startServer() {
     }
   });
 
-  app.post("/api/admin-agent/chat", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/admin-agent/chat",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    adminAgentRateLimit,
+    async (req: AuthenticatedRequest, res) => {
     try {
-      const body = req.body || {};
-      const message = typeof body.message === "string" ? body.message.trim() : "";
-      if (!message) {
-        return res.status(400).json({ error: "Message is required" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const message = readRequiredString(body, "message", issues, { label: "message", maxLength: 8000 });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       const history = Array.isArray(body.history) ? (body.history as ChatHistoryMessage[]) : [];
-      const eventId = typeof body.event_id === "string" && body.event_id.trim() ? body.event_id.trim() : DEFAULT_EVENT_ID;
+      const eventId = getRequestedEventId(req);
       const settings = (body.settings && typeof body.settings === "object")
         ? body.settings as Record<string, any>
         : await getSettingsMap(eventId);
@@ -8715,7 +9679,8 @@ async function startServer() {
       const status = /OPENROUTER_API_KEY/.test(message) ? 400 : 500;
       return res.status(status).json({ error: message });
     }
-  });
+    },
+  );
 
   app.post("/api/admin-agent/telegram/webhook", webhookRateLimit, (req: RawBodyRequest, res) => {
     const payload = req.body;
@@ -9431,4 +10396,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch((error) => {
+  console.error("Server startup failed:", error);
+  process.exit(1);
+});

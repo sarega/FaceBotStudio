@@ -15,10 +15,12 @@ import type {
   AuthUserRow,
   ChannelAccountRow,
   ChannelPlatform,
+  CheckinAccessSessionRow,
   CheckinSessionRow,
   CreateRegistrationEmailDeliveryInput,
   CreateEventInput,
   CreateCheckinSessionInput,
+  ExchangeCheckinSessionTokenInput,
   EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
   EventDocumentRow,
@@ -243,6 +245,7 @@ function mapEventDocumentChunkEmbeddingRow(row: Record<string, unknown>) {
 
 function mapCheckinSessionRow(row: Record<string, unknown>) {
   const revokedAt = typeof row.revoked_at === "string" ? row.revoked_at : null;
+  const exchangedAt = typeof row.exchanged_at === "string" ? row.exchanged_at : null;
   const expiresAt = String(row.expires_at || "");
   const expiresAtMs = Number.isFinite(Date.parse(expiresAt)) ? Date.parse(expiresAt) : 0;
   return {
@@ -253,9 +256,27 @@ function mapCheckinSessionRow(row: Record<string, unknown>) {
     created_at: String(row.created_at || ""),
     expires_at: expiresAt,
     last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
+    exchanged_at: exchangedAt,
+    revoked_at: revokedAt,
+    is_active: !revokedAt && !exchangedAt && expiresAtMs > Date.now(),
+  } satisfies CheckinSessionRow;
+}
+
+function mapCheckinAccessSessionRow(row: Record<string, unknown>) {
+  const revokedAt = typeof row.revoked_at === "string" ? row.revoked_at : null;
+  const expiresAt = String(row.expires_at || "");
+  const expiresAtMs = Number.isFinite(Date.parse(expiresAt)) ? Date.parse(expiresAt) : 0;
+  return {
+    id: String(row.id),
+    checkin_session_id: String(row.checkin_session_id || ""),
+    event_id: String(row.event_id || ""),
+    label: String(row.label || ""),
+    created_at: String(row.created_at || ""),
+    expires_at: expiresAt,
+    last_used_at: typeof row.last_used_at === "string" ? row.last_used_at : null,
     revoked_at: revokedAt,
     is_active: !revokedAt && expiresAtMs > Date.now(),
-  } satisfies CheckinSessionRow;
+  } satisfies CheckinAccessSessionRow;
 }
 
 export class PostgresAppDatabase implements AppDatabase {
@@ -288,6 +309,7 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.ensureBootstrapOwner();
     await this.deleteExpiredSessions();
     await this.deleteExpiredCheckinSessions();
+    await this.deleteExpiredCheckinAccessSessions();
     this.initialized = true;
   }
 
@@ -1625,6 +1647,7 @@ export class PostgresAppDatabase implements AppDatabase {
         created_at::text AS created_at,
         expires_at::text AS expires_at,
         last_used_at::text AS last_used_at,
+        exchanged_at::text AS exchanged_at,
         revoked_at::text AS revoked_at
        FROM checkin_sessions
        WHERE event_id = $1
@@ -1658,6 +1681,7 @@ export class PostgresAppDatabase implements AppDatabase {
         created_at::text AS created_at,
         expires_at::text AS expires_at,
         last_used_at::text AS last_used_at,
+        exchanged_at::text AS exchanged_at,
         revoked_at::text AS revoked_at
        FROM checkin_sessions
        WHERE id = $1`,
@@ -1680,15 +1704,139 @@ export class PostgresAppDatabase implements AppDatabase {
         created_at::text AS created_at,
         expires_at::text AS expires_at,
         last_used_at::text AS last_used_at,
+        exchanged_at::text AS exchanged_at,
         revoked_at::text AS revoked_at
        FROM checkin_sessions
+       WHERE token_hash = $1
+         AND revoked_at IS NULL
+         AND exchanged_at IS NULL
+         AND expires_at > CURRENT_TIMESTAMP
+       LIMIT 1`,
+      [String(tokenHash || "").trim()],
+    );
+    return result.rows[0] ? mapCheckinSessionRow(result.rows[0]) : undefined;
+  }
+
+  async exchangeCheckinSessionToken(input: ExchangeCheckinSessionTokenInput) {
+    const checkinTokenHash = String(input.checkin_token_hash || "").trim();
+    const accessTokenHash = String(input.access_token_hash || "").trim();
+    const maxSessionTtlMs = Math.max(60_000, Number(input.max_session_ttl_ms || 0));
+    if (!checkinTokenHash || !accessTokenHash) {
+      return undefined;
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const sourceResult = await client.query<Record<string, unknown>>(
+        `SELECT
+          id,
+          event_id,
+          label,
+          expires_at::text AS expires_at
+         FROM checkin_sessions
+         WHERE token_hash = $1
+           AND revoked_at IS NULL
+           AND exchanged_at IS NULL
+           AND expires_at > CURRENT_TIMESTAMP
+         LIMIT 1
+         FOR UPDATE`,
+        [checkinTokenHash],
+      );
+      const source = sourceResult.rows[0];
+      if (!source) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      const now = Date.now();
+      const sourceExpiresAtMs = Date.parse(String(source.expires_at || ""));
+      if (!Number.isFinite(sourceExpiresAtMs) || sourceExpiresAtMs <= now) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      const accessExpiresAtMs = Math.min(sourceExpiresAtMs, now + maxSessionTtlMs);
+      if (accessExpiresAtMs <= now) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      const markResult = await client.query(
+        `UPDATE checkin_sessions
+         SET exchanged_at = CURRENT_TIMESTAMP,
+             last_used_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+           AND revoked_at IS NULL
+           AND exchanged_at IS NULL`,
+        [String(source.id || "").trim()],
+      );
+      if (markResult.rowCount <= 0) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      const accessSessionId = generateEntityId("cas");
+      await client.query(
+        `INSERT INTO checkin_access_sessions (
+          id, checkin_session_id, event_id, label, token_hash, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          accessSessionId,
+          String(source.id || "").trim(),
+          String(source.event_id || "").trim(),
+          String(source.label || "").trim(),
+          accessTokenHash,
+          new Date(accessExpiresAtMs).toISOString(),
+        ],
+      );
+
+      const accessResult = await client.query<Record<string, unknown>>(
+        `SELECT
+          id,
+          checkin_session_id,
+          event_id,
+          label,
+          created_at::text AS created_at,
+          expires_at::text AS expires_at,
+          last_used_at::text AS last_used_at,
+          revoked_at::text AS revoked_at
+         FROM checkin_access_sessions
+         WHERE id = $1
+         LIMIT 1`,
+        [accessSessionId],
+      );
+
+      await client.query("COMMIT");
+      return accessResult.rows[0] ? mapCheckinAccessSessionRow(accessResult.rows[0]) : undefined;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getCheckinAccessSessionByTokenHash(tokenHash: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+        id,
+        checkin_session_id,
+        event_id,
+        label,
+        created_at::text AS created_at,
+        expires_at::text AS expires_at,
+        last_used_at::text AS last_used_at,
+        revoked_at::text AS revoked_at
+       FROM checkin_access_sessions
        WHERE token_hash = $1
          AND revoked_at IS NULL
          AND expires_at > CURRENT_TIMESTAMP
        LIMIT 1`,
       [String(tokenHash || "").trim()],
     );
-    return result.rows[0] ? mapCheckinSessionRow(result.rows[0]) : undefined;
+    return result.rows[0] ? mapCheckinAccessSessionRow(result.rows[0]) : undefined;
   }
 
   async touchCheckinSession(sessionId: string) {
@@ -1698,17 +1846,47 @@ export class PostgresAppDatabase implements AppDatabase {
     );
   }
 
-  async revokeCheckinSession(sessionId: string) {
-    const result = await this.pool.query(
-      "UPDATE checkin_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1 AND revoked_at IS NULL",
+  async touchCheckinAccessSession(sessionId: string) {
+    await this.pool.query(
+      "UPDATE checkin_access_sessions SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1",
       [String(sessionId || "").trim()],
     );
-    return result.rowCount > 0;
+  }
+
+  async revokeCheckinSession(sessionId: string) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        "UPDATE checkin_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = $1 AND revoked_at IS NULL",
+        [normalizedSessionId],
+      );
+      if (result.rowCount > 0) {
+        await client.query(
+          "UPDATE checkin_access_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE checkin_session_id = $1 AND revoked_at IS NULL",
+          [normalizedSessionId],
+        );
+      }
+      await client.query("COMMIT");
+      return result.rowCount > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async deleteExpiredCheckinSessions() {
     await this.pool.query(
       "DELETE FROM checkin_sessions WHERE expires_at <= CURRENT_TIMESTAMP",
+    );
+  }
+
+  async deleteExpiredCheckinAccessSessions() {
+    await this.pool.query(
+      "DELETE FROM checkin_access_sessions WHERE expires_at <= CURRENT_TIMESTAMP",
     );
   }
 
