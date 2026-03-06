@@ -31,6 +31,7 @@ import {
   Plus,
   Trash2,
   ChevronDown,
+  MoreHorizontal,
   CircleHelp,
   Eye,
   PencilLine,
@@ -1480,11 +1481,13 @@ function InlineActionsMenu({
   tone = "neutral",
   children,
   className = "",
+  iconOnly = false,
 }: {
   label: string;
   tone?: ActionTone;
   children: ReactNode;
   className?: string;
+  iconOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -1517,12 +1520,27 @@ function InlineActionsMenu({
       <ActionButton
         onClick={() => setOpen((current) => !current)}
         tone={tone}
-        className={`min-w-[3.75rem] px-3 text-sm ${className.includes("w-full") ? "w-full justify-center" : ""}`.trim()}
+        className={
+          iconOnly
+            ? "h-9 w-9 min-h-0 rounded-lg p-0"
+            : `min-w-[3.75rem] px-3 text-sm ${className.includes("w-full") ? "w-full justify-center" : ""}`.trim()
+        }
         aria-expanded={open}
         aria-haspopup="menu"
+        aria-label={label}
+        title={label}
       >
-        <span className="truncate">{label}</span>
-        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        {iconOnly ? (
+          <>
+            <MoreHorizontal className="h-4 w-4" />
+            <span className="sr-only">{label}</span>
+          </>
+        ) : (
+          <>
+            <span className="truncate">{label}</span>
+            <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+          </>
+        )}
       </ActionButton>
       {open && (
         <div
@@ -6643,7 +6661,7 @@ export default function App() {
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {setupMenuOpen && (
-                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                       {setupTabs.map((tab) => (
                         <button
                           key={tab.id}
@@ -6683,7 +6701,7 @@ export default function App() {
                     <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
                   </button>
                   {operationsMenuOpen && (
-                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                       {operationsTabs.map((tab) => (
                         <button
                           key={tab.id}
@@ -8388,54 +8406,43 @@ export default function App() {
             >
               <div className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]">
                 <div className="border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
-                  <div className="flex flex-wrap items-start justify-between gap-2.5">
-                    <div className="flex min-w-0 flex-1 items-start gap-2.5">
-                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 sm:h-9 sm:w-9">
-                        <MonitorCog className="h-4 w-4 text-violet-700 sm:h-5 sm:w-5" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 sm:h-9 sm:w-9">
+                      <MonitorCog className="h-4 w-4 text-violet-700 sm:h-5 sm:w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-1.5">
                           <h3 className="truncate text-sm font-semibold">Admin Agent</h3>
                           <HelpPopover label="Open note for Agent Guard">
                             {adminAgentGuardBody}
                           </HelpPopover>
                         </div>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          <StatusBadge tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"}>
-                            {settings.admin_agent_enabled === "1" ? "enabled" : "disabled"}
-                          </StatusBadge>
-                          <StatusBadge tone="neutral" className="hidden sm:inline-flex">{activeAgentMessageCount} msgs</StatusBadge>
-                          <StatusBadge tone={adminAgentGuardTone}>{adminAgentGuardLabel}</StatusBadge>
-                          {selectedEvent && (
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)} className="hidden sm:inline-flex">
-                              {getEventStatusLabel(selectedEvent.effective_status)}
-                            </StatusBadge>
-                          )}
-                        </div>
+                        <InlineActionsMenu label="Agent actions" tone="neutral" iconOnly>
+                          <MenuActionItem
+                            onClick={() => void handleAdminAgentClearChat()}
+                            disabled={adminAgentMessages.length === 0}
+                            tone="neutral"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span className="font-medium">Clear Chat</span>
+                          </MenuActionItem>
+                        </InlineActionsMenu>
                       </div>
-                    </div>
-                    <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap">
-                      <ActionButton
-                        onClick={() => void saveAgentSettings()}
-                        disabled={saving || !canEditSettings}
-                        tone="violet"
-                        active
-                        className="whitespace-nowrap px-3 text-sm"
-                      >
-                        {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                        <span className="sm:hidden">Save</span>
-                        <span className="hidden sm:inline">Save Agent Setup</span>
-                      </ActionButton>
-                      <InlineActionsMenu label="Actions" tone="neutral" className="sm:w-auto">
-                        <MenuActionItem
-                          onClick={() => void handleAdminAgentClearChat()}
-                          disabled={adminAgentMessages.length === 0}
-                          tone="neutral"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          <span className="font-medium">Clear Chat</span>
-                        </MenuActionItem>
-                      </InlineActionsMenu>
+                      <div className="mt-1.5 flex min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                        <StatusBadge tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"} className="shrink-0">
+                          {settings.admin_agent_enabled === "1" ? "enabled" : "disabled"}
+                        </StatusBadge>
+                        <StatusBadge tone="neutral" className="shrink-0">{activeAgentMessageCount} msgs</StatusBadge>
+                        <StatusBadge tone={adminAgentGuardTone} className="shrink-0 max-w-[9.5rem] truncate">
+                          {adminAgentGuardLabel}
+                        </StatusBadge>
+                        {selectedEvent && (
+                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)} className="shrink-0 max-w-[9rem] truncate">
+                            {getEventStatusLabel(selectedEvent.effective_status)}
+                          </StatusBadge>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -8633,6 +8640,18 @@ export default function App() {
               </div>
 
               <div className="space-y-4">
+                <div className="flex items-center justify-end">
+                  <ActionButton
+                    onClick={() => void saveAgentSettings()}
+                    disabled={saving || !canEditSettings}
+                    tone="violet"
+                    active
+                    className="whitespace-nowrap px-3 text-sm"
+                  >
+                    {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    Save Agent Setup
+                  </ActionButton>
+                </div>
                 <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "p-3" : "space-y-4 p-4"}`}>
                   <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "items-center" : "items-start"}`}>
                     <button
