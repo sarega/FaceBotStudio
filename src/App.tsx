@@ -3544,16 +3544,42 @@ export default function App() {
       adminAgentBottomRef.current?.scrollIntoView({ block: "end" });
     };
 
-    scrollToBottom();
-    const rafId = window.requestAnimationFrame(scrollToBottom);
-    const timeoutId = window.setTimeout(scrollToBottom, 90);
-    const lateTimeoutId = window.setTimeout(scrollToBottom, 220);
+    const scheduleScroll = () => {
+      window.requestAnimationFrame(scrollToBottom);
+    };
+
+    scheduleScroll();
+    const timeoutId = window.setTimeout(scheduleScroll, 90);
+    const lateTimeoutId = window.setTimeout(scheduleScroll, 240);
+
+    const panel = adminAgentScrollRef.current;
+    let mutationObserver: MutationObserver | null = null;
+    const handlePanelAssetLoad = (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.tagName === "IMG" || target.tagName === "VIDEO") {
+        scheduleScroll();
+      }
+    };
+    if (panel) {
+      mutationObserver = new MutationObserver(() => {
+        scheduleScroll();
+      });
+      mutationObserver.observe(panel, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+      panel.addEventListener("load", handlePanelAssetLoad, true);
+    }
+
     return () => {
-      window.cancelAnimationFrame(rafId);
       window.clearTimeout(timeoutId);
       window.clearTimeout(lateTimeoutId);
+      mutationObserver?.disconnect();
+      panel?.removeEventListener("load", handlePanelAssetLoad, true);
     };
-  }, [activeTab, adminAgentMessages.length, adminAgentTyping]);
+  }, [activeTab, selectedEventId, adminAgentMessages.length, adminAgentTyping]);
 
   useEffect(() => {
     setManualOverrideText("");
@@ -8361,51 +8387,56 @@ export default function App() {
               className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]"
             >
               <div className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]">
-                <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-violet-100">
-                      <MonitorCog className="h-5 w-5 text-violet-700" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-sm">Admin Agent</h3>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusBadge tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"}>
-                          {settings.admin_agent_enabled === "1" ? "enabled" : "disabled"}
-                        </StatusBadge>
-                        <StatusBadge tone="neutral">{activeAgentMessageCount} msgs</StatusBadge>
-                        <StatusBadge tone={adminAgentGuardTone}>{adminAgentGuardLabel}</StatusBadge>
-                        <HelpPopover label="Open note for Agent Guard">
-                          {adminAgentGuardBody}
-                        </HelpPopover>
-                        {selectedEvent && (
-                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                            {getEventStatusLabel(selectedEvent.effective_status)}
+                <div className="border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2.5">
+                    <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 sm:h-9 sm:w-9">
+                        <MonitorCog className="h-4 w-4 text-violet-700 sm:h-5 sm:w-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <h3 className="truncate text-sm font-semibold">Admin Agent</h3>
+                          <HelpPopover label="Open note for Agent Guard">
+                            {adminAgentGuardBody}
+                          </HelpPopover>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <StatusBadge tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"}>
+                            {settings.admin_agent_enabled === "1" ? "enabled" : "disabled"}
                           </StatusBadge>
-                        )}
+                          <StatusBadge tone="neutral" className="hidden sm:inline-flex">{activeAgentMessageCount} msgs</StatusBadge>
+                          <StatusBadge tone={adminAgentGuardTone}>{adminAgentGuardLabel}</StatusBadge>
+                          {selectedEvent && (
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)} className="hidden sm:inline-flex">
+                              {getEventStatusLabel(selectedEvent.effective_status)}
+                            </StatusBadge>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ActionButton
-                      onClick={() => void saveAgentSettings()}
-                      disabled={saving || !canEditSettings}
-                      tone="violet"
-                      active
-                      className="text-sm"
-                    >
-                      {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                      Save Agent Setup
-                    </ActionButton>
-                    <InlineActionsMenu label="Actions" tone="neutral">
-                      <MenuActionItem
-                        onClick={() => void handleAdminAgentClearChat()}
-                        disabled={adminAgentMessages.length === 0}
-                        tone="neutral"
+                    <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap">
+                      <ActionButton
+                        onClick={() => void saveAgentSettings()}
+                        disabled={saving || !canEditSettings}
+                        tone="violet"
+                        active
+                        className="whitespace-nowrap px-3 text-sm"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        <span className="font-medium">Clear Chat</span>
-                      </MenuActionItem>
-                    </InlineActionsMenu>
+                        {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                        <span className="sm:hidden">Save</span>
+                        <span className="hidden sm:inline">Save Agent Setup</span>
+                      </ActionButton>
+                      <InlineActionsMenu label="Actions" tone="neutral" className="sm:w-auto">
+                        <MenuActionItem
+                          onClick={() => void handleAdminAgentClearChat()}
+                          disabled={adminAgentMessages.length === 0}
+                          tone="neutral"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span className="font-medium">Clear Chat</span>
+                        </MenuActionItem>
+                      </InlineActionsMenu>
+                    </div>
                   </div>
                 </div>
 
