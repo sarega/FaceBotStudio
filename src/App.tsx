@@ -2,6 +2,8 @@ import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttribute
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import { 
+  ArrowDownLeft,
+  ArrowUpRight,
   MessageSquare, 
   Settings as SettingsIcon, 
   Code, 
@@ -27,6 +29,7 @@ import {
   UserPlus,
   CalendarRange,
   Link2,
+  Lock,
   MonitorCog,
   Plus,
   Trash2,
@@ -79,6 +82,7 @@ type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceFilter = "all" | EventStatus;
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
+type BannerTone = "neutral" | "blue" | "emerald" | "amber" | "rose";
 
 type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
@@ -213,7 +217,7 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       },
       {
         label: "Channel mapping",
-        body: "Link channels to the selected event so incoming messages land in the correct workspace. Keep status badges green before going live.",
+        body: "Link channels to the selected event so incoming messages land in the correct workspace. Keep channel status healthy before going live.",
       },
       {
         label: "Model overrides",
@@ -450,6 +454,7 @@ const COLLAPSIBLE_SECTION_KEYS = {
   contextChunkInspector: "context-chunk-inspector",
   contextEmbeddingPreview: "context-embedding-preview",
   contextRetrievalDebug: "context-retrieval-debug",
+  contextLlmUsage: "context-llm-usage",
   agentRuntime: "agent-runtime",
   agentExternalChannel: "agent-external-channel",
   setupChannels: "setup-channels",
@@ -790,6 +795,21 @@ function getLogMessageDisplayText(message: Message) {
   }
 
   return message.text;
+}
+
+function getLogDirectionMeta(type: string) {
+  if (type === "incoming") {
+    return {
+      label: "Incoming",
+      icon: <ArrowDownLeft className="h-3.5 w-3.5" />,
+      className: "text-emerald-700",
+    };
+  }
+  return {
+    label: "Outgoing",
+    icon: <ArrowUpRight className="h-3.5 w-3.5" />,
+    className: "text-blue-700",
+  };
 }
 
 function buildWebChatEmbedSnippet(appUrl: string, widgetKey: string) {
@@ -1291,10 +1311,48 @@ function getUserAccessTone(isActive: boolean): BadgeTone {
   return isActive ? "emerald" : "neutral";
 }
 
-function getTokenStatusTone(channel: ChannelAccountRecord): BadgeTone {
-  if (channel.platform === "web_chat") return "violet";
-  if (channel.has_access_token) return "blue";
-  return "amber";
+function toBannerTone(tone: BadgeTone): BannerTone {
+  switch (tone) {
+    case "blue":
+      return "blue";
+    case "emerald":
+      return "emerald";
+    case "amber":
+      return "amber";
+    case "rose":
+      return "rose";
+    default:
+      return "neutral";
+  }
+}
+
+function getChannelTokenStatusMeta(channel: ChannelAccountRecord): { label: string; className: string; icon: ReactNode } {
+  if (channel.platform === "web_chat") {
+    return {
+      label: "No token needed",
+      className: "text-violet-700",
+      icon: <Shield className="h-3.5 w-3.5" />,
+    };
+  }
+  if (channel.has_access_token) {
+    return {
+      label: "Token saved",
+      className: "text-emerald-700",
+      icon: <Lock className="h-3.5 w-3.5" />,
+    };
+  }
+  if (channel.platform === "facebook") {
+    return {
+      label: "Using env fallback",
+      className: "text-amber-700",
+      icon: <AlertCircle className="h-3.5 w-3.5" />,
+    };
+  }
+  return {
+    label: "Token missing",
+    className: "text-rose-700",
+    icon: <AlertCircle className="h-3.5 w-3.5" />,
+  };
 }
 
 const BADGE_BASE_CLASS =
@@ -1319,6 +1377,184 @@ function StatusBadge({
   children: ReactNode;
 }) {
   return <span className={`${BADGE_BASE_CLASS} ${BADGE_TONE_CLASSES[tone]} ${className}`.trim()}>{children}</span>;
+}
+
+function SelectionMarker({ className = "" }: { className?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-blue-700 ${className}`.trim()}>
+      <CheckCircle2 className="h-3.5 w-3.5" />
+      selected
+    </span>
+  );
+}
+
+const BANNER_TONE_CLASSES: Record<BannerTone, string> = {
+  neutral: "border-slate-200 bg-slate-50 text-slate-700",
+  blue: "border-blue-200 bg-blue-50 text-blue-800",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  amber: "border-amber-200 bg-amber-50 text-amber-800",
+  rose: "border-rose-200 bg-rose-50 text-rose-800",
+};
+
+function PageBanner({
+  tone = "neutral",
+  icon,
+  children,
+  className = "",
+}: {
+  tone?: BannerTone;
+  icon?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-xl border px-3 py-2 text-xs ${BANNER_TONE_CLASSES[tone]} ${className}`.trim()}>
+      <div className="flex items-start gap-2">
+        {icon ? <span className="mt-0.5 shrink-0">{icon}</span> : null}
+        <p className="leading-relaxed">{children}</p>
+      </div>
+    </div>
+  );
+}
+
+function StatusLine({
+  items,
+  className = "",
+}: {
+  items: Array<ReactNode | null | undefined | false>;
+  className?: string;
+}) {
+  const filtered = items.filter(Boolean) as ReactNode[];
+  if (filtered.length === 0) return null;
+  return (
+    <p className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-600 ${className}`.trim()}>
+      {filtered.map((item, index) => (
+        <span key={index} className="inline-flex items-center gap-1">
+          {index > 0 && <span className="text-slate-300">·</span>}
+          {item}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function SelectionCard({
+  selected,
+  searchFocused = false,
+  className = "",
+  children,
+}: {
+  selected: boolean;
+  searchFocused?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`${selected ? "border-blue-200 bg-blue-50 shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-slate-100"} ${
+        searchFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""
+      } ${className}`.trim()}
+    >
+      {children}
+    </div>
+  );
+}
+
+function MetaRow({
+  items,
+  className = "",
+}: {
+  items: Array<ReactNode | null | undefined | false>;
+  className?: string;
+}) {
+  const filtered = items.filter(Boolean) as ReactNode[];
+  if (filtered.length === 0) return null;
+  return (
+    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 ${className}`.trim()}>
+      {filtered.map((item, index) => (
+        <span key={index} className="inline-flex items-center gap-2">
+          {index > 0 && <span className="text-slate-300">•</span>}
+          {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function CompactStatRow({
+  stats,
+  className = "",
+}: {
+  stats: Array<{ label: string; value: string | number; tone?: BannerTone }>;
+  className?: string;
+}) {
+  return (
+    <div className={`flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 ${className}`.trim()}>
+      {stats.map((stat) => {
+        const toneClasses =
+          stat.tone === "emerald"
+            ? "text-emerald-700"
+            : stat.tone === "amber"
+            ? "text-amber-700"
+            : stat.tone === "blue"
+            ? "text-blue-700"
+            : "text-slate-700";
+        return (
+          <div key={stat.label} className="inline-flex items-center gap-1.5">
+            <span className={`text-sm font-semibold ${toneClasses}`}>{stat.value}</span>
+            <span className="text-[11px] text-slate-500">{stat.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function InlineWarning({
+  tone = "amber",
+  children,
+  className = "",
+}: {
+  tone?: BannerTone;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <PageBanner
+      tone={tone}
+      icon={tone === "rose" ? <AlertCircle className="h-4 w-4" /> : <CircleHelp className="h-4 w-4" />}
+      className={className}
+    >
+      {children}
+    </PageBanner>
+  );
+}
+
+function InspectorSection({
+  title,
+  subtitle,
+  actions,
+  children,
+  className = "",
+}: {
+  title: string;
+  subtitle?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`rounded-2xl border border-slate-200 bg-slate-50 p-4 ${className}`.trim()}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
+          {subtitle ? <p className="mt-1 text-xs text-slate-500">{subtitle}</p> : null}
+        </div>
+        {actions}
+      </div>
+      {children}
+    </section>
+  );
 }
 
 const ACTION_BUTTON_BASE_CLASS =
@@ -1453,39 +1689,6 @@ function HelpPopover({
           {children}
         </div>
       )}
-    </div>
-  );
-}
-
-function CompactGuardBar({
-  title,
-  tone,
-  label,
-  body,
-}: {
-  title: string;
-  tone: BadgeTone;
-  label: string;
-  body: ReactNode;
-}) {
-  const surfaceClasses =
-    tone === "emerald"
-      ? "border-emerald-200 bg-emerald-50"
-      : tone === "amber"
-      ? "border-amber-200 bg-amber-50"
-      : tone === "rose"
-      ? "border-rose-200 bg-rose-50"
-      : "border-slate-200 bg-slate-50";
-
-  return (
-    <div className={`rounded-xl border px-3 py-2 ${surfaceClasses}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-600">{title}</p>
-        <StatusBadge tone={tone}>{label}</StatusBadge>
-        <p className="basis-full text-[11px] leading-relaxed text-slate-600 sm:basis-auto sm:flex-1">
-          {body}
-        </p>
-      </div>
     </div>
   );
 }
@@ -1696,33 +1899,35 @@ function EventWorkspaceRow({
     <button
       id={getSearchTargetDomId("event", event.id)}
       onClick={onSelect}
-      className={`w-full overflow-hidden rounded-2xl border px-4 py-3 text-left transition-colors ${
-        selected
-          ? "border-blue-200 bg-blue-50 shadow-sm"
-          : "border-slate-200 bg-slate-50 hover:bg-slate-100"
-      } ${searchFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
+      className="w-full overflow-hidden rounded-2xl text-left"
     >
-      <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-        <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900">{event.name}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
-            <span className="font-mono">{event.slug}</span>
-            <span className="text-slate-300">•</span>
-            <span>Updated {lastUpdatedLabel}</span>
+      <SelectionCard selected={selected} searchFocused={searchFocused} className="rounded-2xl border px-4 py-3 transition-colors">
+        <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+          <div className="min-w-0 flex-1">
+            <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900">{event.name}</p>
+            <MetaRow
+              className="mt-1"
+              items={[
+                <span className="font-mono">{event.slug}</span>,
+                <span>Updated {lastUpdatedLabel}</span>,
+              ]}
+            />
+            <StatusLine
+              className="mt-1"
+              items={[
+                showAvailabilityBadge ? <>Registration {getRegistrationAvailabilityLabel(event.registration_availability)}</> : null,
+                event.is_default ? "Default workspace" : null,
+              ]}
+            />
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end lg:pl-3">
+            <StatusBadge tone={getEventStatusTone(event.effective_status)}>
+              {getEventStatusLabel(event.effective_status)}
+            </StatusBadge>
+            {selected && <SelectionMarker />}
           </div>
         </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end lg:pl-3">
-          {event.is_default && <StatusBadge tone="neutral">default</StatusBadge>}
-          {showAvailabilityBadge && (
-            <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
-              {getRegistrationAvailabilityLabel(event.registration_availability)}
-            </StatusBadge>
-          )}
-          <StatusBadge tone={getEventStatusTone(event.effective_status)}>
-            {getEventStatusLabel(event.effective_status)}
-          </StatusBadge>
-        </div>
-      </div>
+      </SelectionCard>
     </button>
   );
 }
@@ -2179,6 +2384,7 @@ export default function App() {
   const [statusUpdateMessage, setStatusUpdateMessage] = useState("");
   const [deleteRegistrationLoading, setDeleteRegistrationLoading] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [eventListQuery, setEventListQuery] = useState("");
   const [eventWorkspaceFilter, setEventWorkspaceFilter] = useState<EventWorkspaceFilter>("all");
@@ -2201,7 +2407,13 @@ export default function App() {
   const [logRegistrationMessage, setLogRegistrationMessage] = useState("");
   const [logToolsOpen, setLogToolsOpen] = useState(false);
   const [eventHistoryOpenKeys, setEventHistoryOpenKeys] = useState<string[]>([]);
-  const [collapsedSectionMap, setCollapsedSectionMap] = useState<Record<string, boolean>>(() => readCollapsedSectionStore());
+  const [collapsedSectionMap, setCollapsedSectionMap] = useState<Record<string, boolean>>(() => {
+    const stored = readCollapsedSectionStore();
+    if (stored[COLLAPSIBLE_SECTION_KEYS.contextLlmUsage] === undefined) {
+      stored[COLLAPSIBLE_SECTION_KEYS.contextLlmUsage] = true;
+    }
+    return stored;
+  });
   const [collapsedContextDocumentIds, setCollapsedContextDocumentIds] = useState<string[]>([]);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget>(null);
   const [llmModels, setLlmModels] = useState<LlmModelOption[]>([]);
@@ -2363,6 +2575,36 @@ export default function App() {
       : "Enable Admin Agent in setup before running commands from UI or Telegram.";
   const activeAttendeeCount = registrations.filter((reg) => reg.status !== "cancelled").length;
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
+  const latestResultState: "success" | "already" | "invalid" | "cancelled" | "idle" =
+    checkinStatus === "error" && checkinErrorMessage.toLowerCase().includes("already")
+      ? "already"
+      : checkinStatus === "error"
+      ? "invalid"
+      : latestCheckinRegistration?.status === "cancelled"
+      ? "cancelled"
+      : latestCheckinRegistration
+      ? "success"
+      : "idle";
+  const latestResultToneClass =
+    latestResultState === "success"
+      ? "border-emerald-200 bg-emerald-50"
+      : latestResultState === "already"
+      ? "border-amber-200 bg-amber-50"
+      : latestResultState === "invalid"
+      ? "border-rose-200 bg-rose-50"
+      : latestResultState === "cancelled"
+      ? "border-slate-300 bg-slate-100"
+      : "border-slate-200 bg-slate-50";
+  const latestResultLabel =
+    latestResultState === "success"
+      ? "Check-in success"
+      : latestResultState === "already"
+      ? "Already checked in"
+      : latestResultState === "invalid"
+      ? "Invalid ticket"
+      : latestResultState === "cancelled"
+      ? "Cancelled attendee"
+      : "Waiting for scan";
   const canUseQrScanner =
     typeof window !== "undefined" &&
     typeof navigator !== "undefined" &&
@@ -5937,13 +6179,14 @@ export default function App() {
             <div className="flex items-center justify-between gap-3 mb-3">
               <div>
                 <h3 className="text-lg font-semibold">Latest Result</h3>
-                <p className="text-xs text-slate-500">The most recently scanned or checked-in attendee.</p>
+                <StatusLine
+                  className="mt-1"
+                  items={[
+                    latestResultLabel,
+                    latestCheckinRegistration ? `ID ${latestCheckinRegistration.id}` : null,
+                  ]}
+                />
               </div>
-              {latestCheckinRegistration && (
-                <StatusBadge tone={getRegistrationStatusTone(latestCheckinRegistration.status)}>
-                  {latestCheckinRegistration.status}
-                </StatusBadge>
-              )}
             </div>
 
             {!latestCheckinRegistration ? (
@@ -5951,7 +6194,7 @@ export default function App() {
                 No attendee checked in yet in this session.
               </div>
             ) : (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <div className={`rounded-2xl border p-4 space-y-3 ${latestResultToneClass}`}>
                 <div>
                   <p className="text-lg font-semibold text-slate-900">
                     {latestCheckinRegistration.first_name} {latestCheckinRegistration.last_name}
@@ -6155,7 +6398,7 @@ export default function App() {
               <p className="text-sm font-semibold text-slate-900">Current Members</p>
               <p className="text-xs text-slate-500">Manage active accounts, roles, and emergency access changes.</p>
             </div>
-            <StatusBadge tone="neutral">{teamUsers.length}</StatusBadge>
+            <span className="text-xs font-medium text-slate-500">{teamUsers.length} members</span>
           </div>
           <div className="space-y-3">
             {teamUsers.length === 0 ? (
@@ -6171,10 +6414,12 @@ export default function App() {
                       <p className="mt-1 text-xs text-slate-500">{user.username}</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                      <StatusBadge tone={getUserAccessTone(user.is_active)}>
-                        {user.is_active ? "active" : "disabled"}
-                      </StatusBadge>
-                      <StatusBadge tone="blue">{user.role}</StatusBadge>
+                      <StatusLine
+                        items={[
+                          user.is_active ? "active" : "disabled",
+                          user.role,
+                        ]}
+                      />
                     </div>
                   </div>
 
@@ -6301,12 +6546,20 @@ export default function App() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {selectedLogChannel && (
-            <StatusBadge tone="neutral">{selectedLogChannel.platform_label || selectedLogChannel.platform}</StatusBadge>
+            <span className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">
+              {selectedLogChannel.platform_label || selectedLogChannel.platform}
+            </span>
           )}
           {manualOverrideUnavailableReason ? (
-            <StatusBadge tone="amber">unavailable</StatusBadge>
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">
+              <AlertCircle className="h-3.5 w-3.5" />
+              unavailable
+            </span>
           ) : (
-            <StatusBadge tone="emerald">ready</StatusBadge>
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              ready
+            </span>
           )}
         </div>
       </div>
@@ -6325,9 +6578,9 @@ export default function App() {
                   Existing registrations in this event for the selected sender.
                 </p>
               </div>
-              <StatusBadge tone="neutral">
+              <span className="text-xs font-medium text-slate-500">
                 {selectedSenderRegistrations.length} record{selectedSenderRegistrations.length === 1 ? "" : "s"}
-              </StatusBadge>
+              </span>
             </div>
             {selectedSenderRegistrations.length > 0 ? (
               <div className="mt-3 space-y-2">
@@ -6352,9 +6605,7 @@ export default function App() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="font-mono text-xs font-semibold text-blue-600">{registration.id}</p>
-                          <StatusBadge tone={getRegistrationStatusTone(registration.status)}>
-                          {registration.status}
-                        </StatusBadge>
+                          <span className="text-xs font-medium text-slate-600">{registration.status}</span>
                       </div>
                       <p className="mt-1 text-sm font-semibold text-slate-900">
                         {registration.first_name} {registration.last_name}
@@ -6461,7 +6712,7 @@ export default function App() {
                   Re-run the bot on the latest sender turn if auto-reply failed and stopped.
                 </p>
               </div>
-              <StatusBadge tone="amber">recovery</StatusBadge>
+              <span className="text-xs font-medium text-amber-700">recovery</span>
             </div>
             <div className="mt-3 flex justify-end">
               <ActionButton
@@ -6483,9 +6734,9 @@ export default function App() {
                   Use this after a registration already exists for the sender.
                 </p>
               </div>
-              <StatusBadge tone="neutral">
+              <span className="text-xs font-medium text-slate-500">
                 {selectedSenderRegistrations.length} registration{selectedSenderRegistrations.length === 1 ? "" : "s"}
-              </StatusBadge>
+              </span>
             </div>
             {selectedSenderRegistrations.length > 0 ? (
               <div className="mt-3 flex flex-col gap-3 lg:flex-row">
@@ -6524,7 +6775,7 @@ export default function App() {
                   Use this when the bot did not finish registration but the sender is ready to confirm now.
                 </p>
               </div>
-              <StatusBadge tone="blue">operator flow</StatusBadge>
+              <span className="text-xs font-medium text-blue-700">operator flow</span>
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <input
@@ -6602,8 +6853,17 @@ export default function App() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender History</p>
+            <StatusLine
+              className="mt-1"
+              items={[
+                <>
+                  {getLogDirectionMeta(selectedLogMessage.type).label} via {selectedLogMessage.platform || "unknown"}
+                </>,
+                new Date(selectedLogMessage.timestamp).toLocaleString(),
+              ]}
+            />
             {(selectedLogMessage.sender_name || selectedLogMessage.registration_id) && (
-              <p className="mt-0.5 truncate text-xs font-medium text-slate-700">
+              <p className="mt-1 truncate text-xs font-medium text-slate-700">
                 {selectedLogMessage.sender_name || "-"}
                 {selectedLogMessage.registration_id ? ` • ${selectedLogMessage.registration_id}` : ""}
               </p>
@@ -6614,12 +6874,6 @@ export default function App() {
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {selectedLogMessage.platform && (
-              <StatusBadge tone="neutral">{selectedLogMessage.platform}</StatusBadge>
-            )}
-            <StatusBadge tone={parseLineTraceMessage(selectedLogMessage.text) ? "amber" : selectedLogAuditMarker ? selectedLogAuditMarker.tone : selectedLogMessage.type === "incoming" ? "emerald" : "blue"}>
-              {parseLineTraceMessage(selectedLogMessage.text) ? "trace" : selectedLogAuditMarker ? selectedLogAuditMarker.label : selectedLogMessage.type}
-            </StatusBadge>
             {canSendManualOverride && (
               <ActionButton
                 tone={logToolsOpen ? "amber" : "neutral"}
@@ -6636,18 +6890,17 @@ export default function App() {
         <div className="mt-3 space-y-3">
           {logToolsOpen && logManualOverridePanel}
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-100 p-3 shadow-sm">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
-            <p className="mt-0.5 text-[10px] text-slate-500">{new Date(selectedLogMessage.timestamp).toLocaleString()}</p>
+          <InspectorSection
+            title="Selected Entry"
+            subtitle={new Date(selectedLogMessage.timestamp).toLocaleString()}
+            className="bg-slate-100"
+          >
             {(() => {
               const selectedTrace = parseLineTraceMessage(selectedLogMessage.text);
               if (selectedTrace) {
                 return (
-                  <div className="mt-2 space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge tone="emerald">line</StatusBadge>
-                      <StatusBadge tone="amber">{formatTraceStatusLabel(selectedTrace.status)}</StatusBadge>
-                    </div>
+                  <div className="space-y-1.5">
+                    <StatusLine items={[<>Trace {formatTraceStatusLabel(selectedTrace.status)}</>]} />
                     <p className="chat-selectable whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                       {selectedTrace.detail || "-"}
                     </p>
@@ -6656,11 +6909,8 @@ export default function App() {
               }
               if (selectedLogAuditMarker && selectedLogAuditMarker.marker !== "manual-reply") {
                 return (
-                  <div className="mt-2 space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.actor}</StatusBadge>
-                      <StatusBadge tone={selectedLogAuditMarker.tone}>{selectedLogAuditMarker.label}</StatusBadge>
-                    </div>
+                  <div className="space-y-1.5">
+                    <StatusLine items={[`${selectedLogAuditMarker.actor} · ${selectedLogAuditMarker.label}`]} />
                     <p className="chat-selectable whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                       {selectedLogAuditMarker.summary}
                     </p>
@@ -6668,12 +6918,12 @@ export default function App() {
                 );
               }
               return (
-                <p className="chat-selectable mt-2 whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
+                <p className="chat-selectable whitespace-pre-wrap break-words text-[13px] leading-5 text-slate-700">
                   {selectedLogAuditMarker?.detail || selectedLogMessage.text}
                 </p>
               );
             })()}
-          </div>
+          </InspectorSection>
         </div>
       </div>
 
@@ -6682,6 +6932,7 @@ export default function App() {
           const lineTrace = parseLineTraceMessage(threadMessage.text);
           const auditMarker = lineTrace ? null : parseInternalLogMarker(threadMessage.text);
           const isCurrentMessage = threadMessage.id === selectedLogMessage.id;
+          const directionMeta = getLogDirectionMeta(threadMessage.type);
           const alignClass = lineTrace || auditMarker || threadMessage.type === "incoming" ? "justify-start" : "justify-end";
           return (
             <div key={threadMessage.id} className={`flex ${alignClass}`}>
@@ -6699,13 +6950,14 @@ export default function App() {
                 } ${isCurrentMessage ? "ring-1 ring-blue-200" : ""}`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                    {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
-                    <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : threadMessage.type === "incoming" ? "emerald" : "blue"}>
-                      {lineTrace ? "trace" : auditMarker ? auditMarker.label : threadMessage.type}
-                    </StatusBadge>
-                    {isCurrentMessage && <StatusBadge tone="blue">selected</StatusBadge>}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${directionMeta.className}`}>
+                      {directionMeta.icon}
+                      {directionMeta.label}
+                    </span>
+                    {lineTrace && <span className="text-[11px] text-amber-700">Trace</span>}
+                    {auditMarker && <span className="text-[11px] text-slate-600">{auditMarker.actor}</span>}
+                    {isCurrentMessage && <SelectionMarker />}
                   </div>
                   <p className="text-[10px] text-slate-500">{new Date(threadMessage.timestamp).toLocaleString()}</p>
                 </div>
@@ -7139,21 +7391,22 @@ export default function App() {
                             <Bot className="w-5 h-5 text-blue-600" />
                             Event Information
                           </h3>
-                          {eventDetailsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
                           {selectedEvent && (
-                            <>
-                              <StatusBadge tone={getEventStatusTone(selectedEvent.status)}>
-                                mode {getEventStatusLabel(selectedEvent.status)}
-                              </StatusBadge>
-                              {selectedEvent.effective_status !== selectedEvent.status && (
-                                <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                                  now {getEventStatusLabel(selectedEvent.effective_status)}
-                                </StatusBadge>
-                              )}
-                            </>
+                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                              {getEventStatusLabel(selectedEvent.effective_status)}
+                            </StatusBadge>
                           )}
                         </div>
-                        <p className="text-sm text-slate-500">Core event details for the selected workspace.</p>
+                        <StatusLine
+                          className="mt-1"
+                          items={[
+                            selectedEvent ? <>Mode {getEventStatusLabel(selectedEvent.status)}</> : null,
+                            selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
+                              ? <>Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</>
+                              : "Registration open",
+                            eventDetailsDirty ? "Unsaved changes" : "All changes saved",
+                          ]}
+                        />
                       </div>
                       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
                         <ActionButton
@@ -7205,10 +7458,19 @@ export default function App() {
                     </div>
 
                     {selectedEvent?.effective_status === "closed" && (
-                      <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-                        This event closed automatically when its event window ended at {timingInfo.eventCloseLabel}. Current system time is {timingInfo.nowLabel}. Use the mode controls above if you also want to mark the workspace inactive.
-                      </div>
+                      <PageBanner tone="amber" icon={<AlertCircle className="h-4 w-4" />} className="mb-4">
+                        Registration closed automatically when the event window ended at {timingInfo.eventCloseLabel}. Current system time is {timingInfo.nowLabel}.
+                      </PageBanner>
                     )}
+                    {selectedEvent
+                      && selectedEvent.effective_status !== "closed"
+                      && selectedEvent.effective_status !== "cancelled"
+                      && selectedEvent.registration_availability
+                      && selectedEvent.registration_availability !== "open" && (
+                        <PageBanner tone="amber" icon={<AlertCircle className="h-4 w-4" />} className="mb-4">
+                          Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability).toLowerCase()}. Existing attendees can still check in.
+                        </PageBanner>
+                      )}
 
                     {eventMessage && (
                       <p className={`mb-4 text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
@@ -7314,6 +7576,14 @@ export default function App() {
                           <Activity className="w-5 h-5 text-blue-600" />
                           Registration Rules
                         </h3>
+                        <StatusLine
+                          className="mt-1"
+                          items={[
+                            <>Window {timingInfo.registrationLabel}</>,
+                            registrationCapacity.limit === null ? "Unlimited capacity" : `Capacity ${activeAttendeeCount}/${registrationCapacity.limit}`,
+                            settings.reg_unique_name !== "0" ? "Duplicate guard on" : "Duplicate guard off",
+                          ]}
+                        />
                         <div className="sm:hidden">
                           <HelpPopover label="Open note for Registration Rules">
                             Registration availability depends on the event time zone, the open and close range, and the event window. If you add an optional end time, the event closes only after that end time.
@@ -7321,17 +7591,6 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        {selectedEvent && (
-                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                            {getEventStatusLabel(selectedEvent.effective_status)}
-                          </StatusBadge>
-                        )}
-                        <StatusBadge tone={getRegistrationWindowTone(timingInfo.registrationStatus)}>
-                          {timingInfo.registrationLabel}
-                        </StatusBadge>
-                        {registrationCapacity.isFull && (
-                          <StatusBadge tone="rose">Capacity Full</StatusBadge>
-                        )}
                         <div className="hidden sm:block">
                           <HelpPopover label="Open note for Registration Rules">
                             Registration availability depends on the event time zone, the open and close range, and the event window. If you add an optional end time, the event closes only after that end time.
@@ -7455,19 +7714,19 @@ export default function App() {
                       </div>
                     </div>
                     {timingInfo.registrationStatus === "invalid" && (
-                      <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
+                      <InlineWarning tone="rose" className="mt-3">
                         Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
-                      </div>
+                      </InlineWarning>
                     )}
                     {timingInfo.eventScheduleStatus === "invalid" && (
-                      <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
+                      <InlineWarning tone="rose" className="mt-3">
                         Event end time is earlier than Event start time. Fix the event window first so the schedule is clear across chat, tickets, and email.
-                      </div>
+                      </InlineWarning>
                     )}
                     {registrationCapacity.isFull && (
-                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
+                      <InlineWarning tone="amber" className="mt-3">
                         Capacity is full. New registrations are blocked until you increase the limit or cancel an attendee.
-                      </div>
+                      </InlineWarning>
                     )}
                     {settingsMessage && (
                       <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
@@ -7598,7 +7857,7 @@ export default function App() {
                             <div className="space-y-2">
                               <div className="flex items-center justify-between gap-3">
                                 <p className="text-sm font-semibold text-slate-700">{liveWorkspaceHeading}</p>
-                                <StatusBadge tone="blue">{filteredWorkingEvents.length}</StatusBadge>
+                                <span className="text-xs font-medium text-slate-500">{filteredWorkingEvents.length} events</span>
                               </div>
                               <div className="space-y-2">
                                 {filteredWorkingEvents.map((event) => (
@@ -7618,7 +7877,7 @@ export default function App() {
                             <div className="space-y-2 border-t border-slate-100 pt-5">
                               <div className="flex items-center justify-between gap-3">
                                 <p className="text-sm font-semibold text-slate-700">{inactiveWorkspaceHeading}</p>
-                                <StatusBadge tone="neutral">{filteredInactiveEvents.length}</StatusBadge>
+                                <span className="text-xs font-medium text-slate-500">{filteredInactiveEvents.length} events</span>
                               </div>
                               <div className="space-y-2">
                                 {filteredInactiveEvents.map((event) => (
@@ -7638,7 +7897,7 @@ export default function App() {
                             <div className="space-y-2 border-t border-slate-100 pt-5">
                               <div className="flex items-center justify-between gap-3">
                                 <p className="text-sm font-semibold text-slate-700">{historyWorkspaceHeading}</p>
-                                <StatusBadge tone="neutral">{recentHistoricalEvents.length}</StatusBadge>
+                                <span className="text-xs font-medium text-slate-500">{recentHistoricalEvents.length} events</span>
                               </div>
                               <div className="space-y-2">
                                 {recentHistoricalEvents.map((event) => (
@@ -7658,7 +7917,7 @@ export default function App() {
                             <div className="space-y-2 border-t border-slate-100 pt-5">
                               <div className="flex items-center justify-between gap-3">
                                 <p className="text-sm font-semibold text-slate-700">History by Month</p>
-                                <StatusBadge tone="neutral">{historyEventGroups.length}</StatusBadge>
+                                <span className="text-xs font-medium text-slate-500">{historyEventGroups.length} groups</span>
                               </div>
                               <div className="space-y-2">
                                 {historyEventGroups.map((group) => {
@@ -7681,7 +7940,7 @@ export default function App() {
                                           <p className="text-xs text-slate-500">{group.events.length} events</p>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                          <StatusBadge tone="neutral">{group.events.length}</StatusBadge>
+                                          <span className="text-xs font-medium text-slate-500">{group.events.length} events</span>
                                           {!deferredEventListQuery && (
                                             <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} />
                                           )}
@@ -7725,19 +7984,40 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-4"
             >
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-semibold">Context</h2>
+                  {selectedEvent && (
+                    <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                      {getEventStatusLabel(selectedEvent.effective_status)}
+                    </StatusBadge>
+                  )}
+                </div>
+                <StatusLine
+                  className="mt-1"
+                  items={[
+                    "Context note",
+                    "Knowledge base",
+                    "Retrieval tools",
+                    eventContextDirty ? "Unsaved changes" : "Saved",
+                  ]}
+                />
+              </div>
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-7">
                   <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
                     <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "mb-0" : "mb-4"} space-y-3`}>
                       <div className={`flex flex-col gap-3 lg:flex-row lg:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "lg:items-center" : "lg:items-start"}`}>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-lg font-semibold">Event Context</h2>
-                          {eventContextDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
-                          {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
-                            <HelpPopover label="Open note for Event Context">
-                              Per-event FAQ, source text, and response guidance for the selected workspace.
-                            </HelpPopover>
-                          )}
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h2 className="text-lg font-semibold">Event Context</h2>
+                            {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
+                              <HelpPopover label="Open note for Event Context">
+                                Per-event FAQ, source text, and response guidance for the selected workspace.
+                              </HelpPopover>
+                            )}
+                          </div>
+                          <StatusLine items={[eventContextDirty ? "Unsaved changes" : "All changes saved"]} />
                         </div>
                         <div className="flex w-full items-stretch gap-2 sm:w-auto lg:justify-end">
                           {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
@@ -7945,7 +8225,7 @@ export default function App() {
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-lg font-semibold">Attached Documents</h3>
-                          <StatusBadge tone="neutral">{filteredDocuments.length}</StatusBadge>
+                          <span className="text-xs font-medium text-slate-500">{filteredDocuments.length}</span>
                         </div>
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
                           <p className="mt-1 text-xs text-slate-500">Only active documents are used during retrieval.</p>
@@ -8020,19 +8300,16 @@ export default function App() {
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                   <div className="min-w-0">
                                     <p className="font-semibold text-slate-900 truncate">{document.title}</p>
-                                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                                      <StatusBadge tone="neutral">{document.source_type}</StatusBadge>
-                                      <StatusBadge tone="blue">
-                                        {document.chunk_count || 0} chunks
-                                      </StatusBadge>
-                                      <StatusBadge tone={document.is_active ? "emerald" : "neutral"}>
-                                        {document.is_active ? "active" : "inactive"}
-                                      </StatusBadge>
-                                      <StatusBadge tone={getDocumentEmbeddingTone(document.embedding_status)}>
-                                        embed {document.embedding_status || "pending"}
-                                      </StatusBadge>
-                                      {selectedDocumentForChunksId === document.id && <StatusBadge tone="blue">selected</StatusBadge>}
-                                    </div>
+                                    <StatusLine
+                                      className="mt-2"
+                                      items={[
+                                        document.source_type,
+                                        `${document.chunk_count || 0} chunks`,
+                                        document.is_active ? "Active" : "Inactive",
+                                        `Embed ${document.embedding_status || "pending"}`,
+                                      ]}
+                                    />
+                                    {selectedDocumentForChunksId === document.id && <SelectionMarker className="mt-1" />}
                                   </div>
                                   <CollapseIconButton
                                     collapsed={documentCollapsed}
@@ -8146,16 +8423,15 @@ export default function App() {
                           <div className="mb-4 space-y-3">
                             <div className="rounded-2xl border border-slate-200 bg-white p-4">
                               <p className="font-semibold text-slate-900">{selectedDocumentForChunks.title}</p>
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <StatusBadge tone="neutral">{selectedDocumentForChunks.source_type}</StatusBadge>
-                                <StatusBadge tone="blue">{selectedDocumentForChunks.chunk_count || 0} chunks</StatusBadge>
-                                <StatusBadge tone={selectedDocumentForChunks.is_active ? "emerald" : "neutral"}>
-                                  {selectedDocumentForChunks.is_active ? "active" : "inactive"}
-                                </StatusBadge>
-                                <StatusBadge tone={getDocumentEmbeddingTone(selectedDocumentForChunks.embedding_status)}>
-                                  embed {selectedDocumentForChunks.embedding_status || "pending"}
-                                </StatusBadge>
-                              </div>
+                              <StatusLine
+                                className="mt-2"
+                                items={[
+                                  selectedDocumentForChunks.source_type,
+                                  `${selectedDocumentForChunks.chunk_count || 0} chunks`,
+                                  selectedDocumentForChunks.is_active ? "active" : "inactive",
+                                  `embed ${selectedDocumentForChunks.embedding_status || "pending"}`,
+                                ]}
+                              />
                             </div>
 
                             <div className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
@@ -8261,18 +8537,15 @@ export default function App() {
                                 <div className="space-y-2 text-sm">
                                   <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                     <span className="text-slate-600">Embedding model</span>
-                                    <StatusBadge tone="neutral" className="self-start sm:self-auto">
+                                    <span className="self-start text-xs font-medium text-slate-700 sm:self-auto">
                                       {embeddingPreview?.embedding_model || "text-embedding-3-small"}
-                                    </StatusBadge>
+                                    </span>
                                   </div>
                                   <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                     <span className="text-slate-600">Document status</span>
-                                    <StatusBadge
-                                      tone={getDocumentEmbeddingTone(embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status)}
-                                      className="self-start sm:self-auto"
-                                    >
+                                    <span className="self-start text-xs font-medium text-slate-700 sm:self-auto">
                                       {embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status || "pending"}
-                                    </StatusBadge>
+                                    </span>
                                   </div>
                                   <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                     <span className="text-slate-600">Document content hash</span>
@@ -8282,9 +8555,9 @@ export default function App() {
                                   </div>
                                   <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
                                     <span className="text-slate-600">Chunk count</span>
-                                    <StatusBadge tone="neutral" className="self-start sm:self-auto">
+                                    <span className="self-start text-xs font-medium text-slate-700 sm:self-auto">
                                       {embeddingPreview?.chunks.length ?? selectedDocumentForChunks.chunk_count ?? 0}
-                                    </StatusBadge>
+                                    </span>
                                   </div>
                                 </div>
                                 {embeddingPreviewMessage && (
@@ -8309,14 +8582,15 @@ export default function App() {
                                   )}
                                   {!embeddingPreviewLoading && embeddingPreview?.chunks.map((chunk) => (
                                     <div key={chunk.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                                      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
-                                        <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">chunk {chunk.chunk_index + 1}</StatusBadge>
-                                        <StatusBadge tone="neutral">{chunk.char_count || chunk.content.length} chars</StatusBadge>
-                                        <StatusBadge tone="neutral">~{chunk.token_estimate || 0} tokens</StatusBadge>
-                                        <StatusBadge tone={getDocumentEmbeddingTone(chunk.embedding_status)}>
-                                          {chunk.embedding_status || "pending"}
-                                        </StatusBadge>
-                                      </div>
+                                      <StatusLine
+                                        className="mb-2"
+                                        items={[
+                                          <>chunk {chunk.chunk_index + 1}</>,
+                                          `${chunk.char_count || chunk.content.length} chars`,
+                                          `~${chunk.token_estimate || 0} tokens`,
+                                          chunk.embedding_status || "pending",
+                                        ]}
+                                      />
                                       <p className="break-all text-xs font-mono text-slate-500">{chunk.content_hash || "-"}</p>
                                     </div>
                                   ))}
@@ -8406,46 +8680,46 @@ export default function App() {
                             <div className="space-y-2 text-sm">
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Retrieval mode</span>
-                                <StatusBadge tone={retrievalDebug?.layers.retrieval_mode === "hybrid" ? "blue" : "neutral"}>
+                                <span className="text-xs font-medium text-slate-700">
                                   {retrievalDebug?.layers.retrieval_mode || "lexical"}
-                                </StatusBadge>
+                                </span>
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Global system prompt</span>
-                                <StatusBadge tone={retrievalDebug?.layers.global_system_prompt_present ? "emerald" : "neutral"}>
+                                <span className="text-xs font-medium text-slate-700">
                                   {retrievalDebug?.layers.global_system_prompt_present ? `${retrievalDebug.layers.global_system_prompt_chars} chars` : "empty"}
-                                </StatusBadge>
+                                </span>
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Event context</span>
-                                <StatusBadge tone={retrievalDebug?.layers.event_context_present ? "blue" : "neutral"}>
+                                <span className="text-xs font-medium text-slate-700">
                                   {retrievalDebug?.layers.event_context_present ? `${retrievalDebug.layers.event_context_chars} chars` : "empty"}
-                                </StatusBadge>
+                                </span>
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Active documents</span>
-                                <StatusBadge tone="neutral">
+                                <span className="text-xs font-medium text-slate-700">
                                   {retrievalDebug?.layers.active_document_count ?? documents.filter((document) => document.is_active).length}
-                                </StatusBadge>
+                                </span>
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Active chunks</span>
-                                <StatusBadge tone="neutral">
+                                <span className="text-xs font-medium text-slate-700">
                                   {retrievalDebug?.layers.active_chunk_count ?? documentChunks.length}
-                                </StatusBadge>
+                                </span>
                               </div>
                               <div className="flex items-center justify-between gap-3">
                                 <span className="text-slate-600">Vector-ready chunks</span>
-                                <StatusBadge tone={Number(retrievalDebug?.layers.vector_ready_chunk_count || 0) > 0 ? "blue" : "neutral"}>
+                                <span className="text-xs font-medium text-slate-700">
                                   {retrievalDebug?.layers.vector_ready_chunk_count ?? 0}
-                                </StatusBadge>
+                                </span>
                               </div>
                               {retrievalDebug?.layers.query_embedding_model && (
                                 <div className="flex items-center justify-between gap-3">
                                   <span className="text-slate-600">Query embedding model</span>
-                                  <StatusBadge tone="neutral">
+                                  <span className="text-xs font-medium text-slate-700">
                                     {retrievalDebug.layers.query_embedding_model}
-                                  </StatusBadge>
+                                  </span>
                                 </div>
                               )}
                             </div>
@@ -8460,9 +8734,9 @@ export default function App() {
                                   <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Matched Chunks</p>
                                   <p className="text-xs text-slate-500">Top ranked event chunks for this query.</p>
                                 </div>
-                                <StatusBadge tone="blue">
+                                <span className="text-xs font-medium text-slate-700">
                                   {retrievalDebug.matches.length} matches
-                                </StatusBadge>
+                                </span>
                               </div>
 
                               <div className="max-h-[26rem] space-y-3 overflow-y-auto pr-1">
@@ -8473,23 +8747,18 @@ export default function App() {
                                 )}
                                 {retrievalDebug.matches.map((match) => (
                                   <div key={`${match.document_id}:${match.chunk_index}:${match.rank}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                    <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider">
-                                      <StatusBadge tone="neutral" className="border-slate-900 bg-slate-900 text-white">#{match.rank}</StatusBadge>
-                                      <StatusBadge tone="blue">score {match.score.toFixed(2)}</StatusBadge>
-                                      {match.strategy && (
-                                        <StatusBadge tone={match.strategy === "hybrid" ? "blue" : "neutral"}>
-                                          {match.strategy}
-                                        </StatusBadge>
-                                      )}
-                                      {typeof match.vector_score === "number" && (
-                                        <StatusBadge tone="blue">vector {match.vector_score.toFixed(2)}</StatusBadge>
-                                      )}
-                                      {typeof match.lexical_score === "number" && (
-                                        <StatusBadge tone="neutral">lexical {match.lexical_score}</StatusBadge>
-                                      )}
-                                      <StatusBadge tone="neutral">{match.source_type}</StatusBadge>
-                                      <StatusBadge tone="neutral">chunk {match.chunk_index + 1}</StatusBadge>
-                                    </div>
+                                    <StatusLine
+                                      className="mb-3"
+                                      items={[
+                                        <>#{match.rank}</>,
+                                        `score ${match.score.toFixed(2)}`,
+                                        match.strategy || null,
+                                        typeof match.vector_score === "number" ? `vector ${match.vector_score.toFixed(2)}` : null,
+                                        typeof match.lexical_score === "number" ? `lexical ${match.lexical_score}` : null,
+                                        match.source_type,
+                                        `chunk ${match.chunk_index + 1}`,
+                                      ]}
+                                    />
                                     <p className="font-semibold text-slate-900">{match.document_title}</p>
                                     {match.source_url && (
                                       <a
@@ -8524,25 +8793,37 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "mb-0 items-center" : "mb-5 items-start"} flex flex-col gap-3 sm:flex-row sm:justify-between`}>
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Activity className="w-5 h-5 text-blue-600" />
                           LLM Usage
                         </h3>
-                        <p className="text-sm text-slate-500">Track token burn and estimated spend per event before turning this into credits.</p>
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) && (
+                          <p className="text-sm text-slate-500">Track token burn and estimated spend per event before turning this into credits.</p>
+                        )}
                       </div>
-                      <button
-                        onClick={() => void fetchLlmUsageSummary(selectedEventId)}
-                        disabled={llmUsageLoading}
-                        className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
-                        title="Refresh LLM usage"
-                      >
-                        <RefreshCw className={`h-4 w-4 ${llmUsageLoading ? "animate-spin" : ""}`} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) && (
+                          <button
+                            onClick={() => void fetchLlmUsageSummary(selectedEventId)}
+                            disabled={llmUsageLoading}
+                            className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                            title="Refresh LLM usage"
+                          >
+                            <RefreshCw className={`h-4 w-4 ${llmUsageLoading ? "animate-spin" : ""}`} />
+                          </button>
+                        )}
+                        <CollapseIconButton
+                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage)}
+                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage)}
+                          label="LLM usage"
+                        />
+                      </div>
                     </div>
-
+                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) && (
+                      <>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-4">
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
                         <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Gateway</p>
@@ -8578,7 +8859,7 @@ export default function App() {
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Top Models In Event</p>
-                          <StatusBadge tone="neutral">{llmUsageSummary?.selected_event_models.length || 0}</StatusBadge>
+                          <span className="text-xs font-medium text-slate-500">{llmUsageSummary?.selected_event_models.length || 0}</span>
                         </div>
                         <div className="mt-3 space-y-2">
                           {(llmUsageSummary?.selected_event_models.length || 0) === 0 ? (
@@ -8602,7 +8883,7 @@ export default function App() {
                       <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Top Models Overall</p>
-                          <StatusBadge tone="neutral">{llmUsageSummary?.overall_models.length || 0}</StatusBadge>
+                          <span className="text-xs font-medium text-slate-500">{llmUsageSummary?.overall_models.length || 0}</span>
                         </div>
                         <div className="mt-3 space-y-2">
                           {(llmUsageSummary?.overall_models.length || 0) === 0 ? (
@@ -8631,6 +8912,8 @@ export default function App() {
                         Usage is captured from the OpenRouter response payload at request time, so this can become the ledger for credit deduction later.
                       </p>
                     )}
+                      </>
+                    )}
                   </div>
 
                 </div>
@@ -8653,28 +8936,23 @@ export default function App() {
                   </div>
                     <div>
                       <h3 className="font-semibold text-sm">Bot Simulator</h3>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="w-2 h-2 bg-emerald-500 rounded-full" />
-                        <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Active</span>
-                        <StatusBadge tone="blue">simulator</StatusBadge>
-                        <StatusBadge tone="neutral">{testMessages.length} msgs</StatusBadge>
-                        <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
+                      <StatusLine
+                        className="mt-0.5"
+                        items={[
+                          "Simulator active",
+                          `${testMessages.length} msgs`,
+                          eventOperatorGuard.label,
+                          selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
+                          selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
+                            ? getRegistrationAvailabilityLabel(selectedEvent.registration_availability)
+                            : null,
+                        ]}
+                      />
+                      <div className="mt-1">
                         <HelpPopover label="Open note for Simulation Guard">
                           {eventOperatorGuard.body}
                         </HelpPopover>
-                        {selectedEvent && (
-                          <>
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                              {getEventStatusLabel(selectedEvent.effective_status)}
-                          </StatusBadge>
-                          {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
-                            <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
-                              {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                            </StatusBadge>
-                          )}
-                        </>
-                      )}
-                    </div>
+                      </div>
                   </div>
                 </div>
                 <InlineActionsMenu label="Actions" tone="neutral">
@@ -8807,18 +9085,14 @@ export default function App() {
                         </InlineActionsMenu>
                       </div>
                       <div className="mt-1.5 flex min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                        <StatusBadge tone={settings.admin_agent_enabled === "1" ? "emerald" : "amber"} className="shrink-0">
-                          {settings.admin_agent_enabled === "1" ? "enabled" : "disabled"}
-                        </StatusBadge>
-                        <StatusBadge tone="neutral" className="shrink-0">{activeAgentMessageCount} msgs</StatusBadge>
-                        <StatusBadge tone={adminAgentGuardTone} className="shrink-0 max-w-[9.5rem] truncate">
-                          {adminAgentGuardLabel}
-                        </StatusBadge>
-                        {selectedEvent && (
-                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)} className="shrink-0 max-w-[9rem] truncate">
-                            {getEventStatusLabel(selectedEvent.effective_status)}
-                          </StatusBadge>
-                        )}
+                        <StatusLine
+                          items={[
+                            settings.admin_agent_enabled === "1" ? "enabled" : "disabled",
+                            `${activeAgentMessageCount} msgs`,
+                            adminAgentGuardLabel,
+                            selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
+                          ]}
+                        />
                       </div>
                     </div>
                   </div>
@@ -8880,12 +9154,13 @@ export default function App() {
                         </div>
                       )}
                       {msg.role === "agent" && msg.actionName && (
-                        <div className="ml-2 flex flex-wrap items-center gap-2 pb-2">
-                          <StatusBadge tone={msg.actionSource === "rule" ? "amber" : "violet"}>
-                            {formatAdminActionLabel(msg.actionName)}
-                          </StatusBadge>
-                          <StatusBadge tone="neutral">{msg.actionSource || "llm"}</StatusBadge>
-                        </div>
+                        <StatusLine
+                          className="ml-2 pb-2"
+                          items={[
+                            formatAdminActionLabel(msg.actionName),
+                            msg.actionSource || "llm",
+                          ]}
+                        />
                       )}
                     </div>
                   ))}
@@ -9514,11 +9789,14 @@ export default function App() {
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                     <div className="flex flex-col gap-2 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <div className="mb-0.5 flex items-center gap-2">
-                          <h2 className="text-base font-semibold">Registered Attendees</h2>
-                          <StatusBadge tone="neutral">{filteredRegistrations.length}</StatusBadge>
-                          <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
-                        </div>
+                        <h2 className="text-base font-semibold">Registered Attendees</h2>
+                        <StatusLine
+                          className="mt-0.5"
+                          items={[
+                            `${filteredRegistrations.length} results`,
+                            registrationAvailability.label,
+                          ]}
+                        />
                         <p className="text-xs text-slate-500">
                           {registrationCapacity.limit === null
                             ? `${activeAttendeeCount} active attendees. Search fast, then progressively load more rows when this event gets large.`
@@ -9584,7 +9862,7 @@ export default function App() {
                               </div>
                               <div className="flex shrink-0 flex-wrap justify-end gap-2">
                                 <StatusBadge tone={getRegistrationStatusTone(reg.status)}>{reg.status}</StatusBadge>
-                                {selectedRegistrationId === reg.id && <StatusBadge tone="blue">selected</StatusBadge>}
+                                {selectedRegistrationId === reg.id && <SelectionMarker />}
                               </div>
                             </div>
                             <p className="mt-1 text-[10px] text-slate-500">{new Date(reg.timestamp).toLocaleString()}</p>
@@ -9882,77 +10160,31 @@ export default function App() {
                           Mobile-first check-in flow for staff at the door. Use manual ID entry or scan a QR code.
                         </p>
                       </div>
-                      <div className="flex flex-wrap items-center justify-end gap-2">
-                        <StatusBadge tone={checkinOperatorGuard.tone}>{checkinOperatorGuard.label}</StatusBadge>
-                        {selectedEvent && (
-                          <>
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                              {getEventStatusLabel(selectedEvent.effective_status)}
-                            </StatusBadge>
-                            {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
-                              <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
-                                {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                              </StatusBadge>
-                            )}
-                          </>
-                        )}
-                      </div>
                     </div>
 
                     <div className="mb-4">
-                      <CompactGuardBar
-                        title="Door Guard"
-                        tone={checkinOperatorGuard.tone}
-                        label={checkinOperatorGuard.label}
-                        body={checkinOperatorGuard.body}
-                      />
+                      <PageBanner
+                        tone={toBannerTone(checkinOperatorGuard.tone)}
+                        icon={<QrCode className="h-4 w-4" />}
+                      >
+                        Door mode active · {selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No event selected"}
+                        {selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
+                          ? ` · ${getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}`
+                          : ""}
+                        {selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
+                          ? " · Existing attendees can still check in"
+                          : ""}
+                      </PageBanner>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-lg font-bold text-blue-700">{registeredCount}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Registered</p>
-                          </div>
-                          <span className="rounded-lg bg-slate-100 p-2 text-blue-600">
-                            <UserPlus className="w-4 h-4" />
-                          </span>
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-lg font-bold text-slate-700">{cancelledCount}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Cancelled</p>
-                          </div>
-                          <span className="rounded-lg bg-slate-100 p-2 text-slate-500">
-                            <AlertCircle className="w-4 h-4" />
-                          </span>
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-lg font-bold text-emerald-700">{checkedInCount}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Checked In</p>
-                          </div>
-                          <span className="rounded-lg bg-slate-100 p-2 text-emerald-600">
-                            <CheckCircle2 className="w-4 h-4" />
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-2 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5">
-                      <div className="flex items-center gap-2 text-xs text-slate-600">
-                        <Users className="w-3.5 h-3.5 text-slate-500" />
-                        <span className="font-medium">Check-in rate</span>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-bold text-slate-900">{checkInRate}%</p>
-                        <p className="text-[10px] text-slate-500">of active attendees</p>
-                      </div>
-                    </div>
+                    <CompactStatRow
+                      stats={[
+                        { label: "Registered", value: registeredCount, tone: "blue" },
+                        { label: "Cancelled", value: cancelledCount, tone: "neutral" },
+                        { label: "Checked in", value: checkedInCount, tone: "emerald" },
+                        { label: "Check-in rate", value: `${checkInRate}%`, tone: "neutral" },
+                      ]}
+                    />
                   </div>
 
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
@@ -10065,13 +10297,14 @@ export default function App() {
                     <div className="flex items-center justify-between gap-3 mb-3">
                       <div>
                         <h3 className="text-lg font-semibold">Latest Result</h3>
-                        <p className="text-xs text-slate-500">The most recently scanned or checked-in attendee.</p>
+                        <StatusLine
+                          className="mt-1"
+                          items={[
+                            latestResultLabel,
+                            latestCheckinRegistration ? `ID ${latestCheckinRegistration.id}` : null,
+                          ]}
+                        />
                       </div>
-                      {latestCheckinRegistration && (
-                        <StatusBadge tone={getRegistrationStatusTone(latestCheckinRegistration.status)}>
-                          {latestCheckinRegistration.status}
-                        </StatusBadge>
-                      )}
                     </div>
 
                     {!latestCheckinRegistration ? (
@@ -10079,7 +10312,7 @@ export default function App() {
                         No attendee checked in yet in this session.
                       </div>
                     ) : (
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                      <div className={`rounded-2xl border p-4 space-y-3 ${latestResultToneClass}`}>
                         <div>
                           <p className="text-lg font-semibold text-slate-900">
                             {latestCheckinRegistration.first_name} {latestCheckinRegistration.last_name}
@@ -10249,23 +10482,24 @@ export default function App() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
-                        <StatusBadge tone="neutral">
-                          {messages.length}{logsHasMore ? "+" : ""} items
-                        </StatusBadge>
-                        {deferredLogListQuery && (
-                          <StatusBadge tone="blue">{filteredMessages.length} match</StatusBadge>
-                        )}
                         {selectedEvent && (
                           <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
                             {getEventStatusLabel(selectedEvent.effective_status)}
                           </StatusBadge>
                         )}
                       </div>
+                      <StatusLine
+                        className="mt-1"
+                        items={[
+                          `${messages.length}${logsHasMore ? "+" : ""} items`,
+                          deferredLogListQuery ? `${filteredMessages.length} match` : null,
+                          logsHasMore ? "older logs available" : null,
+                        ]}
+                      />
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {selectedEvent && (
                         <>
-                          <StatusBadge tone={eventOperatorGuard.tone}>{eventOperatorGuard.label}</StatusBadge>
                           <HelpPopover label="Open reply guard details">
                             {eventOperatorGuard.body}
                           </HelpPopover>
@@ -10305,11 +10539,8 @@ export default function App() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                       {selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open" && (
-                        <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
-                          {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                        </StatusBadge>
+                        <span>Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</span>
                       )}
-                      {logsHasMore && <span>older logs available</span>}
                       <span>full message opens on the right</span>
                     </div>
                   </div>
@@ -10324,6 +10555,7 @@ export default function App() {
                       const lineTrace = parseLineTraceMessage(msg.text);
                       const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
                       const isSelected = selectedLogMessageId === msg.id;
+                      const directionMeta = getLogDirectionMeta(msg.type);
                       return (
                         <div key={msg.id} id={getSearchTargetDomId("log", String(msg.id))}>
                           <button
@@ -10336,14 +10568,23 @@ export default function App() {
                                 : "hover:bg-slate-50"
                             } ${isSearchFocused("log", String(msg.id)) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                           >
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                              {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
-                              {msg.platform && <StatusBadge tone="neutral">{msg.platform}</StatusBadge>}
-                              <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
-                                {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
-                              </StatusBadge>
-                              {isSelected && <StatusBadge tone="blue">selected</StatusBadge>}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${directionMeta.className}`}>
+                                {directionMeta.icon}
+                                {directionMeta.label}
+                              </span>
+                              {msg.platform && <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">{msg.platform}</span>}
+                              {lineTrace && (
+                                <span className="text-[11px] text-amber-700">
+                                  Trace {formatTraceStatusLabel(lineTrace.status)}
+                                </span>
+                              )}
+                              {auditMarker && (
+                                <span className="text-[11px] text-slate-600">
+                                  {auditMarker.actor} · {auditMarker.label}
+                                </span>
+                              )}
+                              {isSelected && <SelectionMarker />}
                             </div>
                             <div className="mt-1.5 flex items-start justify-between gap-2">
                               <p className="chat-selectable log-list-preview-2 min-w-0 text-sm leading-5 text-slate-700">
@@ -10362,7 +10603,9 @@ export default function App() {
                           </button>
                           {isSelected && (
                             <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Selected Entry</p>
+                              <p className="text-[11px] text-slate-600">
+                                {directionMeta.label} via {msg.platform || "unknown"} · {new Date(msg.timestamp).toLocaleString()}
+                              </p>
                               <p className="chat-selectable mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
                                 {lineTrace
                                   ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
@@ -10424,8 +10667,8 @@ export default function App() {
                                 {lineTrace ? (
                                   <div className="space-y-1">
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <StatusBadge tone="emerald">LINE</StatusBadge>
-                                      <StatusBadge tone="amber">Delivery Trace</StatusBadge>
+                                      <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">LINE</span>
+                                      <span className="text-[11px] text-amber-700">Delivery Trace</span>
                                       <span className="text-[11px] font-semibold text-slate-600">
                                         {formatTraceStatusLabel(lineTrace.status)}
                                       </span>
@@ -10437,8 +10680,8 @@ export default function App() {
                                 ) : auditMarker ? (
                                   <div className="space-y-1">
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>
-                                      <StatusBadge tone={auditMarker.tone}>{auditMarker.label}</StatusBadge>
+                                      <span className="text-[11px] font-semibold text-slate-600">{auditMarker.actor}</span>
+                                      <span className="text-[11px] text-slate-500">{auditMarker.label}</span>
                                     </div>
                                     <p className="chat-selectable text-sm text-slate-700 break-words">
                                       {auditMarker.marker === "manual-reply" ? auditMarker.detail : auditMarker.summary}
@@ -10449,13 +10692,14 @@ export default function App() {
                                 )}
                               </td>
                               <td className="px-6 py-4">
-                                <div className="flex flex-wrap items-center gap-2">
-                                {msg.platform && (
-                                  <StatusBadge tone="neutral">{msg.platform}</StatusBadge>
-                                )}
-                                <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
-                                  {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
-                                </StatusBadge>
+                                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                                  <span className={`inline-flex items-center gap-1 font-semibold ${getLogDirectionMeta(msg.type).className}`}>
+                                    {getLogDirectionMeta(msg.type).icon}
+                                    {getLogDirectionMeta(msg.type).label}
+                                  </span>
+                                  {msg.platform && <span className="font-medium uppercase tracking-[0.08em] text-slate-500">{msg.platform}</span>}
+                                  {lineTrace && <span className="text-amber-700">Trace</span>}
+                                  {auditMarker && <span className="text-slate-600">{auditMarker.label}</span>}
                                 </div>
                               </td>
                             </tr>
@@ -10480,6 +10724,7 @@ export default function App() {
                           const lineTrace = parseLineTraceMessage(msg.text);
                           const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
                           const isSelected = selectedLogMessageId === msg.id;
+                          const directionMeta = getLogDirectionMeta(msg.type);
                           return (
                             <button
                               key={msg.id}
@@ -10495,12 +10740,13 @@ export default function App() {
                             >
                               <div className="min-w-0">
                                 <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                                  {lineTrace && <StatusBadge tone="emerald">line</StatusBadge>}
-                                  {auditMarker && <StatusBadge tone={auditMarker.tone}>{auditMarker.actor}</StatusBadge>}
-                                  {msg.platform && <StatusBadge tone="neutral">{msg.platform}</StatusBadge>}
-                                  <StatusBadge tone={lineTrace ? "amber" : auditMarker ? auditMarker.tone : msg.type === "incoming" ? "emerald" : "blue"}>
-                                    {lineTrace ? "trace" : auditMarker ? auditMarker.label : msg.type}
-                                  </StatusBadge>
+                                  <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${directionMeta.className}`}>
+                                    {directionMeta.icon}
+                                    {directionMeta.label}
+                                  </span>
+                                  {msg.platform && <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-500">{msg.platform}</span>}
+                                  {lineTrace && <span className="text-[10px] text-amber-700">Trace</span>}
+                                  {auditMarker && <span className="text-[10px] text-slate-600">{auditMarker.actor}</span>}
                                   <p className="min-w-0 truncate text-[10px] font-mono text-blue-600">{msg.sender_id}</p>
                                 </div>
                                 {(msg.sender_name || msg.registration_id) && (
@@ -10543,19 +10789,18 @@ export default function App() {
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold flex items-center gap-2">
-                            <Bot className="w-5 h-5 text-blue-600" />
-                            AI Settings
-                          </h3>
-                          {aiSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
-                        </div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Bot className="w-5 h-5 text-blue-600" />
+                          AI Policy
+                        </h3>
                         <p className="text-sm text-slate-500">Global prompt and model policy for the organization, with optional event-level override.</p>
-                        {llmModelsLoading && (
-                          <div className="mt-2">
-                            <StatusBadge tone="blue">syncing model list</StatusBadge>
-                          </div>
-                        )}
+                        <StatusLine
+                          className="mt-1"
+                          items={[
+                            aiSettingsDirty ? "Unsaved changes" : "All changes saved",
+                            llmModelsLoading ? "Syncing model list" : null,
+                          ]}
+                        />
                       </div>
                       <ActionButton
                         onClick={() => void saveAiSettings()}
@@ -10565,7 +10810,7 @@ export default function App() {
                         className="w-full text-sm sm:w-auto"
                       >
                         {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        Save AI Settings
+                        Save AI Policy
                       </ActionButton>
                     </div>
                     <div className="space-y-4">
@@ -10662,25 +10907,20 @@ export default function App() {
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold flex items-center gap-2">
-                            <Link2 className="w-5 h-5 text-blue-600" />
-                            Channels
-                          </h3>
-                          <StatusBadge tone="neutral">{filteredSelectedEventChannels.length}</StatusBadge>
-                          {selectedEvent && (
-                            <>
-                              <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                                {getEventStatusLabel(selectedEvent.effective_status)}
-                              </StatusBadge>
-                              {selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
-                                <StatusBadge tone={getRegistrationAvailabilityTone(selectedEvent.registration_availability)}>
-                                  {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                                </StatusBadge>
-                              )}
-                            </>
-                          )}
-                        </div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Link2 className="w-5 h-5 text-blue-600" />
+                          Channels
+                        </h3>
+                        <StatusLine
+                          className="mt-1"
+                          items={[
+                            `${filteredSelectedEventChannels.length} linked`,
+                            selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
+                            selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
+                              ? getRegistrationAvailabilityLabel(selectedEvent.registration_availability)
+                              : null,
+                          ]}
+                        />
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
                           <p className="text-sm text-slate-500">Use cards for quick status checks. Open full configuration only when needed.</p>
                         )}
@@ -10706,12 +10946,15 @@ export default function App() {
 
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
                       <>
-                        <CompactGuardBar
-                          title="Channel Guard"
-                          tone={eventOperatorGuard.tone}
-                          label={eventOperatorGuard.label}
-                          body={eventOperatorGuard.body}
-                        />
+                        {selectedEvent && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" ? (
+                          <InlineWarning tone="amber">
+                            Channels remain connected, but closed-registration guardrails are active.
+                          </InlineWarning>
+                        ) : (
+                          <InlineWarning tone={toBannerTone(eventOperatorGuard.tone)}>
+                            {eventOperatorGuard.body}
+                          </InlineWarning>
+                        )}
 
                         <div className="relative">
                           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -10744,6 +10987,7 @@ export default function App() {
                               const isSelected = setupSelectedChannel?.id === channel.id;
                               const isFocused = isSearchFocused("channel", channel.id);
                               const disableToggle = selectedEventChannelWritesLocked && !channel.is_active;
+                              const tokenStatusMeta = getChannelTokenStatusMeta(channel);
                               const toggleLabel = disableToggle
                                 ? "Locked"
                                 : channel.is_active
@@ -10772,30 +11016,23 @@ export default function App() {
                                     <div>
                                       <div className="flex flex-wrap items-center gap-2">
                                         <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
-                                        {isSelected && <StatusBadge tone="blue">selected</StatusBadge>}
+                                        {isSelected && <SelectionMarker />}
                                       </div>
+                                      <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                        {channel.platform_label || channel.platform}
+                                      </p>
                                       <p className="mt-1 text-[11px] font-mono text-slate-500 break-all">{channel.external_id}</p>
                                     </div>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <StatusBadge tone="neutral">
-                                        {channel.platform_label || channel.platform}
-                                      </StatusBadge>
-                                      <StatusBadge tone={getConnectionStatusTone(channel.connection_status)}>
-                                        {channel.connection_status || "incomplete"}
-                                      </StatusBadge>
-                                      <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>
-                                        {channel.is_active ? "active" : "inactive"}
-                                      </StatusBadge>
-                                      <StatusBadge tone={getTokenStatusTone(channel)}>
-                                        {channel.platform === "web_chat"
-                                          ? "no token needed"
-                                          : channel.has_access_token
-                                          ? "saved token"
-                                          : channel.platform === "facebook"
-                                          ? "env fallback"
-                                          : "no token"}
-                                      </StatusBadge>
-                                    </div>
+                                    <StatusLine
+                                      items={[
+                                        channel.connection_status ? `Connected ${channel.connection_status}` : "Connection incomplete",
+                                        channel.is_active ? "Channel active" : "Channel inactive",
+                                        <span className={`inline-flex items-center gap-1.5 ${tokenStatusMeta.className}`}>
+                                          {tokenStatusMeta.icon}
+                                          {tokenStatusMeta.label}
+                                        </span>,
+                                      ]}
+                                    />
                                     {channel.missing_requirements && channel.missing_requirements.length > 0 && (
                                       <p className="text-xs text-amber-700">
                                         Missing: {channel.missing_requirements.join(", ")}
@@ -10853,7 +11090,7 @@ export default function App() {
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <SettingsIcon className="w-5 h-5 text-blue-600" />
-                          Channel Sync
+                          Webhook & Sync
                         </h3>
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) && (
                           <p className="text-sm text-slate-500">Select a channel card to keep endpoint and setup details in sync.</p>
@@ -10884,13 +11121,13 @@ export default function App() {
                                 </ActionButton>
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                <StatusBadge tone="neutral">{setupSelectedChannel.platform_label || setupSelectedChannel.platform}</StatusBadge>
-                                <StatusBadge tone={getConnectionStatusTone(setupSelectedChannel.connection_status)}>
-                                  {setupSelectedChannel.connection_status || "incomplete"}
-                                </StatusBadge>
-                                <StatusBadge tone={setupSelectedChannel.is_active ? "emerald" : "neutral"}>
-                                  {setupSelectedChannel.is_active ? "active" : "inactive"}
-                                </StatusBadge>
+                                <StatusLine
+                                  items={[
+                                    setupSelectedChannel.platform_label || setupSelectedChannel.platform,
+                                    setupSelectedChannel.connection_status || "incomplete",
+                                    setupSelectedChannel.is_active ? "active" : "inactive",
+                                  ]}
+                                />
                               </div>
                               {setupSelectedChannel.platform_description && (
                                 <p className="text-xs text-slate-600">{setupSelectedChannel.platform_description}</p>
@@ -10986,7 +11223,7 @@ export default function App() {
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <label className="block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Verify Token</label>
-                            {webhookSettingsDirty && <StatusBadge tone="amber">unsaved</StatusBadge>}
+                            <StatusLine items={[webhookSettingsDirty ? "Unsaved" : "Saved"]} />
                           </div>
                           <div className="flex gap-2">
                             <input
@@ -11207,31 +11444,35 @@ export default function App() {
       {canEditSettings && !isChatConsoleTab && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 hidden lg:block">
           <div className="mx-auto flex max-w-7xl justify-start px-6">
-            <div className="app-floating-status pointer-events-auto flex w-fit max-w-[min(30rem,calc(100vw-8.5rem))] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
-              <StatusBadge tone={selectedEvent ? getEventStatusTone(selectedEvent.effective_status) : "neutral"}>
-                {selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No Event"}
-              </StatusBadge>
-              {hasAnyUnsavedSettings && <StatusBadge tone="amber">unsaved</StatusBadge>}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-semibold text-slate-900">
-                  {selectedEvent?.name || "No selected event"}
-                </p>
-                <p className="truncate text-[10px] text-slate-500">
-                  OpenRouter • {activeLlmModel}
-                </p>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Event Usage</p>
-                <p className="mt-1 text-xs font-semibold text-slate-900">
-                  {formatCompactNumber(selectedEventUsage?.total_tokens || 0)} tk
-                </p>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total Cost</p>
-                <p className="mt-1 text-xs font-semibold text-slate-900">
-                  {formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0)}
-                </p>
-              </div>
+            <div className="pointer-events-auto flex items-end gap-2">
+              {insightsPanelOpen && (
+                <div className="app-floating-status w-[min(30rem,calc(100vw-10rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Workspace Insights</p>
+                  <StatusLine
+                    className="mt-1"
+                    items={[
+                      selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No selected event",
+                      hasAnyUnsavedSettings ? "Unsaved changes" : "Saved",
+                      <>Model {activeLlmModel}</>,
+                    ]}
+                  />
+                  <CompactStatRow
+                    className="mt-2"
+                    stats={[
+                      { label: "Event tokens", value: formatCompactNumber(selectedEventUsage?.total_tokens || 0), tone: "blue" },
+                      { label: "Total cost", value: formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0), tone: "neutral" },
+                    ]}
+                  />
+                </div>
+              )}
+              <ActionButton
+                onClick={() => setInsightsPanelOpen((open) => !open)}
+                tone={insightsPanelOpen ? "blue" : "neutral"}
+                className="h-11 rounded-2xl px-3 text-sm"
+              >
+                <Activity className="h-4 w-4" />
+                {insightsPanelOpen ? "Hide Insights" : "Insights"}
+              </ActionButton>
             </div>
           </div>
         </div>
