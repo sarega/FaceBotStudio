@@ -465,6 +465,9 @@ const CHANNEL_PLATFORM_WEBHOOK_MAP: Record<ChannelPlatform, WebhookConfigKey[]> 
 };
 const ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-pref-v1";
 const ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-last-audit-v1";
+const CSRF_COOKIE_NAME = "fbs_csrf";
+const CSRF_HEADER_NAME = "x-csrf-token";
+const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const INITIAL_CHECKIN_TOKEN =
   typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("checkin_token")?.trim() || ""
@@ -2749,8 +2752,46 @@ export default function App() {
       ).slice(0, 6)
     : [];
 
+  const readCookieValue = (name: string) => {
+    if (typeof document === "undefined") return "";
+    const prefix = `${name}=`;
+    const segments = document.cookie ? document.cookie.split(";") : [];
+    for (const segment of segments) {
+      const trimmed = segment.trim();
+      if (!trimmed.startsWith(prefix)) continue;
+      const rawValue = trimmed.slice(prefix.length);
+      try {
+        return decodeURIComponent(rawValue);
+      } catch {
+        return rawValue;
+      }
+    }
+    return "";
+  };
+
+  const appendCsrfHeader = (init?: RequestInit) => {
+    const method = String(init?.method || "GET").toUpperCase();
+    if (!UNSAFE_HTTP_METHODS.has(method)) {
+      return init;
+    }
+
+    const csrfToken = readCookieValue(CSRF_COOKIE_NAME);
+    if (!csrfToken) {
+      return init;
+    }
+
+    const headers = new Headers(init?.headers || undefined);
+    if (!headers.has(CSRF_HEADER_NAME)) {
+      headers.set(CSRF_HEADER_NAME, csrfToken);
+    }
+    return {
+      ...(init || {}),
+      headers,
+    } satisfies RequestInit;
+  };
+
   const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const res = await fetch(input, init);
+    const res = await fetch(input, appendCsrfHeader(init));
     if (res.status === 401 && !checkinAccessMode) {
       setAuthStatus("unauthenticated");
       setAuthUser(null);
@@ -5277,7 +5318,7 @@ export default function App() {
       return;
     }
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await apiFetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
       console.error("Failed to logout", err);
     } finally {
@@ -6685,8 +6726,14 @@ export default function App() {
     </div>
   );
 
+  const isChatConsoleTab = activeTab === "test" || (activeTab === "agent" && agentWorkspaceView === "console");
+
   return (
-    <div className="app-shell min-h-dvh bg-slate-50 text-slate-900 font-sans">
+    <div
+      className={`app-shell bg-slate-50 text-slate-900 font-sans ${
+        isChatConsoleTab ? "flex h-dvh flex-col overflow-hidden" : "min-h-dvh"
+      }`}
+    >
       <header className="app-header-surface sticky top-0 z-20 border-b border-slate-200 bg-white backdrop-blur">
         <div className="max-w-7xl mx-auto px-3 py-2 sm:px-4 lg:px-6">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)_minmax(0,1fr)] lg:items-center">
@@ -7066,7 +7113,13 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`max-w-7xl mx-auto px-3 py-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4 lg:px-6 lg:py-5 ${canEditSettings ? "lg:pb-28" : ""}`}>
+      <main
+        className={
+          isChatConsoleTab
+            ? "max-w-7xl mx-auto flex-1 min-h-0 overflow-hidden px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-5"
+            : `max-w-7xl mx-auto px-3 py-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4 lg:px-6 lg:py-5 ${canEditSettings ? "lg:pb-28" : ""}`
+        }
+      >
         <AnimatePresence mode="wait">
           {activeTab === "event" && (
             <motion.div
@@ -8591,7 +8644,7 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]"
+              className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
             >
               <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                 <div className="flex items-center gap-3">
@@ -8636,7 +8689,7 @@ export default function App() {
                 </InlineActionsMenu>
               </div>
 
-              <div className="chat-scroll chat-selectable flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
+              <div className="chat-scroll chat-selectable flex-1 min-h-0 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                 {testMessages.length === 0 && (
                   <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                     <MessageSquare className="h-10 w-10" />
@@ -8725,10 +8778,10 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-4"
+              className={agentWorkspaceView === "console" ? "h-full min-h-0" : "space-y-4"}
             >
               {agentWorkspaceView === "console" && (
-              <div className="flex min-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-[calc(100dvh-11rem)] lg:min-h-[calc(100dvh-17rem)] lg:max-h-[calc(100dvh-17rem)]">
+              <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                   <div className="flex min-w-0 items-start gap-2.5">
                     <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 sm:h-9 sm:w-9">
@@ -8771,7 +8824,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div ref={adminAgentScrollRef} className="chat-scroll chat-selectable flex-1 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
+                <div ref={adminAgentScrollRef} className="chat-scroll chat-selectable flex-1 min-h-0 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                   {adminAgentMessages.length === 0 && (
                     <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                       <MonitorCog className="h-10 w-10" />
@@ -11151,7 +11204,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {canEditSettings && (
+      {canEditSettings && !isChatConsoleTab && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 hidden lg:block">
           <div className="mx-auto flex max-w-7xl justify-start px-6">
             <div className="app-floating-status pointer-events-auto flex w-fit max-w-[min(30rem,calc(100vw-8.5rem))] items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
@@ -11383,7 +11436,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {helpContent && (
+      {helpContent && !isChatConsoleTab && (
         <>
           <AnimatePresence>
             {helpOpen && (
