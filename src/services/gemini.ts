@@ -4,6 +4,35 @@ type ChatPart = {
   functionResponse?: any;
 };
 
+const CSRF_COOKIE_NAME = "fbs_csrf";
+const CSRF_HEADER_NAME = "x-csrf-token";
+
+function readCookieValue(name: string) {
+  if (typeof document === "undefined") return "";
+  const prefix = `${name}=`;
+  const segments = document.cookie ? document.cookie.split(";") : [];
+  for (const segment of segments) {
+    const trimmed = segment.trim();
+    if (!trimmed.startsWith(prefix)) continue;
+    const rawValue = trimmed.slice(prefix.length);
+    try {
+      return decodeURIComponent(rawValue);
+    } catch {
+      return rawValue;
+    }
+  }
+  return "";
+}
+
+function buildJsonPostHeaders() {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  const csrfToken = readCookieValue(CSRF_COOKIE_NAME);
+  if (csrfToken) {
+    headers.set(CSRF_HEADER_NAME, csrfToken);
+  }
+  return headers;
+}
+
 type ChatHistoryMessage = {
   role: "user" | "model";
   parts: ChatPart[];
@@ -52,7 +81,7 @@ export async function getChatResponse(
 ): Promise<ChatResponse> {
   const res = await fetch("/api/llm/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: buildJsonPostHeaders(),
     body: JSON.stringify({ message, settings, history, event_id: eventId }),
   });
 
@@ -75,7 +104,7 @@ export async function getAdminAgentResponse(
 ): Promise<AdminAgentResponse> {
   const res = await fetch("/api/admin-agent/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: buildJsonPostHeaders(),
     body: JSON.stringify({ message, settings, history, event_id: eventId }),
   });
 

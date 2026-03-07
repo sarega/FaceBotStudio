@@ -2,12 +2,23 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 
 export const SESSION_COOKIE_NAME = "fbs_session";
 export const CHECKIN_ACCESS_COOKIE_NAME = "fbs_checkin_access";
+export const CSRF_COOKIE_NAME = "fbs_csrf";
 export const ALL_USER_ROLES = ["owner", "admin", "operator", "checker", "viewer"] as const;
 const SESSION_COOKIE_PATH = "/";
 const CHECKIN_ACCESS_COOKIE_PATH = "/api/checkin-access";
+const CSRF_COOKIE_PATH = "/";
 const ADMIN_SESSION_SAME_SITE: "Strict" = "Strict";
 const CHECKIN_ACCESS_SESSION_SAME_SITE: "Strict" = "Strict";
+const CSRF_TOKEN_SAME_SITE: "Strict" = "Strict";
 const EXPIRED_COOKIE_DATE = new Date(0);
+const PASSWORD_HASH_SCHEME = "scrypt";
+const PASSWORD_HASH_KEY_LENGTH = 64;
+const PASSWORD_HASH_PARAMS = {
+  N: 16384,
+  r: 8,
+  p: 1,
+} as const;
+const PASSWORD_HASH_PARAM_STRING = `n=${PASSWORD_HASH_PARAMS.N},r=${PASSWORD_HASH_PARAMS.r},p=${PASSWORD_HASH_PARAMS.p}`;
 
 type CookieRequestLike = {
   secure?: boolean;
@@ -15,6 +26,12 @@ type CookieRequestLike = {
 };
 
 export type UserRole = (typeof ALL_USER_ROLES)[number];
+type ScryptHashParameters = { N: number; r: number; p: number };
+
+export type PasswordVerificationResult = {
+  valid: boolean;
+  needsRehash: boolean;
+};
 
 export function normalizeUsername(value: unknown) {
   return String(value ?? "").trim().toLowerCase();
@@ -26,18 +43,108 @@ export function isValidUsername(value: string) {
 
 export function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
-  const derivedKey = scryptSync(password, salt, 64).toString("hex");
-  return `scrypt$${salt}$${derivedKey}`;
+  const derivedKey = scryptSync(password, salt, PASSWORD_HASH_KEY_LENGTH, PASSWORD_HASH_PARAMS).toString("hex");
+  return `${PASSWORD_HASH_SCHEME}$${PASSWORD_HASH_PARAM_STRING}$${salt}$${derivedKey}`;
+}
+
+function parseScryptParameters(rawValue: string): ScryptHashParameters | null {
+  const normalized = String(rawValue || "").trim();
+  if (!normalized) return null;
+  const pairs = normalized
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const parsed = new Map<string, number>();
+  for (const pair of pairs) {
+    const [rawKey, rawNumber] = pair.split("=");
+    const key = String(rawKey || "").trim().toLowerCase();
+    const value = Number.parseInt(String(rawNumber || "").trim(), 10);
+    if (!key || !Number.isFinite(value) || value <= 0) {
+      return null;
+    }
+    parsed.set(key, value);
+  }
+
+  const N = parsed.get("n");
+  const r = parsed.get("r");
+  const p = parsed.get("p");
+  if (!N || !r || !p) {
+    return null;
+  }
+  return { N, r, p };
+}
+
+function parseStoredScryptHash(storedHash: string): {
+  salt: string;
+  expectedHex: string;
+  params: ScryptHashParameters;
+  isLegacy: boolean;
+} | null {
+  const parts = String(storedHash || "").split("$");
+  if (parts.length === 3) {
+    const [scheme, salt, expectedHex] = parts;
+    if (scheme !== PASSWORD_HASH_SCHEME || !salt || !expectedHex) return null;
+    return {
+      salt,
+      expectedHex,
+      params: { ...PASSWORD_HASH_PARAMS },
+      isLegacy: true,
+    };
+  }
+
+  if (parts.length === 4) {
+    const [scheme, paramString, salt, expectedHex] = parts;
+    if (scheme !== PASSWORD_HASH_SCHEME || !paramString || !salt || !expectedHex) return null;
+    const params = parseScryptParameters(paramString);
+    if (!params) return null;
+    return {
+      salt,
+      expectedHex,
+      params,
+      isLegacy: false,
+    };
+  }
+
+  return null;
+}
+
+function areCurrentHashParameters(params: ScryptHashParameters) {
+  return params.N === PASSWORD_HASH_PARAMS.N && params.r === PASSWORD_HASH_PARAMS.r && params.p === PASSWORD_HASH_PARAMS.p;
+}
+
+export function verifyPasswordWithMetadata(password: string, storedHash: string): PasswordVerificationResult {
+  const parsedHash = parseStoredScryptHash(storedHash);
+  if (!parsedHash) {
+    return {
+      valid: false,
+      needsRehash: false,
+    };
+  }
+
+  const derivedKey = scryptSync(password, parsedHash.salt, PASSWORD_HASH_KEY_LENGTH, parsedHash.params);
+  const expectedBuffer = Buffer.from(parsedHash.expectedHex, "hex");
+  if (expectedBuffer.length !== derivedKey.length) {
+    return {
+      valid: false,
+      needsRehash: false,
+    };
+  }
+
+  const valid = timingSafeEqual(derivedKey, expectedBuffer);
+  return {
+    valid,
+    needsRehash: valid && (parsedHash.isLegacy || !areCurrentHashParameters(parsedHash.params)),
+  };
+}
+
+export function passwordHashNeedsRehash(storedHash: string) {
+  const parsedHash = parseStoredScryptHash(storedHash);
+  if (!parsedHash) return false;
+  return parsedHash.isLegacy || !areCurrentHashParameters(parsedHash.params);
 }
 
 export function verifyPassword(password: string, storedHash: string) {
-  const [scheme, salt, expected] = String(storedHash || "").split("$");
-  if (scheme !== "scrypt" || !salt || !expected) return false;
-
-  const derivedKey = scryptSync(password, salt, 64);
-  const expectedBuffer = Buffer.from(expected, "hex");
-  if (expectedBuffer.length !== derivedKey.length) return false;
-  return timingSafeEqual(derivedKey, expectedBuffer);
+  return verifyPasswordWithMetadata(password, storedHash).valid;
 }
 
 export function createSessionToken() {
@@ -174,6 +281,27 @@ export function serializeClearedCheckinAccessSessionCookie(request?: CookieReque
     secure: shouldUseSecureSessionCookie(request),
     sameSite: CHECKIN_ACCESS_SESSION_SAME_SITE,
     path: CHECKIN_ACCESS_COOKIE_PATH,
+    maxAgeSeconds: 0,
+    expiresAt: EXPIRED_COOKIE_DATE,
+  });
+}
+
+export function serializeCsrfTokenCookie(token: string, request?: CookieRequestLike) {
+  return cookieSerialize(CSRF_COOKIE_NAME, token, {
+    httpOnly: false,
+    secure: shouldUseSecureSessionCookie(request),
+    sameSite: CSRF_TOKEN_SAME_SITE,
+    path: CSRF_COOKIE_PATH,
+    maxAgeSeconds: Math.floor(getSessionTtlMs() / 1000),
+  });
+}
+
+export function serializeClearedCsrfTokenCookie(request?: CookieRequestLike) {
+  return cookieSerialize(CSRF_COOKIE_NAME, "", {
+    httpOnly: false,
+    secure: shouldUseSecureSessionCookie(request),
+    sameSite: CSRF_TOKEN_SAME_SITE,
+    path: CSRF_COOKIE_PATH,
     maxAgeSeconds: 0,
     expiresAt: EXPIRED_COOKIE_DATE,
   });

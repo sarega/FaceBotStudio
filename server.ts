@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import helmet from "helmet";
 import { createServer as createViteServer } from "vite";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
@@ -15,7 +16,7 @@ import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstag
 import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup, buildLineWebhookDedupKey, canUseLineWebhookQueue, type LineInboundJob } from "./backend/runtime/lineQueue";
 import { enqueueTelegramInboundJob, startEmbeddedTelegramWorker, acquireTelegramWebhookDedup, buildTelegramWebhookDedupKey, canUseTelegramWebhookQueue, type TelegramInboundJob } from "./backend/runtime/telegramQueue";
 import { enqueueWhatsAppInboundJob, startEmbeddedWhatsAppWorker, acquireWhatsAppWebhookDedup, buildWhatsAppWebhookDedupKey, canUseWhatsAppWebhookQueue, type WhatsAppInboundJob } from "./backend/runtime/whatsappQueue";
-import { createRateLimitMiddleware } from "./backend/runtime/rateLimit";
+import { createRateLimitMiddleware, resetRateLimitCounter } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
 import { resolveStartupSecurityConfig } from "./backend/runtime/startupSecurity";
 import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
@@ -32,6 +33,7 @@ import {
 } from "./backend/channelPlatforms";
 import {
   ALL_USER_ROLES,
+  CSRF_COOKIE_NAME,
   CHECKIN_ACCESS_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   createSessionToken,
@@ -41,12 +43,15 @@ import {
   hashSessionToken,
   isValidUsername,
   normalizeUsername,
+  passwordHashNeedsRehash,
   parseCookies,
   serializeAdminSessionCookie,
   serializeCheckinAccessSessionCookie,
+  serializeCsrfTokenCookie,
   serializeClearedCheckinAccessSessionCookie,
   serializeClearedAdminSessionCookie,
-  verifyPassword,
+  serializeClearedCsrfTokenCookie,
+  verifyPasswordWithMetadata,
   type UserRole,
 } from "./backend/auth";
 import {
@@ -66,7 +71,7 @@ import {
   type RegistrationRow,
   type RegistrationStatus,
 } from "./backend/db/index";
-import { DEFAULT_EVENT_ID } from "./backend/db/defaultSettings";
+import { DEFAULT_EVENT_ID, EVENT_SETTING_KEYS, GLOBAL_SETTING_KEYS } from "./backend/db/defaultSettings";
 
 dotenv.config();
 
@@ -101,6 +106,10 @@ const BOT_TEMPORARY_FAILURE_MESSAGE = "ขออภัย ระบบตอบ�
 const IS_PRODUCTION = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
 const JSON_BODY_LIMIT = String(process.env.JSON_BODY_LIMIT || "256kb").trim() || "256kb";
 const CSRF_ALLOWED_ORIGINS_RAW = String(process.env.CSRF_ALLOWED_ORIGINS || "").trim();
+const LOGIN_IP_RATE_LIMIT_NAME = "auth-login-ip";
+const LOGIN_USERNAME_RATE_LIMIT_NAME = "auth-login-username";
+const ALLOWED_SETTINGS_KEY_SET = new Set<string>([...EVENT_SETTING_KEYS, ...GLOBAL_SETTING_KEYS]);
+const CSRF_HEADER_NAME = "x-csrf-token";
 
 type ChatPart = {
   text?: string;
@@ -1159,6 +1168,10 @@ function readOptionalString(source: Record<string, unknown>, field: string, maxL
   return trimStringInput(source[field], maxLength);
 }
 
+function isLikelyEmailAddress(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
 function readBooleanWithDefault(source: Record<string, unknown>, field: string, fallbackValue: boolean, issues: ValidationIssue[]) {
   const raw = source[field];
   if (raw == null) return fallbackValue;
@@ -1337,6 +1350,19 @@ function getRequesterRateLimitScope(req: Request) {
   return buildRateLimitKey(getRequestIp(req) || "unknown", getAuthenticatedUserId(req) || "anonymous");
 }
 
+function getLoginUsernameFromRequest(req: Request) {
+  const body = readObjectBody(req);
+  return normalizeUsername(body.username) || "unknown";
+}
+
+function getLoginIpRateLimitScope(req: Request) {
+  return buildRateLimitKey(getRequestIp(req) || "unknown");
+}
+
+function getLoginUsernameRateLimitScope(req: Request) {
+  return buildRateLimitKey(getLoginUsernameFromRequest(req));
+}
+
 function getRateLimitTokenHash(rawToken: unknown) {
   const normalized = String(rawToken ?? "").trim();
   if (!normalized) return "missing";
@@ -1345,16 +1371,43 @@ function getRateLimitTokenHash(rawToken: unknown) {
 
 function getCheckinExchangeTokenHashFromRequest(req: Request) {
   const bodyToken = (req as Request & { body?: Record<string, unknown> }).body?.token;
-  const queryToken = (req as Request & { query?: Record<string, unknown> }).query?.token;
-  return getRateLimitTokenHash(typeof bodyToken === "string" && bodyToken.trim() ? bodyToken : queryToken);
+  return getRateLimitTokenHash(bodyToken);
 }
 
 function getCheckinAccessRateLimitScope(req: Request) {
   const authReq = req as AuthenticatedRequest;
   const bodyToken = (req as Request & { body?: Record<string, unknown> }).body?.token;
-  const queryToken = (req as Request & { query?: Record<string, unknown> }).query?.token;
-  const fallbackTokenHash = getRateLimitTokenHash(typeof bodyToken === "string" && bodyToken.trim() ? bodyToken : queryToken);
+  const fallbackTokenHash = getRateLimitTokenHash(bodyToken);
   return buildRateLimitKey(getRequestIp(req) || "unknown", authReq.checkinAccess?.sessionId || fallbackTokenHash);
+}
+
+function normalizeSettingsMutationPayload(source: Record<string, unknown>) {
+  const issues: ValidationIssue[] = [];
+  const entries: Record<string, string> = {};
+
+  for (const [key, rawValue] of Object.entries(source)) {
+    if (key === "event_id") continue;
+    if (!ALLOWED_SETTINGS_KEY_SET.has(key)) {
+      issues.push({ field: key, message: `${key} is not an allowed setting key` });
+      continue;
+    }
+
+    const valueType = typeof rawValue;
+    if (rawValue != null && valueType !== "string" && valueType !== "number" && valueType !== "boolean") {
+      issues.push({ field: key, message: `${key} must be a string, number, boolean, or null` });
+      continue;
+    }
+
+    const normalizedValue = String(rawValue ?? "");
+    if (normalizedValue.length > 200000) {
+      issues.push({ field: key, message: `${key} exceeds the maximum allowed length` });
+      continue;
+    }
+
+    entries[key] = normalizedValue;
+  }
+
+  return { entries, issues };
 }
 
 function normalizeOrigin(value: unknown) {
@@ -1394,19 +1447,6 @@ function resolveTrustedCsrfOrigins() {
 const TRUSTED_CSRF_ORIGINS = resolveTrustedCsrfOrigins();
 const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
-const SECURITY_RESPONSE_CSP = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "worker-src 'self' blob:",
-  "form-action 'self'",
-].join("; ");
 
 function getOriginFromHeaders(req: Request) {
   const originHeader = req.headers.origin;
@@ -1440,13 +1480,44 @@ function hasSessionCookieContext(req: Request) {
   return cookies.has(SESSION_COOKIE_NAME) || cookies.has(CHECKIN_ACCESS_COOKIE_NAME);
 }
 
-function isCsrfProtectedApiRequest(req: Request) {
+function hasAdminSessionCookie(req: Request) {
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies.has(SESSION_COOKIE_NAME);
+}
+
+function isCsrfCandidateRequest(req: Request) {
   if (!UNSAFE_HTTP_METHODS.has(String(req.method || "").toUpperCase())) return false;
   if (!String(req.path || "").startsWith("/api/")) return false;
   if (String(req.path || "").startsWith("/api/webhook")) return false;
   if (String(req.path || "").startsWith("/api/admin-agent/telegram/webhook")) return false;
   if (String(req.path || "").startsWith("/api/webchat")) return false;
   return hasSessionCookieContext(req);
+}
+
+function isCsrfTokenRequiredRequest(req: Request) {
+  if (!isCsrfCandidateRequest(req)) return false;
+  const requestPath = String(req.path || "");
+  if (requestPath.startsWith("/api/auth/login")) return false;
+  if (requestPath.startsWith("/api/checkin-access")) return false;
+  return hasAdminSessionCookie(req);
+}
+
+function readCsrfTokenHeader(req: Request) {
+  const rawHeader = req.headers[CSRF_HEADER_NAME];
+  if (Array.isArray(rawHeader)) {
+    return String(rawHeader[0] || "").trim();
+  }
+  return typeof rawHeader === "string" ? rawHeader.trim() : "";
+}
+
+function hasMatchingCsrfTokens(cookieToken: string, headerToken: string) {
+  const cookieValue = String(cookieToken || "").trim();
+  const headerValue = String(headerToken || "").trim();
+  if (!cookieValue || !headerValue) return false;
+  const cookieBuffer = Buffer.from(cookieValue, "utf8");
+  const headerBuffer = Buffer.from(headerValue, "utf8");
+  if (cookieBuffer.length !== headerBuffer.length) return false;
+  return timingSafeEqual(cookieBuffer, headerBuffer);
 }
 
 async function recordSecurityEvent(req: AuthenticatedRequest, action: string, metadata?: Record<string, unknown>) {
@@ -1459,6 +1530,7 @@ async function recordSecurityEvent(req: AuthenticatedRequest, action: string, me
       metadata: {
         ip: getRequestIp(req),
         method: req.method,
+        user_agent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
         ...metadata,
       },
     });
@@ -1468,7 +1540,7 @@ async function recordSecurityEvent(req: AuthenticatedRequest, action: string, me
 }
 
 async function csrfProtectionMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  if (!isCsrfProtectedApiRequest(req)) {
+  if (!isCsrfCandidateRequest(req)) {
     return next();
   }
 
@@ -1490,22 +1562,41 @@ async function csrfProtectionMiddleware(req: AuthenticatedRequest, res: Response
     });
   }
 
+  if (isCsrfTokenRequiredRequest(req)) {
+    const cookies = parseCookies(req.headers.cookie);
+    const csrfCookieToken = cookies.get(CSRF_COOKIE_NAME) || "";
+    const csrfHeaderToken = readCsrfTokenHeader(req);
+    if (!hasMatchingCsrfTokens(csrfCookieToken, csrfHeaderToken)) {
+      await recordSecurityEvent(req, "security.csrf_token_blocked", {
+        has_csrf_cookie: Boolean(csrfCookieToken),
+        has_csrf_header: Boolean(csrfHeaderToken),
+      });
+      return res.status(403).json({
+        error: "CSRF token validation failed",
+      });
+    }
+  }
+
   return next();
 }
 
-function applySecurityHeaders(req: Request, res: Response, next: NextFunction) {
-  res.removeHeader("X-Powered-By");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-DNS-Prefetch-Control", "off");
-  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=()");
-  if (IS_PRODUCTION) {
-    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
-    res.setHeader("Content-Security-Policy", SECURITY_RESPONSE_CSP);
+function ensureCsrfCookieMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  if (!String(req.path || "").startsWith("/api/")) {
+    return next();
   }
+  if (!req.auth?.user) {
+    return next();
+  }
+
+  const existingToken = parseCookies(req.headers.cookie).get(CSRF_COOKIE_NAME);
+  if (!existingToken) {
+    setCsrfCookie(res, createSessionToken(), req);
+  }
+  return next();
+}
+
+function applyPermissionsPolicyHeader(_req: Request, res: Response, next: NextFunction) {
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=()");
   return next();
 }
 
@@ -1559,6 +1650,9 @@ function resolveEventScopeContext(req: AuthenticatedRequest, options?: EventScop
 function requireEventScope(options?: EventScopeOptions) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.auth?.user && !req.checkinAccess) {
+      await recordSecurityEvent(req, "security.event_scope_denied", {
+        reason: "missing_auth_context",
+      });
       return res.status(401).json({ error: "Authentication required" });
     }
 
@@ -1568,11 +1662,36 @@ function requireEventScope(options?: EventScopeOptions) {
     }
 
     if (req.checkinAccess?.eventId && req.checkinAccess.eventId !== scope.eventId) {
+      await recordSecurityEvent(req, "security.event_scope_denied", {
+        reason: "checkin_scope_mismatch",
+        checkin_event_id: req.checkinAccess.eventId,
+        requested_event_id: scope.eventId,
+      });
       return res.status(403).json({ error: "Check-in scope cannot access another event" });
     }
 
     if (req.auth?.user && !userHasRole(req.auth.user.role, EVENT_SCOPED_USER_ROLES)) {
+      await recordSecurityEvent(req, "security.event_scope_denied", {
+        reason: "role_not_allowed",
+        role: req.auth.user.role,
+      });
       return res.status(403).json({ error: "Insufficient permissions" });
+    }
+
+    if (req.auth?.user) {
+      const role = req.auth.user.role;
+      const requiresEventAssignment = role !== "owner" && role !== "admin";
+      if (requiresEventAssignment) {
+        const assigned = await appDb.isUserAssignedToEvent(req.auth.user.id, scope.eventId);
+        if (!assigned) {
+          await recordSecurityEvent(req, "security.event_scope_denied", {
+            reason: "assignment_missing",
+            event_id: scope.eventId,
+            role,
+          });
+          return res.status(403).json({ error: "You are not assigned to this event" });
+        }
+      }
     }
 
     const event = await appDb.getEventById(scope.eventId);
@@ -1621,6 +1740,14 @@ function setSessionCookie(res: Response, token: string, req: Request) {
 
 function clearSessionCookie(res: Response, req: Request) {
   appendSetCookieHeader(res, serializeClearedAdminSessionCookie(req));
+}
+
+function setCsrfCookie(res: Response, token: string, req: Request) {
+  appendSetCookieHeader(res, serializeCsrfTokenCookie(token, req));
+}
+
+function clearCsrfCookie(res: Response, req: Request) {
+  appendSetCookieHeader(res, serializeClearedCsrfTokenCookie(req));
 }
 
 function setCheckinAccessCookie(res: Response, token: string, req: Request, expiresAt?: string) {
@@ -1687,6 +1814,7 @@ async function attachSession(req: AuthenticatedRequest, res: Response, next: Nex
     const session = await appDb.getSessionWithUser(tokenHash);
     if (!session || !session.user.is_active) {
       clearSessionCookie(res, req);
+      clearCsrfCookie(res, req);
       return next();
     }
 
@@ -1760,15 +1888,27 @@ function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunctio
   if (req.auth?.user) {
     return next();
   }
+  void recordSecurityEvent(req, "security.auth_required_denied", {
+    reason: "missing_session",
+  });
   return res.status(401).json({ error: "Authentication required" });
 }
 
 function requireRoles(allowedRoles: UserRole[]) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.auth?.user) {
+      void recordSecurityEvent(req, "security.role_denied", {
+        reason: "missing_session",
+        required_roles: allowedRoles,
+      });
       return res.status(401).json({ error: "Authentication required" });
     }
     if (!userHasRole(req.auth.user.role, allowedRoles)) {
+      void recordSecurityEvent(req, "security.role_denied", {
+        reason: "insufficient_role",
+        required_roles: allowedRoles,
+        user_role: req.auth.user.role,
+      });
       return res.status(403).json({ error: "Insufficient permissions" });
     }
     return next();
@@ -5306,6 +5446,7 @@ async function recordAudit(
     metadata: {
       ...metadata,
       ip: getRequestIp(req),
+      user_agent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
     },
   });
 }
@@ -7607,7 +7748,39 @@ async function startServer() {
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", TRUST_PROXY);
-  app.use(applySecurityHeaders);
+  app.use(helmet({
+    contentSecurityPolicy: IS_PRODUCTION
+      ? {
+          directives: {
+            defaultSrc: ["'self'"],
+            baseUri: ["'self'"],
+            frameAncestors: ["'none'"],
+            objectSrc: ["'none'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "blob:"],
+            fontSrc: ["'self'", "data:"],
+            connectSrc: ["'self'"],
+            workerSrc: ["'self'", "blob:"],
+            formAction: ["'self'"],
+          },
+        }
+      : false,
+    hsts: IS_PRODUCTION
+      ? {
+          maxAge: 15552000,
+          includeSubDomains: true,
+        }
+      : false,
+    frameguard: { action: "deny" },
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    xContentTypeOptions: true,
+    xDnsPrefetchControl: { allow: false },
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    crossOriginResourcePolicy: { policy: "same-origin" },
+    crossOriginEmbedderPolicy: false,
+  }));
+  app.use(applyPermissionsPolicyHeader);
   app.use(express.json({
     limit: JSON_BODY_LIMIT,
     verify: (req, _res, buf) => {
@@ -7627,22 +7800,39 @@ async function startServer() {
   app.use(express.static(path.join(__dirname, "public")));
   app.use(attachSession);
   app.use("/api/checkin-access", attachCheckinAccessSession);
+  app.use(ensureCsrfCookieMiddleware);
   app.use(csrfProtectionMiddleware);
 
   const PORT = Number(process.env.PORT || 3000);
   const loginIpRateLimit = createRateLimitMiddleware({
-    name: "auth-login-ip",
+    name: LOGIN_IP_RATE_LIMIT_NAME,
     windowMs: 10 * 60 * 1000,
-    max: 60,
-    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown"),
+    max: 5,
+    keyFn: (req) => getLoginIpRateLimitScope(req),
     errorMessage: "Too many login attempts from this IP. Please wait and try again.",
+    onBlocked: async ({ req, count, retryAfterSeconds }) => {
+      await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_rate_limited", {
+        scope: "ip",
+        ip: getRequestIp(req),
+        blocked_count: count,
+        retry_after_seconds: retryAfterSeconds,
+      });
+    },
   });
-  const loginRateLimit = createRateLimitMiddleware({
-    name: "auth-login",
+  const loginUsernameRateLimit = createRateLimitMiddleware({
+    name: LOGIN_USERNAME_RATE_LIMIT_NAME,
     windowMs: 10 * 60 * 1000,
-    max: 10,
-    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown", normalizeUsername(req.body?.username) || "unknown"),
-    errorMessage: "Too many login attempts. Please wait and try again.",
+    max: 5,
+    keyFn: (req) => getLoginUsernameRateLimitScope(req),
+    errorMessage: "Too many login attempts for this username. Please wait and try again.",
+    onBlocked: async ({ req, count, retryAfterSeconds }) => {
+      await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_rate_limited", {
+        scope: "username",
+        username: getLoginUsernameFromRequest(req),
+        blocked_count: count,
+        retry_after_seconds: retryAfterSeconds,
+      });
+    },
   });
   const checkinAccessIpRateLimit = createRateLimitMiddleware({
     name: "checkin-access-ip",
@@ -7774,7 +7964,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/login", loginIpRateLimit, loginRateLimit, async (req, res) => {
+  app.post("/api/auth/login", loginIpRateLimit, loginUsernameRateLimit, async (req, res) => {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
@@ -7795,7 +7985,10 @@ async function startServer() {
       }
 
       const passwordHash = await appDb.getUserPasswordHash(username);
-      const valid = typeof passwordHash === "string" && verifyPassword(password, passwordHash);
+      const passwordVerification = typeof passwordHash === "string"
+        ? verifyPasswordWithMetadata(password, passwordHash)
+        : { valid: false, needsRehash: false };
+      const valid = passwordVerification.valid;
 
       if (!valid) {
         await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_failed", {
@@ -7814,8 +8007,18 @@ async function startServer() {
       const tokenHash = hashSessionToken(sessionToken);
       const expiresAt = new Date(Date.now() + getSessionTtlMs());
       await appDb.createSession(user.id, tokenHash, expiresAt);
+      if (typeof passwordHash === "string" && (passwordVerification.needsRehash || passwordHashNeedsRehash(passwordHash))) {
+        await appDb.updateUserPasswordHash(user.id, hashPassword(password));
+        await recordSecurityEvent(req as AuthenticatedRequest, "auth.password_rehashed", {
+          username,
+          user_id: user.id,
+        });
+      }
       await appDb.updateUserLastLogin(user.id);
       setSessionCookie(res, sessionToken, req);
+      setCsrfCookie(res, createSessionToken(), req);
+      await resetRateLimitCounter(LOGIN_IP_RATE_LIMIT_NAME, getLoginIpRateLimitScope(req));
+      await resetRateLimitCounter(LOGIN_USERNAME_RATE_LIMIT_NAME, buildRateLimitKey(username));
       await appDb.recordAuditLog({
         actor_user_id: user.id,
         action: "auth.login",
@@ -7848,8 +8051,12 @@ async function startServer() {
             ip: getRequestIp(req),
           },
         });
+        await recordSecurityEvent(req, "auth.logout_succeeded", {
+          user_id: req.auth.user.id,
+        });
       }
       clearSessionCookie(res, req);
+      clearCsrfCookie(res, req);
       return res.json({ status: "ok" });
     } catch (error) {
       console.error("Logout failed:", error);
@@ -8189,41 +8396,14 @@ async function startServer() {
         clearCheckinAccessCookie(res, req);
       }
 
-      const rawToken = String(req.query.token || "").trim();
-      if (!rawToken) {
-        return res.status(401).json({ error: "Check-in access session is required" });
+      if (typeof req.query.token === "string" && req.query.token.trim()) {
+        await recordSecurityEvent(req, "checkin.exchange_legacy_query_blocked", {
+          token_hash: getRateLimitTokenHash(req.query.token),
+        });
+        return res.status(400).json({ error: "Query token exchange is no longer supported. Use POST /api/checkin-access/exchange." });
       }
 
-      const exchangedSession = await exchangeCheckinAccessToken(rawToken, req, res);
-      if (!exchangedSession) {
-        await recordSecurityEvent(req, "checkin.exchange_failed", {
-          reason: "invalid_or_expired_legacy",
-          token_hash: getRateLimitTokenHash(rawToken),
-          legacy_path: true,
-        });
-        return res.status(401).json({ error: "Check-in token is invalid, expired, or already used" });
-      }
-
-      const payload = await buildCheckinSessionAccessPayload(exchangedSession);
-      if (!payload) {
-        clearCheckinAccessCookie(res, req);
-        await recordSecurityEvent(req, "checkin.exchange_failed", {
-          reason: "event_not_found_legacy",
-          token_hash: getRateLimitTokenHash(rawToken),
-          legacy_path: true,
-        });
-        return res.status(404).json({ error: "Check-in event not found" });
-      }
-      await recordSecurityEvent(req, "checkin.exchange_succeeded", {
-        token_hash: getRateLimitTokenHash(rawToken),
-        event_id: payload.event_id,
-        checkin_access_session_id: payload.id,
-        legacy_path: true,
-      });
-      return res.json({
-        session: payload,
-        deprecated_token_exchange: true,
-      });
+      return res.status(401).json({ error: "Check-in access session is required" });
     } catch (error) {
       console.error("Failed to resolve check-in session:", error);
       return res.status(500).json({ error: "Failed to resolve check-in session" });
@@ -8676,20 +8856,32 @@ async function startServer() {
     try {
       const eventId = getRequestedEventId(req);
       const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 255 });
+      const firstName = readRequiredString(body, "first_name", issues, { label: "first_name", maxLength: 180 });
+      const lastName = readRequiredString(body, "last_name", issues, { label: "last_name", maxLength: 180 });
+      const phone = readRequiredString(body, "phone", issues, { label: "phone", maxLength: 64 });
+      const email = readOptionalString(body, "email", 320);
+      if (email && !isLikelyEmailAddress(email)) {
+        issues.push({ field: "email", message: "email is invalid" });
+      }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       const registrationInput: RegistrationInput = {
-        sender_id: readOptionalString(body, "sender_id", 255),
+        sender_id: senderId,
         event_id: eventId,
-        first_name: body.first_name,
-        last_name: body.last_name,
-        phone: body.phone,
-        email: body.email,
+        first_name: firstName,
+        last_name: lastName,
+        phone,
+        email,
       };
       const result = await createRegistration(registrationInput, {
         source: "registrations_create_api",
       });
       if (result.statusCode === 200 && typeof result.content.id === "string") {
         await recordAudit(req, "registration.created", "registration", String(result.content.id), {
-          sender_id: body.sender_id || null,
+          sender_id: senderId,
           event_id: eventId,
         });
       }
@@ -8913,11 +9105,10 @@ async function startServer() {
     try {
       const eventId = getRequestedEventId(req);
       const input = readObjectBody(req);
-      const body = Object.fromEntries(
-        Object.entries(input)
-          .filter(([key]) => key !== "event_id")
-          .map(([key, value]) => [key, String(value)]),
-      ) as Record<string, string>;
+      const { entries: body, issues } = normalizeSettingsMutationPayload(input);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       if (Object.keys(body).length === 0) {
         return respondValidationError(res, [{ field: "body", message: "No settings payload provided" }]);
       }
@@ -8937,6 +9128,12 @@ async function startServer() {
         keys: Object.keys(body),
         event_id: eventId,
       });
+      if (Object.keys(body).some((key) => key === "verify_token" || key.startsWith("admin_agent_telegram_"))) {
+        await recordSecurityEvent(req, "security.webhook_config_updated", {
+          keys: Object.keys(body),
+          event_id: eventId,
+        });
+      }
       res.json({ status: "ok" });
     } catch (error) {
       res.status(500).json({ error: "Failed to update settings" });
@@ -9141,7 +9338,15 @@ async function startServer() {
     async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
-      const query = String(req.query?.query || "").trim();
+      const querySource = Array.isArray(req.query?.query) ? req.query.query[0] : req.query?.query;
+      const issues: ValidationIssue[] = [];
+      const query = readRequiredString({ query: querySource }, "query", issues, {
+        label: "query",
+        maxLength: 2000,
+      });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
       const documents = await getEventDocuments(eventId);
       const chunks = await getEventDocumentChunkEmbeddings(eventId);
       const settings = await getSettingsMap(eventId);

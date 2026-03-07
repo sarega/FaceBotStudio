@@ -14,6 +14,9 @@ type StartupEnv = {
   NODE_ENV?: string;
   APP_RUNTIME?: string;
   TRUST_PROXY?: string;
+  RAILWAY_ENVIRONMENT?: string;
+  RAILWAY_PROJECT_ID?: string;
+  RAILWAY_SERVICE_ID?: string;
   APP_URL?: string;
   OPENROUTER_API_KEY?: string;
   SESSION_TTL_DAYS?: string;
@@ -30,6 +33,14 @@ function normalizeString(value: unknown) {
 
 function isProductionEnvironment(nodeEnv: string) {
   return nodeEnv === "production";
+}
+
+function isRunningOnRailway(env: StartupEnv) {
+  return Boolean(
+    normalizeString(env.RAILWAY_ENVIRONMENT)
+    || normalizeString(env.RAILWAY_PROJECT_ID)
+    || normalizeString(env.RAILWAY_SERVICE_ID),
+  );
 }
 
 function isLikelyPlaceholderSecret(value: string) {
@@ -124,17 +135,23 @@ export function resolveStartupSecurityConfig(env: StartupEnv): StartupSecurityCo
   const runWebServer = appRuntime !== "worker";
   const runEmbeddedWorker = appRuntime === "all" || appRuntime === "worker";
   const trustProxyRaw = normalizeString(env.TRUST_PROXY);
+  const runningOnRailway = isRunningOnRailway(env);
   const appUrlRaw = normalizeString(env.APP_URL);
   const openRouterApiKey = normalizeString(env.OPENROUTER_API_KEY);
   const facebookAppSecret = normalizeString(env.FACEBOOK_APP_SECRET);
   const sessionTtlDaysRaw = normalizeString(env.SESSION_TTL_DAYS);
-  const trustProxy = resolveTrustProxySetting(env.TRUST_PROXY);
+  let trustProxy = resolveTrustProxySetting(env.TRUST_PROXY);
 
   validateSessionTtlDays(sessionTtlDaysRaw, warnings);
 
   if (isProduction) {
     if (runWebServer && !trustProxyRaw) {
-      throw new Error("TRUST_PROXY must be explicitly set in production (for example: 1, false, loopback, or CIDR list).");
+      if (runningOnRailway) {
+        trustProxy = 1;
+        warnings.push("TRUST_PROXY was not set; defaulting to 1 for Railway proxy deployments. Set TRUST_PROXY explicitly to remove this warning.");
+      } else {
+        throw new Error("TRUST_PROXY must be explicitly set in production (for example: 1, false, loopback, or CIDR list).");
+      }
     }
     if (runWebServer) {
       validateAppUrl(appUrlRaw, true);

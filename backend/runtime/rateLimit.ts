@@ -7,6 +7,7 @@ type RateLimitConfig = {
   max: number;
   keyFn: (req: Request) => string;
   errorMessage: string;
+  onBlocked?: (context: RateLimitBlockedContext) => Promise<void> | void;
 };
 
 type MemoryEntry = {
@@ -14,7 +15,22 @@ type MemoryEntry = {
   resetAt: number;
 };
 
+export type RateLimitBlockedContext = {
+  req: Request;
+  res: Response;
+  scopeKey: string;
+  storeKey: string;
+  count: number;
+  max: number;
+  resetAt: number;
+  retryAfterSeconds: number;
+};
+
 const memoryStore = new Map<string, MemoryEntry>();
+
+function buildStoreKey(name: string, scopeKey: string) {
+  return `ratelimit:${name}:${scopeKey}`;
+}
 
 async function incrementWithRedis(key: string, windowMs: number) {
   const client = await getRedisClient();
@@ -57,12 +73,28 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       const scopeKey = config.keyFn(req) || "unknown";
-      const storeKey = `ratelimit:${config.name}:${scopeKey}`;
+      const storeKey = buildStoreKey(config.name, scopeKey);
       const result = (await incrementWithRedis(storeKey, config.windowMs)) || incrementInMemory(storeKey, config.windowMs);
 
       if (result.count > config.max) {
         const retryAfterSeconds = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
         res.setHeader("Retry-After", String(retryAfterSeconds));
+        if (typeof config.onBlocked === "function") {
+          try {
+            await config.onBlocked({
+              req,
+              res,
+              scopeKey,
+              storeKey,
+              count: result.count,
+              max: config.max,
+              resetAt: result.resetAt,
+              retryAfterSeconds,
+            });
+          } catch (hookError) {
+            console.error(`Rate limiter ${config.name} onBlocked hook failed:`, hookError);
+          }
+        }
         return res.status(429).json({ error: config.errorMessage });
       }
 
@@ -74,3 +106,19 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
   };
 }
 
+export async function resetRateLimitCounter(name: string, scopeKey: string) {
+  const normalizedName = String(name || "").trim();
+  const normalizedScopeKey = String(scopeKey || "").trim();
+  if (!normalizedName || !normalizedScopeKey) return;
+
+  const storeKey = buildStoreKey(normalizedName, normalizedScopeKey);
+  memoryStore.delete(storeKey);
+
+  const client = await getRedisClient();
+  if (!client) return;
+  try {
+    await client.del(storeKey);
+  } catch (error) {
+    console.error(`Failed to reset rate limiter key ${storeKey}:`, error);
+  }
+}

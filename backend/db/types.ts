@@ -377,7 +377,9 @@ export interface AppDatabase {
   resolveEventIdForPage(pageId: string): Promise<string | undefined>;
   getUserByUsername(username: string): Promise<AuthUserRow | undefined>;
   getUserById(userId: string): Promise<AuthUserRow | undefined>;
+  isUserAssignedToEvent(userId: string, eventId: string): Promise<boolean>;
   getUserPasswordHash(username: string): Promise<string | undefined>;
+  updateUserPasswordHash(userId: string, passwordHash: string): Promise<boolean>;
   listUsers(): Promise<AuthUserRow[]>;
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;

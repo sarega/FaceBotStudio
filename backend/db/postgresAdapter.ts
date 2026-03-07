@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { hashPassword, normalizeUsername } from "../auth";
 import { chunkDocumentContent, getDefaultEmbeddingStatus, getEmbeddingModelName, hashDocumentContent } from "../documents";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
@@ -54,6 +54,8 @@ const DEFAULT_ORGANIZATION_ID = "org_default";
 const DEFAULT_ORGANIZATION_NAME = process.env.ORGANIZATION_NAME || "Default Organization";
 const DEFAULT_ORGANIZATION_SLUG = "default";
 const EVENT_SETTING_KEY_SET = new Set<string>(EVENT_SETTING_KEYS);
+const EVENT_ASSIGNMENT_RESTRICTED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
+type QueryableClient = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 
 function generateRegistrationId() {
   return `REG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -307,6 +309,7 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.ensureChannelAccountsBootstrap();
     await this.ensureEventDocumentChunks();
     await this.ensureBootstrapOwner();
+    await this.bootstrapEventAssignmentsIfEmpty();
     await this.deleteExpiredSessions();
     await this.deleteExpiredCheckinSessions();
     await this.deleteExpiredCheckinAccessSessions();
@@ -768,6 +771,7 @@ export class PostgresAppDatabase implements AppDatabase {
           [id, key, NEW_EVENT_TEMPLATE_ENTRIES[key] ?? DEFAULT_SETTINGS_ENTRIES[key]],
         );
       }
+      await this.assignEventToAllRestrictedUsers(id, client);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1348,12 +1352,38 @@ export class PostgresAppDatabase implements AppDatabase {
     return this.queryAuthUser("u.id = $1", [String(userId || "").trim()]);
   }
 
+  async isUserAssignedToEvent(userId: string, eventId: string) {
+    const normalizedUserId = String(userId || "").trim();
+    const normalizedEventId = String(eventId || "").trim();
+    if (!normalizedUserId || !normalizedEventId) return false;
+    const result = await this.pool.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM user_event_assignments
+         WHERE user_id = $1 AND event_id = $2
+       ) AS exists`,
+      [normalizedUserId, normalizedEventId],
+    );
+    return Boolean(result.rows[0]?.exists);
+  }
+
   async getUserPasswordHash(username: string) {
     const result = await this.pool.query<{ password_hash: string }>(
       "SELECT password_hash FROM users WHERE username = $1",
       [normalizeUsername(username)],
     );
     return result.rows[0]?.password_hash;
+  }
+
+  async updateUserPasswordHash(userId: string, passwordHash: string) {
+    const normalizedUserId = String(userId || "").trim();
+    const normalizedPasswordHash = String(passwordHash || "").trim();
+    if (!normalizedUserId || !normalizedPasswordHash) return false;
+    const result = await this.pool.query(
+      "UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+      [normalizedPasswordHash, normalizedUserId],
+    );
+    return result.rowCount > 0;
   }
 
   async listUsers() {
@@ -1395,6 +1425,9 @@ export class PostgresAppDatabase implements AppDatabase {
          VALUES ($1, $2, $3, $4)`,
         [membershipId, DEFAULT_ORGANIZATION_ID, userId, input.role],
       );
+      if (EVENT_ASSIGNMENT_RESTRICTED_ROLES.includes(input.role)) {
+        await this.assignUserToAllEvents(userId, client);
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1413,6 +1446,9 @@ export class PostgresAppDatabase implements AppDatabase {
       "UPDATE memberships SET role = $1 WHERE organization_id = $2 AND user_id = $3",
       [role, DEFAULT_ORGANIZATION_ID, String(userId || "").trim()],
     );
+    if (result.rowCount > 0 && EVENT_ASSIGNMENT_RESTRICTED_ROLES.includes(role)) {
+      await this.assignUserToAllEvents(userId);
+    }
     return result.rowCount > 0;
   }
 
@@ -2043,6 +2079,65 @@ export class PostgresAppDatabase implements AppDatabase {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  private async assignUserToEvent(userId: string, eventId: string, client: QueryableClient = this.pool) {
+    const normalizedUserId = String(userId || "").trim();
+    const normalizedEventId = String(eventId || "").trim();
+    if (!normalizedUserId || !normalizedEventId) return;
+    await client.query(
+      `INSERT INTO user_event_assignments (id, user_id, event_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, event_id) DO NOTHING`,
+      [generateEntityId("uea"), normalizedUserId, normalizedEventId],
+    );
+  }
+
+  private async assignUserToAllEvents(userId: string, client: QueryableClient = this.pool) {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return;
+    const eventsResult = await client.query<{ id: string }>("SELECT id FROM events");
+    for (const row of eventsResult.rows) {
+      await this.assignUserToEvent(normalizedUserId, row.id, client);
+    }
+  }
+
+  private async assignEventToAllRestrictedUsers(eventId: string, client: QueryableClient = this.pool) {
+    const normalizedEventId = String(eventId || "").trim();
+    if (!normalizedEventId) return;
+    const usersResult = await client.query<{ user_id: string }>(
+      `SELECT user_id
+       FROM memberships
+       WHERE organization_id = $1
+         AND role = ANY($2::text[])`,
+      [DEFAULT_ORGANIZATION_ID, EVENT_ASSIGNMENT_RESTRICTED_ROLES],
+    );
+    for (const row of usersResult.rows) {
+      await this.assignUserToEvent(row.user_id, normalizedEventId, client);
+    }
+  }
+
+  private async bootstrapEventAssignmentsIfEmpty() {
+    const countResult = await this.pool.query<{ total: string }>(
+      "SELECT COUNT(*)::text AS total FROM user_event_assignments",
+    );
+    if (Number.parseInt(countResult.rows[0]?.total || "0", 10) > 0) {
+      return;
+    }
+
+    const usersResult = await this.pool.query<{ user_id: string }>(
+      `SELECT user_id
+       FROM memberships
+       WHERE organization_id = $1
+         AND role = ANY($2::text[])`,
+      [DEFAULT_ORGANIZATION_ID, EVENT_ASSIGNMENT_RESTRICTED_ROLES],
+    );
+    const eventsResult = await this.pool.query<{ id: string }>("SELECT id FROM events");
+    for (const userRow of usersResult.rows) {
+      for (const eventRow of eventsResult.rows) {
+        await this.assignUserToEvent(userRow.user_id, eventRow.id);
+      }
     }
   }
 
