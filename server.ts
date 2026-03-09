@@ -104,6 +104,7 @@ const FAILED_INBOUND_TURN_TTL_MS = Math.max(
   Number.parseInt(process.env.FAILED_INBOUND_TURN_TTL_MS || String(1000 * 60 * 60 * 6), 10) || 1000 * 60 * 60 * 6,
 );
 const BOT_TEMPORARY_FAILURE_MESSAGE = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
+const PUBLIC_CHAT_ATTENTION_SUPPRESSION_MS = 5 * 60 * 1000;
 const IS_PRODUCTION = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
 const JSON_BODY_LIMIT = String(process.env.JSON_BODY_LIMIT || "256kb").trim() || "256kb";
 const CSRF_ALLOWED_ORIGINS_RAW = String(process.env.CSRF_ALLOWED_ORIGINS || "").trim();
@@ -237,6 +238,8 @@ type BotReplyResult = {
   ticketRegistrationIds: string[];
 };
 
+type PublicChatAttentionReason = "handoff_request" | "bot_failure";
+
 type FailedInboundTurn = {
   inputText: string;
   history: ChatHistoryMessage[];
@@ -295,6 +298,7 @@ const inboundHandledMessageIds = new Map<string, number>();
 const inboundConversationActivity = new Map<string, number>();
 const inboundReservedMessageIds = new Map<string, { messageId: number; expiresAt: number }>();
 const failedInboundTurns = new Map<string, FailedInboundTurn>();
+const publicChatAttentionSuppression = new Map<string, number>();
 const ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES = 120;
 let adminAgentSharedHistory: ChatHistoryMessage[] = [];
 
@@ -1045,6 +1049,56 @@ function normalizeComparableText(value: unknown) {
 function normalizeOptionalText(value: unknown) {
   const normalized = String(value ?? "").trim();
   return normalized || "";
+}
+
+function detectPublicChatAttentionReason(inputText: string, replyText: string): PublicChatAttentionReason | null {
+  if (normalizeOptionalText(replyText) === BOT_TEMPORARY_FAILURE_MESSAGE) {
+    return "bot_failure";
+  }
+
+  const normalizedInput = normalizeComparableText(inputText);
+  if (!normalizedInput) return null;
+
+  const handoffKeywords = [
+    "เจ้าหน้าที่",
+    "แอดมิน",
+    "พนักงาน",
+    "คนจริง",
+    "human",
+    "staff",
+    "admin",
+    "contact",
+    "ติดต่อ",
+    "โทร",
+    "call",
+    "phone",
+    "line",
+    "messenger",
+  ];
+  return handoffKeywords.some((keyword) => normalizedInput.includes(keyword)) ? "handoff_request" : null;
+}
+
+function reservePublicChatAttention(eventId: string, senderId: string, reason: PublicChatAttentionReason, now = Date.now()) {
+  const key = `${eventId}:${senderId}:${reason}`;
+  const previous = publicChatAttentionSuppression.get(key) || 0;
+  if (previous > 0 && now - previous < PUBLIC_CHAT_ATTENTION_SUPPRESSION_MS) {
+    return false;
+  }
+  publicChatAttentionSuppression.set(key, now);
+  if (publicChatAttentionSuppression.size > 4000) {
+    for (const [entryKey, recordedAt] of publicChatAttentionSuppression.entries()) {
+      if (now - recordedAt >= PUBLIC_CHAT_ATTENTION_SUPPRESSION_MS) {
+        publicChatAttentionSuppression.delete(entryKey);
+      }
+    }
+    if (publicChatAttentionSuppression.size > 4000) {
+      const keys = [...publicChatAttentionSuppression.keys()].slice(0, 500);
+      for (const entryKey of keys) {
+        publicChatAttentionSuppression.delete(entryKey);
+      }
+    }
+  }
+  return true;
 }
 
 function buildEventLocationSummaryFromSettings(settings: Record<string, unknown>) {
@@ -5295,6 +5349,73 @@ async function sendAdminAgentRegistrationNotification(options: {
   }
 }
 
+function formatAdminAgentPublicChatAttentionNotificationText(options: {
+  eventId: string;
+  eventName: string;
+  publicSlug: string;
+  senderId: string;
+  reason: PublicChatAttentionReason;
+  messagePreview: string;
+  observedAtLabel: string;
+}) {
+  const reasonLabel = options.reason === "bot_failure" ? "บอทตอบกลับล้มเหลว" : "ผู้ใช้ขอคุยกับเจ้าหน้าที่";
+  return [
+    "Admin Agent Notification",
+    "ประเภท: Public chat needs attention",
+    `อีเวนต์: ${options.eventName} (${options.eventId})`,
+    `Public slug: ${options.publicSlug || "-"}`,
+    `เหตุผล: ${reasonLabel}`,
+    `Sender ID: ${options.senderId}`,
+    `ข้อความล่าสุด: ${options.messagePreview || "-"}`,
+    `เวลา: ${options.observedAtLabel}`,
+  ].join("\n");
+}
+
+async function sendAdminAgentPublicChatAttentionNotification(options: {
+  eventId: string;
+  publicSlug: string;
+  senderId: string;
+  reason: PublicChatAttentionReason;
+  messagePreview: string;
+  observedAt?: string;
+}) {
+  try {
+    const eventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
+    const settings = await getAdminAgentGlobalSettings();
+    if (!settings.enabled || !settings.notificationEnabled) return;
+    if (!canNotifyAdminAgentForEvent(settings, eventId)) return;
+    if (!settings.telegramEnabled || !settings.telegramBotToken) return;
+
+    const recipients = [...parseAdminAgentTelegramAllowedChatIds(settings.telegramAllowedChatIdsRaw)];
+    if (recipients.length === 0) return;
+
+    const [event, eventSettings] = await Promise.all([
+      appDb.getEventById(eventId),
+      getSettingsMap(eventId),
+    ]);
+    const eventName = normalizeOptionalText(event?.name) || eventId;
+    const observedAtLabel = formatEventScopedTimestamp(
+      normalizeOptionalText(options.observedAt) || new Date().toISOString(),
+      eventSettings.event_timezone,
+    );
+    const text = formatAdminAgentPublicChatAttentionNotificationText({
+      eventId,
+      eventName,
+      publicSlug: normalizeOptionalText(options.publicSlug),
+      senderId: normalizeOptionalText(options.senderId),
+      reason: options.reason,
+      messagePreview: truncateText(normalizeOptionalText(options.messagePreview), 280),
+      observedAtLabel,
+    });
+
+    await Promise.all(
+      recipients.map((chatId) => sendTelegramTextWithBotToken(settings.telegramBotToken, chatId, text)),
+    );
+  } catch (error) {
+    console.error("Failed to send admin agent public chat attention notification:", error);
+  }
+}
+
 async function runAdminAgentCommand(options: {
   message: string;
   eventId: string;
@@ -9199,6 +9320,25 @@ async function startServer() {
         markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
       }
 
+      const attentionReason = detectPublicChatAttentionReason(text, replyText);
+      if (attentionReason && reservePublicChatAttention(match.event.id, senderId, attentionReason)) {
+        const messagePreview = truncateText(text, 220);
+        await recordAudit(req as AuthenticatedRequest, "public.chat.attention_requested", "conversation", senderId, {
+          event_id: match.event.id,
+          public_slug: normalizeOptionalText(match.settings.event_public_slug) || match.event.slug,
+          sender_id: senderId,
+          reason: attentionReason,
+          message_preview: messagePreview,
+        });
+        void sendAdminAgentPublicChatAttentionNotification({
+          eventId: match.event.id,
+          publicSlug: normalizeOptionalText(match.settings.event_public_slug) || match.event.slug,
+          senderId,
+          reason: attentionReason,
+          messagePreview,
+        });
+      }
+
       const artifacts = await buildWebChatArtifacts(match.event.id, ticketRegistrationIds);
       return res.json({
         status: "ok",
@@ -9905,10 +10045,16 @@ async function startServer() {
         const pageId = normalizeOptionalText(row.page_id);
         const channel = pageId ? channelByExternalId.get(pageId) : undefined;
         const registration = senderId ? registrationBySenderId.get(senderId) : undefined;
+        const publicPageSource = pageId.startsWith("public-event:")
+          ? {
+              platform: "web_chat" as const,
+              display_name: "Public Event Page",
+            }
+          : null;
         return {
           ...row,
-          platform: channel?.platform || null,
-          channel_display_name: channel?.display_name || null,
+          platform: channel?.platform || publicPageSource?.platform || null,
+          channel_display_name: channel?.display_name || publicPageSource?.display_name || null,
           sender_name: registration ? formatRegistrationDisplayName(registration) : null,
           sender_phone: registration ? normalizeOptionalText(registration.phone) : null,
           sender_email: registration ? normalizeOptionalText(registration.email) : null,

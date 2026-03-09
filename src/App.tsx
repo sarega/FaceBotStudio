@@ -3996,7 +3996,8 @@ export default function App() {
 
           const isCreated = row.action === "registration.created";
           const isStatus = allowedStatusActions.has(row.action);
-          if (!isCreated && !isStatus) continue;
+          const isPublicAttention = row.action === "public.chat.attention_requested";
+          if (!isCreated && !isStatus && !isPublicAttention) continue;
           if (isCreated && settings.admin_agent_notification_on_registration_created === "0") continue;
           if (isStatus && settings.admin_agent_notification_on_registration_status_changed === "0") continue;
 
@@ -4009,26 +4010,38 @@ export default function App() {
               : row.action === "registration.cancelled"
               ? "cancelled"
               : "");
+          const attentionReason = String(metadata.reason || "").trim();
           const title = isCreated
             ? "ลงทะเบียนใหม่"
-            : "อัปเดตสถานะลงทะเบียน";
+            : isStatus
+            ? "อัปเดตสถานะลงทะเบียน"
+            : "Public chat needs attention";
           const timeLabel = new Date(row.created_at).toLocaleString("th-TH", {
             dateStyle: "short",
             timeStyle: "short",
           });
-          const body = [
-            eventName,
-            registrationId ? `ID ${registrationId}` : "",
-            statusLabel ? `status ${statusLabel}` : "",
-            timeLabel,
-          ]
-            .filter(Boolean)
-            .join(" • ");
+          const body = isPublicAttention
+            ? [
+                eventName,
+                attentionReason === "bot_failure" ? "bot failure" : "staff request",
+                String(metadata.message_preview || "").trim(),
+                timeLabel,
+              ]
+                .filter(Boolean)
+                .join(" • ")
+            : [
+                eventName,
+                registrationId ? `ID ${registrationId}` : "",
+                statusLabel ? `status ${statusLabel}` : "",
+                timeLabel,
+              ]
+                .filter(Boolean)
+                .join(" • ");
 
           try {
             new Notification(title, {
               body,
-              tag: `reg-audit-${row.id}`,
+              tag: `${isPublicAttention ? "public-chat" : "reg-audit"}-${row.id}`,
               silent: false,
             });
           } catch (notifyError) {
@@ -11696,7 +11709,7 @@ export default function App() {
                         />
                         <span>
                           <span className="font-medium">Enable Auto Notifications</span>
-                          <span className="text-xs text-slate-500">Send registration activity updates to admin automatically.</span>
+                          <span className="text-xs text-slate-500">Send registration activity and public chat attention alerts to admin automatically.</span>
                         </span>
                       </label>
 
@@ -11712,7 +11725,7 @@ export default function App() {
                             />
                             <span>
                               <span className="font-medium">Desktop Notifications (This Browser)</span>
-                              <span className="text-xs text-slate-500">Show native browser notifications from registration changes.</span>
+                              <span className="text-xs text-slate-500">Show native browser notifications from registration changes and public chat attention signals.</span>
                             </span>
                           </label>
                           <ActionButton
