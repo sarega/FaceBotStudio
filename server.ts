@@ -5,7 +5,7 @@ import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
 import QRCode from "qrcode";
 import { createHmac, timingSafeEqual } from "crypto";
-import { readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -74,6 +74,7 @@ import {
 } from "./backend/db/index";
 import { DEFAULT_EVENT_ID, EVENT_SETTING_KEYS, GLOBAL_SETTING_KEYS } from "./backend/db/defaultSettings";
 import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
+import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
 
 dotenv.config();
 
@@ -1520,6 +1521,11 @@ function normalizeSettingsMutationPayload(source: Record<string, unknown>) {
       continue;
     }
 
+    if (key === "event_public_slug") {
+      entries[key] = sanitizeEnglishSlugInput(normalizedValue);
+      continue;
+    }
+
     entries[key] = normalizedValue;
   }
 
@@ -2083,7 +2089,35 @@ async function getRegistrationById(id: string) {
 }
 
 function normalizePublicSlug(rawValue: unknown) {
-  return String(rawValue || "").trim().toLowerCase();
+  return sanitizeEnglishSlugInput(String(rawValue || ""));
+}
+
+const PUBLIC_POSTER_MAX_BYTES = 2 * 1024 * 1024;
+const PUBLIC_POSTER_UPLOAD_DIR = path.join(__dirname, "public", "uploads", "event-posters");
+
+function getPosterExtensionFromMimeType(mimeType: string) {
+  switch (mimeType) {
+    case "image/png":
+      return "png";
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    default:
+      return "";
+  }
+}
+
+function buildPublicPosterRelativeUrl(fileName: string) {
+  return `/uploads/event-posters/${fileName}`;
+}
+
+function resolvePublicPosterAbsolutePath(relativeUrl: string) {
+  const normalized = String(relativeUrl || "").trim();
+  const prefix = "/uploads/event-posters/";
+  if (!normalized.startsWith(prefix)) return "";
+  const fileName = path.basename(normalized);
+  return path.join(PUBLIC_POSTER_UPLOAD_DIR, fileName);
 }
 
 function buildTicketArtifactUrls(registrationId: string) {
@@ -2106,13 +2140,25 @@ async function resolvePublicEventBySlug(rawSlug: string) {
     })),
   );
 
-  const explicitMatch = eventSettingsRows.find(({ settings }) => normalizePublicSlug(settings.event_public_slug) === slug);
+  const explicitMatch = eventSettingsRows.find(({ event, settings }) =>
+    resolveEnglishPublicSlug({
+      customSlug: String(settings.event_public_slug || ""),
+      eventName: String(settings.event_name || event.name || ""),
+      eventSlug: event.slug,
+      eventId: event.id,
+    }) === slug,
+  );
   if (explicitMatch) {
     return explicitMatch;
   }
 
   return eventSettingsRows.find(({ event, settings }) =>
-    !normalizePublicSlug(settings.event_public_slug) && normalizePublicSlug(event.slug) === slug,
+    resolveEnglishPublicSlug({
+      customSlug: String(settings.event_public_slug || ""),
+      eventName: String(settings.event_name || event.name || ""),
+      eventSlug: event.slug,
+      eventId: event.id,
+    }) === slug,
   ) || null;
 }
 
@@ -2124,8 +2170,13 @@ async function buildPublicEventPagePayload(
 
   const capacity = await getEventCapacitySnapshot(event.id, settings);
   const location = buildEventLocationSummaryFromSettings(settings);
-  const summary = String(settings.event_public_summary || "").trim() || String(settings.event_description || "").trim();
-  const publicSlug = String(settings.event_public_slug || "").trim() || event.slug;
+  const summary = resolvePublicSummary(settings.event_public_summary, settings.event_description);
+  const publicSlug = resolveEnglishPublicSlug({
+    customSlug: settings.event_public_slug,
+    eventName: String(settings.event_name || event.name || ""),
+    eventSlug: event.slug,
+    eventId: event.id,
+  });
 
   return {
     event: {
@@ -9356,7 +9407,12 @@ async function startServer() {
         const messagePreview = truncateText(text, 220);
         await recordAudit(req as AuthenticatedRequest, "public.chat.attention_requested", "conversation", senderId, {
           event_id: match.event.id,
-          public_slug: normalizeOptionalText(match.settings.event_public_slug) || match.event.slug,
+          public_slug: resolveEnglishPublicSlug({
+            customSlug: normalizeOptionalText(match.settings.event_public_slug),
+            eventName: normalizeOptionalText(match.settings.event_name) || match.event.name,
+            eventSlug: match.event.slug,
+            eventId: match.event.id,
+          }),
           sender_id: senderId,
           reason: attentionReason,
           message_preview: messagePreview,
@@ -9662,10 +9718,20 @@ async function startServer() {
       if (Object.keys(body).length === 0) {
         return respondValidationError(res, [{ field: "body", message: "No settings payload provided" }]);
       }
+      const event = await appDb.getEventById(eventId);
       const mergedSettings = {
         ...(await getSettingsMap(eventId)),
         ...body,
       };
+      if (Object.prototype.hasOwnProperty.call(body, "event_public_slug")) {
+        body.event_public_slug = resolveEnglishPublicSlug({
+          customSlug: body.event_public_slug,
+          eventName: String(mergedSettings.event_name || event?.name || ""),
+          eventSlug: event?.slug || "",
+          eventId,
+        });
+        mergedSettings.event_public_slug = body.event_public_slug;
+      }
       const timingState = getEventState(mergedSettings);
       if (timingState.registrationStatus === "invalid") {
         return res.status(400).json({ error: "Close date must be later than or equal to open date" });
@@ -9687,6 +9753,69 @@ async function startServer() {
       res.json({ status: "ok" });
     } catch (error) {
       res.status(500).json({ error: "Failed to update settings" });
+    }
+    },
+  );
+
+  app.post(
+    "/api/public-page/poster-upload",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: PUBLIC_POSTER_MAX_BYTES }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      const extension = getPosterExtensionFromMimeType(contentType);
+      if (!extension) {
+        return res.status(400).json({ error: "Poster image must be PNG, JPG, or WebP" });
+      }
+
+      const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return res.status(400).json({ error: "Poster image file is required" });
+      }
+      if (fileBuffer.length > PUBLIC_POSTER_MAX_BYTES) {
+        return res.status(400).json({ error: "Poster image must be 2 MB or smaller" });
+      }
+
+      const event = await appDb.getEventById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+
+      mkdirSync(PUBLIC_POSTER_UPLOAD_DIR, { recursive: true });
+      const nextFileName = `${eventId}-${Date.now().toString(36)}.${extension}`;
+      const nextAbsolutePath = path.join(PUBLIC_POSTER_UPLOAD_DIR, nextFileName);
+      const nextRelativeUrl = buildPublicPosterRelativeUrl(nextFileName);
+      writeFileSync(nextAbsolutePath, fileBuffer);
+
+      const existingSettings = await getSettingsMap(eventId);
+      const previousFilePath = resolvePublicPosterAbsolutePath(String(existingSettings.event_public_poster_url || ""));
+      if (previousFilePath && previousFilePath !== nextAbsolutePath && existsSync(previousFilePath)) {
+        try {
+          unlinkSync(previousFilePath);
+        } catch {
+          // Keep the new upload even if previous file cleanup fails.
+        }
+      }
+
+      await appDb.upsertSettings({ event_public_poster_url: nextRelativeUrl }, eventId);
+      await recordAudit(req, "public.poster_uploaded", "settings", eventId, {
+        event_id: eventId,
+        poster_url: nextRelativeUrl,
+        content_type: contentType,
+        size_bytes: fileBuffer.length,
+      });
+
+      return res.status(201).json({
+        status: "ok",
+        poster_url: nextRelativeUrl,
+        size_bytes: fileBuffer.length,
+      });
+    } catch (error) {
+      console.error("Failed to upload public poster image:", error);
+      return res.status(500).json({ error: "Failed to upload poster image" });
     }
     },
   );
@@ -10053,7 +10182,12 @@ async function startServer() {
         appDb.listRegistrationsBySenderIds(senderIds, eventId),
         appDb.listAuditLogs(500),
       ]);
-      const publicSlug = normalizeOptionalText(eventSettings.event_public_slug) || normalizeOptionalText(event?.slug);
+      const publicSlug = resolveEnglishPublicSlug({
+        customSlug: normalizeOptionalText(eventSettings.event_public_slug),
+        eventName: normalizeOptionalText(eventSettings.event_name) || normalizeOptionalText(event?.name),
+        eventSlug: normalizeOptionalText(event?.slug),
+        eventId,
+      });
       const registrationBySenderId = new Map<string, RegistrationRow>();
       for (const registration of registrations) {
         const senderId = normalizeOptionalText(registration.sender_id);
@@ -10164,7 +10298,12 @@ async function startServer() {
         appDb.listAuditLogs(500),
       ]);
       const registration = registrations[0] || null;
-      const publicSlug = normalizeOptionalText(eventSettings.event_public_slug) || normalizeOptionalText(event?.slug);
+      const publicSlug = resolveEnglishPublicSlug({
+        customSlug: normalizeOptionalText(eventSettings.event_public_slug),
+        eventName: normalizeOptionalText(eventSettings.event_name) || normalizeOptionalText(event?.name),
+        eventSlug: normalizeOptionalText(event?.slug),
+        eventId,
+      });
       const relevantAudits = audits.filter((row) =>
         normalizeOptionalText(row.target_type) === "conversation"
         && normalizeOptionalText(row.target_id) === senderId
@@ -10258,7 +10397,12 @@ async function startServer() {
         : "open";
       const event = await appDb.getEventById(eventId);
       const eventSettings = await getSettingsMap(eventId);
-      const publicSlug = normalizeOptionalText(eventSettings.event_public_slug) || normalizeOptionalText(event?.slug);
+      const publicSlug = resolveEnglishPublicSlug({
+        customSlug: normalizeOptionalText(eventSettings.event_public_slug),
+        eventName: normalizeOptionalText(eventSettings.event_name) || normalizeOptionalText(event?.name),
+        eventSlug: normalizeOptionalText(event?.slug),
+        eventId,
+      });
 
       await recordAudit(req, "public.chat.status_updated", "conversation", senderId, {
         event_id: eventId,

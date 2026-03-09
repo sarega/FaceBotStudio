@@ -47,6 +47,7 @@ import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
 import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
+import { PUBLIC_SUMMARY_MAX_WORDS, countApproxWords, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./lib/publicEventPage";
 
 interface Registration {
   id: string;
@@ -2600,7 +2601,7 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
         : INITIAL_SETTINGS.event_public_page_enabled,
     event_public_slug:
       typeof data.event_public_slug === "string"
-        ? data.event_public_slug.trim()
+        ? sanitizeEnglishSlugInput(data.event_public_slug)
         : INITIAL_SETTINGS.event_public_slug,
     event_public_poster_url:
       typeof data.event_public_poster_url === "string"
@@ -2686,13 +2687,7 @@ function normalizeSearchQuery(value: string | null | undefined) {
 }
 
 function buildPublicEventSlug(value: string) {
-  const normalized = value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return normalized || "event";
+  return resolveEnglishPublicSlug({ eventName: value });
 }
 
 function getPublicEventSlugFromPath(pathname: string) {
@@ -2796,6 +2791,7 @@ export default function App() {
   const [publicEventPage, setPublicEventPage] = useState<PublicEventPageResponse | null>(null);
   const [publicEventLoading, setPublicEventLoading] = useState(false);
   const [publicEventError, setPublicEventError] = useState("");
+  const [publicPosterUploading, setPublicPosterUploading] = useState(false);
   const [publicRegistrationForm, setPublicRegistrationForm] = useState<PublicRegistrationFormState>({
     first_name: "",
     last_name: "",
@@ -2813,6 +2809,7 @@ export default function App() {
   const [publicChatSending, setPublicChatSending] = useState(false);
   const [publicChatError, setPublicChatError] = useState("");
   const publicChatBodyRef = useRef<HTMLDivElement | null>(null);
+  const publicPosterFileInputRef = useRef<HTMLInputElement | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [logsHasMore, setLogsHasMore] = useState(false);
   const [logsLoadingMore, setLogsLoadingMore] = useState(false);
@@ -3188,12 +3185,16 @@ export default function App() {
   const eventMapEmbedUrl = buildGoogleMapsEmbedUrl(settings);
   const eventMapIsGenerated = !settings.event_map_url.trim() && Boolean(resolvedEventMapUrl);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
-  const resolvedPublicPageSlug =
-    settings.event_public_slug.trim()
-    || selectedEvent?.slug
-    || buildPublicEventSlug(settings.event_name || selectedEvent?.name || "");
+  const resolvedPublicPageSlug = resolveEnglishPublicSlug({
+    customSlug: settings.event_public_slug,
+    eventName: settings.event_name || selectedEvent?.name || "",
+    eventSlug: selectedEvent?.slug || "",
+    eventId: selectedEvent?.id || selectedEventId,
+  });
   const publicPagePreviewPath = `/events/${encodeURIComponent(resolvedPublicPageSlug)}`;
-  const publicPageSummary = settings.event_public_summary.trim() || settings.event_description.trim();
+  const publicPageAutoSummary = resolvePublicSummary("", settings.event_description);
+  const publicPageSummary = resolvePublicSummary(settings.event_public_summary, settings.event_description);
+  const publicPageSummaryWordCount = countApproxWords(settings.event_public_summary);
   const publicPagePosterUrl = settings.event_public_poster_url.trim();
   const publicPageEnabled = settings.event_public_page_enabled === "1";
   const publicRegistrationEnabled = settings.event_public_registration_enabled === "1";
@@ -4418,6 +4419,7 @@ export default function App() {
     setMessages([]);
     setLogsHasMore(false);
     setLogsLoadingMore(false);
+    setPublicPosterUploading(false);
     setPublicInboxConversations([]);
     setPublicInboxMessage("");
     setPublicInboxSearchQuery("");
@@ -5401,6 +5403,7 @@ export default function App() {
 
   const normalizeSettingsForSave = (source: Settings): Settings => ({
     ...source,
+    event_public_slug: sanitizeEnglishSlugInput(source.event_public_slug),
     event_date: normalizeDateTimeLocalValue(source.event_date),
     event_end_date: normalizeDateTimeLocalValue(source.event_end_date),
     reg_start: normalizeDateTimeLocalValue(source.reg_start),
@@ -5585,11 +5588,11 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasAnyUnsavedSettings]);
 
-  const saveSettingsSubset = async (keys: Array<keyof Settings>, successLabel: string) => {
+  const saveSettingsSubset = async (keys: Array<keyof Settings>, successLabel: string, sourceSettings?: Settings) => {
     setSaving(true);
     setSettingsMessage("");
     try {
-      const normalized = normalizeSettingsForSave(settings);
+      const normalized = normalizeSettingsForSave(sourceSettings || settings);
       const payload = Object.fromEntries(keys.map((key) => [key, normalized[key]])) as Partial<Settings>;
       const res = await apiFetch("/api/settings", {
         method: "POST",
@@ -5661,6 +5664,16 @@ export default function App() {
   };
 
   const saveEventPublicPage = async () => {
+    const nextSettings = {
+      ...settings,
+      event_public_slug: resolveEnglishPublicSlug({
+        customSlug: settings.event_public_slug,
+        eventName: settings.event_name || selectedEvent?.name || "",
+        eventSlug: selectedEvent?.slug || "",
+        eventId: selectedEvent?.id || selectedEventId,
+      }),
+    };
+    setSettings(nextSettings);
     const saved = await saveSettingsSubset([
       "event_public_page_enabled",
       "event_public_slug",
@@ -5679,10 +5692,70 @@ export default function App() {
       "event_public_contact_line_url",
       "event_public_contact_phone",
       "event_public_contact_hours",
-    ], "Public page settings saved");
+    ], "Public page settings saved", nextSettings);
 
     if (saved) {
       await fetchEvents();
+    }
+  };
+
+  const handlePublicPosterFileUpload = async (file: File | null) => {
+    if (!file || !selectedEventId) return;
+
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    if (!allowedTypes.has(file.type)) {
+      setSettingsMessage("Poster image must be PNG, JPG, or WebP");
+      if (publicPosterFileInputRef.current) {
+        publicPosterFileInputRef.current.value = "";
+      }
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setSettingsMessage("Poster image must be 2 MB or smaller");
+      if (publicPosterFileInputRef.current) {
+        publicPosterFileInputRef.current.value = "";
+      }
+      return;
+    }
+
+    setPublicPosterUploading(true);
+    setSettingsMessage("");
+    try {
+      const params = new URLSearchParams({ event_id: selectedEventId });
+      const res = await apiFetch(`/api/public-page/poster-upload?${params.toString()}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type,
+          "x-file-name": file.name,
+        },
+        body: await file.arrayBuffer(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to upload poster image");
+      }
+      const posterUrl = String((data as { poster_url?: string }).poster_url || "").trim();
+      if (!posterUrl) {
+        throw new Error("Poster upload did not return a file URL");
+      }
+
+      setSettings((current) => ({
+        ...current,
+        event_public_poster_url: posterUrl,
+      }));
+      setSavedSettings((current) => ({
+        ...current,
+        event_public_poster_url: posterUrl,
+      }));
+      setSettingsMessage("Poster image uploaded");
+      window.setTimeout(() => setSettingsMessage(""), 2500);
+    } catch (err) {
+      setSettingsMessage(err instanceof Error ? err.message : "Failed to upload poster image");
+    } finally {
+      setPublicPosterUploading(false);
+      if (publicPosterFileInputRef.current) {
+        publicPosterFileInputRef.current.value = "";
+      }
     }
   };
 
@@ -9956,14 +10029,32 @@ export default function App() {
 
                               <div className="md:col-span-2">
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Poster Image URL</label>
-                                <input
-                                  value={settings.event_public_poster_url}
-                                  onChange={(e) => setSettings({ ...settings, event_public_poster_url: e.target.value })}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  placeholder="https://.../event-poster.jpg"
-                                />
+                                <div className="flex flex-col gap-2 sm:flex-row">
+                                  <input
+                                    value={settings.event_public_poster_url}
+                                    onChange={(e) => setSettings({ ...settings, event_public_poster_url: e.target.value })}
+                                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="/uploads/event-posters/... or https://.../event-poster.jpg"
+                                  />
+                                  <input
+                                    ref={publicPosterFileInputRef}
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/webp"
+                                    className="hidden"
+                                    onChange={(event) => void handlePublicPosterFileUpload(event.target.files?.[0] || null)}
+                                  />
+                                  <ActionButton
+                                    onClick={() => publicPosterFileInputRef.current?.click()}
+                                    disabled={publicPosterUploading}
+                                    tone="neutral"
+                                    className="shrink-0 px-3 text-xs"
+                                  >
+                                    {publicPosterUploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                                    Upload Poster
+                                  </ActionButton>
+                                </div>
                                 <p className="mt-1 text-[11px] text-slate-500">
-                                  Start with a hosted image URL. Admin upload can be added later without changing the public page structure.
+                                  Upload PNG, JPG, or WebP up to 2 MB, or paste a hosted image URL manually.
                                 </p>
                               </div>
 
@@ -9971,25 +10062,32 @@ export default function App() {
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Public Slug</label>
                                 <input
                                   value={settings.event_public_slug}
-                                  onChange={(e) => setSettings({ ...settings, event_public_slug: e.target.value })}
+                                  onChange={(e) => setSettings({ ...settings, event_public_slug: sanitizeEnglishSlugInput(e.target.value) })}
                                   className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  placeholder={selectedEvent?.slug || "event-slug"}
+                                  placeholder={resolvedPublicPageSlug || "event-page"}
                                 />
                                 <div className="mt-2 flex flex-wrap items-center gap-2">
                                   <ActionButton
                                     onClick={() =>
                                       setSettings({
                                         ...settings,
-                                        event_public_slug: selectedEvent?.slug || buildPublicEventSlug(settings.event_name),
+                                        event_public_slug: resolveEnglishPublicSlug({
+                                          eventName: settings.event_name || selectedEvent?.name || "",
+                                          eventSlug: selectedEvent?.slug || "",
+                                          eventId: selectedEvent?.id || selectedEventId,
+                                        }),
                                       })
                                     }
                                     tone="neutral"
                                     className="px-3 text-xs"
                                   >
-                                    Use Event Slug
+                                    Generate English Slug
                                   </ActionButton>
                                   <span className="text-[11px] text-slate-500">Target route: <span className="font-mono text-slate-700">{publicPagePreviewPath}</span></span>
                                 </div>
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  Lowercase English letters, numbers, and hyphens only. Slug is auto-shortened for cleaner URLs.
+                                </p>
                               </div>
 
                               <div>
@@ -10009,8 +10107,34 @@ export default function App() {
                                   onChange={(e) => setSettings({ ...settings, event_public_summary: e.target.value })}
                                   rows={4}
                                   className="w-full min-h-[7rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
-                                  placeholder="Short event summary for the public page hero. Leave blank to reuse the internal event description."
+                                  placeholder="Leave blank to auto-generate a short public summary from the event description."
                                 />
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <ActionButton
+                                    onClick={() => setSettings({ ...settings, event_public_summary: publicPageAutoSummary })}
+                                    disabled={!publicPageAutoSummary}
+                                    tone="neutral"
+                                    className="px-3 text-xs"
+                                  >
+                                    Use Auto Summary
+                                  </ActionButton>
+                                  <ActionButton
+                                    onClick={() => setSettings({ ...settings, event_public_summary: "" })}
+                                    disabled={!settings.event_public_summary.trim()}
+                                    tone="neutral"
+                                    className="px-3 text-xs"
+                                  >
+                                    Clear Override
+                                  </ActionButton>
+                                  <span className="text-[11px] text-slate-500">
+                                    {settings.event_public_summary.trim()
+                                      ? `${publicPageSummaryWordCount} words in custom summary`
+                                      : `Auto summary stays within ${PUBLIC_SUMMARY_MAX_WORDS} words`}
+                                  </span>
+                                </div>
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  Auto preview: <span className="text-slate-700">{publicPageAutoSummary || "Add an event description first."}</span>
+                                </p>
                               </div>
 
                               <div className="md:col-span-2">
