@@ -63,6 +63,7 @@ import {
 } from "./backend/datetime";
 import {
   createAppDatabase,
+  type AuditLogRow,
   type AuthUserRow,
   type ChannelPlatform,
   type EventDocumentChunkEmbeddingRow,
@@ -239,6 +240,7 @@ type BotReplyResult = {
 };
 
 type PublicChatAttentionReason = "handoff_request" | "bot_failure";
+type PublicInboxConversationStatus = "open" | "waiting-admin" | "waiting-user" | "resolved";
 
 type FailedInboundTurn = {
   inputText: string;
@@ -1099,6 +1101,34 @@ function reservePublicChatAttention(eventId: string, senderId: string, reason: P
     }
   }
   return true;
+}
+
+function normalizePublicInboxConversationStatus(value: unknown): PublicInboxConversationStatus {
+  const normalized = normalizeComparableText(value);
+  if (normalized === "waiting-admin" || normalized === "waiting-user" || normalized === "resolved") {
+    return normalized;
+  }
+  return "open";
+}
+
+function getPublicInboxStatusLabel(status: PublicInboxConversationStatus) {
+  switch (status) {
+    case "waiting-admin":
+      return "waiting admin";
+    case "waiting-user":
+      return "waiting user";
+    case "resolved":
+      return "resolved";
+    default:
+      return "open";
+  }
+}
+
+function getPublicInboxParticipantLabel(registration?: RegistrationRow | null, senderId?: string) {
+  const senderName = registration ? formatRegistrationDisplayName(registration) : "";
+  if (senderName) return senderName;
+  const normalizedSenderId = normalizeOptionalText(senderId);
+  return normalizedSenderId ? truncateText(normalizedSenderId, 42) : "Unknown visitor";
 }
 
 function buildEventLocationSummaryFromSettings(settings: Record<string, unknown>) {
@@ -8055,9 +8085,10 @@ async function startServer() {
             objectSrc: ["'none'"],
             scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", "data:", "blob:"],
+            imgSrc: ["'self'", "data:", "blob:", "https:"],
             fontSrc: ["'self'", "data:"],
             connectSrc: ["'self'"],
+            frameSrc: ["'self'", "https://www.google.com", "https://maps.google.com"],
             workerSrc: ["'self'", "blob:"],
             formAction: ["'self'"],
           },
@@ -9995,6 +10026,258 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to update document status:", error);
       res.status(500).json({ error: "Failed to update document status" });
+    }
+    },
+  );
+
+  app.get(
+    "/api/public-inbox",
+    requireRoles(["owner", "admin", "operator", "viewer"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const pageId = `public-event:${eventId}`;
+      const messageLimit = parsePositiveInteger(req.query?.limit, 400, 1200);
+      const rows = (await appDb.listMessages(messageLimit, eventId))
+        .filter((row) => normalizeOptionalText(row.page_id) === pageId);
+
+      if (rows.length === 0) {
+        return res.json({ items: [] });
+      }
+
+      const senderIds = [...new Set(rows.map((row) => normalizeOptionalText(row.sender_id)).filter(Boolean))];
+      const [event, eventSettings, registrations, audits] = await Promise.all([
+        appDb.getEventById(eventId),
+        getSettingsMap(eventId),
+        appDb.listRegistrationsBySenderIds(senderIds, eventId),
+        appDb.listAuditLogs(500),
+      ]);
+      const publicSlug = normalizeOptionalText(eventSettings.event_public_slug) || normalizeOptionalText(event?.slug);
+      const registrationBySenderId = new Map<string, RegistrationRow>();
+      for (const registration of registrations) {
+        const senderId = normalizeOptionalText(registration.sender_id);
+        if (!senderId || registrationBySenderId.has(senderId)) continue;
+        registrationBySenderId.set(senderId, registration);
+      }
+
+      const relevantAudits = audits.filter((row) => {
+        if (normalizeOptionalText(row.target_type) !== "conversation") return false;
+        const senderId = normalizeOptionalText(row.target_id);
+        if (!senderId || !senderIds.includes(senderId)) return false;
+        const auditEventId = normalizeOptionalText(row.metadata?.event_id);
+        if (auditEventId !== eventId) return false;
+        return row.action === "public.chat.attention_requested" || row.action === "public.chat.status_updated";
+      });
+
+      const auditsBySenderId = new Map<string, AuditLogRow[]>();
+      for (const row of relevantAudits) {
+        const senderId = normalizeOptionalText(row.target_id);
+        if (!senderId) continue;
+        const list = auditsBySenderId.get(senderId) || [];
+        list.push(row);
+        auditsBySenderId.set(senderId, list);
+      }
+
+      const messageRowsBySenderId = new Map<string, MessageRow[]>();
+      for (const row of rows) {
+        const senderId = normalizeOptionalText(row.sender_id);
+        if (!senderId) continue;
+        const list = messageRowsBySenderId.get(senderId) || [];
+        list.push(row);
+        messageRowsBySenderId.set(senderId, list);
+      }
+
+      const items = [...messageRowsBySenderId.entries()]
+        .map(([senderId, senderRows]) => {
+          const registration = registrationBySenderId.get(senderId) || null;
+          const lastMessage = senderRows[0];
+          const lastIncoming = senderRows.find((row) => row.type === "incoming") || null;
+          const lastOutgoing = senderRows.find((row) => row.type === "outgoing") || null;
+          const senderAudits = auditsBySenderId.get(senderId) || [];
+          const latestStatusAudit = senderAudits.find((row) => row.action === "public.chat.status_updated") || null;
+          const latestAttentionAudit = senderAudits.find((row) => row.action === "public.chat.attention_requested") || null;
+          const status = latestStatusAudit
+            ? normalizePublicInboxConversationStatus(latestStatusAudit.metadata?.status)
+            : latestAttentionAudit
+            ? "waiting-admin"
+            : "open";
+          return {
+            sender_id: senderId,
+            event_id: eventId,
+            public_slug: publicSlug,
+            participant_label: getPublicInboxParticipantLabel(registration, senderId),
+            sender_name: registration ? formatRegistrationDisplayName(registration) : null,
+            sender_phone: registration ? normalizeOptionalText(registration.phone) : null,
+            sender_email: registration ? normalizeOptionalText(registration.email) : null,
+            registration_id: registration?.id || null,
+            status,
+            needs_attention: status === "waiting-admin",
+            attention_reason: latestAttentionAudit ? normalizeOptionalText(latestAttentionAudit.metadata?.reason) || null : null,
+            last_message_text: truncateText(normalizeOptionalText(lastMessage?.text), 220),
+            last_message_type: lastMessage?.type === "incoming" ? "incoming" : "outgoing",
+            last_message_at: normalizeOptionalText(lastMessage?.timestamp),
+            last_incoming_at: lastIncoming ? normalizeOptionalText(lastIncoming.timestamp) : null,
+            last_outgoing_at: lastOutgoing ? normalizeOptionalText(lastOutgoing.timestamp) : null,
+            message_count: senderRows.length,
+          };
+        })
+        .sort((left, right) => {
+          if (left.needs_attention !== right.needs_attention) {
+            return left.needs_attention ? -1 : 1;
+          }
+          return String(right.last_message_at || "").localeCompare(String(left.last_message_at || ""));
+        });
+
+      return res.json({ items });
+    } catch (error) {
+      console.error("Failed to fetch public inbox conversations:", error);
+      return res.status(500).json({ error: "Failed to fetch public inbox conversations" });
+    }
+    },
+  );
+
+  app.get(
+    "/api/public-inbox/conversation",
+    requireRoles(["owner", "admin", "operator", "viewer"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const senderId = normalizeOptionalText(req.query?.sender_id);
+      if (!senderId) {
+        return res.status(400).json({ error: "sender_id is required" });
+      }
+
+      const pageId = `public-event:${eventId}`;
+      const rows = (await appDb.getConversationRowsForSender(senderId, 240, eventId))
+        .filter((row) => normalizeOptionalText(row.page_id) === pageId)
+        .sort((left, right) => left.id - right.id);
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "Public inbox conversation not found" });
+      }
+
+      const [event, eventSettings, registrations, audits] = await Promise.all([
+        appDb.getEventById(eventId),
+        getSettingsMap(eventId),
+        appDb.listRegistrationsBySenderIds([senderId], eventId),
+        appDb.listAuditLogs(500),
+      ]);
+      const registration = registrations[0] || null;
+      const publicSlug = normalizeOptionalText(eventSettings.event_public_slug) || normalizeOptionalText(event?.slug);
+      const relevantAudits = audits.filter((row) =>
+        normalizeOptionalText(row.target_type) === "conversation"
+        && normalizeOptionalText(row.target_id) === senderId
+        && normalizeOptionalText(row.metadata?.event_id) === eventId
+        && (row.action === "public.chat.attention_requested" || row.action === "public.chat.status_updated")
+      );
+      const latestStatusAudit = relevantAudits.find((row) => row.action === "public.chat.status_updated") || null;
+      const latestAttentionAudit = relevantAudits.find((row) => row.action === "public.chat.attention_requested") || null;
+      const status = latestStatusAudit
+        ? normalizePublicInboxConversationStatus(latestStatusAudit.metadata?.status)
+        : latestAttentionAudit
+        ? "waiting-admin"
+        : "open";
+      const lastMessage = rows[rows.length - 1];
+      const lastIncoming = [...rows].reverse().find((row) => row.type === "incoming") || null;
+      const lastOutgoing = [...rows].reverse().find((row) => row.type === "outgoing") || null;
+
+      return res.json({
+        conversation: {
+          sender_id: senderId,
+          event_id: eventId,
+          public_slug: publicSlug,
+          participant_label: getPublicInboxParticipantLabel(registration, senderId),
+          sender_name: registration ? formatRegistrationDisplayName(registration) : null,
+          sender_phone: registration ? normalizeOptionalText(registration.phone) : null,
+          sender_email: registration ? normalizeOptionalText(registration.email) : null,
+          registration_id: registration?.id || null,
+          status,
+          needs_attention: status === "waiting-admin",
+          attention_reason: latestAttentionAudit ? normalizeOptionalText(latestAttentionAudit.metadata?.reason) || null : null,
+          last_message_text: truncateText(normalizeOptionalText(lastMessage?.text), 220),
+          last_message_type: lastMessage?.type === "incoming" ? "incoming" : "outgoing",
+          last_message_at: normalizeOptionalText(lastMessage?.timestamp),
+          last_incoming_at: lastIncoming ? normalizeOptionalText(lastIncoming.timestamp) : null,
+          last_outgoing_at: lastOutgoing ? normalizeOptionalText(lastOutgoing.timestamp) : null,
+          message_count: rows.length,
+        },
+        messages: rows.map((row) => ({
+          ...row,
+          platform: "web_chat",
+          channel_display_name: "Public Event Page",
+          sender_name: registration ? formatRegistrationDisplayName(registration) : null,
+          sender_phone: registration ? normalizeOptionalText(registration.phone) : null,
+          sender_email: registration ? normalizeOptionalText(registration.email) : null,
+          registration_id: registration?.id || null,
+        })),
+      });
+    } catch (error) {
+      console.error("Failed to fetch public inbox conversation:", error);
+      return res.status(500).json({ error: "Failed to fetch public inbox conversation" });
+    }
+    },
+  );
+
+  app.post(
+    "/api/public-inbox/status",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const eventId = getRequestedEventId(req);
+      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 240 });
+      const rawStatus = readEnumValue(body, "status", ["open", "waiting-admin", "waiting-user", "resolved"] as const, issues, {
+        required: true,
+        label: "status",
+      });
+      const note = readOptionalString(body, "note", 320);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+      const status = rawStatus as PublicInboxConversationStatus;
+
+      const pageId = `public-event:${eventId}`;
+      const rows = (await appDb.getConversationRowsForSender(senderId, 10, eventId))
+        .filter((row) => normalizeOptionalText(row.page_id) === pageId);
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "Public inbox conversation not found" });
+      }
+
+      const audits = await appDb.listAuditLogs(200);
+      const latestStatusAudit = audits.find((row) =>
+        row.action === "public.chat.status_updated"
+        && normalizeOptionalText(row.target_type) === "conversation"
+        && normalizeOptionalText(row.target_id) === senderId
+        && normalizeOptionalText(row.metadata?.event_id) === eventId
+      ) || null;
+      const previousStatus = latestStatusAudit
+        ? normalizePublicInboxConversationStatus(latestStatusAudit.metadata?.status)
+        : "open";
+      const event = await appDb.getEventById(eventId);
+      const eventSettings = await getSettingsMap(eventId);
+      const publicSlug = normalizeOptionalText(eventSettings.event_public_slug) || normalizeOptionalText(event?.slug);
+
+      await recordAudit(req, "public.chat.status_updated", "conversation", senderId, {
+        event_id: eventId,
+        public_slug: publicSlug,
+        sender_id: senderId,
+        previous_status: previousStatus,
+        status,
+        note: note || null,
+      });
+
+      return res.json({
+        status: "ok",
+        sender_id: senderId,
+        conversation_status: status,
+        conversation_status_label: getPublicInboxStatusLabel(status),
+      });
+    } catch (error) {
+      console.error("Failed to update public inbox conversation status:", error);
+      return res.status(500).json({ error: "Failed to update public inbox conversation status" });
     }
     },
   );

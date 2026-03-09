@@ -1,4 +1,4 @@
-import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
+import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import { 
@@ -45,7 +45,7 @@ import {
 import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 
 interface Registration {
@@ -95,7 +95,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin";
+type AppTab = "event" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin" | "inbox";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -295,6 +295,24 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       {
         label: "Access links",
         body: "Generate separate mobile-friendly check-in sessions for staff so they can work without full admin access.",
+      },
+    ],
+  },
+  inbox: {
+    title: "Public Inbox Help",
+    summary: "Monitor attendee conversations coming from the public event page, decide who needs follow-up, and keep the thread state explicit.",
+    points: [
+      {
+        label: "Attention queue",
+        body: "Threads move to waiting-admin when the attendee asks for a human or when the bot fails. Use that as the triage queue first.",
+      },
+      {
+        label: "Status flow",
+        body: "Mark waiting-user after you have given instructions and are expecting the attendee to respond. Mark resolved only when the issue is clearly closed.",
+      },
+      {
+        label: "Scope",
+        body: "This tab only covers conversations from the public event page. Messenger, LINE, and other channels remain in the general logs view.",
       },
     ],
   },
@@ -1440,6 +1458,43 @@ function getRegistrationStatusTone(status: string | null | undefined): BadgeTone
       return "neutral";
     default:
       return "blue";
+  }
+}
+
+function getPublicInboxStatusTone(status: PublicInboxConversationStatus): BadgeTone {
+  switch (status) {
+    case "waiting-admin":
+      return "rose";
+    case "waiting-user":
+      return "amber";
+    case "resolved":
+      return "emerald";
+    default:
+      return "blue";
+  }
+}
+
+function getPublicInboxStatusLabel(status: PublicInboxConversationStatus) {
+  switch (status) {
+    case "waiting-admin":
+      return "Waiting Admin";
+    case "waiting-user":
+      return "Waiting User";
+    case "resolved":
+      return "Resolved";
+    default:
+      return "Open";
+  }
+}
+
+function getPublicInboxAttentionReasonLabel(reason: string | null | undefined) {
+  switch (String(reason || "").trim()) {
+    case "handoff_request":
+      return "Human requested";
+    case "bot_failure":
+      return "Bot failure";
+    default:
+      return "";
   }
 }
 
@@ -2761,6 +2816,16 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [logsHasMore, setLogsHasMore] = useState(false);
   const [logsLoadingMore, setLogsLoadingMore] = useState(false);
+  const [publicInboxConversations, setPublicInboxConversations] = useState<PublicInboxConversationSummary[]>([]);
+  const [publicInboxLoading, setPublicInboxLoading] = useState(false);
+  const [publicInboxMessage, setPublicInboxMessage] = useState("");
+  const [publicInboxSearchQuery, setPublicInboxSearchQuery] = useState("");
+  const [publicInboxStatusFilter, setPublicInboxStatusFilter] = useState<"all" | "attention" | PublicInboxConversationStatus>("all");
+  const [selectedPublicInboxSenderId, setSelectedPublicInboxSenderId] = useState("");
+  const [selectedPublicInboxConversation, setSelectedPublicInboxConversation] = useState<PublicInboxConversationSummary | null>(null);
+  const [publicInboxConversationMessages, setPublicInboxConversationMessages] = useState<Message[]>([]);
+  const [publicInboxConversationLoading, setPublicInboxConversationLoading] = useState(false);
+  const [publicInboxStatusUpdating, setPublicInboxStatusUpdating] = useState(false);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
@@ -2903,6 +2968,7 @@ export default function App() {
   const scannerCooldownRef = useRef(false);
   const documentFileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedEventIdRef = useRef("");
+  const selectedPublicInboxSenderIdRef = useRef("");
   const settingsRef = useRef(INITIAL_SETTINGS);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
@@ -2927,6 +2993,7 @@ export default function App() {
   const desktopNotifyBootstrappedRef = useRef(false);
   const desktopNotifyLastAuditIdRef = useRef(0);
   selectedEventIdRef.current = selectedEventId;
+  selectedPublicInboxSenderIdRef.current = selectedPublicInboxSenderId;
   settingsRef.current = settings;
 
   const currentPathname = typeof window !== "undefined" ? window.location.pathname : "/";
@@ -2960,6 +3027,7 @@ export default function App() {
   const deferredRegistrationListQuery = useDeferredValue(normalizeSearchQuery(registrationListQuery));
   const deferredDocumentListQuery = useDeferredValue(normalizeSearchQuery(documentListQuery));
   const deferredLogListQuery = useDeferredValue(normalizeSearchQuery(logListQuery));
+  const deferredPublicInboxQuery = useDeferredValue(normalizeSearchQuery(publicInboxSearchQuery));
   const deferredAdminCommandPaletteQuery = useDeferredValue(normalizeSearchQuery(adminCommandPaletteQuery));
   const adminAgentChatStorageKey = authUser?.id
     ? `${authUser.id}:global`
@@ -3083,7 +3151,7 @@ export default function App() {
     { id: "public" as const, icon: Eye, label: "Public Page", description: "Poster, public copy, and privacy messaging" },
   ];
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
-  const isOperationsTab = activeTab === "registrations" || activeTab === "checkin" || activeTab === "logs";
+  const isOperationsTab = activeTab === "registrations" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const primaryTabs = [
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
@@ -3102,6 +3170,7 @@ export default function App() {
   ];
   const operationsTabs = [
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
+    ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: "Public Inbox" }] : []),
     ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: "Check-in" }] : []),
     ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: "Logs" }] : []),
   ];
@@ -3389,6 +3458,37 @@ export default function App() {
       parseLineTraceMessage(message.text)?.detail,
     ]),
   );
+  const filteredPublicInboxConversations = publicInboxConversations.filter((conversation) => {
+    const matchesStatus =
+      publicInboxStatusFilter === "all"
+        ? true
+        : publicInboxStatusFilter === "attention"
+        ? conversation.needs_attention
+        : conversation.status === publicInboxStatusFilter;
+    return matchesStatus && matchesSearchQuery(deferredPublicInboxQuery, [
+      conversation.participant_label,
+      conversation.sender_name,
+      conversation.sender_phone,
+      conversation.sender_email,
+      conversation.registration_id,
+      conversation.sender_id,
+      conversation.last_message_text,
+      conversation.public_slug,
+      conversation.attention_reason,
+      getPublicInboxStatusLabel(conversation.status),
+    ]);
+  });
+  const publicInboxCounts = {
+    all: publicInboxConversations.length,
+    attention: publicInboxConversations.filter((conversation) => conversation.needs_attention).length,
+    open: publicInboxConversations.filter((conversation) => conversation.status === "open").length,
+    "waiting-admin": publicInboxConversations.filter((conversation) => conversation.status === "waiting-admin").length,
+    "waiting-user": publicInboxConversations.filter((conversation) => conversation.status === "waiting-user").length,
+    resolved: publicInboxConversations.filter((conversation) => conversation.status === "resolved").length,
+  };
+  const activePublicInboxConversation =
+    publicInboxConversations.find((conversation) => conversation.sender_id === selectedPublicInboxSenderId)
+    || selectedPublicInboxConversation;
   const selectedLogMessage =
     filteredMessages.find((message) => message.id === selectedLogMessageId)
     || filteredMessages[0]
@@ -3627,6 +3727,65 @@ export default function App() {
       email: String(value.email || ""),
       timestamp: String(value.timestamp || ""),
       status: String(value.status || "registered"),
+    };
+  };
+
+  const normalizePublicInboxConversationStatusValue = (value: unknown): PublicInboxConversationStatus => {
+    const status = String(value || "").trim();
+    if (status === "waiting-admin" || status === "waiting-user" || status === "resolved") {
+      return status;
+    }
+    return "open";
+  };
+
+  const normalizePublicInboxConversationSummary = (value: unknown): PublicInboxConversationSummary | null => {
+    if (!value || typeof value !== "object") return null;
+    const row = value as Record<string, unknown>;
+    const senderId = String(row.sender_id || "").trim();
+    const eventId = String(row.event_id || "").trim();
+    if (!senderId || !eventId) return null;
+    return {
+      sender_id: senderId,
+      event_id: eventId,
+      public_slug: String(row.public_slug || "").trim(),
+      participant_label: String(row.participant_label || senderId).trim() || senderId,
+      sender_name: row.sender_name == null ? null : String(row.sender_name || "").trim() || null,
+      sender_phone: row.sender_phone == null ? null : String(row.sender_phone || "").trim() || null,
+      sender_email: row.sender_email == null ? null : String(row.sender_email || "").trim() || null,
+      registration_id: row.registration_id == null ? null : String(row.registration_id || "").trim() || null,
+      status: normalizePublicInboxConversationStatusValue(row.status),
+      needs_attention: Boolean(row.needs_attention),
+      attention_reason: row.attention_reason == null ? null : String(row.attention_reason || "").trim() || null,
+      last_message_text: String(row.last_message_text || "").trim(),
+      last_message_type: row.last_message_type === "outgoing" ? "outgoing" : "incoming",
+      last_message_at: String(row.last_message_at || "").trim(),
+      last_incoming_at: row.last_incoming_at == null ? null : String(row.last_incoming_at || "").trim() || null,
+      last_outgoing_at: row.last_outgoing_at == null ? null : String(row.last_outgoing_at || "").trim() || null,
+      message_count: Math.max(0, Number(row.message_count || 0) || 0),
+    };
+  };
+
+  const normalizePublicInboxMessage = (value: unknown): Message | null => {
+    if (!value || typeof value !== "object") return null;
+    const row = value as Record<string, unknown>;
+    const senderId = String(row.sender_id || "").trim();
+    const text = String(row.text || "");
+    const timestamp = String(row.timestamp || "").trim();
+    if (!senderId || !timestamp) return null;
+    return {
+      id: typeof row.id === "number" ? row.id : Number.isFinite(Number(row.id)) ? Number(row.id) : undefined,
+      sender_id: senderId,
+      event_id: row.event_id == null ? null : String(row.event_id || "").trim() || null,
+      page_id: row.page_id == null ? null : String(row.page_id || "").trim() || null,
+      platform: row.platform == null ? null : String(row.platform || "").trim() as ChannelPlatform | null,
+      channel_display_name: row.channel_display_name == null ? null : String(row.channel_display_name || "").trim() || null,
+      sender_name: row.sender_name == null ? null : String(row.sender_name || "").trim() || null,
+      sender_phone: row.sender_phone == null ? null : String(row.sender_phone || "").trim() || null,
+      sender_email: row.sender_email == null ? null : String(row.sender_email || "").trim() || null,
+      registration_id: row.registration_id == null ? null : String(row.registration_id || "").trim() || null,
+      text,
+      timestamp,
+      type: row.type === "outgoing" ? "outgoing" : "incoming",
     };
   };
 
@@ -4259,6 +4418,15 @@ export default function App() {
     setMessages([]);
     setLogsHasMore(false);
     setLogsLoadingMore(false);
+    setPublicInboxConversations([]);
+    setPublicInboxMessage("");
+    setPublicInboxSearchQuery("");
+    setPublicInboxStatusFilter("all");
+    setSelectedPublicInboxSenderId("");
+    setSelectedPublicInboxConversation(null);
+    setPublicInboxConversationMessages([]);
+    setPublicInboxConversationLoading(false);
+    setPublicInboxStatusUpdating(false);
     setRegistrations([]);
     setSelectedRegistrationId("");
     setCheckinLatestResult(null);
@@ -4287,6 +4455,42 @@ export default function App() {
     void fetchDocumentChunks(selectedDocumentForChunksId, selectedEventId);
     void fetchEmbeddingPreview(selectedDocumentForChunksId, selectedEventId);
   }, [authStatus, selectedEventId, selectedDocumentForChunksId]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || publicEventSlug || checkinAccessMode || activeTab !== "inbox" || !selectedEventId) {
+      return;
+    }
+
+    void fetchPublicInboxConversations(selectedEventId);
+    const interval = window.setInterval(() => {
+      void fetchPublicInboxConversations(selectedEventId, { silent: true });
+      if (selectedPublicInboxSenderIdRef.current) {
+        void fetchPublicInboxConversation(selectedPublicInboxSenderIdRef.current, selectedEventId, { silent: true });
+      }
+    }, 10000);
+
+    return () => window.clearInterval(interval);
+  }, [authStatus, activeTab, selectedEventId, publicEventSlug, checkinAccessMode]);
+
+  useEffect(() => {
+    if (selectedPublicInboxSenderId && filteredPublicInboxConversations.some((conversation) => conversation.sender_id === selectedPublicInboxSenderId)) {
+      return;
+    }
+    const nextSenderId = filteredPublicInboxConversations[0]?.sender_id || "";
+    if (nextSenderId !== selectedPublicInboxSenderId) {
+      setSelectedPublicInboxSenderId(nextSenderId);
+    }
+  }, [filteredPublicInboxConversations, selectedPublicInboxSenderId]);
+
+  useEffect(() => {
+    if (!selectedPublicInboxSenderId) {
+      setSelectedPublicInboxConversation(null);
+      setPublicInboxConversationMessages([]);
+      return;
+    }
+    if (activeTab !== "inbox" || authStatus !== "authenticated" || !selectedEventId) return;
+    void fetchPublicInboxConversation(selectedPublicInboxSenderId, selectedEventId);
+  }, [activeTab, authStatus, selectedEventId, selectedPublicInboxSenderId]);
 
   const stopQrScanner = () => {
     scannerControlsRef.current?.stop();
@@ -4646,6 +4850,7 @@ export default function App() {
       ...(canRunTest ? ["test"] : []),
       ...(canRunAgent ? ["agent"] : []),
       ...(canManageRegistrations ? ["registrations", "checkin"] : []),
+      ...(canViewLogs ? ["inbox"] : []),
       ...(canViewLogs ? ["logs"] : []),
       ...(canEditSettings ? ["settings"] : []),
       ...(canManageUsers ? ["team"] : []),
@@ -5552,6 +5757,14 @@ export default function App() {
     }
   };
 
+  const handlePublicChatInputKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  };
+
   const handlePublicRegistrationSubmit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     if (!publicEventSlug || !publicEventPage) return;
@@ -5845,6 +6058,146 @@ export default function App() {
       });
     } catch (err) {
       console.error("Failed to fetch registrations", err);
+    }
+  };
+
+  const fetchPublicInboxConversations = async (eventId = selectedEventId, options?: { silent?: boolean }) => {
+    if (!eventId) return;
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setPublicInboxLoading(true);
+      setPublicInboxMessage("");
+    }
+    try {
+      const res = await apiFetch(`/api/public-inbox?event_id=${encodeURIComponent(eventId)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to fetch public inbox");
+      }
+      if (selectedEventIdRef.current !== eventId) return;
+      const rawItems = Array.isArray((data as { items?: unknown[] }).items) ? (data as { items: unknown[] }).items : [];
+      const items = rawItems
+        .map((item) => normalizePublicInboxConversationSummary(item))
+        .filter(Boolean) as PublicInboxConversationSummary[];
+      setPublicInboxConversations(items);
+      setSelectedPublicInboxConversation((current) => {
+        if (!current) return null;
+        return items.find((item) => item.sender_id === current.sender_id) || current;
+      });
+      setSelectedPublicInboxSenderId((current) => {
+        if (current && items.some((item) => item.sender_id === current)) {
+          return current;
+        }
+        return items[0]?.sender_id || "";
+      });
+    } catch (err) {
+      console.error("Failed to fetch public inbox conversations", err);
+      if (!silent) {
+        setPublicInboxMessage(err instanceof Error ? err.message : "Failed to fetch public inbox");
+      }
+    } finally {
+      if (!silent) {
+        setPublicInboxLoading(false);
+      }
+    }
+  };
+
+  const fetchPublicInboxConversation = async (senderId = selectedPublicInboxSenderId, eventId = selectedEventId, options?: { silent?: boolean }) => {
+    if (!eventId || !senderId) {
+      setSelectedPublicInboxConversation(null);
+      setPublicInboxConversationMessages([]);
+      return;
+    }
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setPublicInboxConversationLoading(true);
+      setPublicInboxMessage("");
+    }
+    try {
+      const params = new URLSearchParams({
+        event_id: eventId,
+        sender_id: senderId,
+      });
+      const res = await apiFetch(`/api/public-inbox/conversation?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to fetch conversation");
+      }
+      if (selectedEventIdRef.current !== eventId || selectedPublicInboxSenderIdRef.current !== senderId) return;
+      const normalizedConversation = normalizePublicInboxConversationSummary((data as PublicInboxConversationDetailResponse).conversation);
+      const normalizedMessages = Array.isArray((data as PublicInboxConversationDetailResponse).messages)
+        ? (data as PublicInboxConversationDetailResponse).messages
+            .map((item) => normalizePublicInboxMessage(item))
+            .filter(Boolean) as Message[]
+        : [];
+      setSelectedPublicInboxConversation(normalizedConversation);
+      setPublicInboxConversationMessages(normalizedMessages);
+      if (normalizedConversation) {
+        setPublicInboxConversations((current) =>
+          current.some((item) => item.sender_id === normalizedConversation.sender_id)
+            ? current.map((item) => (item.sender_id === normalizedConversation.sender_id ? normalizedConversation : item))
+            : [normalizedConversation, ...current],
+        );
+      }
+    } catch (err) {
+      console.error("Failed to fetch public inbox conversation", err);
+      if (!silent) {
+        setPublicInboxMessage(err instanceof Error ? err.message : "Failed to fetch conversation");
+      }
+    } finally {
+      if (!silent) {
+        setPublicInboxConversationLoading(false);
+      }
+    }
+  };
+
+  const updatePublicInboxConversationStatus = async (status: PublicInboxConversationStatus) => {
+    if (!selectedEventId || !selectedPublicInboxSenderId) return false;
+    setPublicInboxStatusUpdating(true);
+    setPublicInboxMessage("");
+    try {
+      const res = await apiFetch("/api/public-inbox/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: selectedEventId,
+          sender_id: selectedPublicInboxSenderId,
+          status,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to update conversation status");
+      }
+      const nextStatus = normalizePublicInboxConversationStatusValue((data as { conversation_status?: string }).conversation_status || status);
+      setPublicInboxConversations((current) =>
+        current.map((item) =>
+          item.sender_id === selectedPublicInboxSenderId
+            ? {
+                ...item,
+                status: nextStatus,
+                needs_attention: nextStatus === "waiting-admin",
+              }
+            : item,
+        ),
+      );
+      setSelectedPublicInboxConversation((current) =>
+        current && current.sender_id === selectedPublicInboxSenderId
+          ? {
+              ...current,
+              status: nextStatus,
+              needs_attention: nextStatus === "waiting-admin",
+            }
+          : current,
+      );
+      setPublicInboxMessage(`Conversation marked ${getPublicInboxStatusLabel(nextStatus).toLowerCase()}`);
+      window.setTimeout(() => setPublicInboxMessage(""), 2500);
+      return true;
+    } catch (err) {
+      setPublicInboxMessage(err instanceof Error ? err.message : "Failed to update conversation status");
+      return false;
+    } finally {
+      setPublicInboxStatusUpdating(false);
     }
   };
 
@@ -8436,6 +8789,7 @@ export default function App() {
                           id="public-chat-input"
                           value={publicChatInput}
                           onChange={(e) => setPublicChatInput(e.target.value)}
+                          onKeyDown={handlePublicChatInputKeyDown}
                           rows={2}
                           placeholder="Ask a question"
                           className="min-h-[4.25rem] flex-1 resize-none rounded-[1.5rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
@@ -12665,6 +13019,291 @@ export default function App() {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+          {activeTab === "inbox" && (
+            <motion.div
+              key="inbox"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-6"
+            >
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="border-b border-slate-100 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-lg font-semibold">Public Inbox</h2>
+                        <StatusBadge tone={publicInboxCounts.attention > 0 ? "rose" : "neutral"}>
+                          {publicInboxCounts.attention > 0 ? `${publicInboxCounts.attention} need attention` : "No attention queue"}
+                        </StatusBadge>
+                      </div>
+                      <StatusLine
+                        className="mt-1"
+                        items={[
+                          `${publicInboxCounts.all} conversation${publicInboxCounts.all === 1 ? "" : "s"}`,
+                          deferredPublicInboxQuery ? `${filteredPublicInboxConversations.length} match` : null,
+                          selectedEvent ? selectedEvent.name : null,
+                        ]}
+                      />
+                      <p className="mt-1 text-xs text-slate-500">
+                        Human handoff requests and bot failures from the public event page land here first.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => void fetchPublicInboxConversations(selectedEventId)}
+                      className="rounded-lg p-2 transition-colors hover:bg-slate-100"
+                      aria-label="Refresh public inbox"
+                    >
+                      <RefreshCw className={`h-4 w-4 text-slate-400 ${publicInboxLoading ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+
+                  <div className="mt-3 flex flex-col gap-3">
+                    <div className="relative min-w-0">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={publicInboxSearchQuery}
+                        onChange={(event) => setPublicInboxSearchQuery(event.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Search by attendee, sender ID, registration ID, contact, or last message"
+                      />
+                      {publicInboxSearchQuery && (
+                        <button
+                          onClick={() => setPublicInboxSearchQuery("")}
+                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                          aria-label="Clear inbox search"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {([
+                        { id: "all", label: "All", count: publicInboxCounts.all },
+                        { id: "attention", label: "Attention", count: publicInboxCounts.attention },
+                        { id: "open", label: "Open", count: publicInboxCounts.open },
+                        { id: "waiting-admin", label: "Waiting Admin", count: publicInboxCounts["waiting-admin"] },
+                        { id: "waiting-user", label: "Waiting User", count: publicInboxCounts["waiting-user"] },
+                        { id: "resolved", label: "Resolved", count: publicInboxCounts.resolved },
+                      ] as Array<{ id: "all" | "attention" | PublicInboxConversationStatus; label: string; count: number }>).map((filter) => {
+                        const isActive = publicInboxStatusFilter === filter.id;
+                        return (
+                          <button
+                            key={filter.id}
+                            onClick={() => setPublicInboxStatusFilter(filter.id)}
+                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                              isActive
+                                ? "border-blue-200 bg-blue-50 text-blue-700"
+                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                            }`}
+                          >
+                            <span>{filter.label}</span>
+                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${isActive ? "bg-white/80 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
+                              {filter.count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {publicInboxMessage && (
+                      <p className={`text-xs ${
+                        publicInboxMessage.toLowerCase().includes("failed") || publicInboxMessage.toLowerCase().includes("error")
+                          ? "text-rose-600"
+                          : "text-emerald-600"
+                      }`}>
+                        {publicInboxMessage}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid min-h-[34rem] grid-cols-1 xl:grid-cols-[minmax(0,0.85fr)_minmax(22rem,1.15fr)]">
+                  <div className="border-b border-slate-100 xl:border-b-0 xl:border-r xl:border-slate-100">
+                    {publicInboxLoading && publicInboxConversations.length === 0 ? (
+                      <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
+                        Loading public inbox conversations...
+                      </div>
+                    ) : filteredPublicInboxConversations.length === 0 ? (
+                      <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
+                        {deferredPublicInboxQuery || publicInboxStatusFilter !== "all"
+                          ? "No public page conversations match this filter."
+                          : "No public page conversations yet."}
+                      </div>
+                    ) : (
+                      <div className="max-h-[34rem] overflow-y-auto">
+                        {filteredPublicInboxConversations.map((conversation) => {
+                          const isSelected = selectedPublicInboxSenderId === conversation.sender_id;
+                          const attentionReasonLabel = getPublicInboxAttentionReasonLabel(conversation.attention_reason);
+                          return (
+                            <button
+                              key={conversation.sender_id}
+                              onClick={() => setSelectedPublicInboxSenderId(conversation.sender_id)}
+                              className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-slate-100 px-4 py-3 text-left transition-colors ${
+                                isSelected ? "bg-blue-50" : "hover:bg-slate-50"
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-sm font-semibold text-slate-900">{conversation.participant_label}</p>
+                                  <StatusBadge tone={getPublicInboxStatusTone(conversation.status)}>
+                                    {getPublicInboxStatusLabel(conversation.status)}
+                                  </StatusBadge>
+                                  {conversation.needs_attention && <SelectionMarker className="text-rose-700" />}
+                                </div>
+                                <p className="mt-1 truncate font-mono text-[10px] text-blue-600">{conversation.sender_id}</p>
+                                <p className="log-list-preview-2 mt-1 text-[13px] leading-5 text-slate-700">
+                                  {conversation.last_message_text || "(no message body)"}
+                                </p>
+                                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-500">
+                                  <span>{conversation.last_message_type === "incoming" ? "visitor" : "bot"} · {conversation.message_count} msg</span>
+                                  {conversation.registration_id && <span>{conversation.registration_id}</span>}
+                                  {attentionReasonLabel && <span>{attentionReasonLabel}</span>}
+                                </div>
+                              </div>
+                              <p className="shrink-0 whitespace-nowrap pl-2 text-[10px] text-slate-500">
+                                {conversation.last_message_at ? new Date(conversation.last_message_at).toLocaleString() : "-"}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 bg-slate-50">
+                    {!activePublicInboxConversation ? (
+                      <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm text-slate-400">
+                        Select a public page conversation to inspect the thread and update follow-up status.
+                      </div>
+                    ) : (
+                      <div className="flex h-full min-h-[34rem] flex-col">
+                        <div className="border-b border-slate-100 bg-white px-4 py-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="text-base font-semibold text-slate-900">{activePublicInboxConversation.participant_label}</h3>
+                                <StatusBadge tone={getPublicInboxStatusTone(activePublicInboxConversation.status)}>
+                                  {getPublicInboxStatusLabel(activePublicInboxConversation.status)}
+                                </StatusBadge>
+                                {activePublicInboxConversation.needs_attention && (
+                                  <StatusBadge tone="rose">
+                                    {getPublicInboxAttentionReasonLabel(activePublicInboxConversation.attention_reason) || "Needs attention"}
+                                  </StatusBadge>
+                                )}
+                              </div>
+                              <p className="mt-1 break-all font-mono text-[11px] text-blue-600">{activePublicInboxConversation.sender_id}</p>
+                              <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                                {activePublicInboxConversation.sender_phone && <span>{activePublicInboxConversation.sender_phone}</span>}
+                                {activePublicInboxConversation.sender_email && <span>{activePublicInboxConversation.sender_email}</span>}
+                                {activePublicInboxConversation.registration_id && <span>{activePublicInboxConversation.registration_id}</span>}
+                                {activePublicInboxConversation.public_slug && <span>/events/{activePublicInboxConversation.public_slug}</span>}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                onClick={() => void fetchPublicInboxConversation(activePublicInboxConversation.sender_id, selectedEventId)}
+                                className="rounded-lg p-2 transition-colors hover:bg-slate-100"
+                                aria-label="Refresh conversation"
+                              >
+                                <RefreshCw className={`h-4 w-4 text-slate-400 ${publicInboxConversationLoading ? "animate-spin" : ""}`} />
+                              </button>
+                              {activePublicInboxConversation.public_slug && (
+                                <a
+                                  href={`/events/${encodeURIComponent(activePublicInboxConversation.public_slug)}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex min-h-8 items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                  Open Page
+                                </a>
+                              )}
+                              {canManageRegistrations && activePublicInboxConversation.registration_id && (
+                                <ActionButton
+                                  tone="neutral"
+                                  className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
+                                  onClick={() => {
+                                    setSelectedRegistrationId(activePublicInboxConversation.registration_id || "");
+                                    handleNavigateToTab("registrations");
+                                  }}
+                                >
+                                  <Users className="h-3.5 w-3.5" />
+                                  Open Registration
+                                </ActionButton>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {(["open", "waiting-admin", "waiting-user", "resolved"] as PublicInboxConversationStatus[]).map((status) => (
+                              <ActionButton
+                                key={status}
+                                tone={activePublicInboxConversation.status === status ? getPublicInboxStatusTone(status) : "neutral"}
+                                className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
+                                disabled={!canChangeRegistrationStatus || publicInboxStatusUpdating || activePublicInboxConversation.status === status}
+                                onClick={() => void updatePublicInboxConversationStatus(status)}
+                              >
+                                {getPublicInboxStatusLabel(status)}
+                              </ActionButton>
+                            ))}
+                          </div>
+                          {!canChangeRegistrationStatus && (
+                            <p className="mt-2 text-[11px] text-slate-500">
+                              Viewer mode can inspect threads but cannot update conversation status.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="grid gap-3 border-b border-slate-100 bg-white px-4 py-3 md:grid-cols-3">
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Last Incoming</p>
+                            <p className="mt-1 text-[11px] text-slate-700">
+                              {activePublicInboxConversation.last_incoming_at ? new Date(activePublicInboxConversation.last_incoming_at).toLocaleString() : "None yet"}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Last Outgoing</p>
+                            <p className="mt-1 text-[11px] text-slate-700">
+                              {activePublicInboxConversation.last_outgoing_at ? new Date(activePublicInboxConversation.last_outgoing_at).toLocaleString() : "None yet"}
+                            </p>
+                          </div>
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Messages</p>
+                            <p className="mt-1 text-[11px] text-slate-700">
+                              {activePublicInboxConversation.message_count} total in this public thread
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="chat-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                          {publicInboxConversationLoading && publicInboxConversationMessages.length === 0 ? (
+                            <div className="flex h-full items-center justify-center py-12 text-center text-sm text-slate-400">
+                              Loading conversation history...
+                            </div>
+                          ) : publicInboxConversationMessages.length === 0 ? (
+                            <div className="flex h-full items-center justify-center py-12 text-center text-sm text-slate-400">
+                              No messages in this conversation yet.
+                            </div>
+                          ) : (
+                            publicInboxConversationMessages.map((message) => (
+                              <ChatBubble
+                                key={`${message.id || message.timestamp}-${message.type}`}
+                                text={message.text}
+                                type={message.type}
+                                timestamp={message.timestamp}
+                              />
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </motion.div>

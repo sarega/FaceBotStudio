@@ -408,3 +408,30 @@ export interface PublicEventChatResponse {
     svg_url: string | null;
   }>;
 }
+
+export type PublicInboxConversationStatus = "open" | "waiting-admin" | "waiting-user" | "resolved";
+
+export interface PublicInboxConversationSummary {
+  sender_id: string;
+  event_id: string;
+  public_slug: string;
+  participant_label: string;
+  sender_name: string | null;
+  sender_phone: string | null;
+  sender_email: string | null;
+  registration_id: string | null;
+  status: PublicInboxConversationStatus;
+  needs_attention: boolean;
+  attention_reason: string | null;
+  last_message_text: string;
+  last_message_type: "incoming" | "outgoing";
+  last_message_at: string;
+  last_incoming_at: string | null;
+  last_outgoing_at: string | null;
+  message_count: number;
+}
+
+export interface PublicInboxConversationDetailResponse {
+  conversation: PublicInboxConversationSummary;
+  messages: Message[];
+}
