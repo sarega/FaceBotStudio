@@ -45,7 +45,7 @@ import {
 import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_WORDS, countApproxWords, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./lib/publicEventPage";
 
@@ -74,6 +74,11 @@ type PublicRegistrationFormState = {
   email: string;
 };
 
+type PublicTicketLookupFormState = {
+  phone: string;
+  email: string;
+};
+
 type PublicChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -81,6 +86,7 @@ type PublicChatMessage = {
   timestamp: string;
   mapUrl: string;
   tickets: PublicEventChatResponse["tickets"];
+  serverMessageId?: number;
 };
 
 interface AuditLogEntry {
@@ -552,7 +558,7 @@ function getPublicEventChatHistoryStorageKey(slug: string) {
 function createPublicChatMessage(
   role: PublicChatMessage["role"],
   text: string,
-  options?: { mapUrl?: string; tickets?: PublicEventChatResponse["tickets"]; timestamp?: string },
+  options?: { mapUrl?: string; tickets?: PublicEventChatResponse["tickets"]; timestamp?: string; serverMessageId?: number },
 ): PublicChatMessage {
   const timestamp = options?.timestamp || new Date().toISOString();
   return {
@@ -562,6 +568,7 @@ function createPublicChatMessage(
     timestamp,
     mapUrl: options?.mapUrl || "",
     tickets: Array.isArray(options?.tickets) ? options?.tickets : [],
+    serverMessageId: typeof options?.serverMessageId === "number" ? options.serverMessageId : undefined,
   };
 }
 
@@ -577,6 +584,30 @@ function normalizePhoneHref(value: string) {
   if (!trimmed) return "";
   const normalized = trimmed.replace(/[^+\d]/g, "");
   return normalized ? `tel:${normalized}` : "";
+}
+
+function mergeServerMessagesIntoPublicChatHistory(current: PublicChatMessage[], rows: Message[]) {
+  const next = [...current];
+  for (const row of rows) {
+    const rowId = typeof row.id === "number" ? row.id : Number.isFinite(Number(row.id)) ? Number(row.id) : undefined;
+    const role = row.type === "incoming" ? "user" : "assistant";
+    const text = String(row.text || "");
+    const timestamp = String(row.timestamp || new Date().toISOString());
+    const alreadyExists = next.some((message) =>
+      (typeof rowId === "number" && typeof message.serverMessageId === "number" && message.serverMessageId === rowId)
+      || (
+        message.role === role
+        && message.text.trim() === text.trim()
+        && Math.abs(new Date(message.timestamp).getTime() - new Date(timestamp).getTime()) < 15_000
+      ),
+    );
+    if (alreadyExists) continue;
+    next.push(createPublicChatMessage(role, text, {
+      timestamp,
+      serverMessageId: rowId,
+    }));
+  }
+  return next.sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
 }
 
 function readPublicEventChatHistory(slug: string) {
@@ -620,6 +651,12 @@ function readPublicEventChatHistory(slug: string) {
           timestamp,
           mapUrl: typeof row.mapUrl === "string" ? row.mapUrl : "",
           tickets,
+          serverMessageId:
+            typeof row.serverMessageId === "number"
+              ? row.serverMessageId
+              : Number.isFinite(Number(row.serverMessageId))
+                ? Number(row.serverMessageId)
+                : undefined,
         } satisfies PublicChatMessage;
       })
       .filter(Boolean) as PublicChatMessage[];
@@ -2798,14 +2835,21 @@ export default function App() {
     phone: "",
     email: "",
   });
+  const [publicTicketLookupForm, setPublicTicketLookupForm] = useState<PublicTicketLookupFormState>({
+    phone: "",
+    email: "",
+  });
   const [publicRegistrationSubmitting, setPublicRegistrationSubmitting] = useState(false);
+  const [publicTicketLookupSubmitting, setPublicTicketLookupSubmitting] = useState(false);
   const [publicRegistrationError, setPublicRegistrationError] = useState("");
+  const [publicTicketLookupError, setPublicTicketLookupError] = useState("");
   const [publicRegistrationResult, setPublicRegistrationResult] = useState<PublicEventRegistrationResponse | null>(null);
   const [publicPrivacyOpen, setPublicPrivacyOpen] = useState(false);
   const [publicChatOpen, setPublicChatOpen] = useState(false);
   const [publicChatInput, setPublicChatInput] = useState("");
   const [publicChatSenderId, setPublicChatSenderId] = useState("");
   const [publicChatMessages, setPublicChatMessages] = useState<PublicChatMessage[]>([]);
+  const [publicChatLastMessageId, setPublicChatLastMessageId] = useState(0);
   const [publicChatSending, setPublicChatSending] = useState(false);
   const [publicChatError, setPublicChatError] = useState("");
   const publicChatBodyRef = useRef<HTMLDivElement | null>(null);
@@ -2823,6 +2867,8 @@ export default function App() {
   const [publicInboxConversationMessages, setPublicInboxConversationMessages] = useState<Message[]>([]);
   const [publicInboxConversationLoading, setPublicInboxConversationLoading] = useState(false);
   const [publicInboxStatusUpdating, setPublicInboxStatusUpdating] = useState(false);
+  const [publicInboxReplyText, setPublicInboxReplyText] = useState("");
+  const [publicInboxReplySending, setPublicInboxReplySending] = useState(false);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
   const [selectedEventId, setSelectedEventId] = useState("");
@@ -2966,6 +3012,7 @@ export default function App() {
   const documentFileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedEventIdRef = useRef("");
   const selectedPublicInboxSenderIdRef = useRef("");
+  const publicChatLastMessageIdRef = useRef(0);
   const settingsRef = useRef(INITIAL_SETTINGS);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
@@ -2991,6 +3038,7 @@ export default function App() {
   const desktopNotifyLastAuditIdRef = useRef(0);
   selectedEventIdRef.current = selectedEventId;
   selectedPublicInboxSenderIdRef.current = selectedPublicInboxSenderId;
+  publicChatLastMessageIdRef.current = publicChatLastMessageId;
   settingsRef.current = settings;
 
   const currentPathname = typeof window !== "undefined" ? window.location.pathname : "/";
@@ -4248,12 +4296,18 @@ export default function App() {
       setPublicEventError("");
       setPublicEventLoading(false);
       setPublicRegistrationError("");
+      setPublicTicketLookupError("");
       setPublicRegistrationResult(null);
+      setPublicTicketLookupForm({
+        phone: "",
+        email: "",
+      });
       setPublicPrivacyOpen(false);
       setPublicChatOpen(false);
       setPublicChatInput("");
       setPublicChatSenderId("");
       setPublicChatMessages([]);
+      setPublicChatLastMessageId(0);
       setPublicChatSending(false);
       setPublicChatError("");
       return;
@@ -4264,14 +4318,23 @@ export default function App() {
     setPublicChatSending(false);
     setPublicChatError("");
     setPublicChatSenderId(getOrCreatePublicEventChatSenderId(publicEventSlug));
-    setPublicChatMessages(readPublicEventChatHistory(publicEventSlug));
+    const storedHistory = readPublicEventChatHistory(publicEventSlug);
+    setPublicChatMessages(storedHistory);
+    setPublicChatLastMessageId(
+      storedHistory.reduce((max, message) => Math.max(max, Number(message.serverMessageId || 0) || 0), 0),
+    );
 
     let cancelled = false;
     void (async () => {
       setPublicEventLoading(true);
       setPublicEventError("");
       setPublicRegistrationError("");
+      setPublicTicketLookupError("");
       setPublicRegistrationResult(null);
+      setPublicTicketLookupForm({
+        phone: "",
+        email: "",
+      });
       try {
         const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}`);
         const data = await res.json().catch(() => ({}));
@@ -4315,11 +4378,27 @@ export default function App() {
   }, [publicEventSlug, publicEventPage]);
 
   useEffect(() => {
+    if (!publicEventSlug || !publicEventPage?.support.bot_enabled || !publicChatSenderId) return;
+    void syncPublicChatHistory({ silent: true });
+  }, [publicEventSlug, publicEventPage, publicChatSenderId]);
+
+  useEffect(() => {
     if (!publicChatOpen) return;
     const container = publicChatBodyRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
   }, [publicChatMessages, publicChatOpen]);
+
+  useEffect(() => {
+    if (!publicEventSlug || !publicEventPage?.support.bot_enabled || !publicChatSenderId) return;
+    const interval = window.setInterval(() => {
+      void syncPublicChatHistory({
+        afterId: publicChatLastMessageIdRef.current,
+        silent: true,
+      });
+    }, 8000);
+    return () => window.clearInterval(interval);
+  }, [publicEventSlug, publicEventPage, publicChatSenderId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4483,6 +4562,10 @@ export default function App() {
       setSelectedPublicInboxSenderId(nextSenderId);
     }
   }, [filteredPublicInboxConversations, selectedPublicInboxSenderId]);
+
+  useEffect(() => {
+    setPublicInboxReplyText("");
+  }, [selectedEventId, selectedPublicInboxSenderId]);
 
   useEffect(() => {
     if (!selectedPublicInboxSenderId) {
@@ -5760,7 +5843,16 @@ export default function App() {
   };
 
   const handlePublicRegistrationFieldChange = (field: keyof PublicRegistrationFormState, value: string) => {
+    setPublicRegistrationError("");
     setPublicRegistrationForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const handlePublicTicketLookupFieldChange = (field: keyof PublicTicketLookupFormState, value: string) => {
+    setPublicTicketLookupError("");
+    setPublicTicketLookupForm((current) => ({
       ...current,
       [field]: value,
     }));
@@ -5769,12 +5861,45 @@ export default function App() {
   const resetPublicRegistrationFlow = () => {
     setPublicRegistrationResult(null);
     setPublicRegistrationError("");
+    setPublicTicketLookupError("");
     setPublicRegistrationForm({
       first_name: "",
       last_name: "",
       phone: "",
       email: "",
     });
+  };
+
+  const syncPublicChatHistory = async (options?: { afterId?: number; silent?: boolean }) => {
+    if (!publicEventSlug || !publicChatSenderId) return null;
+    const afterId = Math.max(0, options?.afterId ?? 0);
+    try {
+      const params = new URLSearchParams({
+        sender_id: publicChatSenderId,
+      });
+      if (afterId > 0) {
+        params.set("after_id", String(afterId));
+      }
+      const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/chat/history?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to sync event chat");
+      }
+      const payload = data as PublicEventChatHistoryResponse;
+      const serverRows = Array.isArray(payload.items)
+        ? payload.items
+            .map((item) => normalizePublicInboxMessage(item))
+            .filter(Boolean) as Message[]
+        : [];
+      setPublicChatMessages((current) => mergeServerMessagesIntoPublicChatHistory(current, serverRows));
+      setPublicChatLastMessageId((current) => Math.max(current, Number(payload.latest_message_id || 0) || 0));
+      return payload;
+    } catch (err) {
+      if (!options?.silent) {
+        setPublicChatError(err instanceof Error ? err.message : "Failed to sync event chat");
+      }
+      return null;
+    }
   };
 
   const handlePublicChatSubmit = async (event?: FormEvent<HTMLFormElement>) => {
@@ -5820,9 +5945,11 @@ export default function App() {
         ...current,
         createPublicChatMessage("assistant", assistantText, {
           mapUrl: payload.map_url || "",
+          serverMessageId: typeof payload.latest_message_id === "number" ? payload.latest_message_id : undefined,
           tickets: payload.tickets,
         }),
       ]);
+      setPublicChatLastMessageId((current) => Math.max(current, Number(payload.latest_message_id || 0) || 0));
     } catch (err) {
       setPublicChatError(err instanceof Error ? err.message : "Failed to send message");
     } finally {
@@ -5853,6 +5980,7 @@ export default function App() {
 
     setPublicRegistrationSubmitting(true);
     setPublicRegistrationError("");
+    setPublicTicketLookupError("");
     try {
       const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/register`, {
         method: "POST",
@@ -5879,6 +6007,47 @@ export default function App() {
       setPublicRegistrationError(err instanceof Error ? err.message : "Failed to register");
     } finally {
       setPublicRegistrationSubmitting(false);
+    }
+  };
+
+  const handlePublicTicketLookupSubmit = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    if (!publicEventSlug || !publicEventPage) return;
+
+    const phone = publicTicketLookupForm.phone.trim();
+    const email = publicTicketLookupForm.email.trim();
+    if (!phone && !email) {
+      setPublicTicketLookupError("Enter your phone number or email to find your ticket.");
+      return;
+    }
+
+    setPublicTicketLookupSubmitting(true);
+    setPublicTicketLookupError("");
+    setPublicRegistrationError("");
+    try {
+      const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/find-ticket`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone,
+          email,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const validationMessage = Array.isArray((data as { validation_errors?: Array<{ message?: string }> }).validation_errors)
+          ? (data as { validation_errors: Array<{ message?: string }> }).validation_errors.find((issue) => issue?.message)?.message
+          : "";
+        throw new Error(validationMessage || (data as { error?: string }).error || "Failed to find ticket");
+      }
+      setPublicRegistrationResult(data as PublicEventRegistrationResponse);
+      window.setTimeout(() => {
+        document.getElementById("public-ticket-ready")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 40);
+    } catch (err) {
+      setPublicTicketLookupError(err instanceof Error ? err.message : "Failed to find ticket");
+    } finally {
+      setPublicTicketLookupSubmitting(false);
     }
   };
 
@@ -6271,6 +6440,80 @@ export default function App() {
       return false;
     } finally {
       setPublicInboxStatusUpdating(false);
+    }
+  };
+
+  const handlePublicInboxReplySubmit = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    if (!selectedEventId || !selectedPublicInboxSenderId) return false;
+    const trimmed = publicInboxReplyText.trim();
+    if (!trimmed) {
+      setPublicInboxMessage("Reply text is required");
+      return false;
+    }
+
+    setPublicInboxReplySending(true);
+    setPublicInboxMessage("");
+    try {
+      const res = await apiFetch("/api/public-inbox/reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: selectedEventId,
+          sender_id: selectedPublicInboxSenderId,
+          text: trimmed,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to send reply");
+      }
+
+      const payload = data as PublicInboxReplyResponse;
+      const normalizedStatus = normalizePublicInboxConversationStatusValue(payload.conversation_status);
+      const normalizedMessage = normalizePublicInboxMessage(payload.message);
+      if (normalizedMessage) {
+        setPublicInboxConversationMessages((current) => [...current, normalizedMessage]);
+      }
+      setPublicInboxConversations((current) =>
+        current.map((item) =>
+          item.sender_id === selectedPublicInboxSenderId
+            ? {
+                ...item,
+                status: normalizedStatus,
+                needs_attention: normalizedStatus === "waiting-admin",
+                last_message_text: trimmed,
+                last_message_type: "outgoing",
+                last_message_at: normalizedMessage?.timestamp || new Date().toISOString(),
+                last_outgoing_at: normalizedMessage?.timestamp || new Date().toISOString(),
+                message_count: item.message_count + 1,
+              }
+            : item,
+        ),
+      );
+      setSelectedPublicInboxConversation((current) =>
+        current && current.sender_id === selectedPublicInboxSenderId
+          ? {
+              ...current,
+              status: normalizedStatus,
+              needs_attention: normalizedStatus === "waiting-admin",
+              last_message_text: trimmed,
+              last_message_type: "outgoing",
+              last_message_at: normalizedMessage?.timestamp || new Date().toISOString(),
+              last_outgoing_at: normalizedMessage?.timestamp || new Date().toISOString(),
+              message_count: current.message_count + 1,
+            }
+          : current,
+      );
+      setPublicInboxReplyText("");
+      setPublicInboxMessage("Reply sent to public event page");
+      window.setTimeout(() => setPublicInboxMessage(""), 2500);
+      return true;
+    } catch (err) {
+      setPublicInboxMessage(err instanceof Error ? err.message : "Failed to send reply");
+      return false;
+    } finally {
+      setPublicInboxReplySending(false);
     }
   };
 
@@ -8571,6 +8814,56 @@ export default function App() {
                             )}
                           </div>
                         )}
+
+                        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">Find My Ticket</p>
+                              <p className="mt-1 text-sm leading-6 text-slate-500">
+                                Already registered? Enter your phone number or email to load your ticket again.
+                              </p>
+                            </div>
+                            <StatusBadge tone="neutral">Recovery</StatusBadge>
+                          </div>
+
+                          <form className="mt-4 space-y-3" onSubmit={handlePublicTicketLookupSubmit}>
+                            <div>
+                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Phone</label>
+                              <input
+                                value={publicTicketLookupForm.phone}
+                                onChange={(e) => handlePublicTicketLookupFieldChange("phone", e.target.value)}
+                                autoComplete="tel"
+                                inputMode="tel"
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Phone number"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Email</label>
+                              <input
+                                value={publicTicketLookupForm.email}
+                                onChange={(e) => handlePublicTicketLookupFieldChange("email", e.target.value)}
+                                autoComplete="email"
+                                inputMode="email"
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Email address"
+                              />
+                            </div>
+                            {publicTicketLookupError && (
+                              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                                {publicTicketLookupError}
+                              </div>
+                            )}
+                            <button
+                              type="submit"
+                              disabled={publicTicketLookupSubmitting}
+                              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {publicTicketLookupSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
+                              Find My Ticket
+                            </button>
+                          </form>
+                        </div>
                       </>
                     ) : (
                       <div id="public-ticket-ready" className="space-y-4">
@@ -8578,7 +8871,7 @@ export default function App() {
                           <div>
                             <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              {publicRegistrationResult.status === "duplicate" ? "Ticket found" : "Registration complete"}
+                              {publicRegistrationResult.status === "success" ? "Registration complete" : "Ticket found"}
                             </div>
                             <h2 className="mt-3 text-lg font-semibold text-slate-900">
                               {publicRegistrationResult.registration.first_name} {publicRegistrationResult.registration.last_name}
@@ -8644,7 +8937,7 @@ export default function App() {
                           onClick={resetPublicRegistrationFlow}
                           className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                         >
-                          Register Another Attendee
+                          {publicRegistrationResult.status === "success" ? "Register Another Attendee" : "Back to Registration"}
                         </button>
                       </div>
                     )}
@@ -13425,6 +13718,44 @@ export default function App() {
                             ))
                           )}
                         </div>
+
+                        <form className="border-t border-slate-100 bg-white px-4 py-4" onSubmit={handlePublicInboxReplySubmit}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">Reply to Public Page</p>
+                              <p className="mt-1 text-xs leading-5 text-slate-500">
+                                This reply appears in the attendee's public event chat when they reopen or keep the page open.
+                              </p>
+                            </div>
+                            <StatusBadge tone="neutral">Web chat</StatusBadge>
+                          </div>
+                          <div className="mt-3 flex flex-col gap-3">
+                            <textarea
+                              value={publicInboxReplyText}
+                              onChange={(event) => setPublicInboxReplyText(event.target.value)}
+                              rows={3}
+                              placeholder="Type a reply for the attendee"
+                              disabled={!canSendManualOverride || publicInboxReplySending}
+                              className="min-h-[7rem] w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              style={{ fontFamily: "var(--font-edit)" }}
+                            />
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              {!canSendManualOverride && (
+                                <p className="text-xs text-slate-500">
+                                  Viewer mode can inspect messages but cannot send replies.
+                                </p>
+                              )}
+                              <button
+                                type="submit"
+                                disabled={!canSendManualOverride || publicInboxReplySending || !publicInboxReplyText.trim()}
+                                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {publicInboxReplySending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                                Send Reply
+                              </button>
+                            </div>
+                          </div>
+                        </form>
                       </div>
                     )}
                   </div>

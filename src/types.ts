@@ -374,7 +374,7 @@ export interface PublicEventPageResponse {
 }
 
 export interface PublicEventRegistrationResponse {
-  status: "success" | "duplicate";
+  status: "success" | "duplicate" | "recovered";
   message: string;
   success_message: string;
   email_backup_enabled: boolean;
@@ -401,12 +401,19 @@ export interface PublicEventChatResponse {
   status: "ok";
   reply_text: string;
   map_url: string | null;
+  latest_message_id: number | null;
   tickets: Array<{
     registration_id: string;
     summary_text: string;
     png_url: string | null;
     svg_url: string | null;
   }>;
+}
+
+export interface PublicEventChatHistoryResponse {
+  sender_id: string;
+  latest_message_id: number | null;
+  items: Message[];
 }
 
 export type PublicInboxConversationStatus = "open" | "waiting-admin" | "waiting-user" | "resolved";
@@ -434,4 +441,11 @@ export interface PublicInboxConversationSummary {
 export interface PublicInboxConversationDetailResponse {
   conversation: PublicInboxConversationSummary;
   messages: Message[];
+}
+
+export interface PublicInboxReplyResponse {
+  status: "ok";
+  sender_id: string;
+  conversation_status: PublicInboxConversationStatus;
+  message: Message;
 }

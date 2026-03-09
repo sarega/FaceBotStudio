@@ -2092,8 +2092,12 @@ function normalizePublicSlug(rawValue: unknown) {
   return sanitizeEnglishSlugInput(String(rawValue || ""));
 }
 
+const DEFAULT_PUBLIC_UPLOADS_ROOT_DIR = path.join(__dirname, "public", "uploads");
+const PUBLIC_UPLOADS_ROOT_DIR = path.resolve(
+  String(process.env.PUBLIC_UPLOADS_DIR || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR).trim() || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR,
+);
 const PUBLIC_POSTER_MAX_BYTES = 2 * 1024 * 1024;
-const PUBLIC_POSTER_UPLOAD_DIR = path.join(__dirname, "public", "uploads", "event-posters");
+const PUBLIC_POSTER_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "event-posters");
 
 function getPosterExtensionFromMimeType(mimeType: string) {
   switch (mimeType) {
@@ -2120,12 +2124,92 @@ function resolvePublicPosterAbsolutePath(relativeUrl: string) {
   return path.join(PUBLIC_POSTER_UPLOAD_DIR, fileName);
 }
 
+function normalizeComparablePhone(value: unknown) {
+  return normalizeOptionalText(value).replace(/\D/g, "");
+}
+
+function phonesRoughlyMatch(left: unknown, right: unknown) {
+  const leftDigits = normalizeComparablePhone(left);
+  const rightDigits = normalizeComparablePhone(right);
+  if (!leftDigits || !rightDigits) return false;
+  if (leftDigits === rightDigits) return true;
+  if (leftDigits.length >= 8 && rightDigits.length >= 8) {
+    return leftDigits.endsWith(rightDigits) || rightDigits.endsWith(leftDigits);
+  }
+  return false;
+}
+
 function buildTicketArtifactUrls(registrationId: string) {
   const encodedId = encodeURIComponent(registrationId);
   return {
     png_url: buildTicketImageUrl(registrationId, "png") || `/api/tickets/${encodedId}.png`,
     svg_url: buildTicketImageUrl(registrationId, "svg") || `/api/tickets/${encodedId}.svg`,
   };
+}
+
+function buildPublicRegistrationResponsePayload(
+  payload: Awaited<ReturnType<typeof buildPublicEventPagePayload>>,
+  registration: RegistrationRow,
+  options: {
+    status: "success" | "duplicate" | "recovered";
+    message: string;
+    successMessage: string;
+  },
+) {
+  const registrationId = String(registration.id || "").trim().toUpperCase();
+  return {
+    status: options.status,
+    message: options.message,
+    success_message: options.successMessage,
+    email_backup_enabled: payload?.event.confirmation_email_enabled ?? false,
+    map_url: payload?.location.map_url || "",
+    registration: {
+      id: registrationId,
+      first_name: normalizeOptionalText(registration.first_name),
+      last_name: normalizeOptionalText(registration.last_name),
+      phone: normalizeOptionalText(registration.phone),
+      email: normalizeOptionalText(registration.email),
+    },
+    ticket: buildTicketArtifactUrls(registrationId),
+    event: {
+      name: payload?.event.name || "-",
+      date_label: payload?.event.date_label || "-",
+      location: payload?.location.compact || "-",
+    },
+  };
+}
+
+async function findConflictingPublicSlug(slug: string, excludeEventId?: string) {
+  const normalizedSlug = normalizePublicSlug(slug);
+  if (!normalizedSlug) return null;
+
+  const events = await appDb.listEvents();
+  for (const event of events) {
+    if (normalizeOptionalText(event.id) === normalizeOptionalText(excludeEventId)) continue;
+    const settings = await getSettingsMap(event.id);
+    const resolvedSlug = resolveEnglishPublicSlug({
+      customSlug: normalizeOptionalText(settings.event_public_slug),
+      eventName: normalizeOptionalText(settings.event_name) || normalizeOptionalText(event.name),
+      eventSlug: normalizeOptionalText(event.slug),
+      eventId: event.id,
+    });
+    if (resolvedSlug === normalizedSlug) {
+      return {
+        event,
+        settings,
+        slug: resolvedSlug,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function listPublicConversationRows(eventId: string, senderId: string, limit = 240) {
+  const pageId = `public-event:${eventId}`;
+  return (await appDb.getConversationRowsForSender(senderId, limit, eventId))
+    .filter((row) => normalizeOptionalText(row.page_id) === pageId)
+    .sort((left, right) => Number(left.id || 0) - Number(right.id || 0));
 }
 
 async function resolvePublicEventBySlug(rawSlug: string) {
@@ -8176,6 +8260,8 @@ async function startServer() {
     }
     return next(error);
   });
+  mkdirSync(PUBLIC_POSTER_UPLOAD_DIR, { recursive: true });
+  app.use("/uploads", express.static(PUBLIC_UPLOADS_ROOT_DIR));
   app.use(express.static(path.join(__dirname, "public")));
   app.use(attachSession);
   app.use("/api/checkin-access", attachCheckinAccessSession);
@@ -9278,74 +9364,149 @@ async function startServer() {
         source: "public_event_page",
       });
 
-      const mapUrl = payload.location.map_url || "";
-      const eventName = payload.event.name;
-      const eventDateLabel = payload.event.date_label;
-      const locationLabel = payload.location.compact || "-";
-
       if (creation.statusCode === 200 && typeof creation.content.id === "string") {
         const registrationId = String(creation.content.id || "").trim().toUpperCase();
-        const ticket = buildTicketArtifactUrls(registrationId);
+        const createdRegistration = await getRegistrationById(registrationId);
+        if (!createdRegistration) {
+          return res.status(500).json({ error: "Registration completed but ticket record could not be loaded" });
+        }
         await recordAudit(req, "public.registration.created", "registration", registrationId, {
           event_id: match.event.id,
           public_slug: payload.event.slug,
         });
-        return res.json({
-          status: "success",
-          message: "Registration complete",
-          success_message: payload.event.success_message,
-          email_backup_enabled: payload.event.confirmation_email_enabled,
-          map_url: mapUrl,
-          registration: {
-            id: registrationId,
-            first_name: firstName,
-            last_name: lastName,
-            phone,
-            email,
-          },
-          ticket,
-          event: {
-            name: eventName,
-            date_label: eventDateLabel,
-            location: locationLabel,
-          },
-        });
+        return res.json(
+          buildPublicRegistrationResponsePayload(payload, createdRegistration, {
+            status: "success",
+            message: "Registration complete",
+            successMessage: payload.event.success_message,
+          }),
+        );
       }
 
       if (creation.statusCode === 409 && typeof creation.content.duplicate_registration_id === "string") {
         const registrationId = String(creation.content.duplicate_registration_id || "").trim().toUpperCase();
         const existing = await getRegistrationById(registrationId);
-        const ticket = buildTicketArtifactUrls(registrationId);
+        if (!existing) {
+          return res.status(404).json({ error: "Existing ticket could not be loaded" });
+        }
         await recordAudit(req, "public.registration.duplicate_reused", "registration", registrationId, {
           event_id: match.event.id,
           public_slug: payload.event.slug,
         });
-        return res.json({
-          status: "duplicate",
-          message: "You already have a ticket for this event",
-          success_message: "You already have a ticket for this event. Save it again below.",
-          email_backup_enabled: payload.event.confirmation_email_enabled,
-          map_url: mapUrl,
-          registration: {
-            id: registrationId,
-            first_name: existing?.first_name || firstName,
-            last_name: existing?.last_name || lastName,
-            phone: existing?.phone || phone,
-            email: existing?.email || email,
-          },
-          ticket,
-          event: {
-            name: eventName,
-            date_label: eventDateLabel,
-            location: locationLabel,
-          },
-        });
+        return res.json(
+          buildPublicRegistrationResponsePayload(payload, existing, {
+            status: "duplicate",
+            message: "You already have a ticket for this event",
+            successMessage: "You already have a ticket for this event. Save it again below.",
+          }),
+        );
       }
 
       return res.status(creation.statusCode).json(creation.content);
     } catch (error) {
       console.error("Failed to register via public event page:", error);
       return res.status(500).json({ error: "Failed to register for this event" });
+    }
+  });
+
+  app.post("/api/public/events/:slug/find-ticket", async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+
+      const payload = await buildPublicEventPagePayload(match.event, match.settings);
+      if (!payload) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const phone = readOptionalString(body, "phone", 64);
+      const email = readOptionalString(body, "email", 320);
+      if (!phone && !email) {
+        issues.push({ field: "phone", message: "Enter your phone number or email to find your ticket" });
+      }
+      if (email && !isLikelyEmailAddress(email)) {
+        issues.push({ field: "email", message: "email is invalid" });
+      }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const rows = await appDb.listRegistrations(undefined, match.event.id);
+      const activeRows = rows.filter((row) => row.status !== "cancelled");
+      const normalizedEmail = normalizeComparableText(email);
+      const matches = activeRows.filter((row) => {
+        if (phone && !phonesRoughlyMatch(row.phone, phone)) {
+          return false;
+        }
+        if (normalizedEmail && normalizeComparableText(row.email) !== normalizedEmail) {
+          return false;
+        }
+        return true;
+      });
+
+      if (matches.length === 0) {
+        return res.status(404).json({
+          error: "No ticket was found for that phone number or email in this event",
+        });
+      }
+      if (matches.length > 1) {
+        return res.status(409).json({
+          error: "More than one ticket matches these details. Please use the contact options on this page for manual help.",
+        });
+      }
+
+      const registration = matches[0];
+      await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", registration.id, {
+        event_id: match.event.id,
+        public_slug: payload.event.slug,
+        lookup_phone: phone ? normalizeComparablePhone(phone) : null,
+        lookup_email: normalizedEmail || null,
+      });
+      return res.json(
+        buildPublicRegistrationResponsePayload(payload, registration, {
+          status: "recovered",
+          message: "We found your ticket",
+          successMessage: "We found your ticket. Save it again below.",
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to recover public event ticket:", error);
+      return res.status(500).json({ error: "Failed to recover ticket" });
+    }
+  });
+
+  app.get("/api/public/events/:slug/chat/history", async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+
+      const senderId = normalizeOptionalText(req.query?.sender_id);
+      if (!senderId) {
+        return res.status(400).json({ error: "sender_id is required" });
+      }
+
+      const afterId = parseNonNegativeInteger(req.query?.after_id, 0, Number.MAX_SAFE_INTEGER);
+      const rows = await listPublicConversationRows(match.event.id, senderId, 240);
+      const latestMessageId = rows.reduce((max, row) => {
+        const nextId = Number(row.id || 0);
+        return Number.isFinite(nextId) ? Math.max(max, nextId) : max;
+      }, 0);
+      const items = rows.filter((row) => Number(row.id || 0) > afterId);
+
+      return res.json({
+        sender_id: senderId,
+        latest_message_id: latestMessageId || null,
+        items,
+      });
+    } catch (error) {
+      console.error("Failed to fetch public chat history:", error);
+      return res.status(500).json({ error: "Failed to fetch public chat history" });
     }
   });
 
@@ -9427,10 +9588,16 @@ async function startServer() {
       }
 
       const artifacts = await buildWebChatArtifacts(match.event.id, ticketRegistrationIds);
+      const latestRows = await listPublicConversationRows(match.event.id, senderId, 4);
+      const latestMessageId = latestRows.reduce((max, row) => {
+        const nextId = Number(row.id || 0);
+        return Number.isFinite(nextId) ? Math.max(max, nextId) : max;
+      }, 0);
       return res.json({
         status: "ok",
         reply_text: replyText,
         map_url: artifacts.map_url,
+        latest_message_id: latestMessageId || null,
         tickets: artifacts.tickets,
       });
     } catch (error) {
@@ -9731,6 +9898,22 @@ async function startServer() {
           eventId,
         });
         mergedSettings.event_public_slug = body.event_public_slug;
+      }
+      const resolvedPublicSlug = resolveEnglishPublicSlug({
+        customSlug: String(mergedSettings.event_public_slug || ""),
+        eventName: String(mergedSettings.event_name || event?.name || ""),
+        eventSlug: event?.slug || "",
+        eventId,
+      });
+      const conflictingPublicSlug = await findConflictingPublicSlug(resolvedPublicSlug, eventId);
+      if (conflictingPublicSlug) {
+        const conflictName =
+          normalizeOptionalText(conflictingPublicSlug.settings.event_name)
+          || normalizeOptionalText(conflictingPublicSlug.event.name)
+          || conflictingPublicSlug.event.id;
+        return res.status(409).json({
+          error: `Public slug "${resolvedPublicSlug}" is already used by "${conflictName}"`,
+        });
       }
       const timingState = getEventState(mergedSettings);
       if (timingState.registrationStatus === "invalid") {
@@ -10354,6 +10537,90 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to fetch public inbox conversation:", error);
       return res.status(500).json({ error: "Failed to fetch public inbox conversation" });
+    }
+    },
+  );
+
+  app.post(
+    "/api/public-inbox/reply",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const eventId = getRequestedEventId(req);
+      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 240 });
+      const text = readRequiredString(body, "text", issues, { label: "text", maxLength: 4000 });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const rows = await listPublicConversationRows(eventId, senderId, 240);
+      if (rows.length === 0) {
+        return res.status(404).json({ error: "Public inbox conversation not found" });
+      }
+
+      const pageId = `public-event:${eventId}`;
+      const audits = await appDb.listAuditLogs(200);
+      const latestStatusAudit = audits.find((row) =>
+        row.action === "public.chat.status_updated"
+        && normalizeOptionalText(row.target_type) === "conversation"
+        && normalizeOptionalText(row.target_id) === senderId
+        && normalizeOptionalText(row.metadata?.event_id) === eventId
+      ) || null;
+      const previousStatus = latestStatusAudit
+        ? normalizePublicInboxConversationStatus(latestStatusAudit.metadata?.status)
+        : "open";
+
+      await saveMessage(senderId, text, "outgoing", eventId, pageId);
+
+      const event = await appDb.getEventById(eventId);
+      const eventSettings = await getSettingsMap(eventId);
+      const publicSlug = resolveEnglishPublicSlug({
+        customSlug: normalizeOptionalText(eventSettings.event_public_slug),
+        eventName: normalizeOptionalText(eventSettings.event_name) || normalizeOptionalText(event?.name),
+        eventSlug: normalizeOptionalText(event?.slug),
+        eventId,
+      });
+
+      await recordAudit(req, "public.chat.reply_sent", "conversation", senderId, {
+        event_id: eventId,
+        public_slug: publicSlug,
+        sender_id: senderId,
+        message_preview: truncateText(text, 220),
+      });
+
+      if (previousStatus !== "waiting-user") {
+        await recordAudit(req, "public.chat.status_updated", "conversation", senderId, {
+          event_id: eventId,
+          public_slug: publicSlug,
+          sender_id: senderId,
+          previous_status: previousStatus,
+          status: "waiting-user",
+          note: "reply sent",
+        });
+      }
+
+      const latestRows = await listPublicConversationRows(eventId, senderId, 8);
+      const latestMessage = latestRows[latestRows.length - 1] || null;
+      if (!latestMessage) {
+        return res.status(500).json({ error: "Reply was stored but could not be reloaded" });
+      }
+
+      return res.json({
+        status: "ok",
+        sender_id: senderId,
+        conversation_status: "waiting-user",
+        message: {
+          ...latestMessage,
+          platform: "web_chat",
+          channel_display_name: "Public Event Page",
+        },
+      });
+    } catch (error) {
+      console.error("Failed to send public inbox reply:", error);
+      return res.status(500).json({ error: "Failed to send public inbox reply" });
     }
     },
   );

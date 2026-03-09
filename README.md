@@ -57,6 +57,7 @@ Recommended for low-traffic demos with SQLite:
    - `CSRF_ALLOWED_ORIGINS=https://admin.example.com` (optional extra trusted origins)
    - `TRUST_PROXY=1` (set explicitly in production; use `false` if direct/no proxy)
    - `DB_PATH=/data/bot.db`
+   - `PUBLIC_UPLOADS_DIR=/data/uploads`
    - `APP_URL=https://YOUR_APP.up.railway.app`
 4. Build command: `npm run build`
 5. Start command: `npm run start`
