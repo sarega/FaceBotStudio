@@ -2,6 +2,7 @@
 
 @theme {
   --font-sans: "Noto Sans Thai", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-edit: "Sarabun", "Noto Sans Thai", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
@@ -54,6 +55,12 @@
   [role="menuitem"] {
     -webkit-user-select: none;
     user-select: none;
+  }
+
+  input:not([readonly]),
+  textarea:not([readonly]),
+  [contenteditable="true"] {
+    font-family: var(--font-edit);
   }
 
   input:not([readonly]),

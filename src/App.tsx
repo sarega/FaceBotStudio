@@ -478,6 +478,13 @@ const INITIAL_CHECKIN_TOKEN =
     ? new URLSearchParams(window.location.search).get("checkin_token")?.trim() || ""
     : "";
 
+function getDefaultTabForRole(role: UserRole | null | undefined): AppTab {
+  if (role === "checker") return "registrations";
+  if (role === "viewer") return "logs";
+  if (role === "operator") return "test";
+  return "event";
+}
+
 function stripCheckinTokenFromUrl() {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
@@ -1353,6 +1360,102 @@ function getChannelTokenStatusMeta(channel: ChannelAccountRecord): { label: stri
     className: "text-rose-700",
     icon: <AlertCircle className="h-3.5 w-3.5" />,
   };
+}
+
+function ChannelPlatformLogo({
+  platform,
+  className = "h-10 w-10 rounded-2xl",
+}: {
+  platform: ChannelPlatform;
+  className?: string;
+}) {
+  const baseClass = `inline-flex shrink-0 items-center justify-center border border-white/35 text-white shadow-sm ${className}`.trim();
+  const iconClass = "h-6 w-6";
+
+  if (platform === "facebook") {
+    return (
+      <span
+        className={baseClass}
+        style={{ background: "linear-gradient(135deg, #0099FF 0%, #2563EB 100%)" }}
+        aria-hidden="true"
+      >
+        <svg viewBox="0 0 24 24" className={iconClass}>
+          <path
+            fill="rgba(255,255,255,0.98)"
+            d="M12 4.9c-4.35 0-7.9 3.18-7.9 7.1 0 2.2 1.1 4.14 2.84 5.45V20l2.62-1.45c.76.2 1.58.3 2.44.3 4.35 0 7.9-3.18 7.9-7.1S16.35 4.9 12 4.9Z"
+          />
+          <path
+            fill="#1D4ED8"
+            d="M7.5 13.9 10.84 10.33a.45.45 0 0 1 .58-.05l2.31 1.73 2.7-2.66c.2-.19.5.06.34.28l-3.34 3.57a.45.45 0 0 1-.58.05l-2.31-1.73-2.7 2.66c-.2.19-.5-.06-.34-.28Z"
+          />
+        </svg>
+      </span>
+    );
+  }
+
+  if (platform === "line_oa") {
+    return (
+      <span className={baseClass} style={{ backgroundColor: "#06C755" }} aria-hidden="true">
+        <svg viewBox="0 0 24 24" className={iconClass}>
+          <rect x="4" y="5" width="16" height="11" rx="5" fill="currentColor" />
+          <path d="M10 16h4l-2 2.6z" fill="currentColor" />
+          <text x="12" y="12.6" textAnchor="middle" fontSize="5.2" fontWeight="700" fill="#06C755" fontFamily="Arial, sans-serif">
+            LINE
+          </text>
+        </svg>
+      </span>
+    );
+  }
+
+  if (platform === "instagram") {
+    return (
+      <span
+        className={baseClass}
+        style={{ background: "linear-gradient(135deg, #F58529 0%, #DD2A7B 55%, #8134AF 100%)" }}
+        aria-hidden="true"
+      >
+        <svg viewBox="0 0 24 24" className={`${iconClass} fill-none stroke-current`}>
+          <rect x="5.25" y="5.25" width="13.5" height="13.5" rx="4" strokeWidth="1.8" />
+          <circle cx="12" cy="12" r="3.25" strokeWidth="1.8" />
+          <circle cx="16.55" cy="7.45" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (platform === "whatsapp") {
+    return (
+      <span className={baseClass} style={{ backgroundColor: "#25D366" }} aria-hidden="true">
+        <svg viewBox="0 0 24 24" className={`${iconClass} fill-none stroke-current`}>
+          <path d="M12 5.2a6.8 6.8 0 0 0-5.9 10.2L5.2 19l3.8-1a6.8 6.8 0 1 0 3-12.8Z" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M9.3 9.4c.2-.3.4-.4.6-.4h.5c.2 0 .4.1.5.4l.6 1.5c.1.3 0 .6-.2.8l-.5.5c.7 1.2 1.7 2.1 3 2.8l.5-.4c.2-.2.5-.2.8-.1l1.4.6c.3.1.4.3.4.5v.5c0 .3-.1.5-.4.6-.4.2-.9.4-1.4.3-3.3-.5-6.2-3.2-7-6.5-.1-.5 0-1 .2-1.5Z" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (platform === "telegram") {
+    return (
+      <span className={baseClass} style={{ backgroundColor: "#229ED9" }} aria-hidden="true">
+        <svg viewBox="0 0 24 24" className={iconClass}>
+          <path d="M18.8 6.2 5.9 11.2c-.9.4-.9 1.1-.2 1.3l3.3 1 1.3 4c.2.6.3.8.8.8.4 0 .6-.2.8-.4l1.8-1.7 3.7 2.8c.7.4 1.2.2 1.4-.7l2.2-10.3c.3-1-.3-1.5-1.2-1.1Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (platform === "web_chat") {
+    return (
+      <span className={baseClass} style={{ backgroundColor: "#475569" }} aria-hidden="true">
+        <svg viewBox="0 0 24 24" className={`${iconClass} fill-none stroke-current`}>
+          <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h5A2.5 2.5 0 0 1 15 7.5v3A2.5 2.5 0 0 1 12.5 13H10l-3 2v-2.3A2.5 2.5 0 0 1 5 10.5Z" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M12.5 10A2.5 2.5 0 0 1 15 7.5h1.5A2.5 2.5 0 0 1 19 10v2A2.5 2.5 0 0 1 16.5 14H15l-2 1.5V13.8" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </span>
+    );
+  }
+
+  return null;
 }
 
 const BADGE_BASE_CLASS =
@@ -2388,7 +2491,6 @@ export default function App() {
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [eventListQuery, setEventListQuery] = useState("");
   const [eventWorkspaceFilter, setEventWorkspaceFilter] = useState<EventWorkspaceFilter>("all");
-  const [channelListQuery, setChannelListQuery] = useState("");
   const [registrationListQuery, setRegistrationListQuery] = useState("");
   const [documentListQuery, setDocumentListQuery] = useState("");
   const [logListQuery, setLogListQuery] = useState("");
@@ -2491,7 +2593,6 @@ export default function App() {
   const canDeleteTeamUser = (user: AuthUser) => canManageTargetAccess(user);
   const deferredGlobalSearchQuery = useDeferredValue(normalizeSearchQuery(globalSearchQuery));
   const deferredEventListQuery = useDeferredValue(normalizeSearchQuery(eventListQuery));
-  const deferredChannelListQuery = useDeferredValue(normalizeSearchQuery(channelListQuery));
   const deferredRegistrationListQuery = useDeferredValue(normalizeSearchQuery(registrationListQuery));
   const deferredDocumentListQuery = useDeferredValue(normalizeSearchQuery(documentListQuery));
   const deferredLogListQuery = useDeferredValue(normalizeSearchQuery(logListQuery));
@@ -2836,17 +2937,7 @@ export default function App() {
       disabled: eventLoading,
     };
   })();
-  const filteredSelectedEventChannels = selectedEventChannels.filter((channel) =>
-    matchesSearchQuery(deferredChannelListQuery, [
-      channel.display_name,
-      channel.external_id,
-      channel.platform_label,
-      channel.platform,
-      channel.connection_status,
-      channel.platform_description,
-      ...(channel.config_summary?.flatMap((item) => [item.label, item.value]) || []),
-    ]),
-  );
+  const visibleSelectedEventChannels = selectedEventChannels;
   const filteredRegistrations = registrations.filter((reg) =>
     matchesSearchQuery(deferredRegistrationListQuery, [
       reg.id,
@@ -3590,6 +3681,7 @@ export default function App() {
         if (cancelled) return;
         setAuthUser(user);
         setAuthStatus("authenticated");
+        setActiveTab(getDefaultTabForRole(user.role));
       } catch {
         if (cancelled) return;
         setAuthStatus("unauthenticated");
@@ -4018,6 +4110,8 @@ export default function App() {
   }, [selectedLogMessage?.id, selectedSenderRegistrationKey]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
     const allowedTabs = [
       ...(canEditSettings ? ["event"] : []),
       ...(canEditSettings ? ["design"] : []),
@@ -4030,9 +4124,9 @@ export default function App() {
     ] as AppTab[];
 
     if (!allowedTabs.includes(activeTab)) {
-      setActiveTab(allowedTabs[0] || "registrations");
+      setActiveTab(allowedTabs[0] || getDefaultTabForRole(role));
     }
-  }, [activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canManageRegistrations, canManageUsers]);
+  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canManageRegistrations, canManageUsers, role]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
@@ -5544,8 +5638,10 @@ export default function App() {
         throw new Error(data?.error || "Failed to login");
       }
 
-      setAuthUser(data.user as AuthUser);
+      const loggedInUser = data.user as AuthUser;
+      setAuthUser(loggedInUser);
       setAuthStatus("authenticated");
+      setActiveTab(getDefaultTabForRole(loggedInUser.role));
       setLoginPassword("");
       setTeamMessage("");
     } catch (err) {
@@ -5968,7 +6064,6 @@ export default function App() {
         setSelectedEventId(channel.event_id);
       }
       if (channel) {
-        setChannelListQuery(channel.external_id || channel.display_name || "");
         selectSetupChannel(channel);
         loadChannelIntoForm(channel);
         setChannelConfigDialogOpen(true);
@@ -7982,9 +8077,9 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-4"
+              className="space-y-3"
             >
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-5">
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-lg font-semibold">Context</h2>
                   {selectedEvent && (
@@ -8003,11 +8098,11 @@ export default function App() {
                   ]}
                 />
               </div>
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-                <div className="space-y-4 xl:col-span-7">
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "mb-0" : "mb-4"} space-y-3`}>
-                      <div className={`flex flex-col gap-3 lg:flex-row lg:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "lg:items-center" : "lg:items-start"}`}>
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-12">
+                <div className="space-y-3 xl:col-span-7">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "mb-0" : "mb-3"} space-y-2`}>
+                      <div className={`flex flex-col gap-2 lg:flex-row lg:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "lg:items-center" : "lg:items-start"}`}>
                         <div>
                           <div className="flex items-center gap-2">
                             <h2 className="text-lg font-semibold">Event Context</h2>
@@ -8084,9 +8179,10 @@ export default function App() {
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
                       <>
                         <textarea
+                          rows={10}
                           value={settings.context}
                           onChange={(e) => setSettings({ ...settings, context: e.target.value })}
-                          className="w-full h-80 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none font-mono text-sm resize-none"
+                          className="w-full min-h-[16rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-y"
                           placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
                         />
                         {settingsMessage && (
@@ -8098,8 +8194,8 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "mb-0" : "mb-4"} flex flex-col gap-3 sm:flex-row sm:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "sm:items-center" : "sm:items-start"}`}>
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "mb-0" : "mb-3"} flex flex-col gap-2 sm:flex-row sm:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "sm:items-center" : "sm:items-start"}`}>
                       <div className="flex items-center gap-2">
                         <h3 className="text-lg font-semibold">Knowledge Documents</h3>
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
@@ -8180,9 +8276,10 @@ export default function App() {
                           <div className="md:col-span-2">
                             <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Document Content</label>
                             <textarea
+                              rows={7}
                               value={documentContent}
                               onChange={(e) => setDocumentContent(e.target.value)}
-                              className="w-full h-56 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-none"
+                              className="w-full min-h-[11rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-y"
                               placeholder="Paste FAQ answers, rules, agenda details, speaker notes, or any event-specific reference content here."
                             />
                           </div>
@@ -8214,9 +8311,9 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-4 xl:col-span-5">
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "mb-0 items-center" : "mb-3 items-start"} flex justify-between gap-3`}>
+                <div className="space-y-3 xl:col-span-5">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "mb-0 items-center" : "mb-2.5 items-start"} flex justify-between gap-2`}>
                       <button
                         type="button"
                         onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
@@ -8256,7 +8353,7 @@ export default function App() {
 
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
                       <>
-                        <div className="mb-4 relative">
+                        <div className="mb-3 relative">
                           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                           <input
                             value={documentListQuery}
@@ -8277,7 +8374,7 @@ export default function App() {
 
                         <div className="space-y-3">
                           {filteredDocuments.length === 0 && (
-                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
                               {deferredDocumentListQuery ? "No documents match this search." : "No documents attached to this event yet."}
                             </div>
                           )}
@@ -8380,8 +8477,8 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "mb-0" : "mb-3"} flex items-center justify-between gap-3`}>
+                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "mb-0" : "mb-2"} flex items-center justify-between gap-2`}>
                       <button
                         type="button"
                         onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
@@ -8416,12 +8513,12 @@ export default function App() {
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && (
                       <>
                         {!selectedDocumentForChunks ? (
-                          <div className="mb-4 rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                          <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-500">
                             Select a document to inspect its chunks.
                           </div>
                         ) : (
-                          <div className="mb-4 space-y-3">
-                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <div className="space-y-2.5">
+                            <div className="rounded-xl border border-slate-200 bg-white p-3">
                               <p className="font-semibold text-slate-900">{selectedDocumentForChunks.title}</p>
                               <StatusLine
                                 className="mt-2"
@@ -8436,17 +8533,17 @@ export default function App() {
 
                             <div className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
                               {documentChunksLoading && (
-                                <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-500">
+                                <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500">
                                   Loading chunks...
                                 </div>
                               )}
                               {!documentChunksLoading && documentChunks.length === 0 && (
-                                <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                                <div className="rounded-xl border border-dashed border-slate-200 bg-white p-3 text-xs text-slate-500">
                                   No chunks generated for this document yet.
                                 </div>
                               )}
                               {!documentChunksLoading && documentChunks.map((chunk) => (
-                                <div key={chunk.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div key={chunk.id} className="rounded-xl border border-slate-200 bg-white p-3">
                                   <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                                     Chunk {chunk.chunk_index + 1}
                                   </p>
@@ -8461,8 +8558,8 @@ export default function App() {
 
                   </div>
 
-                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "mb-0" : "mb-3"} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}>
+                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "mb-0" : "mb-2"} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}>
                       <button
                         type="button"
                         onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
@@ -8513,12 +8610,12 @@ export default function App() {
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) && (
                       <>
                         {!selectedDocumentForChunks ? (
-                          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-xs text-slate-500">
+                          <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-500">
                             Select a document to inspect its vector-ready metadata.
                           </div>
                         ) : (
-                          <div className="min-w-0 space-y-4">
-                            <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs leading-relaxed text-blue-800">
+                          <div className="min-w-0 space-y-3">
+                            <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs leading-relaxed text-blue-800">
                               หลังจาก queue สำเร็จ worker จะสร้าง embeddings และเก็บ vectors ไว้ในระบบนี้ก่อน ทำให้ retrieval ใช้ cosine similarity
                               ร่วมกับ keyword ranking ได้จริง ส่วน
                               {" "}
@@ -8531,8 +8628,8 @@ export default function App() {
                               เพิ่มเติมได้ถ้าต้องการ sync ออกระบบภายนอก
                             </div>
 
-                            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-                              <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
+                              <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-3">
                                 <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Document Embedding State</p>
                                 <div className="space-y-2 text-sm">
                                   <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
@@ -8567,16 +8664,16 @@ export default function App() {
                                 )}
                               </div>
 
-                              <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                              <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-3">
                                 <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Chunk Metadata</p>
                                 <div className="max-h-[14rem] space-y-2 overflow-y-auto overflow-x-hidden pr-1">
                                   {embeddingPreviewLoading && (
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
                                       Loading embedding preview...
                                     </div>
                                   )}
                                   {!embeddingPreviewLoading && !embeddingPreview?.chunks.length && (
-                                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
+                                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
                                       No chunks available for embedding yet.
                                     </div>
                                   )}
@@ -8598,9 +8695,9 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-3">
                               <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Embedding Hook Payload</p>
-                              <div className="max-h-[22rem] overflow-y-auto overflow-x-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <div className="max-h-[22rem] overflow-y-auto overflow-x-hidden rounded-xl border border-slate-200 bg-slate-50 p-3">
                                 <pre className="whitespace-pre-wrap break-all text-xs font-mono text-slate-700">
                                   {embeddingPreview ? JSON.stringify(embeddingPreview.payload, null, 2) : "Select a document to preview the embedding payload."}
                                 </pre>
@@ -8612,8 +8709,8 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "mb-0" : "mb-3"} flex items-center justify-between gap-3`}>
+                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "mb-0" : "mb-2"} flex items-center justify-between gap-2`}>
                       <button
                         type="button"
                         onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
@@ -8636,16 +8733,16 @@ export default function App() {
                     </div>
 
                     {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) && (
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr,0.9fr]">
-                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr,0.9fr]">
+                          <div className="rounded-xl border border-slate-200 bg-white p-3">
                             <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500">
                               Test Query
                             </label>
                             <textarea
                               value={retrievalQuery}
                               onChange={(e) => setRetrievalQuery(e.target.value)}
-                              rows={3}
+                              rows={2}
                               placeholder="Example: งานนี้จัดที่ไหน เดินทางยังไง และเปิดลงทะเบียนถึงวันไหน"
                               className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                             />
@@ -8673,7 +8770,7 @@ export default function App() {
                             )}
                           </div>
 
-                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                          <div className="rounded-xl border border-slate-200 bg-white p-3">
                             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
                               Prompt Layers
                             </p>
@@ -8793,8 +8890,8 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "p-3 sm:p-3" : "p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "mb-0 items-center" : "mb-5 items-start"} flex flex-col gap-3 sm:flex-row sm:justify-between`}>
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
+                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "mb-0 items-center" : "mb-3 items-start"} flex flex-col gap-2 sm:flex-row sm:justify-between`}>
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Activity className="w-5 h-5 text-blue-600" />
@@ -10914,7 +11011,7 @@ export default function App() {
                         <StatusLine
                           className="mt-1"
                           items={[
-                            `${filteredSelectedEventChannels.length} linked`,
+                            `${visibleSelectedEventChannels.length} linked`,
                             selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
                             selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
                               ? getRegistrationAvailabilityLabel(selectedEvent.registration_availability)
@@ -10956,34 +11053,13 @@ export default function App() {
                           </InlineWarning>
                         )}
 
-                        <div className="relative">
-                          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                          <input
-                            value={channelListQuery}
-                            onChange={(e) => setChannelListQuery(e.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Search channels by name, platform, ID, or status"
-                          />
-                          {channelListQuery && (
-                            <button
-                              onClick={() => setChannelListQuery("")}
-                              className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                              aria-label="Clear channel search"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-
-                        {filteredSelectedEventChannels.length === 0 ? (
+                        {visibleSelectedEventChannels.length === 0 ? (
                           <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                            {deferredChannelListQuery
-                              ? "No channels match this search."
-                              : "No channels linked to this event yet. Click Add Channel to connect one."}
+                            No channels linked to this event yet. Click Add Channel to connect one.
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                            {filteredSelectedEventChannels.map((channel) => {
+                            {visibleSelectedEventChannels.map((channel) => {
                               const isSelected = setupSelectedChannel?.id === channel.id;
                               const isFocused = isSearchFocused("channel", channel.id);
                               const disableToggle = selectedEventChannelWritesLocked && !channel.is_active;
@@ -11013,15 +11089,18 @@ export default function App() {
                                   } ${isFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                                 >
                                   <div className="space-y-2.5">
-                                    <div>
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
-                                        {isSelected && <SelectionMarker />}
+                                    <div className="flex items-start gap-3">
+                                      <ChannelPlatformLogo platform={channel.platform} />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
+                                          {isSelected && <SelectionMarker />}
+                                        </div>
+                                        <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                          {channel.platform_label || channel.platform}
+                                        </p>
+                                        <p className="mt-1 text-[11px] font-mono text-slate-500 break-all">{channel.external_id}</p>
                                       </div>
-                                      <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                                        {channel.platform_label || channel.platform}
-                                      </p>
-                                      <p className="mt-1 text-[11px] font-mono text-slate-500 break-all">{channel.external_id}</p>
                                     </div>
                                     <StatusLine
                                       items={[
@@ -11107,9 +11186,15 @@ export default function App() {
                           {setupSelectedChannel ? (
                             <div className="space-y-3">
                               <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <p className="text-sm font-semibold text-slate-900">{setupSelectedChannel.display_name}</p>
-                                  <p className="mt-1 break-all text-xs font-mono text-slate-500">{setupSelectedChannel.external_id}</p>
+                                <div className="flex min-w-0 items-start gap-3">
+                                  <ChannelPlatformLogo platform={setupSelectedChannel.platform} className="h-11 w-11 rounded-2xl" />
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-semibold text-slate-900">{setupSelectedChannel.display_name}</p>
+                                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                      {setupSelectedChannel.platform_label || setupSelectedChannel.platform}
+                                    </p>
+                                    <p className="mt-1 break-all text-xs font-mono text-slate-500">{setupSelectedChannel.external_id}</p>
+                                  </div>
                                 </div>
                                 <ActionButton
                                   onClick={() => openChannelConfigDialog(setupSelectedChannel)}
@@ -11123,7 +11208,6 @@ export default function App() {
                               <div className="flex flex-wrap items-center gap-2">
                                 <StatusLine
                                   items={[
-                                    setupSelectedChannel.platform_label || setupSelectedChannel.platform,
                                     setupSelectedChannel.connection_status || "incomplete",
                                     setupSelectedChannel.is_active ? "active" : "inactive",
                                   ]}
@@ -11323,8 +11407,13 @@ export default function App() {
                 </select>
                 {selectedChannelPlatformDefinition && (
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 space-y-2">
-                    <p className="font-semibold text-slate-800">{selectedChannelPlatformDefinition.label}</p>
-                    <p>{selectedChannelPlatformDefinition.description}</p>
+                    <div className="flex items-start gap-3">
+                      <ChannelPlatformLogo platform={selectedChannelPlatformDefinition.id} className="h-10 w-10 rounded-2xl" />
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-800">{selectedChannelPlatformDefinition.label}</p>
+                        <p>{selectedChannelPlatformDefinition.description}</p>
+                      </div>
+                    </div>
                     <div className="space-y-1 text-xs text-slate-500">
                       {selectedChannelPlatformDefinition.notes.map((note) => (
                         <p key={`${selectedChannelPlatformDefinition.id}:${note}`}>{note}</p>
