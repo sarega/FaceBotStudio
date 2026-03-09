@@ -1,4 +1,4 @@
-import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import { 
@@ -39,12 +39,14 @@ import {
   Eye,
   PencilLine,
   Power,
+  Phone,
   X,
 } from "lucide-react";
 import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 
 interface Registration {
   id: string;
@@ -64,6 +66,22 @@ interface LlmModelOption {
   context_length?: number;
 }
 
+type PublicRegistrationFormState = {
+  first_name: string;
+  last_name: string;
+  phone: string;
+  email: string;
+};
+
+type PublicChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string;
+  mapUrl: string;
+  tickets: PublicEventChatResponse["tickets"];
+};
+
 interface AuditLogEntry {
   id: number;
   action: string;
@@ -79,6 +97,7 @@ type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin";
 type AgentWorkspaceView = "console" | "setup";
+type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
@@ -445,6 +464,8 @@ const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
+const PUBLIC_EVENT_CHAT_SENDER_STORAGE_KEY_PREFIX = "facebotstudio-public-event-chat-sender-v1";
+const PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX = "facebotstudio-public-event-chat-history-v1";
 const LOG_PAGE_SIZE = 200;
 const COLLAPSED_SECTION_STORAGE_KEY = "facebotstudio-collapsed-sections-v1";
 const COLLAPSIBLE_SECTION_KEYS = {
@@ -499,6 +520,119 @@ function getStoredThemeMode(): ThemeMode {
   if (typeof window === "undefined") return "system";
   const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
   return raw === "light" || raw === "dark" || raw === "system" ? raw : "system";
+}
+
+function getPublicEventChatSenderStorageKey(slug: string) {
+  return `${PUBLIC_EVENT_CHAT_SENDER_STORAGE_KEY_PREFIX}:${slug}`;
+}
+
+function getPublicEventChatHistoryStorageKey(slug: string) {
+  return `${PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX}:${slug}`;
+}
+
+function createPublicChatMessage(
+  role: PublicChatMessage["role"],
+  text: string,
+  options?: { mapUrl?: string; tickets?: PublicEventChatResponse["tickets"]; timestamp?: string },
+): PublicChatMessage {
+  const timestamp = options?.timestamp || new Date().toISOString();
+  return {
+    id: `${role}:${timestamp}:${Math.random().toString(36).slice(2, 10)}`,
+    role,
+    text,
+    timestamp,
+    mapUrl: options?.mapUrl || "",
+    tickets: Array.isArray(options?.tickets) ? options?.tickets : [],
+  };
+}
+
+function normalizeExternalHref(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+  return `https://${trimmed.replace(/^\/+/, "")}`;
+}
+
+function normalizePhoneHref(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const normalized = trimmed.replace(/[^+\d]/g, "");
+  return normalized ? `tel:${normalized}` : "";
+}
+
+function readPublicEventChatHistory(slug: string) {
+  if (typeof window === "undefined" || !slug) return [] as PublicChatMessage[];
+  try {
+    const raw = window.localStorage.getItem(getPublicEventChatHistoryStorageKey(slug));
+    if (!raw) return [] as PublicChatMessage[];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [] as PublicChatMessage[];
+    return parsed
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => {
+        const row = entry as Record<string, unknown>;
+        const role = row.role === "user" ? "user" : row.role === "assistant" ? "assistant" : null;
+        const text = typeof row.text === "string" ? row.text : "";
+        const timestamp = typeof row.timestamp === "string" ? row.timestamp : "";
+        if (!role || !timestamp) return null;
+        const tickets = Array.isArray(row.tickets)
+          ? row.tickets
+            .filter((item) => item && typeof item === "object")
+            .map((item) => {
+              const ticket = item as Record<string, unknown>;
+              const registrationId = typeof ticket.registration_id === "string" ? ticket.registration_id : "";
+              const summaryText = typeof ticket.summary_text === "string" ? ticket.summary_text : "";
+              if (!registrationId) return null;
+              return {
+                registration_id: registrationId,
+                summary_text: summaryText,
+                png_url: typeof ticket.png_url === "string" && ticket.png_url.trim() ? ticket.png_url : null,
+                svg_url: typeof ticket.svg_url === "string" && ticket.svg_url.trim() ? ticket.svg_url : null,
+              };
+            })
+            .filter(Boolean) as PublicEventChatResponse["tickets"]
+          : [];
+        return {
+          id: typeof row.id === "string" && row.id.trim()
+            ? row.id
+            : `${role}:${timestamp}:${Math.random().toString(36).slice(2, 10)}`,
+          role,
+          text,
+          timestamp,
+          mapUrl: typeof row.mapUrl === "string" ? row.mapUrl : "",
+          tickets,
+        } satisfies PublicChatMessage;
+      })
+      .filter(Boolean) as PublicChatMessage[];
+  } catch {
+    return [] as PublicChatMessage[];
+  }
+}
+
+function writePublicEventChatHistory(slug: string, messages: PublicChatMessage[]) {
+  if (typeof window === "undefined" || !slug) return;
+  try {
+    window.localStorage.setItem(
+      getPublicEventChatHistoryStorageKey(slug),
+      JSON.stringify(messages.slice(-80)),
+    );
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function getOrCreatePublicEventChatSenderId(slug: string) {
+  if (typeof window === "undefined" || !slug) return "";
+  const storageKey = getPublicEventChatSenderStorageKey(slug);
+  const existing = window.localStorage.getItem(storageKey)?.trim() || "";
+  if (existing) return existing;
+  const next = `public-web:${slug}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    window.localStorage.setItem(storageKey, next);
+  } catch {
+    // ignore storage write failures
+  }
+  return next;
 }
 
 function readAdminAgentChatStore() {
@@ -1458,6 +1592,38 @@ function ChannelPlatformLogo({
   return null;
 }
 
+function PublicContactActionLink({
+  href,
+  label,
+  kind,
+  compact = false,
+}: {
+  href: string;
+  label: string;
+  kind: "messenger" | "line" | "phone";
+  compact?: boolean;
+}) {
+  const iconClass = compact ? "h-3.5 w-3.5" : "h-4 w-4";
+  const baseClass = compact
+    ? "inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+    : "inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600";
+
+  return (
+    <a href={href} target={kind === "phone" ? undefined : "_blank"} rel={kind === "phone" ? undefined : "noopener noreferrer"} className={baseClass}>
+      {kind === "messenger" ? (
+        <ChannelPlatformLogo platform="facebook" className="h-6 w-6 rounded-xl" />
+      ) : kind === "line" ? (
+        <ChannelPlatformLogo platform="line_oa" className="h-6 w-6 rounded-xl" />
+      ) : (
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+          <Phone className={iconClass} />
+        </span>
+      )}
+      {label}
+    </a>
+  );
+}
+
 const BADGE_BASE_CLASS =
   "inline-flex max-w-full items-center justify-center rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] leading-tight text-center select-none";
 
@@ -2083,12 +2249,32 @@ const INITIAL_SETTINGS: Settings = {
   verify_token: "",
   event_name: "",
   event_timezone: DEFAULT_TIMEZONE,
+  event_venue_name: "",
+  event_room_detail: "",
   event_location: "",
   event_map_url: "",
   event_date: "",
   event_end_date: "",
   event_description: "",
   event_travel: "",
+  event_public_page_enabled: "0",
+  event_public_slug: "",
+  event_public_poster_url: "",
+  event_public_summary: "",
+  event_public_registration_enabled: "1",
+  event_public_bot_enabled: "1",
+  event_public_success_message: "Registration complete. Save your ticket image to your phone now.",
+  event_public_cta_label: "Register Now",
+  event_public_privacy_enabled: "1",
+  event_public_privacy_label: "Privacy",
+  event_public_privacy_text:
+    "We use your information only for event registration, ticket delivery, and event-related communication. We do not sell personal data. Access is limited to authorized event staff, and we can delete your data on request.",
+  event_public_contact_enabled: "0",
+  event_public_contact_intro: "Need help from our team? Use one of these contact options.",
+  event_public_contact_messenger_url: "",
+  event_public_contact_line_url: "",
+  event_public_contact_phone: "",
+  event_public_contact_hours: "",
   confirmation_email_enabled: "0",
   confirmation_email_subject: "Your registration for {{event_name}}",
   reg_unique_name: "1",
@@ -2103,12 +2289,32 @@ function getBlankEventScopedSettings() {
     llm_model: "",
     event_name: "",
     event_timezone: DEFAULT_TIMEZONE,
+    event_venue_name: "",
+    event_room_detail: "",
     event_location: "",
     event_map_url: "",
     event_date: "",
     event_end_date: "",
     event_description: "",
     event_travel: "",
+    event_public_page_enabled: "0",
+    event_public_slug: "",
+    event_public_poster_url: "",
+    event_public_summary: "",
+    event_public_registration_enabled: "1",
+    event_public_bot_enabled: "1",
+    event_public_success_message: "Registration complete. Save your ticket image to your phone now.",
+    event_public_cta_label: "Register Now",
+    event_public_privacy_enabled: "1",
+    event_public_privacy_label: "Privacy",
+    event_public_privacy_text:
+      "We use your information only for event registration, ticket delivery, and event-related communication. We do not sell personal data. Access is limited to authorized event staff, and we can delete your data on request.",
+    event_public_contact_enabled: "0",
+    event_public_contact_intro: "Need help from our team? Use one of these contact options.",
+    event_public_contact_messenger_url: "",
+    event_public_contact_line_url: "",
+    event_public_contact_phone: "",
+    event_public_contact_hours: "",
     confirmation_email_enabled: "0",
     confirmation_email_subject: "Your registration for {{event_name}}",
     reg_unique_name: "1",
@@ -2121,12 +2327,31 @@ function getBlankEventScopedSettings() {
     | "llm_model"
     | "event_name"
     | "event_timezone"
+    | "event_venue_name"
+    | "event_room_detail"
     | "event_location"
     | "event_map_url"
     | "event_date"
     | "event_end_date"
     | "event_description"
     | "event_travel"
+    | "event_public_page_enabled"
+    | "event_public_slug"
+    | "event_public_poster_url"
+    | "event_public_summary"
+    | "event_public_registration_enabled"
+    | "event_public_bot_enabled"
+    | "event_public_success_message"
+    | "event_public_cta_label"
+    | "event_public_privacy_enabled"
+    | "event_public_privacy_label"
+    | "event_public_privacy_text"
+    | "event_public_contact_enabled"
+    | "event_public_contact_intro"
+    | "event_public_contact_messenger_url"
+    | "event_public_contact_line_url"
+    | "event_public_contact_phone"
+    | "event_public_contact_hours"
     | "confirmation_email_enabled"
     | "confirmation_email_subject"
     | "reg_unique_name"
@@ -2136,9 +2361,11 @@ function getBlankEventScopedSettings() {
   >;
 }
 
-const EVENT_DETAIL_SETTINGS_KEYS = [
+const EVENT_SETUP_SETTINGS_KEYS = [
   "event_name",
   "event_timezone",
+  "event_venue_name",
+  "event_room_detail",
   "event_location",
   "event_map_url",
   "event_date",
@@ -2151,6 +2378,26 @@ const EVENT_DETAIL_SETTINGS_KEYS = [
   "reg_limit",
   "reg_start",
   "reg_end",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+const EVENT_PUBLIC_SETTINGS_KEYS = [
+  "event_public_page_enabled",
+  "event_public_slug",
+  "event_public_poster_url",
+  "event_public_summary",
+  "event_public_registration_enabled",
+  "event_public_bot_enabled",
+  "event_public_success_message",
+  "event_public_cta_label",
+  "event_public_privacy_enabled",
+  "event_public_privacy_label",
+  "event_public_privacy_text",
+  "event_public_contact_enabled",
+  "event_public_contact_intro",
+  "event_public_contact_messenger_url",
+  "event_public_contact_line_url",
+  "event_public_contact_phone",
+  "event_public_contact_hours",
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 const EVENT_CONTEXT_SETTINGS_KEYS = ["context"] as const satisfies ReadonlyArray<keyof Settings>;
@@ -2284,12 +2531,82 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
     event_timezone: normalizeTimeZoneForUi(
       typeof data.event_timezone === "string" ? data.event_timezone : DEFAULT_TIMEZONE,
     ),
+    event_venue_name: typeof data.event_venue_name === "string" ? data.event_venue_name : "",
+    event_room_detail: typeof data.event_room_detail === "string" ? data.event_room_detail : "",
     event_location: typeof data.event_location === "string" ? data.event_location : "",
     event_map_url: typeof data.event_map_url === "string" ? data.event_map_url : "",
     event_date: normalizeDateTimeLocalValue(typeof data.event_date === "string" ? data.event_date : ""),
     event_end_date: normalizeDateTimeLocalValue(typeof data.event_end_date === "string" ? data.event_end_date : ""),
     event_description: typeof data.event_description === "string" ? data.event_description : "",
     event_travel: typeof data.event_travel === "string" ? data.event_travel : "",
+    event_public_page_enabled:
+      typeof data.event_public_page_enabled === "string" && data.event_public_page_enabled.trim()
+        ? data.event_public_page_enabled.trim()
+        : INITIAL_SETTINGS.event_public_page_enabled,
+    event_public_slug:
+      typeof data.event_public_slug === "string"
+        ? data.event_public_slug.trim()
+        : INITIAL_SETTINGS.event_public_slug,
+    event_public_poster_url:
+      typeof data.event_public_poster_url === "string"
+        ? data.event_public_poster_url
+        : INITIAL_SETTINGS.event_public_poster_url,
+    event_public_summary:
+      typeof data.event_public_summary === "string"
+        ? data.event_public_summary
+        : INITIAL_SETTINGS.event_public_summary,
+    event_public_registration_enabled:
+      typeof data.event_public_registration_enabled === "string" && data.event_public_registration_enabled.trim()
+        ? data.event_public_registration_enabled.trim()
+        : INITIAL_SETTINGS.event_public_registration_enabled,
+    event_public_bot_enabled:
+      typeof data.event_public_bot_enabled === "string" && data.event_public_bot_enabled.trim()
+        ? data.event_public_bot_enabled.trim()
+        : INITIAL_SETTINGS.event_public_bot_enabled,
+    event_public_success_message:
+      typeof data.event_public_success_message === "string" && data.event_public_success_message.trim()
+        ? data.event_public_success_message
+        : INITIAL_SETTINGS.event_public_success_message,
+    event_public_cta_label:
+      typeof data.event_public_cta_label === "string" && data.event_public_cta_label.trim()
+        ? data.event_public_cta_label
+        : INITIAL_SETTINGS.event_public_cta_label,
+    event_public_privacy_enabled:
+      typeof data.event_public_privacy_enabled === "string" && data.event_public_privacy_enabled.trim()
+        ? data.event_public_privacy_enabled.trim()
+        : INITIAL_SETTINGS.event_public_privacy_enabled,
+    event_public_privacy_label:
+      typeof data.event_public_privacy_label === "string" && data.event_public_privacy_label.trim()
+        ? data.event_public_privacy_label
+        : INITIAL_SETTINGS.event_public_privacy_label,
+    event_public_privacy_text:
+      typeof data.event_public_privacy_text === "string" && data.event_public_privacy_text.trim()
+        ? data.event_public_privacy_text
+        : INITIAL_SETTINGS.event_public_privacy_text,
+    event_public_contact_enabled:
+      typeof data.event_public_contact_enabled === "string" && data.event_public_contact_enabled.trim()
+        ? data.event_public_contact_enabled.trim()
+        : INITIAL_SETTINGS.event_public_contact_enabled,
+    event_public_contact_intro:
+      typeof data.event_public_contact_intro === "string"
+        ? data.event_public_contact_intro
+        : INITIAL_SETTINGS.event_public_contact_intro,
+    event_public_contact_messenger_url:
+      typeof data.event_public_contact_messenger_url === "string"
+        ? data.event_public_contact_messenger_url
+        : INITIAL_SETTINGS.event_public_contact_messenger_url,
+    event_public_contact_line_url:
+      typeof data.event_public_contact_line_url === "string"
+        ? data.event_public_contact_line_url
+        : INITIAL_SETTINGS.event_public_contact_line_url,
+    event_public_contact_phone:
+      typeof data.event_public_contact_phone === "string"
+        ? data.event_public_contact_phone
+        : INITIAL_SETTINGS.event_public_contact_phone,
+    event_public_contact_hours:
+      typeof data.event_public_contact_hours === "string"
+        ? data.event_public_contact_hours
+        : INITIAL_SETTINGS.event_public_contact_hours,
     confirmation_email_enabled:
       typeof data.confirmation_email_enabled === "string" && data.confirmation_email_enabled.trim()
         ? data.confirmation_email_enabled.trim()
@@ -2311,6 +2628,26 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
 
 function normalizeSearchQuery(value: string | null | undefined) {
   return String(value || "").trim().toLowerCase();
+}
+
+function buildPublicEventSlug(value: string) {
+  const normalized = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "event";
+}
+
+function getPublicEventSlugFromPath(pathname: string) {
+  const match = String(pathname || "").match(/^\/events\/([^/?#]+)\/?$/i);
+  if (!match?.[1]) return "";
+  try {
+    return decodeURIComponent(match[1]).trim();
+  } catch {
+    return match[1].trim();
+  }
 }
 
 function matchesSearchQuery(query: string, values: Array<string | null | undefined>) {
@@ -2401,6 +2738,26 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
+  const [publicEventPage, setPublicEventPage] = useState<PublicEventPageResponse | null>(null);
+  const [publicEventLoading, setPublicEventLoading] = useState(false);
+  const [publicEventError, setPublicEventError] = useState("");
+  const [publicRegistrationForm, setPublicRegistrationForm] = useState<PublicRegistrationFormState>({
+    first_name: "",
+    last_name: "",
+    phone: "",
+    email: "",
+  });
+  const [publicRegistrationSubmitting, setPublicRegistrationSubmitting] = useState(false);
+  const [publicRegistrationError, setPublicRegistrationError] = useState("");
+  const [publicRegistrationResult, setPublicRegistrationResult] = useState<PublicEventRegistrationResponse | null>(null);
+  const [publicPrivacyOpen, setPublicPrivacyOpen] = useState(false);
+  const [publicChatOpen, setPublicChatOpen] = useState(false);
+  const [publicChatInput, setPublicChatInput] = useState("");
+  const [publicChatSenderId, setPublicChatSenderId] = useState("");
+  const [publicChatMessages, setPublicChatMessages] = useState<PublicChatMessage[]>([]);
+  const [publicChatSending, setPublicChatSending] = useState(false);
+  const [publicChatError, setPublicChatError] = useState("");
+  const publicChatBodyRef = useRef<HTMLDivElement | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [logsHasMore, setLogsHasMore] = useState(false);
   const [logsLoadingMore, setLogsLoadingMore] = useState(false);
@@ -2528,6 +2885,8 @@ export default function App() {
   const [scannerStarting, setScannerStarting] = useState(false);
   const [scannerError, setScannerError] = useState("");
   const [lastScannedValue, setLastScannedValue] = useState("");
+  const [eventWorkspaceView, setEventWorkspaceView] = useState<EventWorkspaceView>("setup");
+  const [eventWorkspaceMenuOpen, setEventWorkspaceMenuOpen] = useState(false);
   const [operationsMenuOpen, setOperationsMenuOpen] = useState(false);
   const [setupMenuOpen, setSetupMenuOpen] = useState(false);
   const [agentWorkspaceView, setAgentWorkspaceView] = useState<AgentWorkspaceView>("console");
@@ -2547,9 +2906,11 @@ export default function App() {
   const settingsRef = useRef(INITIAL_SETTINGS);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
   const qrReaderRef = useRef<BrowserQRCodeReader | null>(null);
+  const eventWorkspaceMenuRef = useRef<HTMLDivElement | null>(null);
   const operationsMenuRef = useRef<HTMLDivElement | null>(null);
   const setupMenuRef = useRef<HTMLDivElement | null>(null);
   const agentWorkspaceMenuRef = useRef<HTMLDivElement | null>(null);
+  const eventWorkspaceMenuCloseTimerRef = useRef<number | null>(null);
   const operationsMenuCloseTimerRef = useRef<number | null>(null);
   const setupMenuCloseTimerRef = useRef<number | null>(null);
   const agentWorkspaceMenuCloseTimerRef = useRef<number | null>(null);
@@ -2568,6 +2929,9 @@ export default function App() {
   selectedEventIdRef.current = selectedEventId;
   settingsRef.current = settings;
 
+  const currentPathname = typeof window !== "undefined" ? window.location.pathname : "/";
+  const publicEventSlug = getPublicEventSlugFromPath(currentPathname);
+  const isPublicEventRoute = Boolean(publicEventSlug);
   const role = authUser?.role;
   const canEditSettings = role === "owner" || role === "admin";
   const canRunTest = role === "owner" || role === "admin" || role === "operator";
@@ -2714,6 +3078,11 @@ export default function App() {
     typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
       ? "Cmd K"
       : "Ctrl K";
+  const eventWorkspaceTabs = [
+    { id: "setup" as const, icon: CalendarRange, label: "Event Setup", description: "Operational event details and registration rules" },
+    { id: "public" as const, icon: Eye, label: "Public Page", description: "Poster, public copy, and privacy messaging" },
+  ];
+  const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
   const isOperationsTab = activeTab === "registrations" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const primaryTabs = [
@@ -2723,7 +3092,7 @@ export default function App() {
     ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: "Agent" }] : []),
   ];
   const setupTabs = [
-    ...(canEditSettings ? [{ id: "settings" as const, icon: SettingsIcon, label: "Workspace Setup" }] : []),
+    ...(canEditSettings ? [{ id: "settings" as const, icon: SettingsIcon, label: "Organization Setup" }] : []),
     ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: "Team Access" }] : []),
   ];
   const selectedSetupTab = setupTabs.find((tab) => tab.id === activeTab) || setupTabs[0] || null;
@@ -2744,7 +3113,44 @@ export default function App() {
     ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
     : "";
   const timingInfo = describeEventTiming(settings);
+  const eventLocationSummary = buildEventLocationSummary(settings);
+  const attendeeLocationLabel = formatEventLocationCompact(settings, "");
+  const resolvedEventMapUrl = resolveEventMapUrl(settings);
+  const eventMapEmbedUrl = buildGoogleMapsEmbedUrl(settings);
+  const eventMapIsGenerated = !settings.event_map_url.trim() && Boolean(resolvedEventMapUrl);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
+  const resolvedPublicPageSlug =
+    settings.event_public_slug.trim()
+    || selectedEvent?.slug
+    || buildPublicEventSlug(settings.event_name || selectedEvent?.name || "");
+  const publicPagePreviewPath = `/events/${encodeURIComponent(resolvedPublicPageSlug)}`;
+  const publicPageSummary = settings.event_public_summary.trim() || settings.event_description.trim();
+  const publicPagePosterUrl = settings.event_public_poster_url.trim();
+  const publicPageEnabled = settings.event_public_page_enabled === "1";
+  const publicRegistrationEnabled = settings.event_public_registration_enabled === "1";
+  const publicBotEnabled = settings.event_public_bot_enabled === "1";
+  const publicPrivacyEnabled = settings.event_public_privacy_enabled === "1";
+  const publicContactEnabled = settings.event_public_contact_enabled === "1";
+  const publicContactIntro = settings.event_public_contact_intro.trim() || INITIAL_SETTINGS.event_public_contact_intro;
+  const publicContactMessengerHref = normalizeExternalHref(settings.event_public_contact_messenger_url);
+  const publicContactLineHref = normalizeExternalHref(settings.event_public_contact_line_url);
+  const publicContactPhoneHref = normalizePhoneHref(settings.event_public_contact_phone);
+  const publicContactHasContent = Boolean(
+    publicContactMessengerHref
+    || publicContactLineHref
+    || settings.event_public_contact_phone.trim()
+    || settings.event_public_contact_hours.trim(),
+  );
+  const publicRouteLocationFields = publicEventPage
+    ? {
+        event_venue_name: publicEventPage.location.venue_name,
+        event_room_detail: publicEventPage.location.room_detail,
+        event_location: publicEventPage.location.address,
+      }
+    : null;
+  const publicRouteMapEmbedUrl = publicRouteLocationFields ? buildGoogleMapsEmbedUrl(publicRouteLocationFields) : "";
+  const publicRouteAvailabilityTone = getRegistrationAvailabilityTone(publicEventPage?.event.registration_availability);
+  const publicRouteAvailabilityLabel = getRegistrationAvailabilityLabel(publicEventPage?.event.registration_availability);
   const registrationCapacity = describeRegistrationCapacity(settings.reg_limit, activeAttendeeCount);
   const registrationAvailability = describeRegistrationAvailability(
     selectedEvent?.effective_status,
@@ -2760,6 +3166,13 @@ export default function App() {
     selectedEvent?.registration_availability,
   );
   const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
+  const eventNameById = new Map(events.map((event) => [event.id, event.name] as const));
+  const workspaceChannelCount = channels.length;
+  const workspaceActiveChannelCount = channels.filter((channel) => channel.is_active).length;
+  const workspaceChannelPlatformCount = new Set(channels.map((channel) => channel.platform)).size;
+  const workspaceChannelEventCount = new Set(channels.map((channel) => channel.event_id).filter(Boolean)).size;
+  const workspaceOtherEventChannels = channels.filter((channel) => channel.event_id !== selectedEventId);
+  const workspaceChannelPreview = workspaceOtherEventChannels.slice(0, 6);
   const selectedEventChannelIdsKey = selectedEventChannels.map((channel) => channel.id).join("|");
   const setupSelectedChannel =
     selectedEventChannels.find((channel) => channel.id === setupSelectedChannelId)
@@ -3030,8 +3443,8 @@ export default function App() {
     {
       id: "map_followup",
       label: "Map Follow-up",
-      text: settings.event_map_url
-        ? `แผนที่สถานที่อยู่ที่นี่ค่ะ ${settings.event_map_url}`
+      text: resolvedEventMapUrl
+        ? `แผนที่สถานที่อยู่ที่นี่ค่ะ ${resolvedEventMapUrl}`
         : "เดี๋ยวแพรวจะแนบแผนที่สถานที่ให้ในข้อความถัดไปนะคะ",
     },
   ];
@@ -3657,8 +4070,94 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (!publicEventSlug) {
+      setPublicEventPage(null);
+      setPublicEventError("");
+      setPublicEventLoading(false);
+      setPublicRegistrationError("");
+      setPublicRegistrationResult(null);
+      setPublicPrivacyOpen(false);
+      setPublicChatOpen(false);
+      setPublicChatInput("");
+      setPublicChatSenderId("");
+      setPublicChatMessages([]);
+      setPublicChatSending(false);
+      setPublicChatError("");
+      return;
+    }
+
+    setPublicChatOpen(false);
+    setPublicChatInput("");
+    setPublicChatSending(false);
+    setPublicChatError("");
+    setPublicChatSenderId(getOrCreatePublicEventChatSenderId(publicEventSlug));
+    setPublicChatMessages(readPublicEventChatHistory(publicEventSlug));
+
     let cancelled = false;
     void (async () => {
+      setPublicEventLoading(true);
+      setPublicEventError("");
+      setPublicRegistrationError("");
+      setPublicRegistrationResult(null);
+      try {
+        const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error((data as { error?: string }).error || "Failed to load public event page");
+        }
+        if (cancelled) return;
+        setPublicEventPage(data as PublicEventPageResponse);
+      } catch (err) {
+        if (cancelled) return;
+        setPublicEventPage(null);
+        setPublicEventError(err instanceof Error ? err.message : "Failed to load public event page");
+      } finally {
+        if (!cancelled) {
+          setPublicEventLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [publicEventSlug]);
+
+  useEffect(() => {
+    if (!publicEventSlug) return;
+    writePublicEventChatHistory(publicEventSlug, publicChatMessages);
+  }, [publicEventSlug, publicChatMessages]);
+
+  useEffect(() => {
+    if (!publicEventSlug || !publicEventPage) return;
+    setPublicChatMessages((current) => {
+      if (current.length > 0) return current;
+      return [
+        createPublicChatMessage(
+          "assistant",
+          `Need help with ${publicEventPage.event.name}? Ask about the schedule, location, travel, registration, or ticket recovery.`,
+        ),
+      ];
+    });
+  }, [publicEventSlug, publicEventPage]);
+
+  useEffect(() => {
+    if (!publicChatOpen) return;
+    const container = publicChatBodyRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, [publicChatMessages, publicChatOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (publicEventSlug) {
+        setAuthStatus("unauthenticated");
+        setAuthUser(null);
+        setLoading(false);
+        return;
+      }
+
       if (checkinAccessMode) {
         setLoading(false);
         setAuthStatus("unauthenticated");
@@ -3692,16 +4191,16 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [checkinAccessMode]);
+  }, [checkinAccessMode, publicEventSlug]);
 
   useEffect(() => {
-    if (checkinAccessMode || authStatus !== "authenticated") return;
+    if (publicEventSlug || checkinAccessMode || authStatus !== "authenticated") return;
 
     void loadAppData();
-  }, [authStatus, role, checkinAccessMode]);
+  }, [authStatus, role, checkinAccessMode, publicEventSlug]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !selectedEventId) return;
+    if (publicEventSlug || authStatus !== "authenticated" || !selectedEventId) return;
 
     void (async () => {
       setLoading(true);
@@ -3731,7 +4230,7 @@ export default function App() {
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canManageCheckinAccess, canEditSettings]);
+  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canManageCheckinAccess, canEditSettings, publicEventSlug]);
 
   useEffect(() => {
     setRegistrationVisibleCount(120);
@@ -3815,9 +4314,11 @@ export default function App() {
   }, [activeTab]);
 
   useEffect(() => {
+    setEventWorkspaceMenuOpen(false);
     setOperationsMenuOpen(false);
     setSetupMenuOpen(false);
     setAgentWorkspaceMenuOpen(false);
+    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
     clearMenuCloseTimer(operationsMenuCloseTimerRef);
     clearMenuCloseTimer(setupMenuCloseTimerRef);
     clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
@@ -3828,6 +4329,19 @@ export default function App() {
     setAdminCommandPaletteOpen(false);
     setAdminCommandPaletteQuery("");
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!eventWorkspaceMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!eventWorkspaceMenuRef.current?.contains(event.target as Node)) {
+        setEventWorkspaceMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [eventWorkspaceMenuOpen]);
 
   useEffect(() => {
     if (!operationsMenuOpen) return;
@@ -3844,6 +4358,7 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
       clearMenuCloseTimer(operationsMenuCloseTimerRef);
       clearMenuCloseTimer(setupMenuCloseTimerRef);
       clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
@@ -4700,7 +5215,9 @@ export default function App() {
   };
   const areSettingsKeysDirty = (keys: ReadonlyArray<keyof Settings>) =>
     keys.some((key) => normalizedSettings[key] !== normalizedSavedSettings[key]);
-  const eventDetailsDirty = areSettingsKeysDirty(EVENT_DETAIL_SETTINGS_KEYS);
+  const eventSetupDirty = areSettingsKeysDirty(EVENT_SETUP_SETTINGS_KEYS);
+  const eventPublicDirty = areSettingsKeysDirty(EVENT_PUBLIC_SETTINGS_KEYS);
+  const eventDetailsDirty = eventSetupDirty || eventPublicDirty;
   const eventContextDirty = areSettingsKeysDirty(EVENT_CONTEXT_SETTINGS_KEYS);
   const aiSettingsDirty = areSettingsKeysDirty(AI_SETTINGS_KEYS);
   const agentSettingsDirty = areSettingsKeysDirty(AGENT_SETTINGS_KEYS);
@@ -4763,6 +5280,15 @@ export default function App() {
     }
   };
 
+  const scheduleEventWorkspaceMenuClose = () => {
+    if (!hoverDropdownEnabled) return;
+    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+    eventWorkspaceMenuCloseTimerRef.current = window.setTimeout(() => {
+      setEventWorkspaceMenuOpen(false);
+      eventWorkspaceMenuCloseTimerRef.current = null;
+    }, 180);
+  };
+
   const scheduleSetupMenuClose = () => {
     if (!hoverDropdownEnabled) return;
     clearMenuCloseTimer(setupMenuCloseTimerRef);
@@ -4805,6 +5331,20 @@ export default function App() {
     setSetupMenuOpen(false);
     setOperationsMenuOpen(false);
     setAgentWorkspaceMenuOpen(false);
+    return true;
+  };
+
+  const handleOpenEventWorkspaceView = (nextView: EventWorkspaceView) => {
+    if (!handleNavigateToTab("event")) return false;
+    setEventWorkspaceView(nextView);
+    setEventWorkspaceMenuOpen(false);
+    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+    setSetupMenuOpen(false);
+    clearMenuCloseTimer(setupMenuCloseTimerRef);
+    setOperationsMenuOpen(false);
+    clearMenuCloseTimer(operationsMenuCloseTimerRef);
+    setAgentWorkspaceMenuOpen(false);
+    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
     return true;
   };
 
@@ -4872,6 +5412,8 @@ export default function App() {
     const saved = await saveSettingsSubset([
       "event_name",
       "event_timezone",
+      "event_venue_name",
+      "event_room_detail",
       "event_location",
       "event_map_url",
       "event_date",
@@ -4897,6 +5439,147 @@ export default function App() {
       } else {
         await fetchEvents();
       }
+    }
+  };
+
+  const saveEventPublicPage = async () => {
+    const saved = await saveSettingsSubset([
+      "event_public_page_enabled",
+      "event_public_slug",
+      "event_public_poster_url",
+      "event_public_summary",
+      "event_public_registration_enabled",
+      "event_public_bot_enabled",
+      "event_public_success_message",
+      "event_public_cta_label",
+      "event_public_privacy_enabled",
+      "event_public_privacy_label",
+      "event_public_privacy_text",
+      "event_public_contact_enabled",
+      "event_public_contact_intro",
+      "event_public_contact_messenger_url",
+      "event_public_contact_line_url",
+      "event_public_contact_phone",
+      "event_public_contact_hours",
+    ], "Public page settings saved");
+
+    if (saved) {
+      await fetchEvents();
+    }
+  };
+
+  const handlePublicRegistrationFieldChange = (field: keyof PublicRegistrationFormState, value: string) => {
+    setPublicRegistrationForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const resetPublicRegistrationFlow = () => {
+    setPublicRegistrationResult(null);
+    setPublicRegistrationError("");
+    setPublicRegistrationForm({
+      first_name: "",
+      last_name: "",
+      phone: "",
+      email: "",
+    });
+  };
+
+  const handlePublicChatSubmit = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    if (!publicEventSlug || !publicEventPage || !publicEventPage.support.bot_enabled) return;
+
+    const trimmed = publicChatInput.trim();
+    if (!trimmed) return;
+
+    const senderId = publicChatSenderId || getOrCreatePublicEventChatSenderId(publicEventSlug);
+    if (!publicChatSenderId && senderId) {
+      setPublicChatSenderId(senderId);
+    }
+
+    const userMessage = createPublicChatMessage("user", trimmed);
+    setPublicChatMessages((current) => [...current, userMessage]);
+    setPublicChatInput("");
+    setPublicChatError("");
+    setPublicChatSending(true);
+
+    try {
+      const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sender_id: senderId,
+          text: trimmed,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to send message");
+      }
+
+      const payload = data as PublicEventChatResponse;
+      const assistantText = payload.reply_text.trim()
+        || (payload.tickets.length > 0
+          ? "I found your ticket details below."
+          : payload.map_url
+            ? "Here is the map link."
+            : "Please try asking a more specific question about the event, registration, or your ticket.");
+      setPublicChatMessages((current) => [
+        ...current,
+        createPublicChatMessage("assistant", assistantText, {
+          mapUrl: payload.map_url || "",
+          tickets: payload.tickets,
+        }),
+      ]);
+    } catch (err) {
+      setPublicChatError(err instanceof Error ? err.message : "Failed to send message");
+    } finally {
+      setPublicChatSending(false);
+    }
+  };
+
+  const handlePublicRegistrationSubmit = async (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    if (!publicEventSlug || !publicEventPage) return;
+
+    const firstName = publicRegistrationForm.first_name.trim();
+    const lastName = publicRegistrationForm.last_name.trim();
+    const phone = publicRegistrationForm.phone.trim();
+    const email = publicRegistrationForm.email.trim();
+    if (!firstName || !lastName || !phone) {
+      setPublicRegistrationError("Please enter first name, last name, and phone number.");
+      return;
+    }
+
+    setPublicRegistrationSubmitting(true);
+    setPublicRegistrationError("");
+    try {
+      const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          first_name: firstName,
+          last_name: lastName,
+          phone,
+          email,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const validationMessage = Array.isArray((data as { issues?: Array<{ message?: string }> }).issues)
+          ? (data as { issues: Array<{ message?: string }> }).issues.find((issue) => issue?.message)?.message
+          : "";
+        throw new Error(validationMessage || (data as { error?: string }).error || "Failed to register");
+      }
+      setPublicRegistrationResult(data as PublicEventRegistrationResponse);
+      window.setTimeout(() => {
+        document.getElementById("public-ticket-ready")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 40);
+    } catch (err) {
+      setPublicRegistrationError(err instanceof Error ? err.message : "Failed to register");
+    } finally {
+      setPublicRegistrationSubmitting(false);
     }
   };
 
@@ -5831,7 +6514,8 @@ export default function App() {
   };
 
   const handleSaveChannel = async () => {
-    if (!selectedEventId) return false;
+    const eventIdForSave = editingChannel?.event_id || selectedEventId;
+    if (!eventIdForSave) return false;
     const externalId = newPageId.trim();
     const displayName = newPageName.trim();
     const accessToken = newPageAccessToken.trim();
@@ -5850,7 +6534,7 @@ export default function App() {
           platform: newChannelPlatform,
           external_id: externalId,
           display_name: displayName || externalId,
-          event_id: selectedEventId,
+          event_id: eventIdForSave,
           access_token: accessToken,
           config: newChannelConfig,
           is_active: true,
@@ -6024,9 +6708,17 @@ export default function App() {
     }
   };
 
+  const focusSetupChannel = (channel: ChannelAccountRecord) => {
+    if (channel.event_id && channel.event_id !== selectedEventId) {
+      if (!handleSelectEvent(channel.event_id)) return false;
+    }
+    selectSetupChannel(channel);
+    return true;
+  };
+
   const openChannelConfigDialog = (channel?: ChannelAccountRecord) => {
     if (channel) {
-      selectSetupChannel(channel);
+      if (!focusSetupChannel(channel)) return;
       loadChannelIntoForm(channel);
     } else {
       resetChannelForm();
@@ -6314,7 +7006,7 @@ export default function App() {
     );
   }
 
-  if (authStatus === "checking") {
+  if (!isPublicEventRoute && authStatus === "checking") {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
@@ -6322,7 +7014,7 @@ export default function App() {
     );
   }
 
-  if (authStatus === "unauthenticated") {
+  if (!isPublicEventRoute && authStatus === "unauthenticated") {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-4">
         <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 backdrop-blur p-8 shadow-2xl">
@@ -6375,7 +7067,7 @@ export default function App() {
     );
   }
 
-  if (loading) {
+  if (!isPublicEventRoute && loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
@@ -7075,6 +7767,723 @@ export default function App() {
 
   const isChatConsoleTab = activeTab === "test" || (activeTab === "agent" && agentWorkspaceView === "console");
 
+  if (isPublicEventRoute) {
+    const publicEventName = publicEventPage?.event.name || "Event";
+    const publicLocationLabel = publicEventPage?.location.compact || "Venue details will be announced soon";
+    const publicSummary = publicEventPage?.event.summary || publicEventPage?.event.description || "";
+    const publicRouteMessengerHref = publicEventPage ? normalizeExternalHref(publicEventPage.contact.messenger_url) : "";
+    const publicRouteLineHref = publicEventPage ? normalizeExternalHref(publicEventPage.contact.line_url) : "";
+    const publicRoutePhoneHref = publicEventPage ? normalizePhoneHref(publicEventPage.contact.phone) : "";
+    const publicRouteContactVisible = Boolean(
+      publicEventPage?.contact.enabled
+      && (
+        publicRouteMessengerHref
+        || publicRouteLineHref
+        || publicEventPage.contact.phone.trim()
+        || publicEventPage.contact.hours.trim()
+      ),
+    );
+    const publicRegistrationAvailable = Boolean(
+      publicEventPage
+      && publicEventPage.event.registration_enabled
+      && publicEventPage.event.registration_availability === "open",
+    );
+    const publicAvailabilityHelper = (() => {
+      switch (publicEventPage?.event.registration_availability) {
+        case "full":
+          return "This event is full right now.";
+        case "closed":
+          return "Registration for this event has closed.";
+        case "not_started":
+          return "Registration has not opened yet.";
+        case "invalid":
+          return "Registration timing is being updated.";
+        default:
+          return "Register on this page and save your ticket image immediately.";
+      }
+    })();
+
+    return (
+      <div className="min-h-dvh bg-slate-50 text-slate-900 font-sans">
+        <header className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.18)]">
+                <Bot className="h-5 w-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-900">{publicEventName}</p>
+                <p className="truncate text-xs text-slate-500">{publicLocationLabel}</p>
+              </div>
+            </div>
+            {publicEventPage && (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StatusBadge tone={getEventStatusTone(publicEventPage.event.status)}>
+                  {getEventStatusLabel(publicEventPage.event.status)}
+                </StatusBadge>
+                <StatusBadge tone={publicRouteAvailabilityTone}>
+                  {publicRouteAvailabilityLabel}
+                </StatusBadge>
+              </div>
+            )}
+          </div>
+        </header>
+
+        <main className="mx-auto max-w-6xl px-4 py-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-8">
+          {publicEventLoading ? (
+            <div className="flex min-h-[50vh] items-center justify-center">
+              <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
+            </div>
+          ) : publicEventError || !publicEventPage ? (
+            <div className="mx-auto max-w-xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
+                <AlertCircle className="h-7 w-7" />
+              </div>
+              <h1 className="mt-5 text-2xl font-bold tracking-tight text-slate-900">Public page unavailable</h1>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {publicEventError || "This event page is not published or could not be found."}
+              </p>
+            </div>
+          ) : (
+            <>
+              <section className="grid gap-6 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
+                <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
+                  {publicEventPage.event.poster_url ? (
+                    <img
+                      src={publicEventPage.event.poster_url}
+                      alt={`${publicEventPage.event.name} poster`}
+                      className="aspect-[800/1132] w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex aspect-[800/1132] flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
+                      <Eye className="h-9 w-9 text-slate-400" />
+                      <div>
+                        <p className="text-sm font-semibold text-slate-700">Event poster</p>
+                        <p className="mt-1 text-xs text-slate-500">Recommended size 800 x 1132 px</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusBadge tone={getEventStatusTone(publicEventPage.event.status)}>
+                      {getEventStatusLabel(publicEventPage.event.status)}
+                    </StatusBadge>
+                    <StatusBadge tone={publicRouteAvailabilityTone}>
+                      Registration {publicRouteAvailabilityLabel}
+                    </StatusBadge>
+                  </div>
+
+                  <div>
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+                      {publicEventPage.event.name}
+                    </h1>
+                    {publicSummary && (
+                      <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600 sm:text-base">
+                        {publicSummary}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Date & Time</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">{publicEventPage.event.date_label}</p>
+                      <p className="mt-1 text-xs text-slate-500">{publicEventPage.event.timezone}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Location</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">
+                        {publicEventPage.location.title || publicLocationLabel}
+                      </p>
+                      {publicEventPage.location.address_line && (
+                        <p className="mt-1 text-xs text-slate-500">{publicEventPage.location.address_line}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">{publicAvailabilityHelper}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">
+                        {publicEventPage.event.registration_limit == null
+                          ? "Unlimited"
+                          : `${publicEventPage.event.active_registration_count}/${publicEventPage.event.registration_limit}`}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">
+                        {publicEventPage.event.remaining_seats == null ? "Open" : publicEventPage.event.remaining_seats}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <a
+                      href="#public-registration"
+                      className="inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
+                    >
+                      {publicEventPage.event.cta_label}
+                    </a>
+                    {publicEventPage.location.map_url && (
+                      <a
+                        href={publicEventPage.location.map_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        Open in Maps
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(20rem,24rem)]">
+                <div className="space-y-6">
+                  {publicEventPage.event.description && (
+                    <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                      <div className="flex items-center gap-2">
+                        <Eye className="h-4 w-4 text-blue-600" />
+                        <h2 className="text-lg font-semibold text-slate-900">About This Event</h2>
+                      </div>
+                      <p className="mt-4 whitespace-pre-line text-sm leading-7 text-slate-600">
+                        {publicEventPage.event.description}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-lg font-semibold text-slate-900">Location & Travel</h2>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {publicEventPage.location.title || publicLocationLabel}
+                        </p>
+                      </div>
+                      {publicEventPage.location.map_url && (
+                        <a
+                          href={publicEventPage.location.map_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                        >
+                          <Link2 className="h-3.5 w-3.5" />
+                          Open in Maps
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                      {publicRouteMapEmbedUrl ? (
+                        <iframe
+                          title="Event location map"
+                          src={publicRouteMapEmbedUrl}
+                          className="h-80 w-full border-0"
+                          loading="lazy"
+                          referrerPolicy="no-referrer-when-downgrade"
+                          allowFullScreen
+                        />
+                      ) : (
+                        <div className="flex h-80 items-center justify-center px-6 text-center text-sm text-slate-500">
+                          Map preview will appear here when venue details are available.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Venue</p>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">
+                          {publicEventPage.location.title || publicLocationLabel}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Address</p>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">
+                          {publicEventPage.location.address_line || publicEventPage.location.address || "-"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {publicEventPage.location.travel_info && (
+                      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Travel Info</p>
+                        <p className="mt-2 whitespace-pre-line text-sm leading-7 text-slate-600">
+                          {publicEventPage.location.travel_info}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <aside id="public-registration" className="space-y-6 xl:sticky xl:top-6 xl:self-start">
+                  <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                    {!publicRegistrationResult ? (
+                      <>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h2 className="text-lg font-semibold text-slate-900">Register</h2>
+                            <p className="mt-1 text-sm text-slate-500">
+                              Fill in one short form. Your ticket appears on this page immediately.
+                            </p>
+                          </div>
+                          <StatusBadge tone={publicRouteAvailabilityTone}>
+                            {publicRouteAvailabilityLabel}
+                          </StatusBadge>
+                        </div>
+
+                        {publicRegistrationAvailable ? (
+                          <form className="mt-5 space-y-3" onSubmit={handlePublicRegistrationSubmit}>
+                            <div>
+                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">First Name</label>
+                              <input
+                                value={publicRegistrationForm.first_name}
+                                onChange={(e) => handlePublicRegistrationFieldChange("first_name", e.target.value)}
+                                autoComplete="given-name"
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="First name"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Last Name</label>
+                              <input
+                                value={publicRegistrationForm.last_name}
+                                onChange={(e) => handlePublicRegistrationFieldChange("last_name", e.target.value)}
+                                autoComplete="family-name"
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Last name"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Phone</label>
+                              <input
+                                value={publicRegistrationForm.phone}
+                                onChange={(e) => handlePublicRegistrationFieldChange("phone", e.target.value)}
+                                autoComplete="tel"
+                                inputMode="tel"
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Phone number"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Email</label>
+                              <input
+                                value={publicRegistrationForm.email}
+                                onChange={(e) => handlePublicRegistrationFieldChange("email", e.target.value)}
+                                autoComplete="email"
+                                inputMode="email"
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Email address"
+                              />
+                            </div>
+
+                            {publicRegistrationError && (
+                              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                                {publicRegistrationError}
+                              </div>
+                            )}
+
+                            <button
+                              type="submit"
+                              disabled={publicRegistrationSubmitting}
+                              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {publicRegistrationSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
+                              {publicEventPage.event.cta_label}
+                            </button>
+
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-slate-500">
+                              <span>Save your ticket image to your phone after submitting.</span>
+                              {publicEventPage.privacy.enabled && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPublicPrivacyOpen(true)}
+                                  className="inline-flex items-center gap-1 font-semibold text-slate-700 transition-colors hover:text-blue-600"
+                                >
+                                  <Lock className="h-3.5 w-3.5" />
+                                  {publicEventPage.privacy.label}
+                                </button>
+                              )}
+                            </div>
+                          </form>
+                        ) : (
+                          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                            <p className="text-sm font-semibold text-slate-900">{publicAvailabilityHelper}</p>
+                            <p className="mt-2 text-sm leading-6 text-slate-500">
+                              This page stays here for event details, location, and ticket recovery when available.
+                            </p>
+                            {publicEventPage.privacy.enabled && (
+                              <button
+                                type="button"
+                                onClick={() => setPublicPrivacyOpen(true)}
+                                className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-slate-700 transition-colors hover:text-blue-600"
+                              >
+                                <Lock className="h-3.5 w-3.5" />
+                                {publicEventPage.privacy.label}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div id="public-ticket-ready" className="space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              {publicRegistrationResult.status === "duplicate" ? "Ticket found" : "Registration complete"}
+                            </div>
+                            <h2 className="mt-3 text-lg font-semibold text-slate-900">
+                              {publicRegistrationResult.registration.first_name} {publicRegistrationResult.registration.last_name}
+                            </h2>
+                            <p className="mt-1 text-sm leading-6 text-slate-500">
+                              {publicRegistrationResult.success_message}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-50">
+                          <a href={publicRegistrationResult.ticket.png_url} target="_blank" rel="noopener noreferrer">
+                            <img
+                              src={publicRegistrationResult.ticket.png_url}
+                              alt={`Ticket for ${publicRegistrationResult.registration.id}`}
+                              className="w-full"
+                            />
+                          </a>
+                        </div>
+
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <a
+                            href={publicRegistrationResult.ticket.png_url}
+                            download={`${publicRegistrationResult.registration.id}.png`}
+                            className="inline-flex items-center justify-center rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                          >
+                            Save Ticket Image
+                          </a>
+                          {publicRegistrationResult.map_url ? (
+                            <a
+                              href={publicRegistrationResult.map_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                              View Map
+                            </a>
+                          ) : (
+                            <a
+                              href={publicRegistrationResult.ticket.svg_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                              Open SVG Copy
+                            </a>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+                          <p className="font-semibold text-slate-900">{publicRegistrationResult.event.name}</p>
+                          <p className="mt-1">{publicRegistrationResult.event.date_label}</p>
+                          <p className="mt-1">{publicRegistrationResult.event.location}</p>
+                          <p className="mt-3 text-xs text-slate-500">
+                            Save this image now. Email backup, if configured for this event, will arrive separately.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={resetPublicRegistrationFlow}
+                          className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                        >
+                          Register Another Attendee
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {publicRouteContactVisible && (
+                    <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h2 className="text-lg font-semibold text-slate-900">Help & Contact</h2>
+                          <p className="mt-1 text-sm leading-6 text-slate-500">
+                            {publicEventPage.contact.intro}
+                          </p>
+                        </div>
+                        <StatusBadge tone="neutral">Fallback</StatusBadge>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {publicRouteMessengerHref && (
+                          <PublicContactActionLink href={publicRouteMessengerHref} label="Chat on Messenger" kind="messenger" />
+                        )}
+                        {publicRouteLineHref && (
+                          <PublicContactActionLink href={publicRouteLineHref} label="Chat on LINE" kind="line" />
+                        )}
+                        {publicRoutePhoneHref && (
+                          <PublicContactActionLink href={publicRoutePhoneHref} label={`Call ${publicEventPage.contact.phone}`} kind="phone" />
+                        )}
+                      </div>
+
+                      {publicEventPage.contact.hours && (
+                        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Support Hours</p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">{publicEventPage.contact.hours}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </aside>
+              </section>
+
+              {publicPrivacyOpen && publicEventPage.privacy.enabled && (
+                <div
+                  className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 px-4"
+                  onClick={() => setPublicPrivacyOpen(false)}
+                >
+                  <div
+                    className="w-full max-w-lg rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                          <Lock className="h-5 w-5" />
+                        </div>
+                        <h2 className="mt-4 text-xl font-bold text-slate-900">{publicEventPage.privacy.label}</h2>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPublicPrivacyOpen(false)}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                        aria-label="Close privacy notice"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <p className="mt-4 whitespace-pre-line text-sm leading-7 text-slate-600">
+                      {publicEventPage.privacy.text}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </main>
+
+        {publicEventPage?.support.bot_enabled && (
+          <>
+            <AnimatePresence>
+              {publicChatOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 18, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  className="fixed inset-x-4 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-50 sm:left-auto sm:right-6 sm:w-[25rem]"
+                >
+                  <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
+                    <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900">Event Help</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          Ask about schedule, venue, travel, registration, or ticket recovery.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPublicChatOpen(false)}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                        aria-label="Close help chat"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div
+                      ref={publicChatBodyRef}
+                      className="max-h-[min(56vh,34rem)] space-y-3 overflow-y-auto bg-slate-50/80 px-4 py-4"
+                    >
+                      {publicChatMessages.map((message) => {
+                        const isAssistant = message.role === "assistant";
+                        return (
+                          <div key={message.id} className={`flex ${isAssistant ? "justify-start" : "justify-end"}`}>
+                            <div
+                              className={`max-w-[88%] rounded-[1.5rem] px-4 py-3 text-sm shadow-sm ${
+                                isAssistant
+                                  ? "border border-slate-200 bg-white text-slate-800"
+                                  : "bg-blue-600 text-white"
+                              }`}
+                              style={{ fontFamily: "var(--font-edit)" }}
+                            >
+                              {message.text && <p className="whitespace-pre-line leading-6">{message.text}</p>}
+
+                              {message.tickets.length > 0 && (
+                                <div className={`${message.text ? "mt-3" : ""} space-y-2`}>
+                                  {message.tickets.map((ticket) => (
+                                    <div
+                                      key={`${message.id}:${ticket.registration_id}`}
+                                      className={`rounded-2xl border px-3 py-3 ${
+                                        isAssistant
+                                          ? "border-slate-200 bg-slate-50"
+                                          : "border-blue-400/60 bg-blue-500/30"
+                                      }`}
+                                    >
+                                      <p className={`text-[11px] font-bold uppercase tracking-[0.16em] ${isAssistant ? "text-slate-500" : "text-blue-100/90"}`}>
+                                        Ticket {ticket.registration_id}
+                                      </p>
+                                      {ticket.summary_text && (
+                                        <p className={`mt-2 whitespace-pre-line text-xs leading-5 ${isAssistant ? "text-slate-600" : "text-blue-50"}`}>
+                                          {ticket.summary_text}
+                                        </p>
+                                      )}
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        {ticket.png_url && (
+                                          <a
+                                            href={ticket.png_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                                              isAssistant
+                                                ? "bg-blue-600 text-white"
+                                                : "bg-white text-blue-700"
+                                            }`}
+                                          >
+                                            <Download className="h-3.5 w-3.5" />
+                                            PNG
+                                          </a>
+                                        )}
+                                        {ticket.svg_url && (
+                                          <a
+                                            href={ticket.svg_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                                              isAssistant
+                                                ? "border-slate-200 bg-white text-slate-700"
+                                                : "border-blue-200/70 bg-transparent text-white"
+                                            }`}
+                                          >
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                            SVG
+                                          </a>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {message.mapUrl && (
+                                <div className={`${message.text || message.tickets.length > 0 ? "mt-3" : ""}`}>
+                                  <a
+                                    href={message.mapUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                                      isAssistant
+                                        ? "border border-slate-200 bg-slate-50 text-slate-700"
+                                        : "bg-white text-blue-700"
+                                    }`}
+                                  >
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                    Open Map
+                                  </a>
+                                </div>
+                              )}
+
+                              <p className={`mt-2 text-[10px] ${isAssistant ? "text-slate-400" : "text-blue-100/80"}`}>
+                                {new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <form className="border-t border-slate-200 bg-white p-4" onSubmit={handlePublicChatSubmit}>
+                      {publicChatError && (
+                        <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                          {publicChatError}
+                        </div>
+                      )}
+                      <label className="sr-only" htmlFor="public-chat-input">Message</label>
+                      <div className="flex items-end gap-2">
+                        <textarea
+                          id="public-chat-input"
+                          value={publicChatInput}
+                          onChange={(e) => setPublicChatInput(e.target.value)}
+                          rows={2}
+                          placeholder="Ask a question"
+                          className="min-h-[4.25rem] flex-1 resize-none rounded-[1.5rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          style={{ fontFamily: "var(--font-edit)" }}
+                        />
+                        <button
+                          type="submit"
+                          disabled={publicChatSending || !publicChatInput.trim()}
+                          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label="Send message"
+                        >
+                          {publicChatSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                        </button>
+                      </div>
+
+                      {publicRouteContactVisible && (
+                        <div className="mt-3 rounded-[1.25rem] border border-slate-200 bg-slate-50 px-3 py-3">
+                          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Need a human instead?</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-600">
+                            {publicEventPage.contact.intro}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {publicRouteMessengerHref && (
+                              <PublicContactActionLink href={publicRouteMessengerHref} label="Messenger" kind="messenger" compact />
+                            )}
+                            {publicRouteLineHref && (
+                              <PublicContactActionLink href={publicRouteLineHref} label="LINE" kind="line" compact />
+                            )}
+                            {publicRoutePhoneHref && (
+                              <PublicContactActionLink href={publicRoutePhoneHref} label="Call" kind="phone" compact />
+                            )}
+                          </div>
+                          {publicEventPage.contact.hours && (
+                            <p className="mt-3 text-[11px] text-slate-500">
+                              Available: <span className="font-semibold text-slate-700">{publicEventPage.contact.hours}</span>
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </form>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-50 sm:right-6">
+              <button
+                type="button"
+                onClick={() => setPublicChatOpen((current) => !current)}
+                className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_48px_rgba(15,23,42,0.24)] transition-transform hover:-translate-y-0.5"
+              >
+                {publicChatOpen ? <X className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
+                {publicChatOpen ? "Close Help" : "Need Help?"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`app-shell bg-slate-50 text-slate-900 font-sans ${
@@ -7197,6 +8606,86 @@ export default function App() {
           <div className="mt-1.5 flex items-center gap-2">
             <div className="app-toolbar-surface grid flex-1 grid-flow-col auto-cols-fr gap-1 rounded-xl bg-slate-100 p-1 sm:flex sm:flex-wrap sm:gap-1 sm:rounded-2xl">
               {primaryTabs.map((tab) => {
+                if (tab.id === "event") {
+                  return (
+                    <div
+                      key={tab.id}
+                      className="relative min-w-0"
+                      ref={eventWorkspaceMenuRef}
+                      onMouseEnter={() => {
+                        if (!hoverDropdownEnabled) return;
+                        clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+                        setEventWorkspaceMenuOpen(true);
+                        clearMenuCloseTimer(setupMenuCloseTimerRef);
+                        setSetupMenuOpen(false);
+                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                        setOperationsMenuOpen(false);
+                        clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+                        setAgentWorkspaceMenuOpen(false);
+                      }}
+                      onMouseLeave={() => {
+                        scheduleEventWorkspaceMenuClose();
+                      }}
+                    >
+                      <button
+                        onClick={() => {
+                          setAgentWorkspaceMenuOpen(false);
+                          if (hoverDropdownEnabled) {
+                            setEventWorkspaceMenuOpen(true);
+                            return;
+                          }
+                          setEventWorkspaceMenuOpen((open) => !open);
+                        }}
+                        className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
+                          activeTab === "event" || eventWorkspaceMenuOpen
+                            ? "bg-white text-blue-600 shadow-sm"
+                            : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                        }`}
+                        aria-expanded={eventWorkspaceMenuOpen}
+                        aria-haspopup="menu"
+                        aria-current={activeTab === "event" ? "page" : undefined}
+                      >
+                        <selectedEventWorkspaceTab.icon className="h-4 w-4 shrink-0" />
+                        <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
+                        {eventDetailsDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
+                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${eventWorkspaceMenuOpen ? "rotate-180" : ""}`} />
+                      </button>
+                      {eventWorkspaceMenuOpen && (
+                        <div
+                          className="app-overlay-surface absolute left-0 top-full z-30 mt-2 w-max min-w-[13rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+                          onMouseEnter={() => {
+                            if (!hoverDropdownEnabled) return;
+                            clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+                          }}
+                          onMouseLeave={() => {
+                            scheduleEventWorkspaceMenuClose();
+                          }}
+                        >
+                          {eventWorkspaceTabs.map((eventViewTab) => (
+                            <button
+                              key={eventViewTab.id}
+                              onClick={() => {
+                                handleOpenEventWorkspaceView(eventViewTab.id);
+                              }}
+                              className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
+                                activeTab === "event" && eventWorkspaceView === eventViewTab.id
+                                  ? "bg-blue-50 text-blue-700"
+                                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                              }`}
+                              role="menuitem"
+                            >
+                              <eventViewTab.icon className="h-4 w-4" />
+                              <span className="font-medium">{eventViewTab.label}</span>
+                              {eventViewTab.id === "setup" && eventSetupDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
+                              {eventViewTab.id === "public" && eventPublicDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
                 if (tab.id === "agent") {
                   return (
                     <div
@@ -7207,6 +8696,8 @@ export default function App() {
                         if (!hoverDropdownEnabled) return;
                         clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
                         setAgentWorkspaceMenuOpen(true);
+                        clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+                        setEventWorkspaceMenuOpen(false);
                         clearMenuCloseTimer(setupMenuCloseTimerRef);
                         setSetupMenuOpen(false);
                         clearMenuCloseTimer(operationsMenuCloseTimerRef);
@@ -7218,6 +8709,7 @@ export default function App() {
                     >
                       <button
                         onClick={() => {
+                          setEventWorkspaceMenuOpen(false);
                           if (hoverDropdownEnabled) {
                             setAgentWorkspaceMenuOpen(true);
                             return;
@@ -7291,13 +8783,85 @@ export default function App() {
                   >
                     <tab.icon className="h-4 w-4 shrink-0" />
                     <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
-                    {((tab.id === "event" && eventDetailsDirty)
-                      || (tab.id === "design" && eventContextDirty)) && (
+                    {(tab.id === "design" && eventContextDirty) && (
                       <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
                     )}
                   </button>
                 );
               })}
+              {operationsTabs.length > 0 && (
+                <div
+                  className="relative min-w-0"
+                  ref={operationsMenuRef}
+                  onMouseEnter={() => {
+                    if (!hoverDropdownEnabled) return;
+                    clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                    setOperationsMenuOpen(true);
+                    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+                    setEventWorkspaceMenuOpen(false);
+                    clearMenuCloseTimer(setupMenuCloseTimerRef);
+                    setSetupMenuOpen(false);
+                    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+                    setAgentWorkspaceMenuOpen(false);
+                  }}
+                  onMouseLeave={() => {
+                    scheduleOperationsMenuClose();
+                  }}
+                >
+                  <button
+                    onClick={() => {
+                      setEventWorkspaceMenuOpen(false);
+                      setAgentWorkspaceMenuOpen(false);
+                      if (hoverDropdownEnabled) {
+                        setOperationsMenuOpen(true);
+                        return;
+                      }
+                      setOperationsMenuOpen((open) => !open);
+                    }}
+                    className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
+                      isOperationsTab || operationsMenuOpen
+                        ? "bg-white text-blue-600 shadow-sm"
+                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+                    }`}
+                    aria-expanded={operationsMenuOpen}
+                    aria-haspopup="menu"
+                  >
+                    <Users className="h-4 w-4 shrink-0" />
+                    <span className="sr-only sm:not-sr-only sm:truncate">Operations</span>
+                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
+                  </button>
+                  {operationsMenuOpen && (
+                    <div
+                      className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+                      onMouseEnter={() => {
+                        if (!hoverDropdownEnabled) return;
+                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                      }}
+                      onMouseLeave={() => {
+                        scheduleOperationsMenuClose();
+                      }}
+                    >
+                      {operationsTabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          onClick={() => {
+                            handleNavigateToTab(tab.id);
+                          }}
+                          className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
+                            activeTab === tab.id
+                              ? "bg-blue-50 text-blue-700"
+                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                          }`}
+                          role="menuitem"
+                        >
+                          <tab.icon className="h-4 w-4" />
+                          <span className="font-medium">{tab.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {setupTabs.length > 0 && selectedSetupTab && (
                 <div
                   className="relative min-w-0"
@@ -7306,6 +8870,8 @@ export default function App() {
                     if (!hoverDropdownEnabled) return;
                     clearMenuCloseTimer(setupMenuCloseTimerRef);
                     setSetupMenuOpen(true);
+                    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+                    setEventWorkspaceMenuOpen(false);
                     clearMenuCloseTimer(operationsMenuCloseTimerRef);
                     setOperationsMenuOpen(false);
                     clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
@@ -7317,6 +8883,7 @@ export default function App() {
                 >
                   <button
                     onClick={() => {
+                      setEventWorkspaceMenuOpen(false);
                       setAgentWorkspaceMenuOpen(false);
                       if (hoverDropdownEnabled) {
                         setSetupMenuOpen(true);
@@ -7370,76 +8937,6 @@ export default function App() {
                   )}
                 </div>
               )}
-              {operationsTabs.length > 0 && (
-                <div
-                  className="relative min-w-0"
-                  ref={operationsMenuRef}
-                  onMouseEnter={() => {
-                    if (!hoverDropdownEnabled) return;
-                    clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                    setOperationsMenuOpen(true);
-                    clearMenuCloseTimer(setupMenuCloseTimerRef);
-                    setSetupMenuOpen(false);
-                    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-                    setAgentWorkspaceMenuOpen(false);
-                  }}
-                  onMouseLeave={() => {
-                    scheduleOperationsMenuClose();
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      setAgentWorkspaceMenuOpen(false);
-                      if (hoverDropdownEnabled) {
-                        setOperationsMenuOpen(true);
-                        return;
-                      }
-                      setOperationsMenuOpen((open) => !open);
-                    }}
-                    className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                      isOperationsTab || operationsMenuOpen
-                        ? "bg-white text-blue-600 shadow-sm"
-                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                    }`}
-                    aria-expanded={operationsMenuOpen}
-                    aria-haspopup="menu"
-                  >
-                    <Users className="h-4 w-4 shrink-0" />
-                    <span className="sr-only sm:not-sr-only sm:truncate">Operations</span>
-                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
-                  </button>
-                  {operationsMenuOpen && (
-                    <div
-                      className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-                      onMouseEnter={() => {
-                        if (!hoverDropdownEnabled) return;
-                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                      }}
-                      onMouseLeave={() => {
-                        scheduleOperationsMenuClose();
-                      }}
-                    >
-                      {operationsTabs.map((tab) => (
-                        <button
-                          key={tab.id}
-                          onClick={() => {
-                            handleNavigateToTab(tab.id);
-                          }}
-                          className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
-                            activeTab === tab.id
-                              ? "bg-blue-50 text-blue-700"
-                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                          }`}
-                          role="menuitem"
-                        >
-                          <tab.icon className="h-4 w-4" />
-                          <span className="font-medium">{tab.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
               <button
                 onClick={() => setGlobalSearchOpen(true)}
                 className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
@@ -7478,6 +8975,8 @@ export default function App() {
             >
               <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-7">
+                  {eventWorkspaceView === "setup" ? (
+                    <>
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0 flex-1">
@@ -7499,7 +8998,7 @@ export default function App() {
                             selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
                               ? <>Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</>
                               : "Registration open",
-                            eventDetailsDirty ? "Unsaved changes" : "All changes saved",
+                            eventSetupDirty ? "Unsaved changes" : "All changes saved",
                           ]}
                         />
                       </div>
@@ -7567,10 +9066,19 @@ export default function App() {
                         </PageBanner>
                       )}
 
-                    {eventMessage && (
-                      <p className={`mb-4 text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {eventMessage}
-                      </p>
+                    {(eventMessage || settingsMessage) && (
+                      <div className="mb-4 space-y-1">
+                        {eventMessage && (
+                          <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                            {eventMessage}
+                          </p>
+                        )}
+                        {settingsMessage && (
+                          <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                            {settingsMessage}
+                          </p>
+                        )}
+                      </div>
                     )}
 
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -7584,60 +9092,31 @@ export default function App() {
                         />
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Location</label>
-                        <input
-                          value={settings.event_location}
-                          onChange={(e) => setSettings({ ...settings, event_location: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. Tech Plaza, Bangkok"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Time Zone</label>
-                        <input
-                          value={settings.event_timezone}
-                          onChange={(e) => setSettings({ ...settings, event_timezone: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. Asia/Bangkok"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Starts</label>
-                        <input
-                          type="datetime-local"
-                          value={settings.event_date}
-                          onChange={(e) => handleEventDateChange(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          When you set a start time, Event Ends auto-fills to 2 hours later. You can adjust it.
-                        </p>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Ends (Optional)</label>
-                        <input
-                          type="datetime-local"
-                          value={settings.event_end_date}
-                          onChange={(e) => setSettings({ ...settings, event_end_date: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          Leave the suggested end time if this is a short session, or extend it if the event runs longer.
-                        </p>
-                      </div>
-
                       <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
-                        <input
-                          value={settings.event_map_url}
-                          onChange={(e) => setSettings({ ...settings, event_map_url: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="https://maps.app.goo.gl/..."
-                        />
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Starts</label>
+                            <input
+                              type="datetime-local"
+                              value={settings.event_date}
+                              onChange={(e) => handleEventDateChange(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Ends (Optional)</label>
+                            <input
+                              type="datetime-local"
+                              value={settings.event_end_date}
+                              onChange={(e) => setSettings({ ...settings, event_end_date: e.target.value })}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                        </div>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Event Ends auto-fills to 2 hours later after you set Event Starts. Adjust it if the session runs longer.
+                        </p>
                       </div>
 
                       <div className="md:col-span-2">
@@ -7651,19 +9130,161 @@ export default function App() {
                         />
                       </div>
 
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Travel Instructions</label>
-                        <textarea
-                          value={settings.event_travel}
-                          onChange={(e) => setSettings({ ...settings, event_travel: e.target.value })}
-                          rows={5}
-                          className="w-full min-h-[7.5rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
-                          placeholder="How to get there?"
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Time Zone</label>
+                        <input
+                          value={settings.event_timezone}
+                          onChange={(e) => setSettings({ ...settings, event_timezone: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="e.g. Asia/Bangkok"
                         />
                       </div>
+
+                      <div className="md:col-span-2">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="mb-4 flex flex-col gap-1">
+                            <h4 className="text-sm font-semibold text-slate-900">Location Details</h4>
+                            <p className="text-xs text-slate-500">
+                              Separate venue, room, and address so tickets, email, and attendee previews stay consistent.
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Venue Name</label>
+                              <input
+                                value={settings.event_venue_name}
+                                onChange={(e) => setSettings({ ...settings, event_venue_name: e.target.value })}
+                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="e.g. Dhakbwan Resort"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Room / Floor / Hall</label>
+                              <input
+                                value={settings.event_room_detail}
+                                onChange={(e) => setSettings({ ...settings, event_room_detail: e.target.value })}
+                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="e.g. ห้องภิรัชญ์การ"
+                              />
+                            </div>
+
+                            <div className="md:col-span-2">
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Address / Location</label>
+                              <input
+                                value={settings.event_location}
+                                onChange={(e) => setSettings({ ...settings, event_location: e.target.value })}
+                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="e.g. Tech Plaza, Bangkok"
+                              />
+                            </div>
+
+                            <div className="md:col-span-2">
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
+                              <input
+                                value={settings.event_map_url}
+                                onChange={(e) => setSettings({ ...settings, event_map_url: e.target.value })}
+                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="https://maps.app.goo.gl/..."
+                              />
+                              <p className="mt-1 text-[11px] text-slate-500">
+                                Leave blank to auto-generate a Google Maps search link from Venue Name and Address.
+                              </p>
+                            </div>
+
+                            <div className="md:col-span-2">
+                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Travel Instructions</label>
+                              <textarea
+                                value={settings.event_travel}
+                                onChange={(e) => setSettings({ ...settings, event_travel: e.target.value })}
+                                rows={4}
+                                className="w-full min-h-[6.5rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
+                                placeholder="How to get there?"
+                              />
+                            </div>
+
+                            <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
+                              <div className="mb-3 flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Attendee Preview</p>
+                                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                                    {eventLocationSummary.title || eventLocationSummary.address || "Location details will appear here"}
+                                  </p>
+                                  {eventLocationSummary.title && eventLocationSummary.addressLine && (
+                                    <p className="mt-1 text-xs text-slate-500">{eventLocationSummary.addressLine}</p>
+                                  )}
+                                </div>
+                                {resolvedEventMapUrl && (
+                                  <a
+                                    href={resolvedEventMapUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600"
+                                  >
+                                    <Link2 className="h-3.5 w-3.5" />
+                                    {eventMapIsGenerated ? "Generated Map" : "Map Link"}
+                                  </a>
+                                )}
+                              </div>
+
+                              <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
+                                {eventMapEmbedUrl ? (
+                                  <iframe
+                                    title="Event location map preview"
+                                    src={eventMapEmbedUrl}
+                                    className="h-80 w-full border-0"
+                                    loading="lazy"
+                                    referrerPolicy="no-referrer-when-downgrade"
+                                    allowFullScreen
+                                  />
+                                ) : (
+                                  <div className="flex h-80 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-slate-500">
+                                    <Link2 className="h-5 w-5 text-slate-400" />
+                                    <p>Add Venue Name and Address to preview a map here.</p>
+                                  </div>
+                                )}
+                              </div>
+
+                              {eventLocationSummary.travelInfo && (
+                                <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3">
+                                  <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Travel Info</p>
+                                  <p className="mt-1 whitespace-pre-line text-sm leading-6 text-slate-600">{eventLocationSummary.travelInfo}</p>
+                                </div>
+                              )}
+
+                              {resolvedEventMapUrl && (
+                                <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                  <span className="font-semibold text-slate-700">
+                                    {eventMapIsGenerated ? "Auto-generated map link:" : "Saved map link:"}
+                                  </span>{" "}
+                                  <a
+                                    href={resolvedEventMapUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="break-all text-blue-600 hover:text-blue-700"
+                                  >
+                                    {resolvedEventMapUrl}
+                                  </a>
+                                </div>
+                              )}
+                              {eventMapIsGenerated && (
+                                <p className="mt-2 text-[11px] text-slate-500">
+                                  The preview and outgoing map links currently use a Google Maps search built from your venue and address.
+                                </p>
+                              )}
+                              {!resolvedEventMapUrl && (
+                                <p className="mt-2 text-[11px] text-slate-500">
+                                  Add a venue and address, or paste a Google Maps URL, to enable map preview and outbound map sharing.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                     </div>
                   </div>
-
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
                     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="flex items-start justify-between gap-3 sm:block">
@@ -7823,12 +9444,482 @@ export default function App() {
                         Capacity is full. New registrations are blocked until you increase the limit or cancel an attendee.
                       </InlineWarning>
                     )}
-                    {settingsMessage && (
-                      <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {settingsMessage}
-                      </p>
-                    )}
                   </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
+                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-lg font-semibold flex items-center gap-2">
+                                <Eye className="w-5 h-5 text-blue-600" />
+                                Public Event Page
+                              </h3>
+                              <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
+                                {publicPageEnabled ? "enabled" : "draft"}
+                              </StatusBadge>
+                            </div>
+                            <StatusLine
+                              className="mt-1"
+                              items={[
+                                publicRegistrationEnabled ? "Inline registration on" : "Inline registration off",
+                                publicBotEnabled ? "Help chat on" : "Help chat off",
+                                publicPrivacyEnabled ? "Privacy note on" : "Privacy note off",
+                                publicContactEnabled ? "Contact options on" : "Contact options off",
+                                eventPublicDirty ? "Unsaved changes" : "All changes saved",
+                              ]}
+                            />
+                          </div>
+                          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                            <ActionButton
+                              onClick={() => void saveEventPublicPage()}
+                              disabled={saving}
+                              tone="blue"
+                              active
+                              className="w-full text-sm sm:w-auto sm:shrink-0"
+                            >
+                              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                              Save Public Page
+                            </ActionButton>
+                          </div>
+                        </div>
+
+                        {(eventMessage || settingsMessage) && (
+                          <div className="mb-4 space-y-1">
+                            {eventMessage && (
+                              <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                                {eventMessage}
+                              </p>
+                            )}
+                            {settingsMessage && (
+                              <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                                {settingsMessage}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        <PageBanner tone="blue" icon={<CircleHelp className="h-4 w-4" />} className="mb-4">
+                          Public route is now live at your event slug. Attendees stay on one page for poster, event facts, registration, ticket delivery, privacy info, and fallback contact options.
+                        </PageBanner>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div className="mb-4 flex flex-col gap-1">
+                              <h4 className="text-sm font-semibold text-slate-900">Page Controls</h4>
+                              <p className="text-xs text-slate-500">
+                                Stage the public-facing experience separately from internal event operations.
+                              </p>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                              <div className="md:col-span-2 flex flex-wrap gap-2">
+                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    checked={publicPageEnabled}
+                                    onChange={(e) =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_page_enabled: e.target.checked ? "1" : "0",
+                                      })
+                                    }
+                                  />
+                                  Public page enabled
+                                </label>
+                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    checked={publicRegistrationEnabled}
+                                    onChange={(e) =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_registration_enabled: e.target.checked ? "1" : "0",
+                                      })
+                                    }
+                                  />
+                                  Inline registration
+                                </label>
+                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    checked={publicBotEnabled}
+                                    onChange={(e) =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_bot_enabled: e.target.checked ? "1" : "0",
+                                      })
+                                    }
+                                  />
+                                  Bot help
+                                </label>
+                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    checked={publicPrivacyEnabled}
+                                    onChange={(e) =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_privacy_enabled: e.target.checked ? "1" : "0",
+                                      })
+                                    }
+                                  />
+                                  Privacy note
+                                </label>
+                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    checked={publicContactEnabled}
+                                    onChange={(e) =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_contact_enabled: e.target.checked ? "1" : "0",
+                                      })
+                                    }
+                                  />
+                                  Contact options
+                                </label>
+                              </div>
+
+                              <div className="md:col-span-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Poster Image URL</label>
+                                <input
+                                  value={settings.event_public_poster_url}
+                                  onChange={(e) => setSettings({ ...settings, event_public_poster_url: e.target.value })}
+                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="https://.../event-poster.jpg"
+                                />
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  Start with a hosted image URL. Admin upload can be added later without changing the public page structure.
+                                </p>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Public Slug</label>
+                                <input
+                                  value={settings.event_public_slug}
+                                  onChange={(e) => setSettings({ ...settings, event_public_slug: e.target.value })}
+                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder={selectedEvent?.slug || "event-slug"}
+                                />
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <ActionButton
+                                    onClick={() =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_slug: selectedEvent?.slug || buildPublicEventSlug(settings.event_name),
+                                      })
+                                    }
+                                    tone="neutral"
+                                    className="px-3 text-xs"
+                                  >
+                                    Use Event Slug
+                                  </ActionButton>
+                                  <span className="text-[11px] text-slate-500">Target route: <span className="font-mono text-slate-700">{publicPagePreviewPath}</span></span>
+                                </div>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Primary CTA Label</label>
+                                <input
+                                  value={settings.event_public_cta_label}
+                                  onChange={(e) => setSettings({ ...settings, event_public_cta_label: e.target.value })}
+                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="Register Now"
+                                />
+                              </div>
+
+                              <div className="md:col-span-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Public Summary</label>
+                                <textarea
+                                  value={settings.event_public_summary}
+                                  onChange={(e) => setSettings({ ...settings, event_public_summary: e.target.value })}
+                                  rows={4}
+                                  className="w-full min-h-[7rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
+                                  placeholder="Short event summary for the public page hero. Leave blank to reuse the internal event description."
+                                />
+                              </div>
+
+                              <div className="md:col-span-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Success Message</label>
+                                <textarea
+                                  value={settings.event_public_success_message}
+                                  onChange={(e) => setSettings({ ...settings, event_public_success_message: e.target.value })}
+                                  rows={3}
+                                  className="w-full min-h-[5.5rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
+                                  placeholder="Registration complete. Save your ticket image to your phone now."
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Privacy Label</label>
+                                <input
+                                  value={settings.event_public_privacy_label}
+                                  onChange={(e) => setSettings({ ...settings, event_public_privacy_label: e.target.value })}
+                                  disabled={!publicPrivacyEnabled}
+                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                  placeholder="Privacy"
+                                />
+                              </div>
+
+                              <div className="md:col-span-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Privacy Notice Text</label>
+                                <textarea
+                                  value={settings.event_public_privacy_text}
+                                  onChange={(e) => setSettings({ ...settings, event_public_privacy_text: e.target.value })}
+                                  disabled={!publicPrivacyEnabled}
+                                  rows={4}
+                                  className="w-full min-h-[7rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y disabled:cursor-not-allowed disabled:opacity-60"
+                                  placeholder="Explain how attendee data is used, retained, and deleted on request."
+                                />
+                              </div>
+
+                              <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="mb-4">
+                                  <h5 className="text-sm font-semibold text-slate-900">Help & Contact</h5>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Offer fallback ways to reach a human if the attendee does not want to use the web chat or needs direct support.
+                                  </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                  <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Contact Intro</label>
+                                    <textarea
+                                      value={settings.event_public_contact_intro}
+                                      onChange={(e) => setSettings({ ...settings, event_public_contact_intro: e.target.value })}
+                                      disabled={!publicContactEnabled}
+                                      rows={3}
+                                      className="w-full min-h-[5.5rem] rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                      placeholder="Need help from our team? Use one of these contact options."
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Messenger URL</label>
+                                    <input
+                                      value={settings.event_public_contact_messenger_url}
+                                      onChange={(e) => setSettings({ ...settings, event_public_contact_messenger_url: e.target.value })}
+                                      disabled={!publicContactEnabled}
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                      placeholder="https://m.me/yourpage"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">LINE URL</label>
+                                    <input
+                                      value={settings.event_public_contact_line_url}
+                                      onChange={(e) => setSettings({ ...settings, event_public_contact_line_url: e.target.value })}
+                                      disabled={!publicContactEnabled}
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                      placeholder="https://lin.ee/youraccount"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Phone</label>
+                                    <input
+                                      value={settings.event_public_contact_phone}
+                                      onChange={(e) => setSettings({ ...settings, event_public_contact_phone: e.target.value })}
+                                      disabled={!publicContactEnabled}
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                      placeholder="+66 8x xxx xxxx"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Support Hours</label>
+                                    <input
+                                      value={settings.event_public_contact_hours}
+                                      onChange={(e) => setSettings({ ...settings, event_public_contact_hours: e.target.value })}
+                                      disabled={!publicContactEnabled}
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                      placeholder="Mon-Sat, 09:00-18:00"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
+                        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <h3 className="text-lg font-semibold flex items-center gap-2">
+                              <ExternalLink className="w-5 h-5 text-blue-600" />
+                              Public Page Preview
+                            </h3>
+                            <p className="mt-1 text-sm text-slate-500">
+                              Preview the live one-page attendee flow exactly as the public route will render it.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600">
+                              Live URL: <span className="font-mono text-slate-700">{publicPagePreviewPath}</span>
+                            </div>
+                            {publicPageEnabled ? (
+                              <a
+                                href={publicPagePreviewPath}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                Open Public Page
+                              </a>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-400">
+                                Enable public page to publish
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
+                            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                              {publicPagePosterUrl ? (
+                                <img
+                                  src={publicPagePosterUrl}
+                                  alt={settings.event_name || selectedEvent?.name || "Event poster"}
+                                  className="aspect-[800/1132] w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex aspect-[800/1132] flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
+                                  <Eye className="h-8 w-8 text-slate-400" />
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-700">Poster Preview</p>
+                                    <p className="mt-1 text-xs text-slate-500">Recommended size 800 x 1132 px</p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="space-y-4">
+                              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
+                                    {publicPageEnabled ? "Public page enabled" : "Draft mode"}
+                                  </StatusBadge>
+                                  {selectedEvent?.registration_availability && (
+                                    <StatusBadge tone={selectedEvent.registration_availability === "open" ? "blue" : "amber"}>
+                                      {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                                    </StatusBadge>
+                                  )}
+                                </div>
+                                <div>
+                                  <h4 className="text-2xl font-bold tracking-tight text-slate-900">
+                                    {settings.event_name || selectedEvent?.name || "Event title"}
+                                  </h4>
+                                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                                    {publicPageSummary || "Public summary will appear here. Keep it short, easy to scan, and non-technical for attendees."}
+                                  </p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Date & Time</p>
+                                    <p className="mt-1 text-sm text-slate-800">{timingInfo.eventDateLabel}</p>
+                                  </div>
+                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Location</p>
+                                    <p className="mt-1 text-sm text-slate-800">{attendeeLocationLabel || "Venue details"}</p>
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="inline-flex items-center rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm">
+                                    {settings.event_public_cta_label.trim() || INITIAL_SETTINGS.event_public_cta_label}
+                                  </span>
+                                  {publicPrivacyEnabled && (
+                                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                      <Lock className="mr-1.5 h-3.5 w-3.5" />
+                                      {settings.event_public_privacy_label.trim() || INITIAL_SETTINGS.event_public_privacy_label}
+                                    </span>
+                                  )}
+                                  {publicBotEnabled && (
+                                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                      <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
+                                      Ask for help
+                                    </span>
+                                  )}
+                                  {publicContactEnabled && publicContactHasContent && (
+                                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                      <Phone className="mr-1.5 h-3.5 w-3.5" />
+                                      Contact fallback
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-900">Inline Registration</p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                      One short form, ticket returned immediately on the same page, email optional as backup.
+                                    </p>
+                                  </div>
+                                  <StatusBadge tone={publicRegistrationEnabled ? "emerald" : "neutral"}>
+                                    {publicRegistrationEnabled ? "enabled" : "hidden"}
+                                  </StatusBadge>
+                                </div>
+                                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">First name</div>
+                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">Last name</div>
+                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">Phone</div>
+                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">Email</div>
+                                </div>
+                                <div className="mt-4 rounded-2xl border border-dashed border-blue-200 bg-blue-50 px-4 py-4">
+                                  <p className="text-sm font-semibold text-blue-900">Success state</p>
+                                  <p className="mt-1 text-sm leading-6 text-blue-800">
+                                    {settings.event_public_success_message.trim() || INITIAL_SETTINGS.event_public_success_message}
+                                  </p>
+                                </div>
+                                {publicPrivacyEnabled && (
+                                  <p className="mt-4 text-xs leading-5 text-slate-500">
+                                    <span className="font-semibold text-slate-700">{settings.event_public_privacy_label.trim() || INITIAL_SETTINGS.event_public_privacy_label}:</span>{" "}
+                                    {settings.event_public_privacy_text.trim() || INITIAL_SETTINGS.event_public_privacy_text}
+                                  </p>
+                                )}
+                                {publicContactEnabled && publicContactHasContent && (
+                                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                                    <p className="text-sm font-semibold text-slate-900">Help & Contact</p>
+                                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                                      {publicContactIntro}
+                                    </p>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      {publicContactMessengerHref && (
+                                        <PublicContactActionLink href={publicContactMessengerHref} label="Messenger" kind="messenger" compact />
+                                      )}
+                                      {publicContactLineHref && (
+                                        <PublicContactActionLink href={publicContactLineHref} label="LINE" kind="line" compact />
+                                      )}
+                                      {publicContactPhoneHref && (
+                                        <PublicContactActionLink href={publicContactPhoneHref} label={settings.event_public_contact_phone.trim() || "Call"} kind="phone" compact />
+                                      )}
+                                    </div>
+                                    {settings.event_public_contact_hours.trim() && (
+                                      <p className="mt-3 text-xs text-slate-500">
+                                        Available: <span className="font-semibold text-slate-700">{settings.event_public_contact_hours.trim()}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="space-y-3 xl:col-span-5">
@@ -8018,7 +10109,7 @@ export default function App() {
                                 {historyEventGroups.map((group) => {
                                   const open = Boolean(deferredEventListQuery) || eventHistoryOpenKeys.includes(group.key);
                                   return (
-                                    <div key={group.key} className="rounded-2xl border border-slate-200 bg-slate-50/70">
+                                    <div key={group.key} className="rounded-2xl border border-slate-200 bg-slate-50">
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -9095,9 +11186,9 @@ export default function App() {
                           email={reg.email}
                           timestamp={reg.timestamp}
                           eventName={settings.event_name}
-                          eventLocation={settings.event_location}
+                          eventLocation={attendeeLocationLabel}
                           eventDateLabel={timingInfo.eventDateLabel}
-                          eventMapUrl={settings.event_map_url}
+                          eventMapUrl={resolvedEventMapUrl}
                         />
                       </motion.div>
                     );
@@ -10142,9 +12233,9 @@ export default function App() {
                             email={selectedRegistration.email}
                             timestamp={selectedRegistration.timestamp}
                             eventName={settings.event_name}
-                            eventLocation={settings.event_location}
+                            eventLocation={attendeeLocationLabel}
                             eventDateLabel={timingInfo.eventDateLabel}
-                            eventMapUrl={settings.event_map_url}
+                            eventMapUrl={resolvedEventMapUrl}
                           />
                         </div>
 
@@ -10661,7 +12752,7 @@ export default function App() {
                               isSelected
                                 ? "border-blue-200 bg-blue-50"
                                 : isSearchFocused("log", String(msg.id))
-                                ? "bg-blue-50/70"
+                                ? "bg-blue-50"
                                 : "hover:bg-slate-50"
                             } ${isSearchFocused("log", String(msg.id)) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
                           >
@@ -10831,7 +12922,7 @@ export default function App() {
                                 isSelected
                                   ? "bg-blue-50"
                                   : isSearchFocused("log", String(msg.id))
-                                  ? "bg-blue-50/70"
+                                  ? "bg-blue-50"
                                   : "hover:bg-slate-50"
                               }`}
                             >
@@ -10881,6 +12972,9 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-4"
             >
+              <PageBanner tone="blue" icon={<SettingsIcon className="h-4 w-4" />}>
+                AI defaults and webhook settings apply organization-wide by default. Selected Event Channels remain event-scoped in the current model, while event-specific AI behavior should use explicit overrides only.
+              </PageBanner>
               <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
                   <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
@@ -10888,9 +12982,9 @@ export default function App() {
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Bot className="w-5 h-5 text-blue-600" />
-                          AI Policy
+                          AI Defaults
                         </h3>
-                        <p className="text-sm text-slate-500">Global prompt and model policy for the organization, with optional event-level override.</p>
+                        <p className="text-sm text-slate-500">Organization-wide prompt and baseline model, with an optional override for the selected event.</p>
                         <StatusLine
                           className="mt-1"
                           items={[
@@ -10911,33 +13005,41 @@ export default function App() {
                       </ActionButton>
                     </div>
                     <div className="space-y-4">
-                      <div>
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <label className="block text-xs font-bold text-slate-500 uppercase">Global System Prompt</label>
-                          <HelpPopover label="Open note for Global System Prompt">
-                            Organization-wide tone, safety rules, and escalation behavior belong here. Event-specific content should stay in Context.
-                          </HelpPopover>
+                      <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Organization Defaults</p>
+                            <p className="mt-1 text-sm text-slate-500">Every event inherits these settings unless a specific override is enabled.</p>
+                          </div>
+                          <StatusLine items={["Applies to all events"]} />
                         </div>
-                        <textarea
-                          value={settings.global_system_prompt}
-                          onChange={(e) => setSettings({ ...settings, global_system_prompt: e.target.value })}
-                          className="w-full h-40 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-none"
-                          placeholder="Global operating rules for the bot across all events and channels."
-                        />
-                      </div>
 
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div>
                           <div className="mb-1 flex items-center justify-between gap-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase">Global Default Model</label>
-                            <HelpPopover label="Open note for Global Default Model">
+                            <label className="block text-xs font-bold text-slate-500 uppercase">Organization System Prompt</label>
+                            <HelpPopover label="Open note for Organization System Prompt">
+                              Organization-wide tone, safety rules, and escalation behavior belong here. Event-specific content should stay in Context.
+                            </HelpPopover>
+                          </div>
+                          <textarea
+                            value={settings.global_system_prompt}
+                            onChange={(e) => setSettings({ ...settings, global_system_prompt: e.target.value })}
+                            className="w-full h-40 rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                            placeholder="Global operating rules for the bot across all events and channels."
+                          />
+                        </div>
+
+                        <div>
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <label className="block text-xs font-bold text-slate-500 uppercase">Organization Default Model</label>
+                            <HelpPopover label="Open note for Organization Default Model">
                               Keep one stable default model here unless an event has a real reason to override it.
                             </HelpPopover>
                           </div>
                           <select
                             value={settings.global_llm_model}
                             onChange={(e) => setSettings({ ...settings, global_llm_model: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                           >
                             <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview (recommended)</option>
                             <option value="openrouter/auto">openrouter/auto</option>
@@ -10949,45 +13051,78 @@ export default function App() {
                             ))}
                           </select>
                         </div>
-
-                        <div>
-                          <div className="mb-1 flex items-center justify-between gap-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase">Selected Event Model Override</label>
-                            <HelpPopover label="Open note for Selected Event Model Override">
-                              Set an event override only when this workspace truly needs different model behavior than the global default.
-                            </HelpPopover>
-                          </div>
-                          <select
-                            value={settings.llm_model}
-                            onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="">Use global default model</option>
-                            <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview</option>
-                            <option value="openrouter/auto">openrouter/auto</option>
-                            {llmModels.map((model) => (
-                              <option key={`event-${model.id}`} value={model.id}>
-                                {model.id}
-                                {model.context_length ? ` (${model.context_length.toLocaleString()} ctx)` : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
                       </div>
 
-                      <div>
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <label className="block text-xs font-bold text-slate-500 uppercase">Custom Model ID</label>
-                          <HelpPopover label="Open note for Custom Model ID">
-                            Leave this blank to inherit the global default. When filled, only the selected event uses this specific model ID.
-                          </HelpPopover>
+                      <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Selected Event Override</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {selectedEvent
+                                ? `${selectedEvent.name} can override the organization default model only when it truly needs different behavior.`
+                                : "Select an event to manage overrides."}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge tone={settings.llm_model ? "amber" : "neutral"}>
+                              {settings.llm_model ? "Override active" : "Using org default"}
+                            </StatusBadge>
+                            {settings.llm_model && (
+                              <ActionButton
+                                onClick={() => setSettings({ ...settings, llm_model: "" })}
+                                tone="neutral"
+                                className="px-3 text-sm"
+                              >
+                                Reset to default
+                              </ActionButton>
+                            )}
+                          </div>
                         </div>
-                        <input
-                          value={settings.llm_model}
-                          onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Leave blank to use the global default. Or set a specific event model ID."
-                        />
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <div className="mb-1 flex items-center justify-between gap-2">
+                              <label className="block text-xs font-bold text-slate-500 uppercase">Preset Override Model</label>
+                              <HelpPopover label="Open note for Preset Override Model">
+                                Set an event override only when this workspace truly needs different model behavior than the organization default.
+                              </HelpPopover>
+                            </div>
+                            <select
+                              value={settings.llm_model}
+                              onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">Use organization default model</option>
+                              <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview</option>
+                              <option value="openrouter/auto">openrouter/auto</option>
+                              {llmModels.map((model) => (
+                                <option key={`event-${model.id}`} value={model.id}>
+                                  {model.id}
+                                  {model.context_length ? ` (${model.context_length.toLocaleString()} ctx)` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <div className="mb-1 flex items-center justify-between gap-2">
+                              <label className="block text-xs font-bold text-slate-500 uppercase">Advanced: Custom Model ID</label>
+                              <HelpPopover label="Open note for Advanced Custom Model ID">
+                                Leave this blank to inherit the organization default. When filled, only the selected event uses this specific model ID.
+                              </HelpPopover>
+                            </div>
+                            <input
+                              value={settings.llm_model}
+                              onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Paste a specific event model ID if needed."
+                            />
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-500">
+                          This override is saved on the selected event only. Event-specific instructions still belong in Context or Event setup.
+                        </p>
                       </div>
 
                       {llmModelsError && (
@@ -11006,7 +13141,114 @@ export default function App() {
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
                           <Link2 className="w-5 h-5 text-blue-600" />
-                          Channels
+                          Workspace Channel Inventory
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-500">
+                          Cross-event visibility only. Channels already assigned to the selected event are listed once below in Selected Event Channels.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Configs</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelCount}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Active</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceActiveChannelCount}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Platforms</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelPlatformCount}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Events Wired</p>
+                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelEventCount}</p>
+                      </div>
+                    </div>
+
+                    {workspaceChannelPreview.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
+                        {workspaceChannelCount === 0
+                          ? "No channels configured anywhere in this workspace yet."
+                          : "All configured channels currently belong to the selected event. Use Selected Event Channels below to manage them."}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                        {workspaceChannelPreview.map((channel) => {
+                          const isSelected = setupSelectedChannelId === channel.id;
+                          return (
+                          <div
+                            key={`workspace-${channel.id}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              focusSetupChannel(channel);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                focusSetupChannel(channel);
+                              }
+                            }}
+                            className={`rounded-2xl border p-3 transition cursor-pointer ${
+                              isSelected
+                                ? "border-blue-200 bg-blue-50"
+                                : "border-slate-200 bg-slate-50 hover:border-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <ChannelPlatformLogo platform={channel.platform} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
+                                  {isSelected && <SelectionMarker />}
+                                </div>
+                                <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                                  {channel.platform_label || channel.platform}
+                                </p>
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  Assigned to {eventNameById.get(channel.event_id) || channel.event_id || "Unknown event"}
+                                </p>
+                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                  <ActionButton
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      openChannelConfigDialog(channel);
+                                    }}
+                                    tone="blue"
+                                    className="px-3 text-sm"
+                                  >
+                                    <PencilLine className="h-3.5 w-3.5" />
+                                    Configure
+                                  </ActionButton>
+                                  {channel.event_id && channel.event_id !== selectedEventId && (
+                                    <span className="text-[11px] text-slate-500">
+                                      Opens {eventNameById.get(channel.event_id) || "its event"} before editing
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )})}
+                      </div>
+                    )}
+
+                    {workspaceOtherEventChannels.length > workspaceChannelPreview.length && (
+                      <p className="text-xs text-slate-500">
+                        Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} channels assigned to other events.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                          <Link2 className="w-5 h-5 text-blue-600" />
+                          Selected Event Channels
                         </h3>
                         <StatusLine
                           className="mt-1"
@@ -11019,7 +13261,7 @@ export default function App() {
                           ]}
                         />
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
-                          <p className="text-sm text-slate-500">Use cards for quick status checks. Open full configuration only when needed.</p>
+                          <p className="text-sm text-slate-500">These assignments currently apply to the selected event only. Use cards for quick status checks and routing control.</p>
                         )}
                       </div>
                       <div className="flex items-center gap-2">
@@ -11031,7 +13273,7 @@ export default function App() {
                             className="px-3 text-sm"
                           >
                             <Plus className="h-3.5 w-3.5" />
-                            Add Channel
+                            Assign Channel
                           </ActionButton>
                         )}
                         <CollapseIconButton
@@ -11055,7 +13297,7 @@ export default function App() {
 
                         {visibleSelectedEventChannels.length === 0 ? (
                           <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                            No channels linked to this event yet. Click Add Channel to connect one.
+                            No channels linked to this event yet. Click Assign Channel to attach one to the selected event.
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -11172,7 +13414,7 @@ export default function App() {
                           Webhook & Sync
                         </h3>
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) && (
-                          <p className="text-sm text-slate-500">Select a channel card to keep endpoint and setup details in sync.</p>
+                          <p className="text-sm text-slate-500">Organization-level endpoints live here. Selecting a channel card only changes which event assignment you are inspecting.</p>
                         )}
                       </div>
                       <CollapseIconButton
@@ -11220,7 +13462,7 @@ export default function App() {
                           ) : (
                             <div className="space-y-2">
                               <p className="text-sm font-semibold text-slate-900">No channel selected</p>
-                              <p className="text-xs text-slate-500">Create the first channel to load endpoint setup details here.</p>
+                              <p className="text-xs text-slate-500">Assign the first event channel to load endpoint setup details here.</p>
                               <ActionButton
                                 onClick={() => openChannelConfigDialog()}
                                 tone="blue"
@@ -11228,7 +13470,7 @@ export default function App() {
                                 className="px-3 text-sm"
                               >
                                 <Plus className="h-3.5 w-3.5" />
-                                Add Channel
+                                Assign Channel
                               </ActionButton>
                             </div>
                           )}
@@ -11370,10 +13612,10 @@ export default function App() {
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Channel Config</p>
                     <h3 className="mt-1 text-lg font-semibold text-slate-900">
-                      {editingChannelKey ? "Update Channel" : "Link Channel to Event"}
+                      {editingChannelKey ? "Update Event Channel" : "Assign Channel to Event"}
                     </h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Save platform credentials and channel identifiers for this event.
+                      Save platform credentials and routing details for the selected event.
                     </p>
                   </div>
                   <button

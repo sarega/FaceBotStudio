@@ -70,7 +70,7 @@ export function Ticket({
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
               <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Location</p>
-              <p className="text-slate-600 text-xs leading-tight">{eventLocation}</p>
+              <p className="text-slate-600 text-xs leading-tight">{eventLocation || "-"}</p>
             </div>
             <div>
               <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Event Window</p>
@@ -94,7 +94,7 @@ export function Ticket({
             className="flex items-center justify-center gap-2 w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all"
           >
             <Download className="w-3 h-3 rotate-180" />
-            View on Google Maps
+            View Map
           </a>
         )}
       </div>

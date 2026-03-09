@@ -72,6 +72,7 @@ import {
   type RegistrationStatus,
 } from "./backend/db/index";
 import { DEFAULT_EVENT_ID, EVENT_SETTING_KEYS, GLOBAL_SETTING_KEYS } from "./backend/db/defaultSettings";
+import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
 
 dotenv.config();
 
@@ -340,11 +341,16 @@ function buildEventInfo(
   capacitySnapshot?: EventCapacitySnapshot | null,
 ) {
   const eventState = getEventState(settings);
+  const locationSummary = buildEventLocationSummaryFromSettings(settings);
+  const locationLabel = formatEventLocationFromSettings(settings);
+  const mapUrl = resolveEventMapUrlFromSettings(settings);
   return `
 Current Event Details:
 - Name: ${settings.event_name || ""}
-- Location: ${settings.event_location || ""}
-- Map: ${settings.event_map_url || ""}
+- Venue: ${locationSummary.venueName || ""}
+- Room/Floor/Hall: ${locationSummary.roomDetail || ""}
+- Location: ${locationLabel}
+- Map: ${mapUrl}
 - Event Status Right Now: ${eventStatus}
 - Time Zone: ${eventState.timeZone}
 - Current System Time: ${eventState.nowLabel}
@@ -1039,6 +1045,32 @@ function normalizeComparableText(value: unknown) {
 function normalizeOptionalText(value: unknown) {
   const normalized = String(value ?? "").trim();
   return normalized || "";
+}
+
+function buildEventLocationSummaryFromSettings(settings: Record<string, unknown>) {
+  return buildEventLocationSummary({
+    event_venue_name: normalizeOptionalText(settings.event_venue_name),
+    event_room_detail: normalizeOptionalText(settings.event_room_detail),
+    event_location: normalizeOptionalText(settings.event_location),
+    event_travel: normalizeOptionalText(settings.event_travel),
+  });
+}
+
+function formatEventLocationFromSettings(settings: Record<string, unknown>, fallback = "-") {
+  return formatEventLocationCompact({
+    event_venue_name: normalizeOptionalText(settings.event_venue_name),
+    event_room_detail: normalizeOptionalText(settings.event_room_detail),
+    event_location: normalizeOptionalText(settings.event_location),
+  }, fallback);
+}
+
+function resolveEventMapUrlFromSettings(settings: Record<string, unknown>) {
+  return resolveEventMapUrl({
+    event_venue_name: normalizeOptionalText(settings.event_venue_name),
+    event_room_detail: normalizeOptionalText(settings.event_room_detail),
+    event_location: normalizeOptionalText(settings.event_location),
+    event_map_url: normalizeOptionalText(settings.event_map_url),
+  });
 }
 
 function normalizeAdminAgentHistory(history: ChatHistoryMessage[] = []) {
@@ -1966,6 +1998,109 @@ async function getRegistrationById(id: string) {
   return appDb.getRegistrationById(id);
 }
 
+function normalizePublicSlug(rawValue: unknown) {
+  return String(rawValue || "").trim().toLowerCase();
+}
+
+function buildTicketArtifactUrls(registrationId: string) {
+  const encodedId = encodeURIComponent(registrationId);
+  return {
+    png_url: buildTicketImageUrl(registrationId, "png") || `/api/tickets/${encodedId}.png`,
+    svg_url: buildTicketImageUrl(registrationId, "svg") || `/api/tickets/${encodedId}.svg`,
+  };
+}
+
+async function resolvePublicEventBySlug(rawSlug: string) {
+  const slug = normalizePublicSlug(rawSlug);
+  if (!slug) return null;
+
+  const events = await appDb.listEvents();
+  const eventSettingsRows = await Promise.all(
+    events.map(async (event) => ({
+      event,
+      settings: await getSettingsMap(event.id),
+    })),
+  );
+
+  const explicitMatch = eventSettingsRows.find(({ settings }) => normalizePublicSlug(settings.event_public_slug) === slug);
+  if (explicitMatch) {
+    return explicitMatch;
+  }
+
+  return eventSettingsRows.find(({ event, settings }) =>
+    !normalizePublicSlug(settings.event_public_slug) && normalizePublicSlug(event.slug) === slug,
+  ) || null;
+}
+
+async function buildPublicEventPagePayload(
+  event: Awaited<ReturnType<typeof appDb.getEventById>>,
+  settings: Record<string, string>,
+) {
+  if (!event) return null;
+
+  const capacity = await getEventCapacitySnapshot(event.id, settings);
+  const location = buildEventLocationSummaryFromSettings(settings);
+  const summary = String(settings.event_public_summary || "").trim() || String(settings.event_description || "").trim();
+  const publicSlug = String(settings.event_public_slug || "").trim() || event.slug;
+
+  return {
+    event: {
+      id: event.id,
+      name: String(settings.event_name || event.name || "").trim() || event.name,
+      slug: publicSlug,
+      status: event.effective_status,
+      summary,
+      description: String(settings.event_description || "").trim(),
+      poster_url: String(settings.event_public_poster_url || "").trim(),
+      cta_label: String(settings.event_public_cta_label || "").trim() || "Register Now",
+      success_message:
+        String(settings.event_public_success_message || "").trim()
+        || "Registration complete. Save your ticket image to your phone now.",
+      date: String(settings.event_date || "").trim(),
+      end_date: String(settings.event_end_date || "").trim(),
+      date_label: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
+      timezone: normalizeTimeZone(settings.event_timezone),
+      registration_enabled: isTruthySetting(settings.event_public_registration_enabled ?? "1"),
+      registration_availability: event.registration_availability || capacity.registrationAvailability,
+      registration_limit: capacity.limit,
+      active_registration_count: capacity.activeCount,
+      remaining_seats: capacity.remainingCount,
+      is_capacity_full: capacity.isFull,
+      confirmation_email_enabled: isTruthySetting(settings.confirmation_email_enabled),
+    },
+    location: {
+      venue_name: location.venueName,
+      room_detail: location.roomDetail,
+      address: location.address,
+      title: location.title,
+      address_line: location.addressLine,
+      compact: location.compact,
+      travel_info: location.travelInfo,
+      map_url: resolveEventMapUrlFromSettings(settings),
+    },
+    privacy: {
+      enabled: isTruthySetting(settings.event_public_privacy_enabled ?? "1"),
+      label: String(settings.event_public_privacy_label || "").trim() || "Privacy",
+      text:
+        String(settings.event_public_privacy_text || "").trim()
+        || "We use your information only for event registration and event-related communication.",
+    },
+    contact: {
+      enabled: isTruthySetting(settings.event_public_contact_enabled ?? "0"),
+      intro:
+        String(settings.event_public_contact_intro || "").trim()
+        || "Need help from our team? Use one of these contact options.",
+      messenger_url: String(settings.event_public_contact_messenger_url || "").trim(),
+      line_url: String(settings.event_public_contact_line_url || "").trim(),
+      phone: String(settings.event_public_contact_phone || "").trim(),
+      hours: String(settings.event_public_contact_hours || "").trim(),
+    },
+    support: {
+      bot_enabled: isTruthySetting(settings.event_public_bot_enabled ?? "1"),
+    },
+  };
+}
+
 type CheckinAccessPayloadSource = {
   id: string;
   label: string;
@@ -1984,7 +2119,7 @@ async function buildCheckinSessionAccessPayload(session: CheckinAccessPayloadSou
     label: session.label,
     event_id: session.event_id,
     event_name: settings.event_name || event.name,
-    event_location: settings.event_location || "",
+    event_location: formatEventLocationFromSettings(settings, ""),
     event_timezone: settings.event_timezone || "Asia/Bangkok",
     event_date: settings.event_date || "",
     event_end_date: settings.event_end_date || "",
@@ -2325,8 +2460,8 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
     steps.push("link");
   }
 
-  if ((steps.includes("image") || steps.includes("link")) && String(settings.event_map_url || "").trim()) {
-    const mapUrl = String(settings.event_map_url || "").trim();
+  const mapUrl = resolveEventMapUrlFromSettings(settings);
+  if ((steps.includes("image") || steps.includes("link")) && mapUrl) {
     await sendTextToOutboundTarget(target, `แผนที่สถานที่: ${mapUrl}`);
     await saveMessage(target.senderId, `[manual-map-link] ${mapUrl}`, "outgoing", target.eventId, target.externalId);
     steps.push("map");
@@ -2939,18 +3074,24 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
   const candidates = await Promise.all(events.map(async (event) => {
     const settings = await getSettingsMap(event.id);
     const configuredName = normalizeOptionalText(settings.event_name);
+    const configuredVenueName = normalizeOptionalText(settings.event_venue_name);
+    const configuredRoomDetail = normalizeOptionalText(settings.event_room_detail);
     const configuredLocation = normalizeOptionalText(settings.event_location);
     const configuredMapUrl = normalizeOptionalText(settings.event_map_url);
     const configuredDescription = normalizeOptionalText(settings.event_description);
     const configuredTravel = normalizeOptionalText(settings.event_travel);
     const configuredContext = normalizeOptionalText(settings.context);
+    const configuredLocationLabel = formatEventLocationFromSettings(settings, "");
     const displayName = configuredName || normalizeOptionalText(event.name) || event.id;
     const searchableCoreParts = [
       normalizeComparableText(event.id),
       normalizeComparableText(event.slug),
       normalizeComparableText(event.name),
       normalizeComparableText(configuredName),
+      normalizeComparableText(configuredVenueName),
+      normalizeComparableText(configuredRoomDetail),
       normalizeComparableText(configuredLocation),
+      normalizeComparableText(configuredLocationLabel),
       normalizeComparableText(configuredMapUrl),
       normalizeComparableText(event.effective_status || ""),
       normalizeComparableText(event.registration_availability || ""),
@@ -3339,6 +3480,16 @@ function parseAdminAgentEventSetupPatch(args: Record<string, unknown>) {
   const timeZone = normalizeOptionalText(args.event_timezone) || normalizeOptionalText(args.timezone);
   if (timeZone) put("event_timezone", normalizeTimeZone(timeZone));
 
+  const venueName = normalizeOptionalText(args.event_venue_name) || normalizeOptionalText(args.venue_name);
+  if (venueName) put("event_venue_name", venueName);
+
+  const roomDetail =
+    normalizeOptionalText(args.event_room_detail)
+    || normalizeOptionalText(args.room_detail)
+    || normalizeOptionalText(args.room)
+    || normalizeOptionalText(args.hall);
+  if (roomDetail) put("event_room_detail", roomDetail);
+
   const location = normalizeOptionalText(args.event_location) || normalizeOptionalText(args.location);
   if (location) put("event_location", location);
 
@@ -3458,10 +3609,12 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
   const registrationEndLabel = formatStoredDateForDisplay(settings.reg_end || "", state.timeZone);
   const eventStartLabel = formatStoredDateForDisplay(settings.event_date || "", state.timeZone);
   const eventEndLabel = formatStoredDateForDisplay(settings.event_end_date || "", state.timeZone);
-  const mapUrl = normalizeOptionalText(settings.event_map_url);
+  const mapUrl = resolveEventMapUrlFromSettings(settings);
   const description = normalizeOptionalText(settings.event_description);
   const travel = normalizeOptionalText(settings.event_travel);
   const context = normalizeOptionalText(settings.context);
+  const locationSummary = buildEventLocationSummaryFromSettings(settings);
+  const locationLabel = formatEventLocationFromSettings(settings);
   const confirmationEmailEnabled = isTruthySetting(settings.confirmation_email_enabled);
   const recent = registrations.slice(0, Math.min(Math.max(0, includeRecentRegistrations), 10)).map((row) => ({
     id: row.id,
@@ -3475,12 +3628,18 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
     `Event ${event.id}: ${settings.event_name || event.name || "-"}`,
     `สถานะงาน: ${event.effective_status} | สถานะลงทะเบียน: ${event.registration_availability || state.registrationStatus}`,
     `เวลา: ${formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", state.timeZone)}`,
-    `สถานที่: ${settings.event_location || "-"}`,
+    `สถานที่: ${locationLabel}`,
     `แผนที่: ${mapUrl || "-"}`,
     `ลงทะเบียน: ทั้งหมด ${total} | active ${active} | checked-in ${checkedIn} | cancelled ${cancelled}`,
     `กติกาลงทะเบียน: limit ${registrationLimit ?? "unlimited"} | unique-full-name ${duplicateNameGuard ? "on" : "off"} | เปิด ${registrationStartLabel} | ปิด ${registrationEndLabel}`,
     `อีเมลยืนยัน: ${confirmationEmailEnabled ? "on" : "off"}`,
   ];
+  if (locationSummary.venueName) {
+    summaryLines.push(`venue: ${locationSummary.venueName}`);
+  }
+  if (locationSummary.roomDetail) {
+    summaryLines.push(`room: ${locationSummary.roomDetail}`);
+  }
   if (description) {
     summaryLines.push(`รายละเอียด: ${truncateText(description, 320)}`);
   }
@@ -3510,7 +3669,10 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
       event_date_label: formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", state.timeZone),
       event_start_label: eventStartLabel,
       event_end_label: eventEndLabel,
-      location: settings.event_location || "",
+      venue_name: locationSummary.venueName,
+      room_detail: locationSummary.roomDetail,
+      address: locationSummary.address,
+      location: locationLabel,
       map_url: mapUrl,
       description,
       travel,
@@ -3638,6 +3800,12 @@ async function requestAdminAgentPlan(
                 event_name: { type: "string" },
                 status: { type: "string", enum: ["pending", "active", "inactive", "cancelled"] },
                 event_timezone: { type: "string" },
+                event_venue_name: { type: "string" },
+                venue_name: { type: "string" },
+                event_room_detail: { type: "string" },
+                room_detail: { type: "string" },
+                room: { type: "string" },
+                hall: { type: "string" },
                 event_location: { type: "string" },
                 event_map_url: { type: "string" },
                 event_date: { type: "string" },
@@ -3666,6 +3834,12 @@ async function requestAdminAgentPlan(
                 name: { type: "string" },
                 event_name: { type: "string" },
                 event_timezone: { type: "string" },
+                event_venue_name: { type: "string" },
+                venue_name: { type: "string" },
+                event_room_detail: { type: "string" },
+                room_detail: { type: "string" },
+                room: { type: "string" },
+                hall: { type: "string" },
                 event_location: { type: "string" },
                 event_map_url: { type: "string" },
                 map_url: { type: "string" },
@@ -5424,7 +5598,7 @@ async function buildWebChatArtifacts(eventId: string, registrationIds: string[])
     });
   }
 
-  const mapUrl = String(settings.event_map_url || "").trim();
+  const mapUrl = resolveEventMapUrlFromSettings(settings);
   return {
     tickets,
     map_url: mapUrl || null,
@@ -5726,10 +5900,11 @@ function buildEmbeddedTicketFontCss() {
 function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
   const fontCss = buildEmbeddedTicketFontCss();
   const timeZone = normalizeTimeZone(settings.event_timezone);
+  const location = formatEventLocationFromSettings(settings);
   const eventName = escapeXml(String(settings.event_name || "Event Ticket").trim() || "Event Ticket");
   const attendeeName = escapeXml(`${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-");
   const registrationId = escapeXml(reg.id);
-  const location = escapeXml(String(settings.event_location || "-").trim() || "-");
+  const escapedLocation = escapeXml(location);
   const eventDate = escapeXml(formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone));
   const qrSrc = escapeXml(qrDataUrl);
 
@@ -5913,7 +6088,7 @@ function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<st
       <div class="grid">
         <div>
           <p class="label">Location</p>
-          <p class="value-sm">${location}</p>
+          <p class="value-sm">${escapedLocation}</p>
         </div>
         <div>
           <p class="label">Event Date</p>
@@ -5966,7 +6141,7 @@ function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, s
   const timeZone = normalizeTimeZone(settings.event_timezone);
   const fullName = `${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-";
   const eventDate = formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone);
-  const location = String(settings.event_location || "-").trim() || "-";
+  const location = formatEventLocationFromSettings(settings);
 
   return [
     "ลงทะเบียนสำเร็จแล้ว ✅",
@@ -6014,9 +6189,9 @@ function buildRegistrationConfirmationEmailContent(
   const fullName = `${registration.first_name || ""} ${registration.last_name || ""}`.trim() || "-";
   const timeZone = normalizeTimeZone(settings.event_timezone);
   const eventDate = formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone);
-  const location = String(settings.event_location || "-").trim() || "-";
-  const mapUrl = String(settings.event_map_url || "").trim();
-  const travel = String(settings.event_travel || "").trim();
+  const location = formatEventLocationFromSettings(settings);
+  const mapUrl = resolveEventMapUrlFromSettings(settings);
+  const travel = buildEventLocationSummaryFromSettings(settings).travelInfo;
   const ticketPngUrl = buildTicketImageUrl(registration.id, "png");
   const ticketSvgUrl = buildTicketImageUrl(registration.id, "svg");
   const ticketUrl = ticketPngUrl || ticketSvgUrl || "";
@@ -6156,8 +6331,9 @@ async function sendRegistrationConfirmationEmailIfNeeded(registrationId: string)
 
 function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
   const timeZone = normalizeTimeZone(settings.event_timezone);
+  const locationLabel = formatEventLocationFromSettings(settings);
   const eventNameLines = wrapTextLines(settings.event_name || "Event Ticket", 18, 2).map(escapeXml);
-  const locationLines = wrapTextLines(settings.event_location || "-", 18, 2).map(escapeXml);
+  const locationLines = wrapTextLines(locationLabel, 18, 2).map(escapeXml);
   const eventDateLines = wrapTextLines(
     formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone),
     18,
@@ -7089,7 +7265,7 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
     }
 
     if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
-      const mapUrl = String(settings?.event_map_url || "").trim();
+      const mapUrl = resolveEventMapUrlFromSettings(settings || {});
       if (mapUrl) {
         try {
           await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId);
@@ -7213,7 +7389,7 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
   }
 
   if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
-    const mapUrl = String(settings?.event_map_url || "").trim();
+    const mapUrl = resolveEventMapUrlFromSettings(settings || {});
     if (mapUrl) {
       try {
         await sendLinePushTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, destination);
@@ -7311,7 +7487,7 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
   }
 
   if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
-    const mapUrl = String(settings?.event_map_url || "").trim();
+    const mapUrl = resolveEventMapUrlFromSettings(settings || {});
     if (mapUrl) {
       try {
         await sendInstagramTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, accountId);
@@ -7409,7 +7585,7 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
   }
 
   if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
-    const mapUrl = String(settings?.event_map_url || "").trim();
+    const mapUrl = resolveEventMapUrlFromSettings(settings || {});
     if (mapUrl) {
       try {
         await sendWhatsAppTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, phoneNumberId);
@@ -7507,7 +7683,7 @@ async function handleIncomingTelegramText(senderId: string, text: string, botKey
   }
 
   if (uniqueTicketIds.length > 0 && sentTicketArtifact) {
-    const mapUrl = String(settings?.event_map_url || "").trim();
+    const mapUrl = resolveEventMapUrlFromSettings(settings || {});
     if (mapUrl) {
       try {
         await sendTelegramTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, botKey);
@@ -8832,6 +9008,209 @@ async function startServer() {
     }
     },
   );
+
+  app.get("/api/public/events/:slug", async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+
+      const payload = await buildPublicEventPagePayload(match.event, match.settings);
+      if (!payload) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+
+      return res.json(payload);
+    } catch (error) {
+      console.error("Failed to fetch public event page:", error);
+      return res.status(500).json({ error: "Failed to load public event page" });
+    }
+  });
+
+  app.post("/api/public/events/:slug/register", async (req: AuthenticatedRequest, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+
+      const payload = await buildPublicEventPagePayload(match.event, match.settings);
+      if (!payload) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+      if (!payload.event.registration_enabled) {
+        return res.status(400).json({ error: "Public registration is disabled for this event" });
+      }
+
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const firstName = readRequiredString(body, "first_name", issues, { label: "first_name", maxLength: 180 });
+      const lastName = readRequiredString(body, "last_name", issues, { label: "last_name", maxLength: 180 });
+      const phone = readRequiredString(body, "phone", issues, { label: "phone", maxLength: 64 });
+      const email = readOptionalString(body, "email", 320);
+      if (email && !isLikelyEmailAddress(email)) {
+        issues.push({ field: "email", message: "email is invalid" });
+      }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const senderSeed = [phone, email, firstName, lastName]
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
+        .join(":")
+        .replace(/[^a-z0-9:@._+-]+/g, "-")
+        .slice(0, 80);
+      const senderId = `public-web:${match.event.id}:${senderSeed || Date.now().toString(36)}:${Date.now().toString(36)}`;
+
+      const creation = await createRegistration({
+        sender_id: senderId,
+        event_id: match.event.id,
+        first_name: firstName,
+        last_name: lastName,
+        phone,
+        email,
+      }, {
+        source: "public_event_page",
+      });
+
+      const mapUrl = payload.location.map_url || "";
+      const eventName = payload.event.name;
+      const eventDateLabel = payload.event.date_label;
+      const locationLabel = payload.location.compact || "-";
+
+      if (creation.statusCode === 200 && typeof creation.content.id === "string") {
+        const registrationId = String(creation.content.id || "").trim().toUpperCase();
+        const ticket = buildTicketArtifactUrls(registrationId);
+        await recordAudit(req, "public.registration.created", "registration", registrationId, {
+          event_id: match.event.id,
+          public_slug: payload.event.slug,
+        });
+        return res.json({
+          status: "success",
+          message: "Registration complete",
+          success_message: payload.event.success_message,
+          email_backup_enabled: payload.event.confirmation_email_enabled,
+          map_url: mapUrl,
+          registration: {
+            id: registrationId,
+            first_name: firstName,
+            last_name: lastName,
+            phone,
+            email,
+          },
+          ticket,
+          event: {
+            name: eventName,
+            date_label: eventDateLabel,
+            location: locationLabel,
+          },
+        });
+      }
+
+      if (creation.statusCode === 409 && typeof creation.content.duplicate_registration_id === "string") {
+        const registrationId = String(creation.content.duplicate_registration_id || "").trim().toUpperCase();
+        const existing = await getRegistrationById(registrationId);
+        const ticket = buildTicketArtifactUrls(registrationId);
+        await recordAudit(req, "public.registration.duplicate_reused", "registration", registrationId, {
+          event_id: match.event.id,
+          public_slug: payload.event.slug,
+        });
+        return res.json({
+          status: "duplicate",
+          message: "You already have a ticket for this event",
+          success_message: "You already have a ticket for this event. Save it again below.",
+          email_backup_enabled: payload.event.confirmation_email_enabled,
+          map_url: mapUrl,
+          registration: {
+            id: registrationId,
+            first_name: existing?.first_name || firstName,
+            last_name: existing?.last_name || lastName,
+            phone: existing?.phone || phone,
+            email: existing?.email || email,
+          },
+          ticket,
+          event: {
+            name: eventName,
+            date_label: eventDateLabel,
+            location: locationLabel,
+          },
+        });
+      }
+
+      return res.status(creation.statusCode).json(creation.content);
+    } catch (error) {
+      console.error("Failed to register via public event page:", error);
+      return res.status(500).json({ error: "Failed to register for this event" });
+    }
+  });
+
+  app.post("/api/public/events/:slug/chat", webChatRateLimit, async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+      if (!isTruthySetting(match.settings.event_public_bot_enabled ?? "1")) {
+        return res.status(400).json({ error: "Bot help is disabled for this event" });
+      }
+
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 240 });
+      const text = readRequiredString(body, "text", issues, { label: "text", maxLength: 4000 });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const pageId = `public-event:${match.event.id}`;
+      await saveMessage(senderId, text, "incoming", match.event.id, pageId);
+      const conversationKey = buildInboundConversationKey("public-web", senderId, match.event.id);
+      markInboundConversationActivity(conversationKey);
+
+      const preparedTurn = await prepareBundledConversationTurnForSender("public-web", senderId, match.event.id, {
+        burstWindowMs: WEBCHAT_BURST_WINDOW_MS,
+      });
+
+      let replyText = "";
+      let ticketRegistrationIds: string[] = [];
+      if (preparedTurn) {
+        try {
+          const result = await generateReplyForPreparedTurn(senderId, match.event.id, preparedTurn);
+          replyText = result.text;
+          ticketRegistrationIds = result.ticketRegistrationIds;
+          clearFailedInboundTurn(preparedTurn.conversationKey);
+        } catch (error) {
+          console.error("Failed to generate public event bot reply:", error);
+          rememberFailedInboundTurn(
+            preparedTurn.conversationKey,
+            preparedTurn,
+            error instanceof Error ? error.message : String(error),
+          );
+          replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+        }
+      }
+
+      if (replyText) {
+        await saveMessage(senderId, replyText, "outgoing", match.event.id, pageId);
+      }
+      if (preparedTurn) {
+        markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
+      }
+
+      const artifacts = await buildWebChatArtifacts(match.event.id, ticketRegistrationIds);
+      return res.json({
+        status: "ok",
+        reply_text: replyText,
+        map_url: artifacts.map_url,
+        tickets: artifacts.tickets,
+      });
+    } catch (error) {
+      console.error("Public event chat handler failed:", error);
+      return res.status(500).json({ error: "Failed to process event chat message" });
+    }
+  });
 
   app.get(
     "/api/registrations",

@@ -268,12 +268,31 @@ export interface Settings {
   verify_token: string;
   event_name: string;
   event_timezone: string;
+  event_venue_name: string;
+  event_room_detail: string;
   event_location: string;
   event_map_url: string;
   event_date: string;
   event_end_date: string;
   event_description: string;
   event_travel: string;
+  event_public_page_enabled: string;
+  event_public_slug: string;
+  event_public_poster_url: string;
+  event_public_summary: string;
+  event_public_registration_enabled: string;
+  event_public_bot_enabled: string;
+  event_public_success_message: string;
+  event_public_cta_label: string;
+  event_public_privacy_enabled: string;
+  event_public_privacy_label: string;
+  event_public_privacy_text: string;
+  event_public_contact_enabled: string;
+  event_public_contact_intro: string;
+  event_public_contact_messenger_url: string;
+  event_public_contact_line_url: string;
+  event_public_contact_phone: string;
+  event_public_contact_hours: string;
   confirmation_email_enabled: string;
   confirmation_email_subject: string;
   reg_unique_name: string;
@@ -301,4 +320,91 @@ export interface LlmUsageSummary {
   selected_event: LlmUsageTotals;
   overall_models: LlmUsageModelSummary[];
   selected_event_models: LlmUsageModelSummary[];
+}
+
+export interface PublicEventPageResponse {
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    status: EventStatus;
+    summary: string;
+    description: string;
+    poster_url: string;
+    cta_label: string;
+    success_message: string;
+    date: string;
+    end_date: string;
+    date_label: string;
+    timezone: string;
+    registration_enabled: boolean;
+    registration_availability: "open" | "not_started" | "closed" | "invalid" | "full";
+    registration_limit: number | null;
+    active_registration_count: number;
+    remaining_seats: number | null;
+    is_capacity_full: boolean;
+    confirmation_email_enabled: boolean;
+  };
+  location: {
+    venue_name: string;
+    room_detail: string;
+    address: string;
+    title: string;
+    address_line: string;
+    compact: string;
+    travel_info: string;
+    map_url: string;
+  };
+  privacy: {
+    enabled: boolean;
+    label: string;
+    text: string;
+  };
+  contact: {
+    enabled: boolean;
+    intro: string;
+    messenger_url: string;
+    line_url: string;
+    phone: string;
+    hours: string;
+  };
+  support: {
+    bot_enabled: boolean;
+  };
+}
+
+export interface PublicEventRegistrationResponse {
+  status: "success" | "duplicate";
+  message: string;
+  success_message: string;
+  email_backup_enabled: boolean;
+  map_url: string;
+  registration: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    phone: string;
+    email: string;
+  };
+  ticket: {
+    png_url: string;
+    svg_url: string;
+  };
+  event: {
+    name: string;
+    date_label: string;
+    location: string;
+  };
+}
+
+export interface PublicEventChatResponse {
+  status: "ok";
+  reply_text: string;
+  map_url: string | null;
+  tickets: Array<{
+    registration_id: string;
+    summary_text: string;
+    png_url: string | null;
+    svg_url: string | null;
+  }>;
 }
