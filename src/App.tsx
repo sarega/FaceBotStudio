@@ -1,6 +1,7 @@
 import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
+import QRCode from "qrcode";
 import { 
   ArrowDownLeft,
   ArrowUpRight,
@@ -89,6 +90,9 @@ type PublicChatMessage = {
   tickets: PublicEventChatResponse["tickets"];
   serverMessageId?: number;
 };
+
+const PUBLIC_PAGE_QR_SIZE = 960;
+const PUBLIC_PAGE_QR_MARGIN = 2;
 
 function isRecoveredPublicRegistrationResult(
   value: PublicEventRegistrationResponse | null,
@@ -2955,6 +2959,10 @@ export default function App() {
     return Notification.permission;
   });
   const [copied, setCopied] = useState(false);
+  const [publicPageLinkCopied, setPublicPageLinkCopied] = useState(false);
+  const [publicPageQrDataUrl, setPublicPageQrDataUrl] = useState("");
+  const [publicPageQrSvgMarkup, setPublicPageQrSvgMarkup] = useState("");
+  const [publicPageQrError, setPublicPageQrError] = useState("");
   const [selectedWebhookConfigKey, setSelectedWebhookConfigKey] = useState<WebhookConfigKey>("facebook");
   const [setupSelectedChannelId, setSetupSelectedChannelId] = useState("");
   const [channelConfigDialogOpen, setChannelConfigDialogOpen] = useState(false);
@@ -3267,6 +3275,10 @@ export default function App() {
     eventId: selectedEvent?.id || selectedEventId,
   });
   const publicPagePreviewPath = `/events/${encodeURIComponent(resolvedPublicPageSlug)}`;
+  const publicPageAbsoluteUrl = typeof window !== "undefined"
+    ? new URL(publicPagePreviewPath, window.location.origin).toString()
+    : publicPagePreviewPath;
+  const publicPageQrFileBase = `event-${resolvedPublicPageSlug || "public-page"}-qr`;
   const publicPageAutoSummary = resolvePublicSummary("", settings.event_description);
   const publicPageSummary = resolvePublicSummary(settings.event_public_summary, settings.event_description);
   const publicPageSummaryWordCount = countApproxWords(settings.event_public_summary);
@@ -3290,6 +3302,58 @@ export default function App() {
     || settings.event_public_contact_phone.trim()
     || settings.event_public_contact_hours.trim(),
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const generatePublicPageQrAssets = async () => {
+      if (!publicPageAbsoluteUrl) {
+        setPublicPageQrDataUrl("");
+        setPublicPageQrSvgMarkup("");
+        setPublicPageQrError("");
+        return;
+      }
+
+      try {
+        const [dataUrl, svgMarkup] = await Promise.all([
+          QRCode.toDataURL(publicPageAbsoluteUrl, {
+            width: PUBLIC_PAGE_QR_SIZE,
+            margin: PUBLIC_PAGE_QR_MARGIN,
+            color: {
+              dark: "#0f172a",
+              light: "#ffffff",
+            },
+          }),
+          QRCode.toString(publicPageAbsoluteUrl, {
+            type: "svg",
+            width: PUBLIC_PAGE_QR_SIZE,
+            margin: PUBLIC_PAGE_QR_MARGIN,
+            color: {
+              dark: "#0f172a",
+              light: "#ffffff",
+            },
+          }),
+        ]);
+
+        if (cancelled) return;
+        setPublicPageQrDataUrl(dataUrl);
+        setPublicPageQrSvgMarkup(svgMarkup);
+        setPublicPageQrError("");
+      } catch (error) {
+        if (cancelled) return;
+        setPublicPageQrDataUrl("");
+        setPublicPageQrSvgMarkup("");
+        setPublicPageQrError(error instanceof Error ? error.message : "Failed to generate public page QR code");
+      }
+    };
+
+    void generatePublicPageQrAssets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [publicPageAbsoluteUrl]);
+
   const publicRouteLocationFields = publicEventPage
     ? {
         event_venue_name: publicEventPage.location.venue_name,
@@ -7507,6 +7571,53 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const copyPublicPageUrlToClipboard = async () => {
+    if (!publicPageAbsoluteUrl) return;
+    try {
+      await navigator.clipboard.writeText(publicPageAbsoluteUrl);
+      setPublicPageLinkCopied(true);
+      window.setTimeout(() => setPublicPageLinkCopied(false), 2000);
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? error.message : "Failed to copy public page URL");
+    }
+  };
+
+  const triggerDownloadFromHref = (href: string, fileName: string) => {
+    if (!href) return;
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = fileName;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
+  const triggerDownloadFromBlob = (blob: Blob, fileName: string) => {
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      triggerDownloadFromHref(objectUrl, fileName);
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    }
+  };
+
+  const handleDownloadPublicPageQrPng = () => {
+    if (!publicPageQrDataUrl) {
+      setSettingsMessage("QR code is not ready yet");
+      return;
+    }
+    triggerDownloadFromHref(publicPageQrDataUrl, `${publicPageQrFileBase}.png`);
+  };
+
+  const handleDownloadPublicPageQrSvg = () => {
+    if (!publicPageQrSvgMarkup) {
+      setSettingsMessage("QR code is not ready yet");
+      return;
+    }
+    triggerDownloadFromBlob(new Blob([publicPageQrSvgMarkup], { type: "image/svg+xml;charset=utf-8" }), `${publicPageQrFileBase}.svg`);
+  };
+
   const focusSearchTarget = (kind: GlobalSearchResultKind, id: string) => {
     if (searchFocusTimeoutRef.current !== null) {
       window.clearTimeout(searchFocusTimeoutRef.current);
@@ -10778,6 +10889,97 @@ export default function App() {
                                 Enable public page to publish
                               </span>
                             )}
+                          </div>
+                        </div>
+
+                        <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                            <div className="flex items-start gap-3">
+                              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm">
+                                <QrCode className="h-5 w-5" />
+                              </span>
+                              <div className="min-w-0">
+                                <h4 className="text-sm font-semibold text-slate-900">Public Link & QR</h4>
+                                <p className="mt-1 text-xs leading-5 text-slate-500">
+                                  Download a clean QR asset for posters, handouts, or venue signage. SVG is best for print.
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Full Public URL</p>
+                              <p className="mt-2 break-all font-mono text-xs leading-6 text-slate-700">{publicPageAbsoluteUrl}</p>
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <ActionButton
+                                onClick={() => void copyPublicPageUrlToClipboard()}
+                                tone="neutral"
+                                className="px-3 text-xs"
+                              >
+                                {publicPageLinkCopied ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                                {publicPageLinkCopied ? "Copied" : "Copy Full URL"}
+                              </ActionButton>
+                              <ActionButton
+                                onClick={handleDownloadPublicPageQrPng}
+                                disabled={!publicPageQrDataUrl}
+                                tone="blue"
+                                className="px-3 text-xs"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Download PNG
+                              </ActionButton>
+                              <ActionButton
+                                onClick={handleDownloadPublicPageQrSvg}
+                                disabled={!publicPageQrSvgMarkup}
+                                tone="neutral"
+                                className="px-3 text-xs"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Download SVG
+                              </ActionButton>
+                              {publicPageEnabled && (
+                                <ActionButton
+                                  onClick={() => window.open(publicPagePreviewPath, "_blank", "noopener,noreferrer")}
+                                  tone="neutral"
+                                  className="px-3 text-xs"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                  Open Page
+                                </ActionButton>
+                              )}
+                            </div>
+
+                            {!publicPageEnabled && (
+                              <p className="mt-3 text-[11px] leading-5 text-amber-700">
+                                QR can be prepared now, but the public page must be enabled before attendees can open it successfully.
+                              </p>
+                            )}
+                            {publicPageQrError && (
+                              <p className="mt-3 text-[11px] leading-5 text-rose-600">
+                                {publicPageQrError}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">QR Preview</p>
+                            <div className="mt-3 overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
+                              {publicPageQrDataUrl ? (
+                                <img
+                                  src={publicPageQrDataUrl}
+                                  alt={`QR code for ${publicPageAbsoluteUrl}`}
+                                  className="mx-auto w-full max-w-[14rem]"
+                                />
+                              ) : (
+                                <div className="flex aspect-square w-full items-center justify-center rounded-[1.25rem] bg-slate-50 text-slate-400">
+                                  <RefreshCw className="h-6 w-6 animate-spin" />
+                                </div>
+                              )}
+                            </div>
+                            <p className="mt-3 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                              Scan to register
+                            </p>
                           </div>
                         </div>
 
