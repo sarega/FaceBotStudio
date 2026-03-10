@@ -2129,13 +2129,50 @@ function normalizeComparablePhone(value: unknown) {
   return normalizeOptionalText(value).replace(/\D/g, "");
 }
 
+function buildComparablePhoneVariants(value: unknown) {
+  const digits = normalizeComparablePhone(value);
+  if (!digits) return [] as string[];
+
+  const variants = new Set<string>();
+  const pushVariant = (candidate: string) => {
+    const normalized = String(candidate || "").replace(/\D/g, "");
+    if (normalized) {
+      variants.add(normalized);
+    }
+  };
+
+  pushVariant(digits);
+
+  if (digits.startsWith("00") && digits.length > 4) {
+    pushVariant(digits.slice(2));
+  }
+  if (digits.startsWith("66") && digits.length >= 10) {
+    pushVariant(`0${digits.slice(2)}`);
+    pushVariant(digits.slice(2));
+  }
+  if (digits.startsWith("0") && digits.length >= 9) {
+    pushVariant(`66${digits.slice(1)}`);
+    pushVariant(digits.slice(1));
+  }
+
+  return [...variants];
+}
+
 function phonesRoughlyMatch(left: unknown, right: unknown) {
-  const leftDigits = normalizeComparablePhone(left);
-  const rightDigits = normalizeComparablePhone(right);
-  if (!leftDigits || !rightDigits) return false;
-  if (leftDigits === rightDigits) return true;
-  if (leftDigits.length >= 8 && rightDigits.length >= 8) {
-    return leftDigits.endsWith(rightDigits) || rightDigits.endsWith(leftDigits);
+  const leftVariants = buildComparablePhoneVariants(left);
+  const rightVariants = buildComparablePhoneVariants(right);
+  if (leftVariants.length === 0 || rightVariants.length === 0) return false;
+
+  for (const leftDigits of leftVariants) {
+    for (const rightDigits of rightVariants) {
+      if (leftDigits === rightDigits) return true;
+      if (leftDigits.length >= 9 && rightDigits.length >= 9) {
+        if (leftDigits.slice(-9) === rightDigits.slice(-9)) return true;
+      }
+      if (leftDigits.length >= 8 && rightDigits.length >= 8) {
+        if (leftDigits.endsWith(rightDigits) || rightDigits.endsWith(leftDigits)) return true;
+      }
+    }
   }
   return false;
 }
