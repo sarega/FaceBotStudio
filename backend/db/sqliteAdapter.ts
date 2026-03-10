@@ -637,6 +637,9 @@ export class SqliteAppDatabase implements AppDatabase {
     return {
       ...base,
       effective_status: effectiveStatus,
+      event_date: settings.event_date || "",
+      event_end_date: settings.event_end_date || "",
+      event_timezone: settings.event_timezone || "",
       registration_availability: eventState.registrationStatus === "open" && isCapacityFull ? "full" : eventState.registrationStatus,
       registration_limit: registrationLimit,
       active_registration_count: activeCount,

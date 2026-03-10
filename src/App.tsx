@@ -122,6 +122,7 @@ type AppTab = "event" | "design" | "test" | "agent" | "logs" | "settings" | "tea
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
+type EventWorkspaceSort = "event_start_desc" | "name_asc" | "modified_desc";
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
 type BannerTone = "neutral" | "blue" | "emerald" | "amber" | "rose";
@@ -889,6 +890,7 @@ function getDefaultRegistrationCloseDate(startValue: string | undefined) {
 }
 
 const DEFAULT_TIMEZONE = "Asia/Bangkok";
+const EVENT_NAME_COLLATOR = new Intl.Collator(["th", "en"], { numeric: true, sensitivity: "base" });
 
 function parseLineTraceMessage(text: string) {
   const match = String(text || "").match(/^\[line:([a-z-]+)\]\s*(.*)$/i);
@@ -1245,6 +1247,38 @@ function getEventWorkspaceTimestamp(event: EventRecord) {
   if (!Number.isNaN(updatedAt)) return updatedAt;
   const createdAt = Date.parse(String(event.created_at || ""));
   return Number.isNaN(createdAt) ? 0 : createdAt;
+}
+
+function getEventWorkspaceStartTimestamp(event: EventRecord) {
+  const parsed = parseDateTimeLocalValue(event.event_date || "");
+  if (parsed) return parsed.getTime();
+  return Number.NEGATIVE_INFINITY;
+}
+
+function compareEventWorkspaceRecords(left: EventRecord, right: EventRecord, sortMode: EventWorkspaceSort) {
+  if (sortMode === "name_asc") {
+    const byName = EVENT_NAME_COLLATOR.compare(left.name, right.name);
+    if (byName !== 0) return byName;
+    return getEventWorkspaceTimestamp(right) - getEventWorkspaceTimestamp(left);
+  }
+  if (sortMode === "modified_desc") {
+    const byModified = getEventWorkspaceTimestamp(right) - getEventWorkspaceTimestamp(left);
+    if (byModified !== 0) return byModified;
+    return EVENT_NAME_COLLATOR.compare(left.name, right.name);
+  }
+  const leftStart = getEventWorkspaceStartTimestamp(left);
+  const rightStart = getEventWorkspaceStartTimestamp(right);
+  const leftHasStart = Number.isFinite(leftStart);
+  const rightHasStart = Number.isFinite(rightStart);
+  if (leftHasStart && rightHasStart && rightStart !== leftStart) {
+    return rightStart - leftStart;
+  }
+  if (leftHasStart !== rightHasStart) {
+    return leftHasStart ? -1 : 1;
+  }
+  const byModified = getEventWorkspaceTimestamp(right) - getEventWorkspaceTimestamp(left);
+  if (byModified !== 0) return byModified;
+  return EVENT_NAME_COLLATOR.compare(left.name, right.name);
 }
 
 function formatEventWorkspaceDateLabel(value: string | null | undefined) {
@@ -3017,6 +3051,7 @@ export default function App() {
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [eventListQuery, setEventListQuery] = useState("");
   const [eventWorkspaceFilter, setEventWorkspaceFilter] = useState<EventWorkspaceFilter>("all");
+  const [eventWorkspaceSort, setEventWorkspaceSort] = useState<EventWorkspaceSort>("event_start_desc");
   const [registrationListQuery, setRegistrationListQuery] = useState("");
   const [documentListQuery, setDocumentListQuery] = useState("");
   const [logListQuery, setLogListQuery] = useState("");
@@ -3454,11 +3489,6 @@ export default function App() {
   const inactiveEvents = events.filter((event) => event.effective_status === "inactive");
   const nonHistoricalEvents = [...workingEvents, ...inactiveEvents];
   const queryMatchedEvents = [...events]
-    .sort((left, right) => {
-      const byRecency = getEventWorkspaceTimestamp(right) - getEventWorkspaceTimestamp(left);
-      if (byRecency !== 0) return byRecency;
-      return left.name.localeCompare(right.name);
-    })
     .filter((event) =>
       matchesSearchQuery(deferredEventListQuery, [
         event.name,
@@ -3466,7 +3496,8 @@ export default function App() {
         getEventStatusLabel(event.effective_status),
         getRegistrationAvailabilityLabel(event.registration_availability),
       ]),
-    );
+    )
+    .sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
   const eventWorkspaceCounts = {
     all: queryMatchedEvents.length,
     active: queryMatchedEvents.filter((event) => event.effective_status === "active").length,
@@ -3488,7 +3519,9 @@ export default function App() {
     (event) => event.effective_status === "closed" || event.effective_status === "cancelled",
   );
   const recentHistoricalEvents = filteredHistoricalEvents.slice(0, 6);
-  const historyEventGroups = filteredHistoricalEvents.slice(6).reduce<
+  const historyEventGroups = filteredHistoricalEvents
+    .slice(6)
+    .reduce<
     Array<{ key: string; label: string; events: EventRecord[] }>
   >((groups, event) => {
     const key = getEventHistoryGroupKey(event.updated_at || event.created_at);
@@ -3503,7 +3536,16 @@ export default function App() {
       events: [event],
     });
     return groups;
-  }, []);
+  }, [])
+    .map((group) => ({
+      ...group,
+      events: [...group.events].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort)),
+    }))
+    .sort((left, right) => {
+      const leftTimestamp = Math.max(...left.events.map((event) => getEventWorkspaceTimestamp(event)));
+      const rightTimestamp = Math.max(...right.events.map((event) => getEventWorkspaceTimestamp(event)));
+      return rightTimestamp - leftTimestamp;
+    });
   const eventWorkspaceFilterOptions: Array<{ id: EventWorkspaceFilter; label: string; count: number }> = [
     { id: "all", label: "All", count: eventWorkspaceCounts.all },
     { id: "active", label: "Live", count: eventWorkspaceCounts.active },
@@ -3532,7 +3574,7 @@ export default function App() {
     if (selectedEvent && !base.some((event) => event.id === selectedEvent.id)) {
       base.unshift(selectedEvent);
     }
-    return base;
+    return [...base].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
   })();
   const eventStatusToggle = (() => {
     if (!selectedEvent) {
@@ -11367,23 +11409,37 @@ export default function App() {
                     )}
 
                     <div className="space-y-3">
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input
-                          value={eventListQuery}
-                          onChange={(e) => setEventListQuery(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Search events by name, slug, or status"
-                        />
-                        {eventListQuery && (
-                          <button
-                            onClick={() => setEventListQuery("")}
-                            className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                            aria-label="Clear event search"
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <div className="relative min-w-0 flex-1">
+                          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                          <input
+                            value={eventListQuery}
+                            onChange={(e) => setEventListQuery(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Search events by name, slug, or status"
+                          />
+                          {eventListQuery && (
+                            <button
+                              onClick={() => setEventListQuery("")}
+                              className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
+                              aria-label="Clear event search"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="sm:w-56">
+                          <select
+                            value={eventWorkspaceSort}
+                            onChange={(e) => setEventWorkspaceSort(e.target.value as EventWorkspaceSort)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            aria-label="Sort events"
                           >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        )}
+                            <option value="event_start_desc">Event Start</option>
+                            <option value="name_asc">Alphabetical</option>
+                            <option value="modified_desc">Modified Time</option>
+                          </select>
+                        </div>
                       </div>
 
                       <div className="flex flex-wrap gap-2">

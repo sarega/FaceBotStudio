@@ -150,6 +150,9 @@ export interface EventRow {
   slug: string;
   status: ManualEventStatus;
   effective_status: EventStatus;
+  event_date?: string;
+  event_end_date?: string;
+  event_timezone?: string;
   registration_availability?: "open" | "not_started" | "closed" | "invalid" | "full";
   registration_limit?: number | null;
   active_registration_count?: number;
