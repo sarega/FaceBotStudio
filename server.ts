@@ -106,6 +106,10 @@ const FAILED_INBOUND_TURN_TTL_MS = Math.max(
   60000,
   Number.parseInt(process.env.FAILED_INBOUND_TURN_TTL_MS || String(1000 * 60 * 60 * 6), 10) || 1000 * 60 * 60 * 6,
 );
+const PENDING_CANCELLATION_INTENT_TTL_MS = Math.max(
+  60000,
+  Number.parseInt(process.env.PENDING_CANCELLATION_INTENT_TTL_MS || String(1000 * 60 * 30), 10) || 1000 * 60 * 30,
+);
 const BOT_TEMPORARY_FAILURE_MESSAGE = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
 const PUBLIC_CHAT_ATTENTION_SUPPRESSION_MS = 5 * 60 * 1000;
 const IS_PRODUCTION = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
@@ -251,6 +255,14 @@ type FailedInboundTurn = {
   reason?: string;
 };
 
+type PendingCancellationIntent = {
+  senderId: string;
+  eventId: string;
+  registrationId: string;
+  attendeeName: string;
+  createdAt: number;
+};
+
 type AuthContext = {
   sessionId: string;
   tokenHash: string;
@@ -303,6 +315,7 @@ const inboundConversationActivity = new Map<string, number>();
 const inboundReservedMessageIds = new Map<string, { messageId: number; expiresAt: number }>();
 const failedInboundTurns = new Map<string, FailedInboundTurn>();
 const publicChatAttentionSuppression = new Map<string, number>();
+const pendingCancellationIntents = new Map<string, PendingCancellationIntent>();
 const ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES = 120;
 let adminAgentSharedHistory: ChatHistoryMessage[] = [];
 
@@ -417,7 +430,9 @@ function getSystemInstruction(
     "Politely ask for any missing information one by one.",
     "If registration fails (e.g. limit reached or period closed), explain why to the user.",
     "If registration is rejected because the same first+last name already exists, explain that this event blocks duplicate full names and ask for a different attendee name.",
-    "If a user wants to cancel, use the cancelRegistration tool with their ID.",
+    "If a user wants to cancel, only cancel registrations for the current event conversation. Never assume a cancellation should affect another event.",
+    "If the user does not have a Registration ID, ask for the attendee's full name plus phone number or email. On channels like Facebook or LINE, you may also use the current chat sender to narrow the match, but still stay within the current event only.",
+    "When you identify a single attendee to cancel, confirm the exact attendee first. Only after the user explicitly confirms should you call cancelRegistration to complete the cancellation.",
   ].join("\n\n");
 }
 
@@ -479,6 +494,50 @@ function getFailedInboundTurn(conversationKey: string, now = Date.now()) {
     return null;
   }
   return cached;
+}
+
+function buildPendingCancellationIntentKey(senderId: string, eventId: string) {
+  return `${normalizeOptionalText(eventId)}:${normalizeOptionalText(senderId)}`;
+}
+
+function prunePendingCancellationIntents(now = Date.now()) {
+  if (pendingCancellationIntents.size === 0) return;
+  for (const [key, intent] of pendingCancellationIntents.entries()) {
+    if (now - intent.createdAt > PENDING_CANCELLATION_INTENT_TTL_MS) {
+      pendingCancellationIntents.delete(key);
+    }
+  }
+}
+
+function rememberPendingCancellationIntent(intent: PendingCancellationIntent) {
+  const now = Date.now();
+  prunePendingCancellationIntents(now);
+  pendingCancellationIntents.set(buildPendingCancellationIntentKey(intent.senderId, intent.eventId), {
+    ...intent,
+    createdAt: now,
+  });
+  if (pendingCancellationIntents.size > 4000) {
+    const keys = [...pendingCancellationIntents.keys()].slice(0, 500);
+    for (const key of keys) {
+      pendingCancellationIntents.delete(key);
+    }
+  }
+}
+
+function getPendingCancellationIntent(senderId: string, eventId: string) {
+  prunePendingCancellationIntents();
+  const key = buildPendingCancellationIntentKey(senderId, eventId);
+  const intent = pendingCancellationIntents.get(key);
+  if (!intent) return null;
+  if (Date.now() - intent.createdAt > PENDING_CANCELLATION_INTENT_TTL_MS) {
+    pendingCancellationIntents.delete(key);
+    return null;
+  }
+  return intent;
+}
+
+function clearPendingCancellationIntent(senderId: string, eventId: string) {
+  pendingCancellationIntents.delete(buildPendingCancellationIntentKey(senderId, eventId));
 }
 
 function markInboundConversationActivity(conversationKey: string, activityAt = Date.now()) {
@@ -1053,6 +1112,45 @@ function normalizeComparableText(value: unknown) {
 function normalizeOptionalText(value: unknown) {
   const normalized = String(value ?? "").trim();
   return normalized || "";
+}
+
+const NON_ASCII_DIGIT_MAP: Record<string, string> = {
+  "๐": "0",
+  "๑": "1",
+  "๒": "2",
+  "๓": "3",
+  "๔": "4",
+  "๕": "5",
+  "๖": "6",
+  "๗": "7",
+  "๘": "8",
+  "๙": "9",
+  "٠": "0",
+  "١": "1",
+  "٢": "2",
+  "٣": "3",
+  "٤": "4",
+  "٥": "5",
+  "٦": "6",
+  "٧": "7",
+  "٨": "8",
+  "٩": "9",
+  "۰": "0",
+  "۱": "1",
+  "۲": "2",
+  "۳": "3",
+  "۴": "4",
+  "۵": "5",
+  "۶": "6",
+  "۷": "7",
+  "۸": "8",
+  "۹": "9",
+};
+
+function normalizeAsciiDigits(value: unknown) {
+  const normalized = String(value ?? "").normalize("NFKC");
+  if (!normalized) return "";
+  return Array.from(normalized).map((char) => NON_ASCII_DIGIT_MAP[char] || char).join("");
 }
 
 function detectPublicChatAttentionReason(inputText: string, replyText: string): PublicChatAttentionReason | null {
@@ -2094,10 +2192,38 @@ function normalizePublicSlug(rawValue: unknown) {
 }
 
 const DEFAULT_PUBLIC_UPLOADS_ROOT_DIR = path.join(__dirname, "public", "uploads");
-const PUBLIC_UPLOADS_ROOT_DIR = path.resolve(
-  String(process.env.PUBLIC_UPLOADS_DIR || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR).trim() || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR,
-);
 const PUBLIC_POSTER_MAX_BYTES = 2 * 1024 * 1024;
+const IS_RAILWAY_RUNTIME = Boolean(
+  normalizeOptionalText(process.env.RAILWAY_ENVIRONMENT)
+  || normalizeOptionalText(process.env.RAILWAY_SERVICE_ID)
+  || normalizeOptionalText(process.env.RAILWAY_PROJECT_ID),
+);
+
+function resolvePublicUploadsRootDir() {
+  const configuredRoot = path.resolve(
+    String(process.env.PUBLIC_UPLOADS_DIR || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR).trim() || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR,
+  );
+  const ensureWritableRoot = (rootDir: string) => {
+    const posterDir = path.join(rootDir, "event-posters");
+    mkdirSync(posterDir, { recursive: true });
+    return rootDir;
+  };
+
+  try {
+    return ensureWritableRoot(configuredRoot);
+  } catch (error) {
+    if (IS_RAILWAY_RUNTIME || configuredRoot === DEFAULT_PUBLIC_UPLOADS_ROOT_DIR) {
+      throw error;
+    }
+
+    console.warn(
+      `[uploads] PUBLIC_UPLOADS_DIR "${configuredRoot}" is unavailable in local runtime. Falling back to "${DEFAULT_PUBLIC_UPLOADS_ROOT_DIR}".`,
+    );
+    return ensureWritableRoot(DEFAULT_PUBLIC_UPLOADS_ROOT_DIR);
+  }
+}
+
+const PUBLIC_UPLOADS_ROOT_DIR = resolvePublicUploadsRootDir();
 const PUBLIC_POSTER_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "event-posters");
 
 function getPosterExtensionFromMimeType(mimeType: string) {
@@ -2126,7 +2252,11 @@ function resolvePublicPosterAbsolutePath(relativeUrl: string) {
 }
 
 function normalizeComparablePhone(value: unknown) {
-  return normalizeOptionalText(value).replace(/\D/g, "");
+  return normalizeAsciiDigits(normalizeOptionalText(value)).replace(/\D/g, "");
+}
+
+function resolvePublicTicketRecoveryMode(value: unknown) {
+  return normalizeComparableText(value) === "verified_contact" ? "verified_contact" as const : "shared_contact" as const;
 }
 
 function buildComparablePhoneVariants(value: unknown) {
@@ -2177,6 +2307,348 @@ function phonesRoughlyMatch(left: unknown, right: unknown) {
   return false;
 }
 
+function isActiveLookupRegistration(row: RegistrationRow) {
+  return normalizeComparableText(row.status) !== "cancelled";
+}
+
+function isPublicLookupLegacyEventMatch(row: RegistrationRow, eventId: string) {
+  const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
+  const rowEventId = normalizeOptionalText(row.event_id) || DEFAULT_EVENT_ID;
+  if (rowEventId === normalizedEventId) return true;
+  if (rowEventId !== DEFAULT_EVENT_ID) return false;
+
+  const senderId = normalizeOptionalText(row.sender_id);
+  if (!senderId) return false;
+  return senderId.startsWith(`public-web:${normalizedEventId}:`) || senderId.includes(`:${normalizedEventId}:`);
+}
+
+function buildPublicLookupIdentityKey(row: RegistrationRow) {
+  const nameKey = normalizeComparableText(`${row.first_name || ""} ${row.last_name || ""}`);
+  const phoneVariants = buildComparablePhoneVariants(row.phone).sort();
+  const phoneKey = phoneVariants[0] || normalizeComparablePhone(row.phone);
+  const emailKey = normalizeComparableText(row.email);
+  return [nameKey, phoneKey, emailKey].join("|");
+}
+
+function countDistinctPublicLookupIdentities(rows: RegistrationRow[]) {
+  return new Set(rows.map(buildPublicLookupIdentityKey)).size;
+}
+
+function matchesPublicLookupAttendeeName(row: RegistrationRow, rawName: string) {
+  const normalizedQuery = normalizeComparableText(rawName);
+  if (!normalizedQuery) return false;
+
+  const fullName = normalizeComparableText(`${row.first_name || ""} ${row.last_name || ""}`);
+  if (!fullName) return false;
+  if (fullName === normalizedQuery || fullName.includes(normalizedQuery) || normalizedQuery.includes(fullName)) {
+    return true;
+  }
+
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  if (queryTokens.length === 0) return false;
+  return queryTokens.every((token) => fullName.includes(token));
+}
+
+function sortPublicLookupRows(rows: RegistrationRow[], eventId: string) {
+  const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
+  return rows.slice().sort((left, right) => {
+    const leftEventId = normalizeOptionalText(left.event_id) || DEFAULT_EVENT_ID;
+    const rightEventId = normalizeOptionalText(right.event_id) || DEFAULT_EVENT_ID;
+    const leftPrimary = leftEventId === normalizedEventId ? 1 : 0;
+    const rightPrimary = rightEventId === normalizedEventId ? 1 : 0;
+    if (leftPrimary !== rightPrimary) return rightPrimary - leftPrimary;
+
+    const leftLegacy = isPublicLookupLegacyEventMatch(left, normalizedEventId) ? 1 : 0;
+    const rightLegacy = isPublicLookupLegacyEventMatch(right, normalizedEventId) ? 1 : 0;
+    if (leftLegacy !== rightLegacy) return rightLegacy - leftLegacy;
+
+    const leftStatus = normalizeComparableText(left.status) === "registered" ? 1 : 0;
+    const rightStatus = normalizeComparableText(right.status) === "registered" ? 1 : 0;
+    if (leftStatus !== rightStatus) return rightStatus - leftStatus;
+
+    const leftTs = Date.parse(String(left.timestamp || ""));
+    const rightTs = Date.parse(String(right.timestamp || ""));
+    if (Number.isFinite(leftTs) && Number.isFinite(rightTs) && leftTs !== rightTs) {
+      return rightTs - leftTs;
+    }
+
+    return String(right.id || "").localeCompare(String(left.id || ""));
+  });
+}
+
+function resolveSinglePublicLookupMatch(rows: RegistrationRow[], eventId: string) {
+  const sorted = sortPublicLookupRows(rows, eventId);
+  if (sorted.length === 0) {
+    return {
+      status: "none" as const,
+      registration: null,
+      scopedMatchCount: 0,
+    };
+  }
+
+  const exactScoped = sorted.filter((row) => {
+    const rowEventId = normalizeOptionalText(row.event_id) || DEFAULT_EVENT_ID;
+    return rowEventId === (normalizeOptionalText(eventId) || DEFAULT_EVENT_ID);
+  });
+
+  if (exactScoped.length === 1) {
+    return {
+      status: "single" as const,
+      registration: exactScoped[0],
+      scopedMatchCount: exactScoped.length,
+    };
+  }
+
+  if (exactScoped.length > 1) {
+    const identityKeys = new Set(exactScoped.map(buildPublicLookupIdentityKey));
+    if (identityKeys.size === 1) {
+      return {
+        status: "single" as const,
+        registration: sortPublicLookupRows(exactScoped, eventId)[0],
+        scopedMatchCount: exactScoped.length,
+      };
+    }
+    return {
+      status: "ambiguous" as const,
+      registration: null,
+      scopedMatchCount: exactScoped.length,
+    };
+  }
+
+  const legacyScoped = sorted.filter((row) => isPublicLookupLegacyEventMatch(row, eventId));
+  if (legacyScoped.length === 1) {
+    return {
+      status: "single" as const,
+      registration: legacyScoped[0],
+      scopedMatchCount: legacyScoped.length,
+    };
+  }
+
+  if (legacyScoped.length > 1) {
+    const identityKeys = new Set(legacyScoped.map(buildPublicLookupIdentityKey));
+    if (identityKeys.size === 1) {
+      return {
+        status: "single" as const,
+        registration: sortPublicLookupRows(legacyScoped, eventId)[0],
+        scopedMatchCount: legacyScoped.length,
+      };
+    }
+    return {
+      status: "ambiguous" as const,
+      registration: null,
+      scopedMatchCount: legacyScoped.length,
+    };
+  }
+
+  return {
+    status: "none" as const,
+    registration: null,
+    scopedMatchCount: 0,
+  };
+}
+
+function hasCancellationConfirmationText(value: unknown) {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return false;
+
+  const negativePatterns = [
+    "ไม่ยืนยัน",
+    "ยังไม่",
+    "ไม่ต้อง",
+    "ไม่เอา",
+    "ไม่ใช่",
+    "do not",
+    "don't",
+    "not yet",
+    "not now",
+    "no thanks",
+    "nope",
+  ];
+  if (negativePatterns.some((pattern) => normalized.includes(pattern))) {
+    return false;
+  }
+
+  const explicitPatterns = [
+    "ยืนยัน",
+    "ยกเลิกเลย",
+    "ยกเลิกได้เลย",
+    "confirm",
+    "confirmed",
+    "go ahead",
+    "proceed",
+    "do it",
+    "cancel it",
+    "cancel them",
+  ];
+  if (explicitPatterns.some((pattern) => normalized.includes(pattern))) {
+    return true;
+  }
+
+  return ["yes", "ใช่", "ครับ", "ค่ะ", "โอเค", "ok", "ตกลง", "ได้เลย"].includes(normalized);
+}
+
+function filterCancellationRowsByProvidedFields(
+  rows: RegistrationRow[],
+  filters: { phone?: string; email?: string; fullName?: string },
+) {
+  const normalizedEmail = normalizeComparableText(filters.email);
+  const normalizedFullName = normalizeOptionalText(filters.fullName);
+  return rows.filter((row) => {
+    if (filters.phone && !phonesRoughlyMatch(row.phone, filters.phone)) {
+      return false;
+    }
+    if (normalizedEmail && normalizeComparableText(row.email) !== normalizedEmail) {
+      return false;
+    }
+    if (normalizedFullName && !matchesPublicLookupAttendeeName(row, normalizedFullName)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+async function resolveAttendeeCancellationTarget(options: {
+  eventId: string;
+  senderId: string;
+  registrationId?: string;
+  phone?: string;
+  email?: string;
+  fullName?: string;
+}) {
+  const eventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
+  const senderId = normalizeOptionalText(options.senderId);
+  const registrationId = normalizeRegistrationId(options.registrationId);
+  const phone = normalizeOptionalText(options.phone);
+  const email = normalizeOptionalText(options.email);
+  const fullName = normalizeOptionalText(options.fullName);
+
+  if (registrationId) {
+    const registration = await getRegistrationById(registrationId);
+    if (!registration) {
+      return {
+        status: "not_found" as const,
+        message: "I could not find that Registration ID.",
+      };
+    }
+    const registrationEventId = normalizeOptionalText(registration.event_id) || DEFAULT_EVENT_ID;
+    if (registrationEventId !== eventId) {
+      return {
+        status: "event_mismatch" as const,
+        registration,
+        message: "That Registration ID belongs to a different event. Do not cancel it from this conversation.",
+      };
+    }
+    if (normalizeComparableText(registration.status) === "cancelled") {
+      return {
+        status: "already_cancelled" as const,
+        registration,
+        message: "That registration is already cancelled.",
+      };
+    }
+    return {
+      status: "single" as const,
+      registration,
+      matchSource: "registration_id" as const,
+    };
+  }
+
+  const eventRows = await appDb.listRegistrations(undefined, eventId);
+  const activeRows = eventRows.filter(isActiveLookupRegistration);
+  const senderScopedRows = senderId
+    ? activeRows.filter((row) => normalizeOptionalText(row.sender_id) === senderId)
+    : [];
+  const senderScopedCancelledRows = senderId
+    ? eventRows.filter((row) =>
+        normalizeOptionalText(row.sender_id) === senderId
+        && normalizeComparableText(row.status) === "cancelled")
+    : [];
+  const hasContactLookup = Boolean(phone || email);
+  const hasNameLookup = Boolean(fullName);
+
+  if (senderScopedRows.length > 0 && !hasContactLookup && !hasNameLookup) {
+    const resolvedFromSender = resolveSinglePublicLookupMatch(senderScopedRows, eventId);
+    if (resolvedFromSender.status === "single" && resolvedFromSender.registration) {
+      return {
+        status: "single" as const,
+        registration: resolvedFromSender.registration,
+        matchSource: "sender_only" as const,
+      };
+    }
+    return {
+      status: "needs_name" as const,
+      candidateCount: countDistinctPublicLookupIdentities(senderScopedRows),
+      message: "I found more than one active attendee under this chat for this event. Ask for the attendee full name before cancelling.",
+    };
+  }
+
+  if (!hasContactLookup && !hasNameLookup) {
+    if (senderScopedCancelledRows.length === 1) {
+      return {
+        status: "already_cancelled" as const,
+        registration: senderScopedCancelledRows[0],
+        message: "The attendee linked to this chat is already cancelled for this event.",
+      };
+    }
+    return {
+      status: "needs_identifier" as const,
+      message: senderId
+        ? "Ask for the attendee full name, phone number, email, or Registration ID before cancelling."
+        : "Ask for the Registration ID, or the attendee full name plus phone number or email before cancelling.",
+    };
+  }
+
+  let candidateRows = senderScopedRows.length > 0
+    ? filterCancellationRowsByProvidedFields(senderScopedRows, { phone, email, fullName })
+    : [];
+  let matchSource: "sender_details" | "contact_details" = "sender_details";
+  if (candidateRows.length === 0) {
+    candidateRows = filterCancellationRowsByProvidedFields(activeRows, { phone, email, fullName });
+    matchSource = "contact_details";
+  }
+
+  if (candidateRows.length === 0) {
+    const cancelledRows = filterCancellationRowsByProvidedFields(
+      senderScopedCancelledRows.length > 0 ? senderScopedCancelledRows : eventRows.filter((row) => normalizeComparableText(row.status) === "cancelled"),
+      { phone, email, fullName },
+    );
+    if (cancelledRows.length === 1) {
+      return {
+        status: "already_cancelled" as const,
+        registration: cancelledRows[0],
+        message: "That attendee is already cancelled for this event.",
+      };
+    }
+    return {
+      status: "not_found" as const,
+      message: "I could not find an active registration in this event with that information.",
+    };
+  }
+
+  const distinctCount = countDistinctPublicLookupIdentities(candidateRows);
+  const resolved = resolveSinglePublicLookupMatch(candidateRows, eventId);
+  if (resolved.status === "single" && resolved.registration) {
+    return {
+      status: "single" as const,
+      registration: resolved.registration,
+      matchSource,
+    };
+  }
+
+  if (!hasNameLookup) {
+    return {
+      status: "needs_name" as const,
+      candidateCount: distinctCount,
+      message: "I found multiple attendees in this event under that contact. Ask for the attendee full name before cancelling.",
+    };
+  }
+
+  return {
+    status: "ambiguous" as const,
+    candidateCount: distinctCount,
+    message: "More than one attendee still matches that contact and name in this event. Ask for the Registration ID or hand off to staff.",
+  };
+}
+
 function buildTicketArtifactUrls(registrationId: string) {
   const encodedId = encodeURIComponent(registrationId);
   return {
@@ -2199,6 +2671,7 @@ function buildPublicRegistrationResponsePayload(
     status: options.status,
     message: options.message,
     success_message: options.successMessage,
+    recovery_mode: payload?.event.ticket_recovery_mode || "shared_contact",
     email_backup_enabled: payload?.event.confirmation_email_enabled ?? false,
     map_url: payload?.location.map_url || "",
     registration: {
@@ -2214,6 +2687,27 @@ function buildPublicRegistrationResponsePayload(
       date_label: payload?.event.date_label || "-",
       location: payload?.location.compact || "-",
     },
+  };
+}
+
+function buildPublicNameVerificationRequiredPayload(candidateCount: number, message?: string) {
+  return {
+    status: "name_verification_required" as const,
+    recovery_mode: "shared_contact" as const,
+    requires_name_verification: true,
+    candidate_count: Math.max(2, candidateCount),
+    message:
+      message
+      || `We found multiple attendees under this contact. Enter the attendee name to continue (${Math.max(2, candidateCount)} matches).`,
+  };
+}
+
+function buildPublicVerifiedRecoveryRequiredPayload() {
+  return {
+    status: "verification_required" as const,
+    recovery_mode: "verified_contact" as const,
+    verification_channel: "otp_or_reference" as const,
+    message: "This event requires additional verification before a ticket can be released online. Use the contact options below for manual help for now.",
   };
 }
 
@@ -2318,6 +2812,7 @@ async function buildPublicEventPagePayload(
       date_label: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
       timezone: normalizeTimeZone(settings.event_timezone),
       registration_enabled: isTruthySetting(settings.event_public_registration_enabled ?? "1"),
+      ticket_recovery_mode: resolvePublicTicketRecoveryMode(settings.event_public_ticket_recovery_mode),
       show_seat_availability: isTruthySetting(settings.event_public_show_seat_availability ?? "0"),
       registration_availability: event.registration_availability || capacity.registrationAvailability,
       registration_limit: capacity.limit,
@@ -6879,9 +7374,148 @@ async function cancelRegistration(id: unknown, options?: { source?: string }) {
     source: options?.source || "registration_cancel",
   });
   if (result.updated) {
-    return { statusCode: 200, content: { status: "success" } };
+    return {
+      statusCode: 200,
+      content: {
+        status: "success",
+        registration_id: result.registration?.id || registrationId,
+        attendee_name: result.registration ? formatRegistrationDisplayName(result.registration) : null,
+        previous_status: result.previousStatus || null,
+      },
+    };
   }
   return { statusCode: 404, content: { error: "Registration not found" } };
+}
+
+async function executeAttendeeCancellationTool(
+  senderId: string,
+  eventId: string,
+  args: Record<string, unknown>,
+  incomingText: string,
+) {
+  const explicitConfirmation = hasCancellationConfirmationText(incomingText);
+  const pendingIntent = getPendingCancellationIntent(senderId, eventId);
+  const registrationId = normalizeRegistrationId(args.registration_id);
+  const fullName = normalizeOptionalText(args.full_name)
+    || `${normalizeOptionalText(args.first_name)} ${normalizeOptionalText(args.last_name)}`.trim();
+  const phone = normalizeOptionalText(args.phone);
+  const email = normalizeOptionalText(args.email);
+
+  let resolved:
+    | Awaited<ReturnType<typeof resolveAttendeeCancellationTarget>>
+    | { status: "single"; registration: RegistrationRow; matchSource: "pending_intent" }
+    | null = null;
+
+  if (registrationId || fullName || phone || email) {
+    resolved = await resolveAttendeeCancellationTarget({
+      eventId,
+      senderId,
+      registrationId,
+      fullName,
+      phone,
+      email,
+    });
+  } else if (pendingIntent) {
+    const pendingRegistration = await getRegistrationById(pendingIntent.registrationId);
+    if (
+      pendingRegistration
+      && (normalizeOptionalText(pendingRegistration.event_id) || DEFAULT_EVENT_ID) === (normalizeOptionalText(eventId) || DEFAULT_EVENT_ID)
+      && normalizeComparableText(pendingRegistration.status) !== "cancelled"
+    ) {
+      resolved = {
+        status: "single",
+        registration: pendingRegistration,
+        matchSource: "pending_intent",
+      };
+    } else {
+      clearPendingCancellationIntent(senderId, eventId);
+    }
+  } else {
+    resolved = await resolveAttendeeCancellationTarget({
+      eventId,
+      senderId,
+      registrationId,
+      fullName,
+      phone,
+      email,
+    });
+  }
+
+  if (!resolved) {
+    return {
+      statusCode: 400,
+      content: {
+        status: "needs_identifier",
+        error: "I need the attendee's Registration ID, or their full name plus phone number or email before cancelling.",
+      },
+    };
+  }
+
+  if (resolved.status === "single" && resolved.registration) {
+    const registration = resolved.registration;
+    if (!explicitConfirmation) {
+      rememberPendingCancellationIntent({
+        senderId,
+        eventId,
+        registrationId: registration.id,
+        attendeeName: formatRegistrationDisplayName(registration),
+        createdAt: Date.now(),
+      });
+      return {
+        statusCode: 200,
+        content: {
+          status: "confirmation_required",
+          registration_id: registration.id,
+          attendee_name: formatRegistrationDisplayName(registration),
+          event_id: eventId,
+          message: `Confirm cancellation for ${formatRegistrationDisplayName(registration)} (${registration.id}) in this event before cancelling.`,
+        },
+      };
+    }
+
+    clearPendingCancellationIntent(senderId, eventId);
+    return cancelRegistration(registration.id, { source: "attendee_bot_tool" });
+  }
+
+  if (resolved.status === "already_cancelled") {
+    clearPendingCancellationIntent(senderId, eventId);
+    return {
+      statusCode: 200,
+      content: {
+        status: "already_cancelled",
+        registration_id: resolved.registration?.id || null,
+        attendee_name: resolved.registration ? formatRegistrationDisplayName(resolved.registration) : null,
+        message: resolved.message,
+      },
+    };
+  }
+
+  if (resolved.status === "event_mismatch") {
+    clearPendingCancellationIntent(senderId, eventId);
+    return {
+      statusCode: 409,
+      content: {
+        status: "event_mismatch",
+        registration_id: resolved.registration?.id || null,
+        attendee_name: resolved.registration ? formatRegistrationDisplayName(resolved.registration) : null,
+        error: resolved.message,
+      },
+    };
+  }
+
+  clearPendingCancellationIntent(senderId, eventId);
+  const candidateCount = "candidateCount" in resolved && typeof resolved.candidateCount === "number"
+    ? resolved.candidateCount
+    : undefined;
+  const resolutionMessage = "message" in resolved ? resolved.message : "Unable to resolve the attendee to cancel in this event.";
+  return {
+    statusCode: resolved.status === "ambiguous" ? 409 : 200,
+    content: {
+      status: resolved.status,
+      ...(typeof candidateCount === "number" ? { candidate_count: candidateCount } : {}),
+      error: resolutionMessage,
+    },
+  };
 }
 
 function normalizeOpenRouterUsage(payload: any) {
@@ -6957,16 +7591,32 @@ async function requestOpenRouterChat(
           type: "function",
           function: {
             name: "cancelRegistration",
-            description: "Cancel an existing registration using the Registration ID.",
+            description: "Find and cancel a registration for the current event. If the attendee is identified but not yet explicitly confirmed, this tool will return a confirmation request instead of cancelling.",
             parameters: {
               type: "object",
               properties: {
                 registration_id: {
                   type: "string",
-                  description: "The Registration ID (e.g. REG-XXXXXX)",
+                  description: "The Registration ID (e.g. REG-XXXXXX) if the user has it",
+                },
+                full_name: {
+                  type: "string",
+                  description: "Attendee full name to help identify the correct registration",
+                },
+                phone: {
+                  type: "string",
+                  description: "Attendee phone number to help identify the correct registration",
+                },
+                email: {
+                  type: "string",
+                  description: "Attendee email to help identify the correct registration",
+                },
+                confirm: {
+                  type: "boolean",
+                  description: "Set true only after the user explicitly confirms the cancellation",
                 },
               },
-              required: ["registration_id"],
+              required: [],
             },
           },
         },
@@ -7059,6 +7709,7 @@ async function buildToolResponseMessages(
   senderId: string,
   eventId: string,
   calls: Array<{ name: string; args: Record<string, unknown> }>,
+  incomingText: string,
 ): Promise<ToolExecutionBundle> {
   const messages: ChatHistoryMessage[] = [];
   const ticketRegistrationIds: string[] = [];
@@ -7083,7 +7734,7 @@ async function buildToolResponseMessages(
         ticketRegistrationIds.push(result.content.id);
       }
     } else if (call.name === "cancelRegistration") {
-      const result = await cancelRegistration(call.args.registration_id, { source: "attendee_bot_tool" });
+      const result = await executeAttendeeCancellationTool(senderId, eventId, call.args, incomingText);
       content = result.content;
     } else {
       content = { error: `Unknown tool: ${call.name}` };
@@ -7135,7 +7786,7 @@ async function generateBotReplyForSender(
   let ticketRegistrationIds: string[] = [];
 
   if (firstResponse.functionCalls && firstResponse.functionCalls.length > 0) {
-    const toolResult = await buildToolResponseMessages(senderId, eventId, firstResponse.functionCalls);
+    const toolResult = await buildToolResponseMessages(senderId, eventId, firstResponse.functionCalls, incomingText);
     const toolMessages = toolResult.messages;
     ticketRegistrationIds = toolResult.ticketRegistrationIds;
     const assistantMessage: ChatHistoryMessage = {
@@ -9525,6 +10176,7 @@ async function startServer() {
       const issues: ValidationIssue[] = [];
       const phone = readOptionalString(body, "phone", 64);
       const email = readOptionalString(body, "email", 320);
+      const attendeeName = readOptionalString(body, "attendee_name", 180);
       if (!phone && !email) {
         issues.push({ field: "phone", message: "Enter your phone number or email to find your ticket" });
       }
@@ -9535,10 +10187,16 @@ async function startServer() {
         return respondValidationError(res, issues);
       }
 
-      const rows = await appDb.listRegistrations(undefined, match.event.id);
-      const activeRows = rows.filter((row) => row.status !== "cancelled");
+      const recoveryMode = resolvePublicTicketRecoveryMode(match.settings.event_public_ticket_recovery_mode);
+      if (recoveryMode === "verified_contact") {
+        return res.json(buildPublicVerifiedRecoveryRequiredPayload());
+      }
+
       const normalizedEmail = normalizeComparableText(email);
-      const matches = activeRows.filter((row) => {
+      const filterMatchingRows = (rows: RegistrationRow[]) => rows.filter((row) => {
+        if (!isActiveLookupRegistration(row)) {
+          return false;
+        }
         if (phone && !phonesRoughlyMatch(row.phone, phone)) {
           return false;
         }
@@ -9547,32 +10205,163 @@ async function startServer() {
         }
         return true;
       });
+      const filterRowsByAttendeeName = (rows: RegistrationRow[]) => {
+        if (!attendeeName.trim()) return rows;
+        return rows.filter((row) => matchesPublicLookupAttendeeName(row, attendeeName));
+      };
 
-      if (matches.length === 0) {
+      const scopedRows = await appDb.listRegistrations(undefined, match.event.id);
+      const scopedMatches = filterMatchingRows(scopedRows);
+      const scopedCandidateCount = countDistinctPublicLookupIdentities(scopedMatches);
+      const resolvedScoped = resolveSinglePublicLookupMatch(scopedMatches, match.event.id);
+      if (resolvedScoped.status === "single" && resolvedScoped.registration) {
+        const registration = resolvedScoped.registration;
+        await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", registration.id, {
+          event_id: match.event.id,
+          public_slug: payload.event.slug,
+          lookup_phone: phone ? normalizeComparablePhone(phone) : null,
+          lookup_email: normalizedEmail || null,
+          match_source: normalizeOptionalText(registration.event_id) === normalizeOptionalText(match.event.id) ? "event" : "legacy-sender-fallback",
+          scoped_match_count: resolvedScoped.scopedMatchCount,
+        });
+        return res.json(
+          buildPublicRegistrationResponsePayload(payload, registration, {
+            status: "recovered",
+            message: "We found your ticket",
+            successMessage: "We found your ticket. Save it again below.",
+          }),
+        );
+      }
+
+      if (resolvedScoped.status === "ambiguous") {
+        const namedScopedMatches = filterRowsByAttendeeName(scopedMatches);
+        if (!attendeeName.trim()) {
+          return res.json(buildPublicNameVerificationRequiredPayload(
+            scopedCandidateCount,
+            "We found more than one attendee under this contact in this event. Enter the attendee name to continue.",
+          ));
+        }
+        if (namedScopedMatches.length === 0) {
+          return res.status(404).json({
+            error: "We found tickets under this contact in this event, but none matched that attendee name.",
+          });
+        }
+        const resolvedNamedScoped = resolveSinglePublicLookupMatch(namedScopedMatches, match.event.id);
+        if (resolvedNamedScoped.status === "single" && resolvedNamedScoped.registration) {
+          const registration = resolvedNamedScoped.registration;
+          await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", registration.id, {
+            event_id: match.event.id,
+            public_slug: payload.event.slug,
+            lookup_phone: phone ? normalizeComparablePhone(phone) : null,
+            lookup_email: normalizedEmail || null,
+            lookup_attendee_name: normalizeComparableText(attendeeName),
+            match_source: normalizeOptionalText(registration.event_id) === normalizeOptionalText(match.event.id) ? "event-name-verified" : "legacy-sender-name-verified",
+            scoped_match_count: resolvedNamedScoped.scopedMatchCount,
+          });
+          return res.json(
+            buildPublicRegistrationResponsePayload(payload, registration, {
+              status: "recovered",
+              message: "We found your ticket",
+              successMessage: "We found your ticket. Save it again below.",
+            }),
+          );
+        }
+        return res.status(409).json({
+          error: "More than one attendee still matches that contact and name. Please use the contact options on this page for manual help.",
+        });
+      }
+
+      const globalRows = await appDb.listRegistrations();
+      const globalMatches = filterMatchingRows(globalRows);
+      const globalCandidateCount = countDistinctPublicLookupIdentities(globalMatches);
+      const globalResolved = resolveSinglePublicLookupMatch(globalMatches, match.event.id);
+
+      if (globalResolved.status === "single" && globalResolved.registration) {
+        const recoveredRegistration = globalResolved.registration;
+        if (isPublicLookupLegacyEventMatch(recoveredRegistration, match.event.id)) {
+          await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", recoveredRegistration.id, {
+            event_id: match.event.id,
+            public_slug: payload.event.slug,
+            lookup_phone: phone ? normalizeComparablePhone(phone) : null,
+            lookup_email: normalizedEmail || null,
+            match_source: "legacy-global-fallback",
+            global_match_count: globalMatches.length,
+          });
+          return res.json(
+            buildPublicRegistrationResponsePayload(payload, recoveredRegistration, {
+              status: "recovered",
+              message: "We found your ticket",
+              successMessage: "We found your ticket. Save it again below.",
+            }),
+          );
+        }
+      }
+
+      if (globalMatches.length === 0) {
         return res.status(404).json({
           error: "No ticket was found for that phone number or email in this event",
         });
       }
-      if (matches.length > 1) {
+
+      const matchedEventIds = [...new Set(
+        globalMatches
+          .map((row) => normalizeOptionalText(row.event_id) || DEFAULT_EVENT_ID)
+          .filter(Boolean),
+      )];
+      if (matchedEventIds.length === 1 && matchedEventIds[0] !== (normalizeOptionalText(match.event.id) || DEFAULT_EVENT_ID)) {
+        return res.status(404).json({
+          error: "A ticket was found with these details, but it belongs to a different event. Please open the correct event page or use the contact options below.",
+        });
+      }
+
+      if (!attendeeName.trim() && globalCandidateCount > 1) {
+        return res.json(buildPublicNameVerificationRequiredPayload(
+          globalCandidateCount,
+          "We found more than one attendee under this contact. Enter the attendee name to continue.",
+        ));
+      }
+
+      if (attendeeName.trim()) {
+        const namedGlobalMatches = filterRowsByAttendeeName(globalMatches);
+        if (namedGlobalMatches.length === 0) {
+          return res.status(404).json({
+            error: "We found tickets under this contact, but none matched that attendee name in this event.",
+          });
+        }
+
+        const resolvedNamedGlobal = resolveSinglePublicLookupMatch(namedGlobalMatches, match.event.id);
+        if (resolvedNamedGlobal.status === "single" && resolvedNamedGlobal.registration) {
+          const recoveredRegistration = resolvedNamedGlobal.registration;
+          if (isPublicLookupLegacyEventMatch(recoveredRegistration, match.event.id)) {
+            await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", recoveredRegistration.id, {
+              event_id: match.event.id,
+              public_slug: payload.event.slug,
+              lookup_phone: phone ? normalizeComparablePhone(phone) : null,
+              lookup_email: normalizedEmail || null,
+              lookup_attendee_name: normalizeComparableText(attendeeName),
+              match_source: "legacy-global-name-verified",
+              global_match_count: namedGlobalMatches.length,
+            });
+            return res.json(
+              buildPublicRegistrationResponsePayload(payload, recoveredRegistration, {
+                status: "recovered",
+                message: "We found your ticket",
+                successMessage: "We found your ticket. Save it again below.",
+              }),
+            );
+          }
+        }
+      }
+
+      if (globalResolved.status === "ambiguous" || globalMatches.length > 1) {
         return res.status(409).json({
           error: "More than one ticket matches these details. Please use the contact options on this page for manual help.",
         });
       }
 
-      const registration = matches[0];
-      await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", registration.id, {
-        event_id: match.event.id,
-        public_slug: payload.event.slug,
-        lookup_phone: phone ? normalizeComparablePhone(phone) : null,
-        lookup_email: normalizedEmail || null,
+      return res.status(404).json({
+        error: "No ticket was found for that phone number or email in this event",
       });
-      return res.json(
-        buildPublicRegistrationResponsePayload(payload, registration, {
-          status: "recovered",
-          message: "We found your ticket",
-          successMessage: "We found your ticket. Save it again below.",
-        }),
-      );
     } catch (error) {
       console.error("Failed to recover public event ticket:", error);
       return res.status(500).json({ error: "Failed to recover ticket" });

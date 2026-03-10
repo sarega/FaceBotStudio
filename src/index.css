@@ -80,6 +80,21 @@
     -webkit-touch-callout: default;
   }
 
+  .public-page-selectable,
+  .public-page-selectable * {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+
+  .public-page-control,
+  .public-page-control *,
+  .public-page-control svg {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
   html.theme-dark body {
     background: #020617;
     color: #e2e8f0;

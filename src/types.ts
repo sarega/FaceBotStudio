@@ -282,6 +282,7 @@ export interface Settings {
   event_public_poster_url: string;
   event_public_summary: string;
   event_public_registration_enabled: string;
+  event_public_ticket_recovery_mode: string;
   event_public_bot_enabled: string;
   event_public_success_message: string;
   event_public_cta_label: string;
@@ -339,6 +340,7 @@ export interface PublicEventPageResponse {
     date_label: string;
     timezone: string;
     registration_enabled: boolean;
+    ticket_recovery_mode: "shared_contact" | "verified_contact";
     show_seat_availability: boolean;
     registration_availability: "open" | "not_started" | "closed" | "invalid" | "full";
     registration_limit: number | null;
@@ -375,10 +377,11 @@ export interface PublicEventPageResponse {
   };
 }
 
-export interface PublicEventRegistrationResponse {
+export interface PublicEventRecoveredRegistrationResponse {
   status: "success" | "duplicate" | "recovered";
   message: string;
   success_message: string;
+  recovery_mode: "shared_contact" | "verified_contact";
   email_backup_enabled: boolean;
   map_url: string;
   registration: {
@@ -398,6 +401,26 @@ export interface PublicEventRegistrationResponse {
     location: string;
   };
 }
+
+export interface PublicEventNameVerificationRequiredResponse {
+  status: "name_verification_required";
+  message: string;
+  recovery_mode: "shared_contact";
+  requires_name_verification: true;
+  candidate_count: number;
+}
+
+export interface PublicEventVerificationRequiredResponse {
+  status: "verification_required";
+  message: string;
+  recovery_mode: "verified_contact";
+  verification_channel: "otp_or_reference";
+}
+
+export type PublicEventRegistrationResponse =
+  | PublicEventRecoveredRegistrationResponse
+  | PublicEventNameVerificationRequiredResponse
+  | PublicEventVerificationRequiredResponse;
 
 export interface PublicEventChatResponse {
   status: "ok";

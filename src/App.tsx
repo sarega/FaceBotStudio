@@ -45,7 +45,7 @@ import {
 import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_WORDS, countApproxWords, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./lib/publicEventPage";
 
@@ -77,6 +77,7 @@ type PublicRegistrationFormState = {
 type PublicTicketLookupFormState = {
   phone: string;
   email: string;
+  attendee_name: string;
 };
 
 type PublicChatMessage = {
@@ -88,6 +89,15 @@ type PublicChatMessage = {
   tickets: PublicEventChatResponse["tickets"];
   serverMessageId?: number;
 };
+
+function isRecoveredPublicRegistrationResult(
+  value: PublicEventRegistrationResponse | null,
+): value is PublicEventRecoveredRegistrationResponse {
+  return Boolean(
+    value
+    && (value.status === "success" || value.status === "duplicate" || value.status === "recovered"),
+  );
+}
 
 interface AuditLogEntry {
   id: number;
@@ -1698,8 +1708,8 @@ function PublicContactActionLink({
 }) {
   const iconClass = compact ? "h-3.5 w-3.5" : "h-4 w-4";
   const baseClass = compact
-    ? "inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-    : "inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600";
+    ? "public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+    : "public-page-control inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600";
 
   return (
     <a href={href} target={kind === "phone" ? undefined : "_blank"} rel={kind === "phone" ? undefined : "noopener noreferrer"} className={baseClass}>
@@ -2356,6 +2366,7 @@ const INITIAL_SETTINGS: Settings = {
   event_public_poster_url: "",
   event_public_summary: "",
   event_public_registration_enabled: "1",
+  event_public_ticket_recovery_mode: "shared_contact",
   event_public_bot_enabled: "1",
   event_public_success_message: "Registration complete. Save your ticket image to your phone now.",
   event_public_cta_label: "Register Now",
@@ -2397,6 +2408,7 @@ function getBlankEventScopedSettings() {
     event_public_poster_url: "",
     event_public_summary: "",
     event_public_registration_enabled: "1",
+    event_public_ticket_recovery_mode: "shared_contact",
     event_public_bot_enabled: "1",
     event_public_success_message: "Registration complete. Save your ticket image to your phone now.",
     event_public_cta_label: "Register Now",
@@ -2436,6 +2448,7 @@ function getBlankEventScopedSettings() {
     | "event_public_poster_url"
     | "event_public_summary"
     | "event_public_registration_enabled"
+    | "event_public_ticket_recovery_mode"
     | "event_public_bot_enabled"
     | "event_public_success_message"
     | "event_public_cta_label"
@@ -2483,6 +2496,7 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_poster_url",
   "event_public_summary",
   "event_public_registration_enabled",
+  "event_public_ticket_recovery_mode",
   "event_public_bot_enabled",
   "event_public_success_message",
   "event_public_cta_label",
@@ -2660,6 +2674,10 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_registration_enabled === "string" && data.event_public_registration_enabled.trim()
         ? data.event_public_registration_enabled.trim()
         : INITIAL_SETTINGS.event_public_registration_enabled,
+    event_public_ticket_recovery_mode:
+      typeof data.event_public_ticket_recovery_mode === "string" && data.event_public_ticket_recovery_mode.trim()
+        ? data.event_public_ticket_recovery_mode.trim()
+        : INITIAL_SETTINGS.event_public_ticket_recovery_mode,
     event_public_bot_enabled:
       typeof data.event_public_bot_enabled === "string" && data.event_public_bot_enabled.trim()
         ? data.event_public_bot_enabled.trim()
@@ -2846,6 +2864,7 @@ export default function App() {
   const [publicTicketLookupForm, setPublicTicketLookupForm] = useState<PublicTicketLookupFormState>({
     phone: "",
     email: "",
+    attendee_name: "",
   });
   const [publicRegistrationSubmitting, setPublicRegistrationSubmitting] = useState(false);
   const [publicTicketLookupSubmitting, setPublicTicketLookupSubmitting] = useState(false);
@@ -3255,6 +3274,9 @@ export default function App() {
   const publicPageEnabled = settings.event_public_page_enabled === "1";
   const publicShowSeatAvailability = settings.event_public_show_seat_availability === "1";
   const publicRegistrationEnabled = settings.event_public_registration_enabled === "1";
+  const publicTicketRecoveryMode = settings.event_public_ticket_recovery_mode === "verified_contact"
+    ? "verified_contact"
+    : "shared_contact";
   const publicBotEnabled = settings.event_public_bot_enabled === "1";
   const publicPrivacyEnabled = settings.event_public_privacy_enabled === "1";
   const publicContactEnabled = settings.event_public_contact_enabled === "1";
@@ -4323,6 +4345,7 @@ export default function App() {
       setPublicTicketLookupForm({
         phone: "",
         email: "",
+        attendee_name: "",
       });
       setPublicPrivacyOpen(false);
       setPublicChatOpen(false);
@@ -4356,6 +4379,7 @@ export default function App() {
       setPublicTicketLookupForm({
         phone: "",
         email: "",
+        attendee_name: "",
       });
       try {
         const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}`);
@@ -5786,6 +5810,7 @@ export default function App() {
       "event_public_poster_url",
       "event_public_summary",
       "event_public_registration_enabled",
+      "event_public_ticket_recovery_mode",
       "event_public_bot_enabled",
       "event_public_success_message",
       "event_public_cta_label",
@@ -5875,8 +5900,17 @@ export default function App() {
 
   const handlePublicTicketLookupFieldChange = (field: keyof PublicTicketLookupFormState, value: string) => {
     setPublicTicketLookupError("");
+    if (field !== "attendee_name") {
+      setPublicRegistrationResult((current) => {
+        if (current?.status === "name_verification_required" || current?.status === "verification_required") {
+          return null;
+        }
+        return current;
+      });
+    }
     setPublicTicketLookupForm((current) => ({
       ...current,
+      ...(field === "attendee_name" ? {} : { attendee_name: "" }),
       [field]: value,
     }));
   };
@@ -5890,6 +5924,11 @@ export default function App() {
       last_name: "",
       phone: "",
       email: "",
+    });
+    setPublicTicketLookupForm({
+      phone: "",
+      email: "",
+      attendee_name: "",
     });
   };
 
@@ -6039,6 +6078,7 @@ export default function App() {
 
     const phone = publicTicketLookupForm.phone.trim();
     const email = publicTicketLookupForm.email.trim();
+    const attendeeName = publicTicketLookupForm.attendee_name.trim();
     if (!phone && !email) {
       setPublicTicketLookupError("Enter your phone number or email to find your ticket.");
       return;
@@ -6054,6 +6094,7 @@ export default function App() {
         body: JSON.stringify({
           phone,
           email,
+          attendee_name: attendeeName,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -6063,10 +6104,13 @@ export default function App() {
           : "";
         throw new Error(validationMessage || (data as { error?: string }).error || "Failed to find ticket");
       }
-      setPublicRegistrationResult(data as PublicEventRegistrationResponse);
-      window.setTimeout(() => {
-        document.getElementById("public-ticket-ready")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 40);
+      const result = data as PublicEventRegistrationResponse;
+      setPublicRegistrationResult(result);
+      if (result.status === "success" || result.status === "duplicate" || result.status === "recovered") {
+        window.setTimeout(() => {
+          document.getElementById("public-ticket-ready")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 40);
+      }
     } catch (err) {
       setPublicTicketLookupError(err instanceof Error ? err.message : "Failed to find ticket");
     } finally {
@@ -6865,12 +6909,19 @@ export default function App() {
             void Promise.all([fetchRegistrations(selectedEventId), fetchEvents()]);
           } else if (call.name === "cancelRegistration") {
             const { registration_id } = call.args as any;
-            const res = await apiFetch("/api/registrations/cancel", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id: registration_id }),
-            });
-            const result = await res.json();
+            const result = registration_id
+              ? await (async () => {
+                  const res = await apiFetch("/api/registrations/cancel", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ id: registration_id }),
+                  });
+                  return res.json();
+                })()
+              : {
+                  status: "confirmation_required",
+                  error: "Test console only simulates direct cancellation by Registration ID. Use a live channel or public page to test contact-based cancellation.",
+                };
 
             const funcResponseMsg = { 
               role: "model" as const, 
@@ -6885,7 +6936,10 @@ export default function App() {
             
             setTestMessages(prev => [...prev, funcResponseMsg]);
             
-            const followUp = await getChatResponse("Registration " + registration_id + " has been cancelled.", settings, [...history, newModelMsg, funcResponseMsg], selectedEventId);
+            const followUpPrompt = registration_id
+              ? "Registration " + registration_id + " has been cancelled."
+              : "Continue based on the cancellation tool result.";
+            const followUp = await getChatResponse(followUpPrompt, settings, [...history, newModelMsg, funcResponseMsg], selectedEventId);
             setTestMessages(prev => [...prev, { role: "model", parts: followUp.candidates[0].content.parts, timestamp: new Date().toISOString() }]);
             void Promise.all([fetchRegistrations(selectedEventId), fetchEvents()]);
           }
@@ -8560,6 +8614,13 @@ export default function App() {
       && publicEventPage.event.registration_enabled
       && publicEventPage.event.registration_availability === "open",
     );
+    const publicTicketRecoveryMode = publicEventPage?.event.ticket_recovery_mode || "shared_contact";
+    const publicRecoveredRegistrationResult = isRecoveredPublicRegistrationResult(publicRegistrationResult)
+      ? publicRegistrationResult
+      : null;
+    const publicTicketReady = Boolean(publicRecoveredRegistrationResult);
+    const publicNameVerificationRequired = publicRegistrationResult?.status === "name_verification_required";
+    const publicVerifiedRecoveryRequired = publicRegistrationResult?.status === "verification_required";
     const publicAvailabilityHelper = (() => {
       switch (publicEventPage?.event.registration_availability) {
         case "full":
@@ -8576,7 +8637,7 @@ export default function App() {
     })();
 
     return (
-      <div className="min-h-dvh bg-slate-50 text-slate-900 font-sans">
+      <div className="public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans">
         <header className="border-b border-slate-200 bg-white">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6 lg:px-8">
             <div className="flex min-w-0 items-center gap-3">
@@ -8705,7 +8766,7 @@ export default function App() {
                   <div className="flex flex-wrap items-center gap-2.5">
                     <a
                       href="#public-registration"
-                      className="inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
+                      className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                     >
                       {publicEventPage.event.cta_label}
                     </a>
@@ -8714,7 +8775,7 @@ export default function App() {
                         href={publicEventPage.location.map_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                        className="public-page-control inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                       >
                         <ExternalLink className="h-4 w-4" />
                         Open in Maps
@@ -8751,7 +8812,7 @@ export default function App() {
                           href={publicEventPage.location.map_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                          className="public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                         >
                           <Link2 className="h-3.5 w-3.5" />
                           Open in Maps
@@ -8804,7 +8865,7 @@ export default function App() {
 
                 <aside id="public-registration" className="space-y-6 xl:sticky xl:top-6 xl:self-start">
                   <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                    {!publicRegistrationResult ? (
+                    {!publicTicketReady ? (
                       <>
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -8872,7 +8933,7 @@ export default function App() {
                             <button
                               type="submit"
                               disabled={publicRegistrationSubmitting}
-                              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {publicRegistrationSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
                               {publicEventPage.event.cta_label}
@@ -8884,7 +8945,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   onClick={() => setPublicPrivacyOpen(true)}
-                                  className="inline-flex items-center gap-1 font-semibold text-slate-700 transition-colors hover:text-blue-600"
+                                  className="public-page-control inline-flex items-center gap-1 font-semibold text-slate-700 transition-colors hover:text-blue-600"
                                 >
                                   <Lock className="h-3.5 w-3.5" />
                                   {publicEventPage.privacy.label}
@@ -8902,7 +8963,7 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => setPublicPrivacyOpen(true)}
-                                className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-slate-700 transition-colors hover:text-blue-600"
+                              className="public-page-control mt-3 inline-flex items-center gap-1 text-xs font-semibold text-slate-700 transition-colors hover:text-blue-600"
                               >
                                 <Lock className="h-3.5 w-3.5" />
                                 {publicEventPage.privacy.label}
@@ -8916,7 +8977,9 @@ export default function App() {
                             <div>
                               <p className="text-sm font-semibold text-slate-900">Find My Ticket</p>
                               <p className="mt-1 text-sm leading-6 text-slate-500">
-                                Already registered? Enter your phone number or email to load your ticket again.
+                                {publicTicketRecoveryMode === "verified_contact"
+                                  ? "This event is set up for verified ticket recovery. OTP or reference-based release will plug in here for paid events."
+                                  : "Already registered? Enter your phone number or email. If that contact has multiple attendees, we will ask for the attendee name next."}
                               </p>
                             </div>
                             <StatusBadge tone="neutral">Recovery</StatusBadge>
@@ -8945,6 +9008,28 @@ export default function App() {
                                 placeholder="Email address"
                               />
                             </div>
+                            {publicNameVerificationRequired && (
+                              <div>
+                                <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Attendee Name</label>
+                                <input
+                                  value={publicTicketLookupForm.attendee_name}
+                                  onChange={(e) => handlePublicTicketLookupFieldChange("attendee_name", e.target.value)}
+                                  autoComplete="name"
+                                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="Enter the attendee's first and last name"
+                                />
+                              </div>
+                            )}
+                            {publicNameVerificationRequired && publicRegistrationResult && (
+                              <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                                {publicRegistrationResult.message}
+                              </div>
+                            )}
+                            {publicVerifiedRecoveryRequired && publicRegistrationResult && (
+                              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                {publicRegistrationResult.message}
+                              </div>
+                            )}
                             {publicTicketLookupError && (
                               <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                                 {publicTicketLookupError}
@@ -8953,10 +9038,10 @@ export default function App() {
                             <button
                               type="submit"
                               disabled={publicTicketLookupSubmitting}
-                              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {publicTicketLookupSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
-                              Find My Ticket
+                              {publicNameVerificationRequired ? "Verify Attendee Name" : "Find My Ticket"}
                             </button>
                           </form>
                         </div>
@@ -8967,22 +9052,22 @@ export default function App() {
                           <div>
                             <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                               <CheckCircle2 className="h-3.5 w-3.5" />
-                              {publicRegistrationResult.status === "success" ? "Registration complete" : "Ticket found"}
+                              {publicRecoveredRegistrationResult?.status === "success" ? "Registration complete" : "Ticket found"}
                             </div>
                             <h2 className="mt-3 text-lg font-semibold text-slate-900">
-                              {publicRegistrationResult.registration.first_name} {publicRegistrationResult.registration.last_name}
+                              {publicRecoveredRegistrationResult?.registration.first_name} {publicRecoveredRegistrationResult?.registration.last_name}
                             </h2>
                             <p className="mt-1 text-sm leading-6 text-slate-500">
-                              {publicRegistrationResult.success_message}
+                              {publicRecoveredRegistrationResult?.success_message}
                             </p>
                           </div>
                         </div>
 
                         <div className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-50">
-                          <a href={publicRegistrationResult.ticket.png_url} target="_blank" rel="noopener noreferrer">
+                          <a href={publicRecoveredRegistrationResult?.ticket.png_url} target="_blank" rel="noopener noreferrer">
                             <img
-                              src={publicRegistrationResult.ticket.png_url}
-                              alt={`Ticket for ${publicRegistrationResult.registration.id}`}
+                              src={publicRecoveredRegistrationResult?.ticket.png_url}
+                              alt={`Ticket for ${publicRecoveredRegistrationResult?.registration.id}`}
                               className="w-full"
                             />
                           </a>
@@ -8990,28 +9075,28 @@ export default function App() {
 
                         <div className="grid gap-2 sm:grid-cols-2">
                           <a
-                            href={publicRegistrationResult.ticket.png_url}
-                            download={`${publicRegistrationResult.registration.id}.png`}
-                            className="inline-flex items-center justify-center rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                            href={publicRecoveredRegistrationResult?.ticket.png_url}
+                            download={`${publicRecoveredRegistrationResult?.registration.id}.png`}
+                            className="public-page-control inline-flex items-center justify-center rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
                           >
                             Save Ticket Image
                           </a>
-                          {publicRegistrationResult.map_url ? (
+                          {publicRecoveredRegistrationResult?.map_url ? (
                             <a
-                              href={publicRegistrationResult.map_url}
+                              href={publicRecoveredRegistrationResult?.map_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                              className="public-page-control inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                             >
                               <ExternalLink className="h-4 w-4" />
                               View Map
                             </a>
                           ) : (
                             <a
-                              href={publicRegistrationResult.ticket.svg_url}
+                              href={publicRecoveredRegistrationResult?.ticket.svg_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                              className="public-page-control inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                             >
                               <ExternalLink className="h-4 w-4" />
                               Open SVG Copy
@@ -9020,9 +9105,9 @@ export default function App() {
                         </div>
 
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
-                          <p className="font-semibold text-slate-900">{publicRegistrationResult.event.name}</p>
-                          <p className="mt-1">{publicRegistrationResult.event.date_label}</p>
-                          <p className="mt-1">{publicRegistrationResult.event.location}</p>
+                          <p className="font-semibold text-slate-900">{publicRecoveredRegistrationResult?.event.name}</p>
+                          <p className="mt-1">{publicRecoveredRegistrationResult?.event.date_label}</p>
+                          <p className="mt-1">{publicRecoveredRegistrationResult?.event.location}</p>
                           <p className="mt-3 text-xs text-slate-500">
                             Save this image now. Email backup, if configured for this event, will arrive separately.
                           </p>
@@ -9031,9 +9116,9 @@ export default function App() {
                         <button
                           type="button"
                           onClick={resetPublicRegistrationFlow}
-                          className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                          className="public-page-control inline-flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                         >
-                          {publicRegistrationResult.status === "success" ? "Register Another Attendee" : "Back to Registration"}
+                          {publicRecoveredRegistrationResult?.status === "success" ? "Register Another Attendee" : "Back to Registration"}
                         </button>
                       </div>
                     )}
@@ -9093,7 +9178,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setPublicPrivacyOpen(false)}
-                        className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                        className="public-page-control inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
                         aria-label="Close privacy notice"
                       >
                         <X className="h-4 w-4" />
@@ -9131,7 +9216,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setPublicChatOpen(false)}
-                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                        className="public-page-control inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
                         aria-label="Close help chat"
                       >
                         <X className="h-4 w-4" />
@@ -9181,7 +9266,7 @@ export default function App() {
                                             href={ticket.png_url}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                                            className={`public-page-control inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
                                               isAssistant
                                                 ? "bg-blue-600 text-white"
                                                 : "bg-white text-blue-700"
@@ -9196,7 +9281,7 @@ export default function App() {
                                             href={ticket.svg_url}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                                            className={`public-page-control inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${
                                               isAssistant
                                                 ? "border-slate-200 bg-white text-slate-700"
                                                 : "border-blue-200/70 bg-transparent text-white"
@@ -9218,7 +9303,7 @@ export default function App() {
                                     href={message.mapUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                                    className={`public-page-control inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
                                       isAssistant
                                         ? "border border-slate-200 bg-slate-50 text-slate-700"
                                         : "bg-white text-blue-700"
@@ -9260,7 +9345,7 @@ export default function App() {
                         <button
                           type="submit"
                           disabled={publicChatSending || !publicChatInput.trim()}
-                          className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="public-page-control inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                           aria-label="Send message"
                         >
                           {publicChatSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -9301,7 +9386,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setPublicChatOpen((current) => !current)}
-                className="inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_48px_rgba(15,23,42,0.24)] transition-transform hover:-translate-y-0.5"
+                className="public-page-control inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_48px_rgba(15,23,42,0.24)] transition-transform hover:-translate-y-0.5"
               >
                 {publicChatOpen ? <X className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
                 {publicChatOpen ? "Close Help" : "Need Help?"}
@@ -10553,6 +10638,23 @@ export default function App() {
                               </div>
 
                               <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ticket Recovery Mode</label>
+                                <select
+                                  value={settings.event_public_ticket_recovery_mode}
+                                  onChange={(e) => setSettings({ ...settings, event_public_ticket_recovery_mode: e.target.value })}
+                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                  <option value="shared_contact">Shared Contact (free/community events)</option>
+                                  <option value="verified_contact">Verified Recovery (paid events, future OTP/reference flow)</option>
+                                </select>
+                                <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                                  {publicTicketRecoveryMode === "verified_contact"
+                                    ? "Use this to prepare paid events. Online ticket recovery will not auto-release a ticket until OTP or order-reference verification is added."
+                                    : "Best for free events where families may share one phone or email. If multiple attendees use the same contact, the page will ask for the attendee name next."}
+                                </p>
+                              </div>
+
+                              <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Privacy Label</label>
                                 <input
                                   value={settings.event_public_privacy_label}
@@ -10776,6 +10878,14 @@ export default function App() {
                                   <p className="text-sm font-semibold text-blue-900">Success state</p>
                                   <p className="mt-1 text-sm leading-6 text-blue-800">
                                     {settings.event_public_success_message.trim() || INITIAL_SETTINGS.event_public_success_message}
+                                  </p>
+                                </div>
+                                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                                  <p className="text-sm font-semibold text-slate-900">Ticket recovery</p>
+                                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                                    {publicTicketRecoveryMode === "verified_contact"
+                                      ? "Verified recovery mode. Paid events can plug OTP or order-reference verification into this slot later."
+                                      : "Shared-contact mode. If one phone or email is used for multiple attendees, the public page will ask for the attendee name before releasing a ticket."}
                                   </p>
                                 </div>
                                 {publicPrivacyEnabled && (
