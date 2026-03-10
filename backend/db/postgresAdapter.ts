@@ -515,6 +515,9 @@ export class PostgresAppDatabase implements AppDatabase {
     if (event.effective_status === "inactive") {
       return { statusCode: 400, content: { error: "This event is currently inactive" } };
     }
+    if (event.effective_status === "archived") {
+      return { statusCode: 400, content: { error: "This event has been archived" } };
+    }
 
     const settings = await this.getSettingsMap(eventId);
     const eventState = getEventState(settings);

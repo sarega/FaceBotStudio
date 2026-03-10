@@ -3882,6 +3882,7 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
       event.effective_status === "closed" ? "closed จบแล้ว ปิดแล้ว สิ้นสุด" : "",
       event.effective_status === "inactive" ? "inactive ปิดใช้งาน" : "",
       event.effective_status === "cancelled" ? "cancelled canceled ยกเลิก" : "",
+      event.effective_status === "archived" ? "archived archive เก็บเข้าคลัง งานเก่า" : "",
       event.registration_availability === "open" ? "registration open เปิดรับสมัคร ลงทะเบียนได้" : "",
       event.registration_availability === "not_started" ? "registration not started ยังไม่เปิดลงทะเบียน" : "",
       event.registration_availability === "closed" ? "registration closed ปิดรับสมัคร" : "",
@@ -4211,13 +4212,14 @@ function inferAdminAgentRuleToolCall(
   return null;
 }
 
-function normalizeAdminEventStatusInput(value: unknown): "pending" | "active" | "inactive" | "cancelled" | null {
+function normalizeAdminEventStatusInput(value: unknown): "pending" | "active" | "inactive" | "cancelled" | "archived" | null {
   const normalized = normalizeComparableText(value);
-  if (normalized === "pending" || normalized === "active" || normalized === "inactive" || normalized === "cancelled") {
+  if (normalized === "pending" || normalized === "active" || normalized === "inactive" || normalized === "cancelled" || normalized === "archived") {
     return normalized;
   }
   if (normalized === "live") return "active";
   if (normalized === "pause" || normalized === "paused") return "inactive";
+  if (normalized === "archive" || normalized === "archived") return "archived";
   return null;
 }
 
@@ -4531,7 +4533,7 @@ async function requestAdminAgentPlan(
     "When matching by name, pass full_name or first_name/last_name.",
     "Use create_event when admin asks to create a new event from natural language details.",
     "Use update_event_setup to fill event detail/rules fields after event creation.",
-    "Use update_event_status for live/inactive/pending/cancelled updates.",
+    "Use update_event_status for live/inactive/pending/cancelled/archived updates.",
     "Use update_event_context for writing event context notes from admin instructions.",
     "Use find_event when asked to check whether an event exists, or when event name is partial.",
     "Use search_system only when admin asks to search across the whole system.",
@@ -4580,7 +4582,7 @@ async function requestAdminAgentPlan(
               properties: {
                 name: { type: "string" },
                 event_name: { type: "string" },
-                status: { type: "string", enum: ["pending", "active", "inactive", "cancelled"] },
+                status: { type: "string", enum: ["pending", "active", "inactive", "cancelled", "archived"] },
                 event_timezone: { type: "string" },
                 event_venue_name: { type: "string" },
                 venue_name: { type: "string" },
@@ -4649,12 +4651,12 @@ async function requestAdminAgentPlan(
           type: "function",
           function: {
             name: "update_event_status",
-            description: "Update event lifecycle status (pending/active/inactive/cancelled).",
+            description: "Update event lifecycle status (pending/active/inactive/cancelled/archived).",
             parameters: {
               type: "object",
               properties: {
                 event_id: { type: "string" },
-                status: { type: "string", enum: ["pending", "active", "inactive", "cancelled"] },
+                status: { type: "string", enum: ["pending", "active", "inactive", "cancelled", "archived"] },
               },
             },
           },
@@ -5132,7 +5134,7 @@ async function executeAdminAgentToolCall(
       }
       const status = normalizeAdminEventStatusInput(call.args.status);
       if (!status) {
-        throw new Error("Valid event status is required (pending/active/inactive/cancelled)");
+        throw new Error("Valid event status is required (pending/active/inactive/cancelled/archived)");
       }
       const updated = await appDb.updateEvent(targetEventId, { status });
       if (!updated) {
@@ -9464,8 +9466,9 @@ async function startServer() {
         event.effective_status === "closed"
         || event.effective_status === "cancelled"
         || event.effective_status === "inactive"
+        || event.effective_status === "archived"
       ) {
-        return res.status(400).json({ error: "Check-in access cannot be generated for inactive, closed, or cancelled events" });
+        return res.status(400).json({ error: "Check-in access cannot be generated for inactive, archived, closed, or cancelled events" });
       }
 
       const rawToken = createSessionToken();
@@ -9681,6 +9684,73 @@ async function startServer() {
   });
 
   app.post(
+    "/api/events/:id/clone",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ paramKey: "id", allowDefault: true, allowCheckinAccess: false, queryKey: null }),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const sourceEventId = getRequestedEventId(req);
+        const sourceEvent = await appDb.getEventById(sourceEventId);
+        if (!sourceEvent) {
+          return res.status(404).json({ error: "Event not found" });
+        }
+
+        const sourceSettings = await getSettingsMap(sourceEventId);
+        const body = readObjectBody(req);
+        const issues: ValidationIssue[] = [];
+        const requestedName = readOptionalString(body, "name", 180);
+        const cloneName = normalizeOptionalText(requestedName)
+          || `${normalizeOptionalText(sourceSettings.event_name) || sourceEvent.name} Copy`;
+
+        if (!cloneName) {
+          issues.push({ field: "name", message: "Event name is required" });
+          return respondValidationError(res, issues);
+        }
+
+        const clonedEvent = await appDb.createEvent({ name: cloneName });
+        const clonedSettings = Object.fromEntries(
+          EVENT_SETTING_KEYS.map((key) => [key, sourceSettings[key] ?? ""]),
+        );
+        clonedSettings.event_name = cloneName;
+        clonedSettings.event_public_page_enabled = "0";
+        clonedSettings.event_public_slug = "";
+
+        validateEventSettingsPatch(await getSettingsMap(clonedEvent.id), clonedSettings);
+        await appDb.upsertSettings(clonedSettings, clonedEvent.id);
+
+        const refreshedEvent = await appDb.getEventById(clonedEvent.id);
+        if (!refreshedEvent) {
+          throw new Error("Failed to load cloned event");
+        }
+
+        await recordAudit(req, "event.cloned", "event", refreshedEvent.id, {
+          source_event_id: sourceEventId,
+          source_event_name: sourceEvent.name,
+          cloned_name: cloneName,
+          copied_event_settings: EVENT_SETTING_KEYS.length,
+          copied_registrations: 0,
+          copied_channels: 0,
+          copied_documents: 0,
+        });
+
+        return res.status(201).json({
+          event: refreshedEvent,
+          source_event_id: sourceEventId,
+          copied: {
+            event_settings: EVENT_SETTING_KEYS.length,
+            registrations: 0,
+            channels: 0,
+            documents: 0,
+          },
+        });
+      } catch (error) {
+        console.error("Failed to clone event:", error);
+        return res.status(500).json({ error: "Failed to clone event" });
+      }
+    },
+  );
+
+  app.post(
     "/api/events/:id",
     requireRoles(["owner", "admin"]),
     requireEventScope({ paramKey: "id", allowDefault: false, allowCheckinAccess: false, queryKey: null }),
@@ -9695,7 +9765,7 @@ async function startServer() {
         ? readEnumValue(
             { status: statusRaw },
             "status",
-            ["pending", "active", "inactive", "cancelled"] as const,
+            ["pending", "active", "inactive", "cancelled", "archived"] as const,
             issues,
             { required: false, label: "Event status" },
           )
@@ -9912,11 +9982,15 @@ async function startServer() {
       const isNewActiveAssignment = !currentAssignedEventId && Boolean(targetAssignedEventId) && isActive;
       if (
         targetAssignedEvent
-        && (targetAssignedEvent.effective_status === "closed" || targetAssignedEvent.effective_status === "cancelled")
+        && (
+          targetAssignedEvent.effective_status === "closed"
+          || targetAssignedEvent.effective_status === "cancelled"
+          || targetAssignedEvent.effective_status === "archived"
+        )
         && (isAssignmentChanging || isReenable || isNewActiveAssignment)
       ) {
         return res.status(400).json({
-          error: "Closed or cancelled events cannot link or re-enable channels",
+          error: "Archived, closed, or cancelled events cannot link or re-enable channels",
         });
       }
 
@@ -9992,8 +10066,12 @@ async function startServer() {
       if (!targetEvent) {
         return res.status(404).json({ error: "Event not found" });
       }
-      if (targetEvent.effective_status === "closed" || targetEvent.effective_status === "cancelled") {
-        return res.status(400).json({ error: "Closed or cancelled events cannot link channels" });
+      if (
+        targetEvent.effective_status === "closed"
+        || targetEvent.effective_status === "cancelled"
+        || targetEvent.effective_status === "archived"
+      ) {
+        return res.status(400).json({ error: "Archived, closed, or cancelled events cannot link channels" });
       }
 
       const previousEventId = normalizeOptionalText(existingChannel.event_id);

@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import QRCode from "qrcode";
 import { 
+  Archive,
+  ArchiveRestore,
   ArrowDownLeft,
   ArrowUpRight,
   MessageSquare, 
@@ -1195,6 +1197,8 @@ function getEventStatusLabel(status: EventStatus) {
       return "closed";
     case "cancelled":
       return "cancelled";
+    case "archived":
+      return "archived";
     default:
       return status;
   }
@@ -1210,6 +1214,8 @@ function getEventStatusTone(status: EventStatus): BadgeTone {
       return "neutral";
     case "cancelled":
       return "rose";
+    case "archived":
+      return "neutral";
     default:
       return "neutral";
   }
@@ -1227,6 +1233,8 @@ function getEventStatusBadgeClass(status: EventStatus) {
       return "bg-slate-200 text-slate-600";
     case "cancelled":
       return "bg-rose-100 text-rose-700";
+    case "archived":
+      return "bg-slate-200 text-slate-600";
     default:
       return "bg-slate-200 text-slate-600";
   }
@@ -1312,6 +1320,9 @@ function describeRegistrationAvailability(
   if (eventStatus === "pending") {
     return { label: "Pending", tone: "amber" as const, helper: "Launch the event before accepting registrations." };
   }
+  if (eventStatus === "archived") {
+    return { label: "Archived", tone: "neutral" as const, helper: "This event has been archived and is no longer accepting registrations." };
+  }
   if (eventStatus === "inactive") {
     return { label: "Inactive", tone: "neutral" as const, helper: "This event is currently inactive, so registrations stay paused." };
   }
@@ -1374,6 +1385,13 @@ function describeEventOperatorGuard(
       tone: "amber" as const,
       label: "Launch Pending",
       body: "Channels may stay wired, but the bot should explain that registration has not launched yet.",
+    };
+  }
+  if (eventStatus === "archived") {
+    return {
+      tone: "neutral" as const,
+      label: "Archived",
+      body: "This event is archived. Keep channels detached or inactive so no new attendee traffic routes here.",
     };
   }
   if (eventStatus === "inactive") {
@@ -1441,6 +1459,13 @@ function describeCheckinOperatorGuard(
       tone: "neutral" as const,
       label: "Inactive",
       body: "This event is currently inactive. Keep check-in off until the event is live again.",
+    };
+  }
+  if (eventStatus === "archived") {
+    return {
+      tone: "neutral" as const,
+      label: "Archived",
+      body: "This event is archived. Keep check-in disabled and use it only for audit/history review.",
     };
   }
   if (registrationAvailability === "full") {
@@ -2269,7 +2294,8 @@ function EventWorkspaceRow({
     event.registration_availability
     && event.registration_availability !== "open"
     && event.effective_status !== "closed"
-    && event.effective_status !== "cancelled";
+    && event.effective_status !== "cancelled"
+    && event.effective_status !== "archived";
 
   return (
     <button
@@ -3416,11 +3442,14 @@ export default function App() {
     return missing;
   })();
   const selectedEventChannelWritesLocked =
-    selectedEvent?.effective_status === "closed" || selectedEvent?.effective_status === "cancelled";
+    selectedEvent?.effective_status === "closed"
+    || selectedEvent?.effective_status === "cancelled"
+    || selectedEvent?.effective_status === "archived";
   const selectedEventCheckinLocked =
     selectedEvent?.effective_status === "inactive"
     || selectedEvent?.effective_status === "closed"
-    || selectedEvent?.effective_status === "cancelled";
+    || selectedEvent?.effective_status === "cancelled"
+    || selectedEvent?.effective_status === "archived";
   const workingEvents = events.filter((event) => event.effective_status === "active" || event.effective_status === "pending");
   const inactiveEvents = events.filter((event) => event.effective_status === "inactive");
   const nonHistoricalEvents = [...workingEvents, ...inactiveEvents];
@@ -3445,6 +3474,7 @@ export default function App() {
     inactive: queryMatchedEvents.filter((event) => event.effective_status === "inactive").length,
     closed: queryMatchedEvents.filter((event) => event.effective_status === "closed").length,
     cancelled: queryMatchedEvents.filter((event) => event.effective_status === "cancelled").length,
+    archived: queryMatchedEvents.filter((event) => event.effective_status === "archived").length,
   };
   const filteredEventWorkspaceEvents = queryMatchedEvents.filter((event) =>
     eventWorkspaceFilter === "all" ? true : event.effective_status === eventWorkspaceFilter,
@@ -3454,7 +3484,7 @@ export default function App() {
   );
   const filteredInactiveEvents = filteredEventWorkspaceEvents.filter((event) => event.effective_status === "inactive");
   const filteredHistoricalEvents = filteredEventWorkspaceEvents.filter(
-    (event) => event.effective_status === "closed" || event.effective_status === "cancelled",
+    (event) => event.effective_status === "closed" || event.effective_status === "cancelled" || event.effective_status === "archived",
   );
   const recentHistoricalEvents = filteredHistoricalEvents.slice(0, 6);
   const historyEventGroups = filteredHistoricalEvents.slice(6).reduce<
@@ -3480,6 +3510,7 @@ export default function App() {
     { id: "inactive", label: "Inactive", count: eventWorkspaceCounts.inactive },
     { id: "closed", label: "Closed", count: eventWorkspaceCounts.closed },
     { id: "cancelled", label: "Cancelled", count: eventWorkspaceCounts.cancelled },
+    { id: "archived", label: "Archived", count: eventWorkspaceCounts.archived },
   ];
   const liveWorkspaceHeading =
     eventWorkspaceFilter === "active"
@@ -3492,6 +3523,8 @@ export default function App() {
       ? "Recently Closed"
       : eventWorkspaceFilter === "cancelled"
       ? "Recently Cancelled"
+      : eventWorkspaceFilter === "archived"
+      ? "Archived"
       : "Recent History";
   const inactiveWorkspaceHeading = eventWorkspaceFilter === "inactive" ? "Inactive Workspaces" : "Inactive";
   const selectorEvents = (() => {
@@ -3527,6 +3560,14 @@ export default function App() {
           disabled: selectedEvent.is_default || eventLoading,
         };
       }
+      if (selectedEvent.status === "archived") {
+        return {
+          label: "Restore Inactive",
+          nextStatus: "inactive" as const,
+          tone: "neutral" as ActionTone,
+          disabled: selectedEvent.is_default || eventLoading,
+        };
+      }
       return {
         label: "Set Inactive",
         nextStatus: "inactive" as const,
@@ -3551,6 +3592,14 @@ export default function App() {
       };
     }
     if (selectedEvent.status === "cancelled") {
+      return {
+        label: "Restore Inactive",
+        nextStatus: "inactive" as const,
+        tone: "neutral" as ActionTone,
+        disabled: eventLoading,
+      };
+    }
+    if (selectedEvent.status === "archived") {
       return {
         label: "Restore Inactive",
         nextStatus: "inactive" as const,
@@ -7230,7 +7279,7 @@ export default function App() {
     successMessage = "Event updated",
     silent = false,
   }: {
-    status?: "pending" | "active" | "inactive" | "cancelled";
+    status?: "pending" | "active" | "inactive" | "cancelled" | "archived";
     name?: string;
     successMessage?: string;
     silent?: boolean;
@@ -7272,6 +7321,50 @@ export default function App() {
         setEventMessage(message);
       }
       return false;
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const handleCloneEvent = async () => {
+    if (!selectedEventId || !selectedEvent) return;
+    if (
+      hasAnyUnsavedSettings
+      && !window.confirm("Clone from the last saved version of this event? Unsaved changes on the current event will not be included.")
+    ) {
+      return;
+    }
+    const suggestedName = `${settings.event_name.trim() || selectedEvent.name} Copy`;
+    const nameInput = window.prompt("Name for the cloned event", suggestedName);
+    if (nameInput == null) return;
+    const nextName = nameInput.trim();
+    if (!nextName) {
+      setEventMessage("Cloned event name is required");
+      return;
+    }
+
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}/clone`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nextName }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to clone event");
+      }
+      await Promise.all([fetchEvents(), fetchChannels()]);
+      if (data?.event?.id) {
+        setSelectedEventId(String(data.event.id));
+        setEventWorkspaceView("setup");
+        setActiveTab("event");
+      }
+      setEventMessage("Event cloned. Registrations and channel assignments were not copied.");
+      window.setTimeout(() => setEventMessage(""), 3500);
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to clone event");
     } finally {
       setEventLoading(false);
     }
@@ -7393,7 +7486,7 @@ export default function App() {
       return true;
     }
     if (selectedEventChannelWritesLocked) {
-      setEventMessage("Closed or cancelled events cannot link channels");
+      setEventMessage("Archived, closed, or cancelled events cannot link channels");
       return false;
     }
 
@@ -10048,19 +10141,50 @@ export default function App() {
                           {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : eventStatusToggle.nextStatus === "active" ? <Power className="w-4 h-4" /> : <Activity className="w-4 h-4" />}
                           {eventStatusToggle.label}
                         </ActionButton>
-                        {!selectedEvent?.is_default && (
+                        {selectedEvent && (
                           <InlineActionsMenu label="Event Actions" tone="neutral">
-                            {selectedEvent?.status !== "inactive" && (
+                            <MenuActionItem
+                              onClick={() => void handleCloneEvent()}
+                              disabled={!selectedEvent || eventLoading}
+                              tone="neutral"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              <span className="font-medium">Clone Event</span>
+                            </MenuActionItem>
+                            {!selectedEvent.is_default && selectedEvent.status !== "inactive" && selectedEvent.status !== "archived" && (
                               <MenuActionItem
                                 onClick={() => void handleUpdateEvent({ status: "inactive" })}
                                 disabled={!selectedEvent || eventLoading}
                                 tone="neutral"
+                                className="mt-1"
                               >
                                 <Power className="h-3.5 w-3.5" />
                                 <span className="font-medium">Set Inactive</span>
                               </MenuActionItem>
                             )}
-                            {selectedEvent?.status !== "cancelled" && (
+                            {!selectedEvent.is_default && selectedEvent.status !== "archived" && (
+                              <MenuActionItem
+                                onClick={() => void handleUpdateEvent({ status: "archived" })}
+                                disabled={!selectedEvent || eventLoading}
+                                tone="neutral"
+                                className="mt-1"
+                              >
+                                <Archive className="h-3.5 w-3.5" />
+                                <span className="font-medium">Archive Event</span>
+                              </MenuActionItem>
+                            )}
+                            {!selectedEvent.is_default && selectedEvent.status === "archived" && (
+                              <MenuActionItem
+                                onClick={() => void handleUpdateEvent({ status: "inactive" })}
+                                disabled={!selectedEvent || eventLoading}
+                                tone="neutral"
+                                className="mt-1"
+                              >
+                                <ArchiveRestore className="h-3.5 w-3.5" />
+                                <span className="font-medium">Restore Archived</span>
+                              </MenuActionItem>
+                            )}
+                            {!selectedEvent.is_default && selectedEvent.status !== "cancelled" && selectedEvent.status !== "archived" && (
                               <MenuActionItem
                                 onClick={() => void handleUpdateEvent({ status: "cancelled" })}
                                 disabled={!selectedEvent || eventLoading}
@@ -10084,6 +10208,7 @@ export default function App() {
                     {selectedEvent
                       && selectedEvent.effective_status !== "closed"
                       && selectedEvent.effective_status !== "cancelled"
+                      && selectedEvent.effective_status !== "archived"
                       && selectedEvent.registration_availability
                       && selectedEvent.registration_availability !== "open" && (
                         <PageBanner tone="amber" icon={<AlertCircle className="h-4 w-4" />} className="mb-4">
@@ -12833,7 +12958,7 @@ export default function App() {
                           disabled={!canEditSettings}
                           className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
                         />
-                        <span><span className="font-medium">Event Status Write</span> <span className="text-xs text-slate-500">set pending/active/inactive/cancelled</span></span>
+                        <span><span className="font-medium">Event Status Write</span> <span className="text-xs text-slate-500">set pending/active/inactive/cancelled/archived</span></span>
                       </label>
                       <label className="flex items-start gap-2">
                         <input
@@ -14944,7 +15069,7 @@ export default function App() {
                         )}
                         {selectedEvent && selectedEventChannelWritesLocked && (
                           <p className="text-xs text-amber-700">
-                            Closed or cancelled events cannot link or re-enable channels. You can still remove an assignment or disable an active channel if you want to stop replies entirely.
+                            Archived, closed, or cancelled events cannot link or re-enable channels. You can still remove an assignment or disable an active channel if you want to stop replies entirely.
                           </p>
                         )}
                         {selectedEvent && !selectedEventChannelWritesLocked && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
@@ -15451,7 +15576,7 @@ export default function App() {
                             <p className="mt-1 truncate text-xs text-slate-500">{event.slug}</p>
                           </div>
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                            {event.registration_availability && event.registration_availability !== "open" && event.effective_status !== "closed" && event.effective_status !== "cancelled" && (
+                            {event.registration_availability && event.registration_availability !== "open" && event.effective_status !== "closed" && event.effective_status !== "cancelled" && event.effective_status !== "archived" && (
                               <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
                                 {getRegistrationAvailabilityLabel(event.registration_availability)}
                               </StatusBadge>

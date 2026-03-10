@@ -1,7 +1,7 @@
 export type MessageType = "incoming" | "outgoing";
 export type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
-export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled";
+export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" | "archived";
 export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram" | "web_chat";
 export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";

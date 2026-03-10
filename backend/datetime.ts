@@ -9,7 +9,7 @@ type DateTimeParts = {
 };
 
 export type RegistrationWindowState = "open" | "not_started" | "closed" | "invalid";
-export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled";
+export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" | "archived";
 export type EventStatus = ManualEventStatus | "closed";
 
 function parseDateTimeLocalInput(value: string): DateTimeParts | null {
@@ -177,6 +177,9 @@ export function getEffectiveEventStatus(
   const normalizedManual = String(manualStatus || "").trim().toLowerCase();
   if (normalizedManual === "cancelled") {
     return "cancelled";
+  }
+  if (normalizedManual === "archived") {
+    return "archived";
   }
 
   const eventState = getEventState(settings, now);
