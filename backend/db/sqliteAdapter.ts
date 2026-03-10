@@ -1035,6 +1035,42 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
+  async getEventDeletionImpact(eventId: string) {
+    const normalizedEventId = String(eventId || "").trim();
+    const registrationRow = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM registrations WHERE event_id = ?",
+    ).get(normalizedEventId) as { count?: number | null };
+    const messageRow = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM messages WHERE event_id = ?",
+    ).get(normalizedEventId) as { count?: number | null };
+    const documentRow = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM event_documents WHERE event_id = ?",
+    ).get(normalizedEventId) as { count?: number | null };
+    const checkinRow = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM checkin_sessions WHERE event_id = ?",
+    ).get(normalizedEventId) as { count?: number | null };
+    const channelRow = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM channel_event_assignments WHERE event_id = ?",
+    ).get(normalizedEventId) as { count?: number | null };
+    const pageRow = this.db.prepare(
+      "SELECT COUNT(*) AS count FROM facebook_pages WHERE event_id = ?",
+    ).get(normalizedEventId) as { count?: number | null };
+    return {
+      registrations: Number(registrationRow.count || 0),
+      messages: Number(messageRow.count || 0),
+      documents: Number(documentRow.count || 0),
+      checkin_sessions: Number(checkinRow.count || 0),
+      assigned_channels: Number(channelRow.count || 0),
+      legacy_pages: Number(pageRow.count || 0),
+    };
+  }
+
+  async deleteEvent(eventId: string) {
+    const normalizedEventId = String(eventId || "").trim();
+    const result = this.db.prepare("DELETE FROM events WHERE id = ? AND is_default = 0").run(normalizedEventId);
+    return result.changes > 0;
+  }
+
   private replaceEventDocumentChunks(documentId: string, eventId: string, content: string, isActive = true) {
     const chunks = chunkDocumentContent(content);
     const embeddingModel = getEmbeddingModelName();

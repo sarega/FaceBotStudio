@@ -812,6 +812,35 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
+  async getEventDeletionImpact(eventId: string) {
+    const normalizedEventId = String(eventId || "").trim();
+    const [registrationResult, messageResult, documentResult, checkinResult, channelResult, pageResult] = await Promise.all([
+      this.pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM registrations WHERE event_id = $1", [normalizedEventId]),
+      this.pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM messages WHERE event_id = $1", [normalizedEventId]),
+      this.pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM event_documents WHERE event_id = $1", [normalizedEventId]),
+      this.pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM checkin_sessions WHERE event_id = $1", [normalizedEventId]),
+      this.pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM channel_event_assignments WHERE event_id = $1", [normalizedEventId]),
+      this.pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM facebook_pages WHERE event_id = $1", [normalizedEventId]),
+    ]);
+    return {
+      registrations: Number.parseInt(registrationResult.rows[0]?.count || "0", 10),
+      messages: Number.parseInt(messageResult.rows[0]?.count || "0", 10),
+      documents: Number.parseInt(documentResult.rows[0]?.count || "0", 10),
+      checkin_sessions: Number.parseInt(checkinResult.rows[0]?.count || "0", 10),
+      assigned_channels: Number.parseInt(channelResult.rows[0]?.count || "0", 10),
+      legacy_pages: Number.parseInt(pageResult.rows[0]?.count || "0", 10),
+    };
+  }
+
+  async deleteEvent(eventId: string) {
+    const normalizedEventId = String(eventId || "").trim();
+    const result = await this.pool.query(
+      "DELETE FROM events WHERE id = $1 AND is_default = FALSE",
+      [normalizedEventId],
+    );
+    return result.rowCount > 0;
+  }
+
   private async replaceEventDocumentChunks(documentId: string, eventId: string, content: string, isActive = true) {
     const chunks = chunkDocumentContent(content);
     const embeddingModel = getEmbeddingModelName();

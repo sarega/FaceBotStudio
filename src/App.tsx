@@ -7370,6 +7370,46 @@ export default function App() {
     }
   };
 
+  const handleDeleteEvent = async () => {
+    if (!selectedEventId || !selectedEvent) return;
+    if (selectedEvent.is_default) {
+      setEventMessage("Default event cannot be deleted");
+      return;
+    }
+    if (selectedEvent.status !== "archived") {
+      setEventMessage("Archive the event before deleting it");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete "${selectedEvent.name}" permanently?\n\nThis only works when the event has no registrations, messages, documents, check-in links, or channel assignments.`,
+    );
+    if (!confirmed) return;
+
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const blockerText = Array.isArray(data?.blockers) && data.blockers.length > 0
+          ? ` (${data.blockers.join(", ")})`
+          : "";
+        throw new Error((data?.error || "Failed to delete event") + blockerText);
+      }
+      setSelectedEventId("");
+      await Promise.all([fetchEvents(), fetchChannels()]);
+      setEventWorkspaceView("setup");
+      setEventMessage("Event deleted");
+      window.setTimeout(() => setEventMessage(""), 3000);
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to delete event");
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
   const resetChannelForm = () => {
     setEditingChannelKey("");
     setNewPageId("");
@@ -10182,6 +10222,17 @@ export default function App() {
                               >
                                 <ArchiveRestore className="h-3.5 w-3.5" />
                                 <span className="font-medium">Restore Archived</span>
+                              </MenuActionItem>
+                            )}
+                            {!selectedEvent.is_default && selectedEvent.status === "archived" && (
+                              <MenuActionItem
+                                onClick={() => void handleDeleteEvent()}
+                                disabled={!selectedEvent || eventLoading}
+                                tone="rose"
+                                className="mt-1"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                <span className="font-medium">Delete Event</span>
                               </MenuActionItem>
                             )}
                             {!selectedEvent.is_default && selectedEvent.status !== "cancelled" && selectedEvent.status !== "archived" && (

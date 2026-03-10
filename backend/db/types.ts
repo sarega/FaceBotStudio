@@ -162,6 +162,15 @@ export interface EventRow {
   updated_at: string;
 }
 
+export interface EventDeletionImpact {
+  registrations: number;
+  messages: number;
+  documents: number;
+  checkin_sessions: number;
+  assigned_channels: number;
+  legacy_pages: number;
+}
+
 export interface FacebookPageRow {
   id: string;
   page_id: string;
@@ -343,6 +352,8 @@ export interface AppDatabase {
   getEventById(eventId: string): Promise<EventRow | undefined>;
   createEvent(input: CreateEventInput): Promise<EventRow>;
   updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
+  getEventDeletionImpact(eventId: string): Promise<EventDeletionImpact>;
+  deleteEvent(eventId: string): Promise<boolean>;
   listEventDocuments(eventId: string): Promise<EventDocumentRow[]>;
   listEventDocumentChunks(eventId: string): Promise<EventDocumentChunkRow[]>;
   listEventDocumentChunkEmbeddings(eventId: string): Promise<EventDocumentChunkEmbeddingRow[]>;

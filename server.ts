@@ -4360,6 +4360,24 @@ function formatEventScopedTimestamp(value: string, timeZone?: string) {
   }
 }
 
+function summarizeEventDeletionBlockers(impact: {
+  registrations: number;
+  messages: number;
+  documents: number;
+  checkin_sessions: number;
+  assigned_channels: number;
+  legacy_pages: number;
+}) {
+  return [
+    impact.registrations > 0 ? `${impact.registrations} registrations` : "",
+    impact.messages > 0 ? `${impact.messages} messages` : "",
+    impact.documents > 0 ? `${impact.documents} knowledge docs` : "",
+    impact.checkin_sessions > 0 ? `${impact.checkin_sessions} check-in links` : "",
+    impact.assigned_channels > 0 ? `${impact.assigned_channels} assigned channels` : "",
+    impact.legacy_pages > 0 ? `${impact.legacy_pages} legacy Facebook pages` : "",
+  ].filter(Boolean);
+}
+
 function formatAdminTimelineMessage(text: string) {
   const normalized = normalizeMessageTextForHistory(text);
   if (normalized) return normalized;
@@ -9746,6 +9764,51 @@ async function startServer() {
       } catch (error) {
         console.error("Failed to clone event:", error);
         return res.status(500).json({ error: "Failed to clone event" });
+      }
+    },
+  );
+
+  app.delete(
+    "/api/events/:id",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ paramKey: "id", allowDefault: false, allowCheckinAccess: false, queryKey: null }),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const eventId = getRequestedEventId(req);
+        const event = await appDb.getEventById(eventId);
+        if (!event) {
+          return res.status(404).json({ error: "Event not found" });
+        }
+        if (event.is_default) {
+          return res.status(400).json({ error: "Default event cannot be deleted" });
+        }
+        if (event.status !== "archived") {
+          return res.status(400).json({ error: "Archive the event before deleting it" });
+        }
+
+        const impact = await appDb.getEventDeletionImpact(eventId);
+        const blockers = summarizeEventDeletionBlockers(impact);
+        if (blockers.length > 0) {
+          return res.status(409).json({
+            error: "Event still has operational data. Archive it instead of deleting.",
+            blockers,
+            impact,
+          });
+        }
+
+        const deleted = await appDb.deleteEvent(eventId);
+        if (!deleted) {
+          return res.status(404).json({ error: "Event not found" });
+        }
+
+        await recordAudit(req, "event.deleted", "event", eventId, {
+          name: event.name,
+          deleted_after_archive: true,
+        });
+        return res.json({ status: "ok", id: eventId });
+      } catch (error) {
+        console.error("Failed to delete event:", error);
+        return res.status(500).json({ error: "Failed to delete event" });
       }
     },
   );
