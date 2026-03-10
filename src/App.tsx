@@ -3483,8 +3483,9 @@ export default function App() {
     (event) => event.effective_status === "active" || event.effective_status === "pending",
   );
   const filteredInactiveEvents = filteredEventWorkspaceEvents.filter((event) => event.effective_status === "inactive");
+  const filteredArchivedEvents = filteredEventWorkspaceEvents.filter((event) => event.effective_status === "archived");
   const filteredHistoricalEvents = filteredEventWorkspaceEvents.filter(
-    (event) => event.effective_status === "closed" || event.effective_status === "cancelled" || event.effective_status === "archived",
+    (event) => event.effective_status === "closed" || event.effective_status === "cancelled",
   );
   const recentHistoricalEvents = filteredHistoricalEvents.slice(0, 6);
   const historyEventGroups = filteredHistoricalEvents.slice(6).reduce<
@@ -3523,10 +3524,9 @@ export default function App() {
       ? "Recently Closed"
       : eventWorkspaceFilter === "cancelled"
       ? "Recently Cancelled"
-      : eventWorkspaceFilter === "archived"
-      ? "Archived"
       : "Recent History";
   const inactiveWorkspaceHeading = eventWorkspaceFilter === "inactive" ? "Inactive Workspaces" : "Inactive";
+  const archivedWorkspaceHeading = eventWorkspaceFilter === "archived" ? "Archived Workspaces" : "Archived";
   const selectorEvents = (() => {
     const base = nonHistoricalEvents.length > 0 ? [...nonHistoricalEvents] : [...events];
     if (selectedEvent && !base.some((event) => event.id === selectedEvent.id)) {
@@ -7342,6 +7342,9 @@ export default function App() {
       setEventMessage("Cloned event name is required");
       return;
     }
+    const includeDocuments = documents.length > 0
+      ? window.confirm("Copy knowledge documents to the cloned event too? Registrations and channel assignments will still be skipped.")
+      : false;
 
     setEventLoading(true);
     setEventMessage("");
@@ -7349,7 +7352,7 @@ export default function App() {
       const res = await apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}/clone`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: nextName }),
+        body: JSON.stringify({ name: nextName, include_documents: includeDocuments }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -7361,7 +7364,12 @@ export default function App() {
         setEventWorkspaceView("setup");
         setActiveTab("event");
       }
-      setEventMessage("Event cloned. Registrations and channel assignments were not copied.");
+      const copiedDocuments = Number(data?.copied?.documents || 0);
+      setEventMessage(
+        copiedDocuments > 0
+          ? `Event cloned. Copied ${copiedDocuments} knowledge documents. Registrations and channel assignments were not copied.`
+          : "Event cloned. Registrations, channel assignments, and knowledge documents were not copied.",
+      );
       window.setTimeout(() => setEventMessage(""), 3500);
     } catch (err) {
       setEventMessage(err instanceof Error ? err.message : "Failed to clone event");
@@ -11407,6 +11415,8 @@ export default function App() {
                         <span className="text-slate-300">•</span>
                         <span>{eventWorkspaceCounts.inactive} inactive</span>
                         <span className="text-slate-300">•</span>
+                        <span>{eventWorkspaceCounts.archived} archived</span>
+                        <span className="text-slate-300">•</span>
                         <span>{eventWorkspaceCounts.closed + eventWorkspaceCounts.cancelled} in history</span>
                       </div>
                     </div>
@@ -11450,6 +11460,26 @@ export default function App() {
                               </div>
                               <div className="space-y-2">
                                 {filteredInactiveEvents.map((event) => (
+                                  <EventWorkspaceRow
+                                    key={event.id}
+                                    event={event}
+                                    selected={selectedEventId === event.id}
+                                    searchFocused={isSearchFocused("event", event.id)}
+                                    onSelect={() => handleSelectEvent(event.id)}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {filteredArchivedEvents.length > 0 && (
+                            <div className="space-y-2 border-t border-slate-100 pt-5">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-slate-700">{archivedWorkspaceHeading}</p>
+                                <span className="text-xs font-medium text-slate-500">{filteredArchivedEvents.length} events</span>
+                              </div>
+                              <div className="space-y-2">
+                                {filteredArchivedEvents.map((event) => (
                                   <EventWorkspaceRow
                                     key={event.id}
                                     event={event}

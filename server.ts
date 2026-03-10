@@ -9717,11 +9717,14 @@ async function startServer() {
         const body = readObjectBody(req);
         const issues: ValidationIssue[] = [];
         const requestedName = readOptionalString(body, "name", 180);
+        const includeDocuments = readBooleanWithDefault(body, "include_documents", false, issues);
         const cloneName = normalizeOptionalText(requestedName)
           || `${normalizeOptionalText(sourceSettings.event_name) || sourceEvent.name} Copy`;
 
         if (!cloneName) {
           issues.push({ field: "name", message: "Event name is required" });
+        }
+        if (issues.length > 0) {
           return respondValidationError(res, issues);
         }
 
@@ -9736,6 +9739,22 @@ async function startServer() {
         validateEventSettingsPatch(await getSettingsMap(clonedEvent.id), clonedSettings);
         await appDb.upsertSettings(clonedSettings, clonedEvent.id);
 
+        let copiedDocuments = 0;
+        if (includeDocuments) {
+          const sourceDocuments = await appDb.listEventDocuments(sourceEventId);
+          for (const document of sourceDocuments) {
+            await appDb.upsertEventDocument({
+              event_id: clonedEvent.id,
+              title: document.title,
+              source_type: document.source_type,
+              source_url: document.source_url || undefined,
+              content: document.content,
+              is_active: document.is_active,
+            });
+          }
+          copiedDocuments = sourceDocuments.length;
+        }
+
         const refreshedEvent = await appDb.getEventById(clonedEvent.id);
         if (!refreshedEvent) {
           throw new Error("Failed to load cloned event");
@@ -9748,7 +9767,7 @@ async function startServer() {
           copied_event_settings: EVENT_SETTING_KEYS.length,
           copied_registrations: 0,
           copied_channels: 0,
-          copied_documents: 0,
+          copied_documents: copiedDocuments,
         });
 
         return res.status(201).json({
@@ -9758,7 +9777,7 @@ async function startServer() {
             event_settings: EVENT_SETTING_KEYS.length,
             registrations: 0,
             channels: 0,
-            documents: 0,
+            documents: copiedDocuments,
           },
         });
       } catch (error) {
