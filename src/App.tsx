@@ -8618,32 +8618,34 @@ export default function App() {
             </div>
           ) : (
             <>
-              <section className="grid gap-6 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
-                <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
-                  {publicEventPage.event.poster_url ? (
-                    <img
-                      src={publicEventPage.event.poster_url}
-                      alt={`${publicEventPage.event.name} poster`}
-                      className="aspect-[800/1132] w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex aspect-[800/1132] flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
-                      <Eye className="h-9 w-9 text-slate-400" />
-                      <div>
-                        <p className="text-sm font-semibold text-slate-700">Event poster</p>
-                        <p className="mt-1 text-xs text-slate-500">Recommended size 800 x 1132 px</p>
+              <section className="grid gap-5 lg:items-start lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
+                <div className="self-start overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
+                  <div className="aspect-[800/1132] w-full">
+                    {publicEventPage.event.poster_url ? (
+                      <img
+                        src={publicEventPage.event.poster_url}
+                        alt={`${publicEventPage.event.name} poster`}
+                        className="h-full w-full object-cover object-top"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
+                        <Eye className="h-9 w-9 text-slate-400" />
+                        <div>
+                          <p className="text-sm font-semibold text-slate-700">Event poster</p>
+                          <p className="mt-1 text-xs text-slate-500">Recommended size 800 x 1132 px</p>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
 
-                <div className="space-y-6 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                  <div className="flex flex-wrap items-center gap-2">
+                <div className="space-y-5 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm lg:self-start sm:p-6">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <StatusBadge tone={getEventStatusTone(publicEventPage.event.status)}>
                       {getEventStatusLabel(publicEventPage.event.status)}
                     </StatusBadge>
                     <StatusBadge tone={publicRouteAvailabilityTone}>
-                      Registration {publicRouteAvailabilityLabel}
+                      {publicRouteAvailabilityLabel}
                     </StatusBadge>
                   </div>
 
@@ -8652,21 +8654,21 @@ export default function App() {
                       {publicEventPage.event.name}
                     </h1>
                     {publicSummary && (
-                      <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600 sm:text-base">
+                      <p className="mt-2.5 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
                         {publicSummary}
                       </p>
                     )}
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Date & Time</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">{publicEventPage.event.date_label}</p>
+                      <p className="mt-1.5 text-sm font-semibold text-slate-900">{publicEventPage.event.date_label}</p>
                       <p className="mt-1 text-xs text-slate-500">{publicEventPage.event.timezone}</p>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Location</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">
+                      <p className="mt-1.5 text-sm font-semibold text-slate-900">
                         {publicEventPage.location.title || publicLocationLabel}
                       </p>
                       {publicEventPage.location.address_line && (
@@ -8676,14 +8678,14 @@ export default function App() {
                   </div>
 
                   <div className={`grid gap-3 ${publicEventPage.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">{publicAvailabilityHelper}</p>
+                      <p className="mt-1.5 text-sm font-semibold text-slate-900">{publicAvailabilityHelper}</p>
                     </div>
                     {publicEventPage.event.show_seat_availability && (
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
                         <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
-                        <p className="mt-2 text-sm font-semibold text-slate-900">
+                        <p className="mt-1.5 text-sm font-semibold text-slate-900">
                           {publicEventPage.event.registration_limit == null
                             ? "Unlimited"
                             : `${publicEventPage.event.active_registration_count}/${publicEventPage.event.registration_limit}`}
@@ -8691,19 +8693,19 @@ export default function App() {
                       </div>
                     )}
                     {publicEventPage.event.show_seat_availability && (
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
                         <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
-                        <p className="mt-2 text-sm font-semibold text-slate-900">
+                        <p className="mt-1.5 text-sm font-semibold text-slate-900">
                           {publicEventPage.event.remaining_seats == null ? "Open" : publicEventPage.event.remaining_seats}
                         </p>
                       </div>
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2.5">
                     <a
                       href="#public-registration"
-                      className="inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
+                      className="inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                     >
                       {publicEventPage.event.cta_label}
                     </a>
@@ -8712,7 +8714,7 @@ export default function App() {
                         href={publicEventPage.location.map_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                       >
                         <ExternalLink className="h-4 w-4" />
                         Open in Maps
