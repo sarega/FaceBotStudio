@@ -81,7 +81,7 @@ export interface FacebookPageRecord {
   id: string;
   page_id: string;
   page_name: string;
-  event_id: string;
+  event_id?: string | null;
   is_active: boolean;
   has_page_access_token?: boolean;
   created_at: string;
@@ -93,7 +93,7 @@ export interface ChannelAccountRecord {
   platform: ChannelPlatform;
   external_id: string;
   display_name: string;
-  event_id: string;
+  event_id?: string | null;
   is_active: boolean;
   has_access_token?: boolean;
   platform_label?: string;
@@ -277,6 +277,7 @@ export interface Settings {
   event_description: string;
   event_travel: string;
   event_public_page_enabled: string;
+  event_public_show_seat_availability: string;
   event_public_slug: string;
   event_public_poster_url: string;
   event_public_summary: string;
@@ -338,6 +339,7 @@ export interface PublicEventPageResponse {
     date_label: string;
     timezone: string;
     registration_enabled: boolean;
+    show_seat_availability: boolean;
     registration_availability: "open" | "not_started" | "closed" | "invalid" | "full";
     registration_limit: number | null;
     active_registration_count: number;

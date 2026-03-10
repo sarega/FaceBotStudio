@@ -166,7 +166,7 @@ export interface FacebookPageRow {
   id: string;
   page_id: string;
   page_name: string;
-  event_id: string;
+  event_id?: string | null;
   page_access_token?: string | null;
   is_active: boolean;
   created_at: string;
@@ -178,7 +178,7 @@ export interface ChannelAccountRow {
   platform: ChannelPlatform;
   external_id: string;
   display_name: string;
-  event_id: string;
+  event_id?: string | null;
   access_token?: string | null;
   is_active: boolean;
   config_json?: string | null;
@@ -251,7 +251,7 @@ export interface UpsertChannelAccountInput {
   platform: ChannelPlatform;
   external_id: string;
   display_name: string;
-  event_id: string;
+  event_id?: string | null;
   access_token?: string;
   is_active?: boolean;
   config_json?: string;
@@ -370,6 +370,8 @@ export interface AppDatabase {
     originalExternalId: string,
     input: UpsertChannelAccountInput,
   ): Promise<ChannelAccountRow>;
+  assignChannelAccount(channelId: string, eventId: string): Promise<ChannelAccountRow | undefined>;
+  unassignChannelAccount(channelId: string): Promise<ChannelAccountRow | undefined>;
   resolveEventIdForChannel(platform: ChannelPlatform, externalId: string): Promise<string | undefined>;
   listFacebookPages(): Promise<FacebookPageRow[]>;
   getFacebookPageByPageId(pageId: string): Promise<FacebookPageRow | undefined>;

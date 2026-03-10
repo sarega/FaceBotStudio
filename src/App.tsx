@@ -2351,6 +2351,7 @@ const INITIAL_SETTINGS: Settings = {
   event_description: "",
   event_travel: "",
   event_public_page_enabled: "0",
+  event_public_show_seat_availability: "0",
   event_public_slug: "",
   event_public_poster_url: "",
   event_public_summary: "",
@@ -2391,6 +2392,7 @@ function getBlankEventScopedSettings() {
     event_description: "",
     event_travel: "",
     event_public_page_enabled: "0",
+    event_public_show_seat_availability: "0",
     event_public_slug: "",
     event_public_poster_url: "",
     event_public_summary: "",
@@ -2429,6 +2431,7 @@ function getBlankEventScopedSettings() {
     | "event_description"
     | "event_travel"
     | "event_public_page_enabled"
+    | "event_public_show_seat_availability"
     | "event_public_slug"
     | "event_public_poster_url"
     | "event_public_summary"
@@ -2475,6 +2478,7 @@ const EVENT_SETUP_SETTINGS_KEYS = [
 
 const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_page_enabled",
+  "event_public_show_seat_availability",
   "event_public_slug",
   "event_public_poster_url",
   "event_public_summary",
@@ -2636,6 +2640,10 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_page_enabled === "string" && data.event_public_page_enabled.trim()
         ? data.event_public_page_enabled.trim()
         : INITIAL_SETTINGS.event_public_page_enabled,
+    event_public_show_seat_availability:
+      typeof data.event_public_show_seat_availability === "string" && data.event_public_show_seat_availability.trim()
+        ? data.event_public_show_seat_availability.trim()
+        : INITIAL_SETTINGS.event_public_show_seat_availability,
     event_public_slug:
       typeof data.event_public_slug === "string"
         ? sanitizeEnglishSlugInput(data.event_public_slug)
@@ -3245,6 +3253,7 @@ export default function App() {
   const publicPageSummaryWordCount = countApproxWords(settings.event_public_summary);
   const publicPagePosterUrl = settings.event_public_poster_url.trim();
   const publicPageEnabled = settings.event_public_page_enabled === "1";
+  const publicShowSeatAvailability = settings.event_public_show_seat_availability === "1";
   const publicRegistrationEnabled = settings.event_public_registration_enabled === "1";
   const publicBotEnabled = settings.event_public_bot_enabled === "1";
   const publicPrivacyEnabled = settings.event_public_privacy_enabled === "1";
@@ -3291,10 +3300,12 @@ export default function App() {
   const workspaceChannelEventCount = new Set(channels.map((channel) => channel.event_id).filter(Boolean)).size;
   const workspaceOtherEventChannels = channels.filter((channel) => channel.event_id !== selectedEventId);
   const workspaceChannelPreview = workspaceOtherEventChannels.slice(0, 6);
+  const allChannelIdsKey = channels.map((channel) => channel.id).join("|");
   const selectedEventChannelIdsKey = selectedEventChannels.map((channel) => channel.id).join("|");
   const setupSelectedChannel =
-    selectedEventChannels.find((channel) => channel.id === setupSelectedChannelId)
+    channels.find((channel) => channel.id === setupSelectedChannelId)
     || selectedEventChannels[0]
+    || workspaceOtherEventChannels[0]
     || null;
   const selectedChannelPlatformDefinition = channelPlatformDefinitions.find((definition) => definition.id === newChannelPlatform) || null;
   const editingChannel = channels.find((channel) => `${channel.platform}:${channel.external_id}` === editingChannelKey) || null;
@@ -4090,17 +4101,28 @@ export default function App() {
   }, [adminAgentMessages, adminAgentChatStorageKey]);
 
   useEffect(() => {
-    const channelIds = selectedEventChannelIdsKey ? selectedEventChannelIdsKey.split("|") : [];
-    if (!channelIds.length) {
+    const allChannelIds = allChannelIdsKey ? allChannelIdsKey.split("|") : [];
+    const selectedChannelIds = selectedEventChannelIdsKey ? selectedEventChannelIdsKey.split("|") : [];
+    if (!allChannelIds.length) {
       setSetupSelectedChannelId("");
       return;
     }
     setSetupSelectedChannelId((current) =>
-      channelIds.includes(current)
+      allChannelIds.includes(current)
         ? current
-        : channelIds[0],
+        : selectedChannelIds[0] || allChannelIds[0],
     );
-  }, [selectedEventChannelIdsKey]);
+  }, [allChannelIdsKey, selectedEventChannelIdsKey]);
+
+  useEffect(() => {
+    const selectedChannelIds = selectedEventChannelIdsKey ? selectedEventChannelIdsKey.split("|") : [];
+    if (!selectedChannelIds.length) return;
+    setSetupSelectedChannelId((current) =>
+      selectedChannelIds.includes(current)
+        ? current
+        : selectedChannelIds[0],
+    );
+  }, [selectedEventId, selectedEventChannelIdsKey]);
 
   useEffect(() => {
     if (!setupSelectedChannel) return;
@@ -5759,6 +5781,7 @@ export default function App() {
     setSettings(nextSettings);
     const saved = await saveSettingsSubset([
       "event_public_page_enabled",
+      "event_public_show_seat_availability",
       "event_public_slug",
       "event_public_poster_url",
       "event_public_summary",
@@ -7175,7 +7198,7 @@ export default function App() {
           platform,
           external_id: externalId,
           display_name: displayName || externalId,
-          event_id: selectedEventId,
+          event_id: channel.event_id || selectedEventId,
           access_token: accessToken,
           config: channel.config || {},
           is_active: !channel.is_active,
@@ -7196,11 +7219,11 @@ export default function App() {
   };
 
   const handleSaveChannel = async () => {
-    const eventIdForSave = editingChannel?.event_id || selectedEventId;
-    if (!eventIdForSave) return false;
+    if (!selectedEventId) return false;
     const externalId = newPageId.trim();
     const displayName = newPageName.trim();
     const accessToken = newPageAccessToken.trim();
+    const nextIsActive = editingChannel?.is_active ?? true;
     if (!lineChannelIdAutoResolved && !externalId) {
       setEventMessage(selectedChannelPlatformDefinition?.external_id_label || "Channel external ID is required");
       return false;
@@ -7216,10 +7239,10 @@ export default function App() {
           platform: newChannelPlatform,
           external_id: externalId,
           display_name: displayName || externalId,
-          event_id: eventIdForSave,
+          ...(!editingChannel ? { event_id: selectedEventId } : {}),
           access_token: accessToken,
           config: newChannelConfig,
-          is_active: true,
+          is_active: nextIsActive,
           ...(editingChannel
             ? {
                 original_platform: editingChannel.platform,
@@ -7233,12 +7256,85 @@ export default function App() {
         throw new Error(data?.error || "Failed to save channel");
       }
       await fetchChannels();
-      setEventMessage(editingChannelKey ? "Channel updated" : "Channel linked");
+      setEventMessage(editingChannelKey ? "Channel connection updated" : "Channel created and assigned");
       resetChannelForm();
       window.setTimeout(() => setEventMessage(""), 2500);
       return true;
     } catch (err) {
       setEventMessage(err instanceof Error ? err.message : "Failed to save channel");
+      return false;
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const handleAssignChannelToSelectedEvent = async (channel: ChannelAccountRecord) => {
+    if (!selectedEventId || !selectedEvent) return false;
+    if (channel.event_id === selectedEventId) {
+      selectSetupChannel(channel);
+      return true;
+    }
+    if (selectedEventChannelWritesLocked) {
+      setEventMessage("Closed or cancelled events cannot link channels");
+      return false;
+    }
+
+    const previousEventName = channel.event_id
+      ? eventNameById.get(channel.event_id) || channel.event_id
+      : "";
+    if (channel.event_id && channel.event_id !== selectedEventId) {
+      const confirmed = window.confirm(
+        `Move ${channel.display_name} from ${previousEventName || "its current event"} to ${selectedEvent.name}?`,
+      );
+      if (!confirmed) return false;
+    }
+
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch(`/api/channels/${encodeURIComponent(channel.id)}/assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: selectedEventId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to assign channel");
+      }
+      await fetchChannels();
+      setSetupSelectedChannelId(channel.id);
+      setEventMessage(channel.event_id ? "Channel moved to selected event" : "Channel assigned to selected event");
+      window.setTimeout(() => setEventMessage(""), 2500);
+      return true;
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to assign channel");
+      return false;
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const handleUnassignChannelFromSelectedEvent = async (channel: ChannelAccountRecord) => {
+    const confirmed = window.confirm(`Remove ${channel.display_name} from the selected event?`);
+    if (!confirmed) return false;
+
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const res = await apiFetch(`/api/channels/${encodeURIComponent(channel.id)}/unassign`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to remove channel from event");
+      }
+      await fetchChannels();
+      setSetupSelectedChannelId(channel.id);
+      setEventMessage("Channel removed from selected event");
+      window.setTimeout(() => setEventMessage(""), 2500);
+      return true;
+    } catch (err) {
+      setEventMessage(err instanceof Error ? err.message : "Failed to remove channel from event");
       return false;
     } finally {
       setEventLoading(false);
@@ -7391,9 +7487,6 @@ export default function App() {
   };
 
   const focusSetupChannel = (channel: ChannelAccountRecord) => {
-    if (channel.event_id && channel.event_id !== selectedEventId) {
-      if (!handleSelectEvent(channel.event_id)) return false;
-    }
     selectSetupChannel(channel);
     return true;
   };
@@ -7433,10 +7526,7 @@ export default function App() {
     }
     if (kind === "channel") {
       const channel = channels.find((item) => item.id === id);
-      if (!confirmDiscardDirtyChanges({ nextTab: "settings", nextEventId: channel?.event_id })) return;
-      if (channel?.event_id) {
-        setSelectedEventId(channel.event_id);
-      }
+      if (!confirmDiscardDirtyChanges({ nextTab: "settings" })) return;
       if (channel) {
         selectSetupChannel(channel);
         loadChannelIntoForm(channel);
@@ -8585,25 +8675,29 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <div className={`grid gap-3 ${publicEventPage.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
                     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration</p>
                       <p className="mt-2 text-sm font-semibold text-slate-900">{publicAvailabilityHelper}</p>
                     </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">
-                        {publicEventPage.event.registration_limit == null
-                          ? "Unlimited"
-                          : `${publicEventPage.event.active_registration_count}/${publicEventPage.event.registration_limit}`}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">
-                        {publicEventPage.event.remaining_seats == null ? "Open" : publicEventPage.event.remaining_seats}
-                      </p>
-                    </div>
+                    {publicEventPage.event.show_seat_availability && (
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">
+                          {publicEventPage.event.registration_limit == null
+                            ? "Unlimited"
+                            : `${publicEventPage.event.active_registration_count}/${publicEventPage.event.registration_limit}`}
+                        </p>
+                      </div>
+                    )}
+                    {publicEventPage.event.show_seat_availability && (
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">
+                          {publicEventPage.event.remaining_seats == null ? "Open" : publicEventPage.event.remaining_seats}
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-3">
@@ -10197,6 +10291,7 @@ export default function App() {
                               className="mt-1"
                               items={[
                                 publicRegistrationEnabled ? "Inline registration on" : "Inline registration off",
+                                publicShowSeatAvailability ? "Seat counts on" : "Seat counts hidden",
                                 publicBotEnabled ? "Help chat on" : "Help chat off",
                                 publicPrivacyEnabled ? "Privacy note on" : "Privacy note off",
                                 publicContactEnabled ? "Contact options on" : "Contact options off",
@@ -10275,6 +10370,20 @@ export default function App() {
                                     }
                                   />
                                   Inline registration
+                                </label>
+                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    checked={publicShowSeatAvailability}
+                                    onChange={(e) =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_show_seat_availability: e.target.checked ? "1" : "0",
+                                      })
+                                    }
+                                  />
+                                  Show seat counts
                                 </label>
                                 <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                                   <input
@@ -14080,7 +14189,7 @@ export default function App() {
               className="space-y-4"
             >
               <PageBanner tone="blue" icon={<SettingsIcon className="h-4 w-4" />}>
-                AI defaults and webhook settings apply organization-wide by default. Selected Event Channels remain event-scoped in the current model, while event-specific AI behavior should use explicit overrides only.
+                AI defaults and webhook settings apply organization-wide by default. Channel credentials are now managed as shared workspace connections, then assigned explicitly to the selected event when needed.
               </PageBanner>
               <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
                 <div className="space-y-4 xl:col-span-8">
@@ -14251,7 +14360,7 @@ export default function App() {
                           Workspace Channel Inventory
                         </h3>
                         <p className="mt-1 text-sm text-slate-500">
-                          Cross-event visibility only. Channels already assigned to the selected event are listed once below in Selected Event Channels.
+                          Configure connection credentials once here, then assign or move them into the selected event explicitly.
                         </p>
                       </div>
                     </div>
@@ -14316,7 +14425,9 @@ export default function App() {
                                   {channel.platform_label || channel.platform}
                                 </p>
                                 <p className="mt-1 text-[11px] text-slate-500">
-                                  Assigned to {eventNameById.get(channel.event_id) || channel.event_id || "Unknown event"}
+                                  {channel.event_id
+                                    ? `Assigned to ${eventNameById.get(channel.event_id) || channel.event_id}`
+                                    : "Currently unassigned"}
                                 </p>
                                 <div className="mt-3 flex flex-wrap items-center gap-2">
                                   <ActionButton
@@ -14330,11 +14441,18 @@ export default function App() {
                                     <PencilLine className="h-3.5 w-3.5" />
                                     Configure
                                   </ActionButton>
-                                  {channel.event_id && channel.event_id !== selectedEventId && (
-                                    <span className="text-[11px] text-slate-500">
-                                      Opens {eventNameById.get(channel.event_id) || "its event"} before editing
-                                    </span>
-                                  )}
+                                  <ActionButton
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleAssignChannelToSelectedEvent(channel);
+                                    }}
+                                    disabled={eventLoading || selectedEventChannelWritesLocked}
+                                    tone="neutral"
+                                    className="px-3 text-sm"
+                                  >
+                                    <Link2 className="h-3.5 w-3.5" />
+                                    {channel.event_id ? "Move to Selected Event" : "Assign to Selected Event"}
+                                  </ActionButton>
                                 </div>
                               </div>
                             </div>
@@ -14345,7 +14463,7 @@ export default function App() {
 
                     {workspaceOtherEventChannels.length > workspaceChannelPreview.length && (
                       <p className="text-xs text-slate-500">
-                        Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} channels assigned to other events.
+                        Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} channels not currently assigned to the selected event.
                       </p>
                     )}
                   </div>
@@ -14375,12 +14493,13 @@ export default function App() {
                         {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
                           <ActionButton
                             onClick={() => openChannelConfigDialog()}
+                            disabled={selectedEventChannelWritesLocked}
                             tone="blue"
                             active
                             className="px-3 text-sm"
                           >
                             <Plus className="h-3.5 w-3.5" />
-                            Assign Channel
+                            New Connection
                           </ActionButton>
                         )}
                         <CollapseIconButton
@@ -14404,7 +14523,7 @@ export default function App() {
 
                         {visibleSelectedEventChannels.length === 0 ? (
                           <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                            No channels linked to this event yet. Click Assign Channel to attach one to the selected event.
+                            No channels assigned to this event yet. Use New Connection to create one, or assign an existing connection from Workspace Channel Inventory above.
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -14481,6 +14600,18 @@ export default function App() {
                                       <ActionButton
                                         onClick={(event) => {
                                           event.stopPropagation();
+                                          void handleUnassignChannelFromSelectedEvent(channel);
+                                        }}
+                                        disabled={eventLoading}
+                                        tone="neutral"
+                                        className="px-3 text-sm"
+                                      >
+                                        <Link2 className="h-3.5 w-3.5" />
+                                        Remove from Event
+                                      </ActionButton>
+                                      <ActionButton
+                                        onClick={(event) => {
+                                          event.stopPropagation();
                                           void handleToggleChannel(channel);
                                         }}
                                         disabled={eventLoading || disableToggle}
@@ -14499,7 +14630,7 @@ export default function App() {
                         )}
                         {selectedEvent && selectedEventChannelWritesLocked && (
                           <p className="text-xs text-amber-700">
-                            Closed or cancelled events cannot link or re-enable channels. You can still disable an active channel if you want to stop replies entirely.
+                            Closed or cancelled events cannot link or re-enable channels. You can still remove an assignment or disable an active channel if you want to stop replies entirely.
                           </p>
                         )}
                         {selectedEvent && !selectedEventChannelWritesLocked && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
@@ -14719,10 +14850,10 @@ export default function App() {
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Channel Config</p>
                     <h3 className="mt-1 text-lg font-semibold text-slate-900">
-                      {editingChannelKey ? "Update Event Channel" : "Assign Channel to Event"}
+                      {editingChannelKey ? "Update Channel Connection" : "Create Channel Connection"}
                     </h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Save platform credentials and routing details for the selected event.
+                      Save platform credentials once at workspace level. Event assignment is managed separately from the connection itself.
                     </p>
                   </div>
                   <button
@@ -14770,6 +14901,13 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  {editingChannel
+                    ? editingChannel.event_id
+                      ? <>Current assignment: <span className="font-semibold text-slate-800">{eventNameById.get(editingChannel.event_id) || editingChannel.event_id}</span>. Use Assign/Remove actions in Organization Setup to change routing.</>
+                      : "Current assignment: unassigned. Use Assign to Selected Event when you want this connection to route into the active event."
+                    : <>New connections are assigned to <span className="font-semibold text-slate-800">{selectedEvent?.name || "the selected event"}</span> as soon as you save them.</>}
+                </div>
                 <input
                   value={newPageName}
                   onChange={(e) => setNewPageName(e.target.value)}
@@ -14862,7 +15000,7 @@ export default function App() {
                       !selectedEventId
                       || (!lineChannelIdAutoResolved && !newPageId.trim())
                       || eventLoading
-                      || selectedEventChannelWritesLocked
+                      || (!editingChannelKey && selectedEventChannelWritesLocked)
                       || channelFormMissingRequirements.length > 0
                     }
                     tone="blue"
@@ -14870,7 +15008,7 @@ export default function App() {
                     className="px-3"
                   >
                     {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    {editingChannelKey ? "Update Channel" : "Link Channel"}
+                    {editingChannelKey ? "Save Connection" : "Create + Assign"}
                   </ActionButton>
                 </div>
               </div>

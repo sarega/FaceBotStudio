@@ -65,6 +65,7 @@ import {
   createAppDatabase,
   type AuditLogRow,
   type AuthUserRow,
+  type ChannelAccountRow,
   type ChannelPlatform,
   type EventDocumentChunkEmbeddingRow,
   type MessageRow,
@@ -2280,6 +2281,7 @@ async function buildPublicEventPagePayload(
       date_label: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
       timezone: normalizeTimeZone(settings.event_timezone),
       registration_enabled: isTruthySetting(settings.event_public_registration_enabled ?? "1"),
+      show_seat_availability: isTruthySetting(settings.event_public_show_seat_availability ?? "0"),
       registration_availability: event.registration_availability || capacity.registrationAvailability,
       registration_limit: capacity.limit,
       active_registration_count: capacity.activeCount,
@@ -2317,6 +2319,35 @@ async function buildPublicEventPagePayload(
     support: {
       bot_enabled: isTruthySetting(settings.event_public_bot_enabled ?? "1"),
     },
+  };
+}
+
+function serializeChannelAccount(channel: ChannelAccountRow) {
+  const parsedConfig = safeParseChannelConfig(channel.config_json);
+  return {
+    id: channel.id,
+    platform: channel.platform,
+    platform_label: getChannelPlatformDefinition(channel.platform)?.label || channel.platform,
+    platform_description: getChannelPlatformDefinition(channel.platform)?.description || "",
+    external_id: channel.external_id,
+    display_name: channel.display_name,
+    event_id: channel.event_id,
+    is_active: channel.is_active,
+    has_access_token: Boolean(channel.access_token),
+    live_messaging_ready: getChannelPlatformDefinition(channel.platform)?.live_messaging_ready || false,
+    connection_status: getChannelConnectionStatus(channel.platform, {
+      hasAccessToken: Boolean(channel.access_token),
+      config: parsedConfig,
+    }),
+    missing_requirements: getChannelMissingRequirements(channel.platform, {
+      hasAccessToken: Boolean(channel.access_token),
+      config: parsedConfig,
+    }),
+    config: parsedConfig,
+    config_summary: getChannelConfigSummary(channel.platform, parsedConfig),
+    secret_config_fields_present: getPresentSecretConfigFields(channel.platform, parsedConfig),
+    created_at: channel.created_at,
+    updated_at: channel.updated_at,
   };
 }
 
@@ -9031,33 +9062,7 @@ async function startServer() {
     try {
       const platform = typeof req.query.platform === "string" ? req.query.platform.trim() as ChannelPlatform : undefined;
       const channels = await appDb.listChannelAccounts(platform);
-      return res.json(
-        channels.map((channel) => ({
-          id: channel.id,
-          platform: channel.platform,
-          platform_label: getChannelPlatformDefinition(channel.platform)?.label || channel.platform,
-          platform_description: getChannelPlatformDefinition(channel.platform)?.description || "",
-          external_id: channel.external_id,
-          display_name: channel.display_name,
-          event_id: channel.event_id,
-          is_active: channel.is_active,
-          has_access_token: Boolean(channel.access_token),
-          live_messaging_ready: getChannelPlatformDefinition(channel.platform)?.live_messaging_ready || false,
-          connection_status: getChannelConnectionStatus(channel.platform, {
-            hasAccessToken: Boolean(channel.access_token),
-            config: safeParseChannelConfig(channel.config_json),
-          }),
-          missing_requirements: getChannelMissingRequirements(channel.platform, {
-            hasAccessToken: Boolean(channel.access_token),
-            config: safeParseChannelConfig(channel.config_json),
-          }),
-          config: safeParseChannelConfig(channel.config_json),
-          config_summary: getChannelConfigSummary(channel.platform, safeParseChannelConfig(channel.config_json)),
-          secret_config_fields_present: getPresentSecretConfigFields(channel.platform, safeParseChannelConfig(channel.config_json)),
-          created_at: channel.created_at,
-          updated_at: channel.updated_at,
-        })),
-      );
+      return res.json(channels.map(serializeChannelAccount));
     } catch (error) {
       console.error("Failed to fetch channels:", error);
       return res.status(500).json({ error: "Failed to fetch channels" });
@@ -9122,7 +9127,6 @@ async function startServer() {
   app.post(
     "/api/channels",
     requireRoles(["owner", "admin"]),
-    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false, queryKey: null }),
     async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);
@@ -9130,7 +9134,8 @@ async function startServer() {
       const platform = readOptionalString(body, "platform", 40) as ChannelPlatform || "facebook";
       const requestedExternalId = readOptionalString(body, "external_id", 300);
       const displayName = readOptionalString(body, "display_name", 300);
-      const eventId = getRequestedEventId(req);
+      const hasEventId = Object.prototype.hasOwnProperty.call(body, "event_id");
+      const requestedEventId = readOptionalString(body, "event_id", 128);
       const accessToken = readOptionalString(body, "access_token", 4096);
       const isActive = readBooleanWithDefault(body, "is_active", true, issues);
       const originalPlatformRaw = readOptionalString(body, "original_platform", 40);
@@ -9146,14 +9151,6 @@ async function startServer() {
       }
       if (originalPlatformRaw && !ALLOWED_CHANNEL_PLATFORMS.includes(originalPlatformRaw as ChannelPlatform)) {
         return res.status(400).json({ error: "Invalid original channel platform" });
-      }
-      if (!eventId) {
-        return res.status(400).json({ error: "external_id and event_id are required" });
-      }
-
-      const event = await appDb.getEventById(eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
       }
 
       const originalPlatform = (originalPlatformRaw || "") as ChannelPlatform | "";
@@ -9186,7 +9183,7 @@ async function startServer() {
       }
 
       if (!resolvedExternalId) {
-        return res.status(400).json({ error: "external_id and event_id are required" });
+        return res.status(400).json({ error: "external_id is required" });
       }
 
       const isSameIdentityAsOriginal =
@@ -9214,14 +9211,22 @@ async function startServer() {
         hasAccessToken: effectiveHasAccessToken,
         config: mergedConfig,
       });
-      const isDisableOnlyUpdate =
-        Boolean(originalChannel || existingChannel) &&
-        (originalChannel || existingChannel)?.event_id === eventId &&
-        (originalChannel || existingChannel)?.platform === platform &&
-        (originalChannel || existingChannel)?.external_id === resolvedExternalId &&
-        isActive === false;
-
-      if ((event.effective_status === "closed" || event.effective_status === "cancelled") && !isDisableOnlyUpdate) {
+      const currentAssignedEventId = normalizeOptionalText(originalChannel?.event_id || existingChannel?.event_id);
+      const targetAssignedEventId = hasEventId ? normalizeOptionalText(requestedEventId) : currentAssignedEventId;
+      const targetAssignedEvent = targetAssignedEventId
+        ? await appDb.getEventById(targetAssignedEventId)
+        : undefined;
+      if (targetAssignedEventId && !targetAssignedEvent) {
+        return res.status(404).json({ error: "Assigned event not found" });
+      }
+      const isAssignmentChanging = hasEventId && targetAssignedEventId !== currentAssignedEventId;
+      const isReenable = Boolean(originalChannel || existingChannel) && !(originalChannel || existingChannel)?.is_active && isActive;
+      const isNewActiveAssignment = !currentAssignedEventId && Boolean(targetAssignedEventId) && isActive;
+      if (
+        targetAssignedEvent
+        && (targetAssignedEvent.effective_status === "closed" || targetAssignedEvent.effective_status === "cancelled")
+        && (isAssignmentChanging || isReenable || isNewActiveAssignment)
+      ) {
         return res.status(400).json({
           error: "Closed or cancelled events cannot link or re-enable channels",
         });
@@ -9238,7 +9243,7 @@ async function startServer() {
         platform,
         external_id: resolvedExternalId,
         display_name: resolvedDisplayName || resolvedExternalId,
-        event_id: eventId,
+        ...(hasEventId ? { event_id: targetAssignedEventId || null } : {}),
         access_token: effectiveAccessToken,
         config_json: JSON.stringify(mergedConfig),
         is_active: isActive,
@@ -9252,6 +9257,7 @@ async function startServer() {
         external_id: channel.external_id,
         event_id: channel.event_id,
         is_active: channel.is_active,
+        assignment_changed: isAssignmentChanging,
         ...(originalChannel
           ? {
               original_platform: originalChannel.platform,
@@ -9266,34 +9272,91 @@ async function startServer() {
           : {}),
       });
 
-      return res.json({
-        id: channel.id,
-        platform: channel.platform,
-        platform_label: getChannelPlatformDefinition(channel.platform)?.label || channel.platform,
-        platform_description: getChannelPlatformDefinition(channel.platform)?.description || "",
-        external_id: channel.external_id,
-        display_name: channel.display_name,
-        event_id: channel.event_id,
-        is_active: channel.is_active,
-        has_access_token: Boolean(channel.access_token),
-        live_messaging_ready: getChannelPlatformDefinition(channel.platform)?.live_messaging_ready || false,
-        connection_status: getChannelConnectionStatus(channel.platform, {
-          hasAccessToken: Boolean(channel.access_token),
-          config: safeParseChannelConfig(channel.config_json),
-        }),
-        missing_requirements: getChannelMissingRequirements(channel.platform, {
-          hasAccessToken: Boolean(channel.access_token),
-          config: safeParseChannelConfig(channel.config_json),
-        }),
-        config: safeParseChannelConfig(channel.config_json),
-        config_summary: getChannelConfigSummary(channel.platform, safeParseChannelConfig(channel.config_json)),
-        secret_config_fields_present: getPresentSecretConfigFields(channel.platform, safeParseChannelConfig(channel.config_json)),
-        created_at: channel.created_at,
-        updated_at: channel.updated_at,
-      });
+      return res.json(serializeChannelAccount(channel));
     } catch (error) {
       console.error("Failed to upsert channel:", error);
       return res.status(500).json({ error: "Failed to save channel" });
+    }
+    },
+  );
+
+  app.post(
+    "/api/channels/:id/assign",
+    requireRoles(["owner", "admin"]),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const channelId = String(req.params.id || "").trim();
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const eventId = readRequiredString(body, "event_id", issues, { label: "event_id", maxLength: 128 });
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const [allChannels, targetEvent] = await Promise.all([
+        appDb.listChannelAccounts(),
+        appDb.getEventById(eventId),
+      ]);
+      const existingChannel = allChannels.find((channel) => channel.id === channelId);
+      if (!existingChannel) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
+      if (!targetEvent) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+      if (targetEvent.effective_status === "closed" || targetEvent.effective_status === "cancelled") {
+        return res.status(400).json({ error: "Closed or cancelled events cannot link channels" });
+      }
+
+      const previousEventId = normalizeOptionalText(existingChannel.event_id);
+      const channel = await appDb.assignChannelAccount(channelId, eventId);
+      if (!channel) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
+
+      await recordAudit(req, "channel.assigned_to_event", "channel", channel.id, {
+        platform: channel.platform,
+        external_id: channel.external_id,
+        previous_event_id: previousEventId || null,
+        event_id: channel.event_id,
+      });
+
+      return res.json(serializeChannelAccount(channel));
+    } catch (error) {
+      console.error("Failed to assign channel to event:", error);
+      return res.status(500).json({ error: "Failed to assign channel to event" });
+    }
+    },
+  );
+
+  app.post(
+    "/api/channels/:id/unassign",
+    requireRoles(["owner", "admin"]),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const channelId = String(req.params.id || "").trim();
+      const allChannels = await appDb.listChannelAccounts();
+      const existingChannel = allChannels.find((channel) => channel.id === channelId);
+      if (!existingChannel) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
+
+      const previousEventId = normalizeOptionalText(existingChannel.event_id);
+      const channel = await appDb.unassignChannelAccount(channelId);
+      if (!channel) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
+
+      await recordAudit(req, "channel.unassigned_from_event", "channel", channel.id, {
+        platform: channel.platform,
+        external_id: channel.external_id,
+        previous_event_id: previousEventId || null,
+      });
+
+      return res.json(serializeChannelAccount(channel));
+    } catch (error) {
+      console.error("Failed to unassign channel from event:", error);
+      return res.status(500).json({ error: "Failed to unassign channel from event" });
     }
     },
   );

@@ -178,7 +178,7 @@ function mapPageRow(row: Record<string, unknown>) {
     id: String(row.id),
     page_id: String(row.page_id),
     page_name: String(row.page_name),
-    event_id: String(row.event_id),
+    event_id: row.event_id == null ? null : String(row.event_id),
     page_access_token: typeof row.page_access_token === "string" ? row.page_access_token : null,
     is_active: Boolean(row.is_active),
     created_at: String(row.created_at),
@@ -192,7 +192,7 @@ function mapChannelRow(row: Record<string, unknown>) {
     platform: String(row.platform) as ChannelPlatform,
     external_id: String(row.external_id),
     display_name: String(row.display_name),
-    event_id: String(row.event_id),
+    event_id: row.event_id == null ? null : String(row.event_id),
     access_token: typeof row.access_token === "string" ? row.access_token : null,
     config_json: typeof row.config_json === "string" ? row.config_json : "{}",
     is_active: Boolean(row.is_active),
@@ -476,6 +476,14 @@ export class SqliteAppDatabase implements AppDatabase {
         UNIQUE (platform, external_id),
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS channel_event_assignments (
+        channel_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (channel_id) REFERENCES channel_accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS event_documents (
         id TEXT PRIMARY KEY,
         event_id TEXT NOT NULL,
@@ -519,6 +527,7 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_event_id ON channel_accounts (event_id);
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts (platform);
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_external_id ON channel_accounts (external_id);
+      CREATE INDEX IF NOT EXISTS idx_channel_event_assignments_event_id ON channel_event_assignments (event_id);
       CREATE INDEX IF NOT EXISTS idx_event_documents_event_id ON event_documents (event_id);
       CREATE INDEX IF NOT EXISTS idx_event_documents_active ON event_documents (event_id, is_active);
       CREATE INDEX IF NOT EXISTS idx_event_document_chunks_event_id ON event_document_chunks (event_id);
@@ -549,6 +558,11 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn("checkin_sessions", "exchanged_at", "DATETIME");
     this.db.exec(`
+      INSERT OR IGNORE INTO channel_event_assignments (channel_id, event_id)
+      SELECT id, event_id
+      FROM channel_accounts
+      WHERE event_id IS NOT NULL AND TRIM(event_id) <> '';
+
       UPDATE events
       SET status = CASE
         WHEN COALESCE(TRIM(status), '') <> '' THEN status
@@ -1367,17 +1381,27 @@ export class SqliteAppDatabase implements AppDatabase {
   async listChannelAccounts(platform?: ChannelPlatform) {
     const rows = platform
       ? this.db.prepare(
-          "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE platform = ? ORDER BY created_at ASC",
+          `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+           FROM channel_accounts ca
+           LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+           WHERE ca.platform = ?
+           ORDER BY ca.created_at ASC`,
         ).all(platform)
       : this.db.prepare(
-          "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts ORDER BY created_at ASC",
+          `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+           FROM channel_accounts ca
+           LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+           ORDER BY ca.created_at ASC`,
         ).all();
     return (rows as Array<Record<string, unknown>>).map(mapChannelRow);
   }
 
   async getChannelAccount(platform: ChannelPlatform, externalId: string) {
     const row = this.db.prepare(
-      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE platform = ? AND external_id = ? LIMIT 1",
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+       FROM channel_accounts ca
+       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       WHERE ca.platform = ? AND ca.external_id = ? LIMIT 1`,
     ).get(platform, String(externalId || "").trim()) as Record<string, unknown> | undefined;
     return row ? mapChannelRow(row) : undefined;
   }
@@ -1386,7 +1410,9 @@ export class SqliteAppDatabase implements AppDatabase {
     const platform = (String(input.platform || "facebook").trim() || "facebook") as ChannelPlatform;
     const externalId = String(input.external_id || "").trim();
     const displayName = String(input.display_name || "").trim() || externalId;
-    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const hasEventId = Object.prototype.hasOwnProperty.call(input, "event_id");
+    const eventId = String(input.event_id || "").trim();
+    const storageEventId = eventId || DEFAULT_EVENT_ID;
     const accessToken = String(input.access_token || "").trim();
     const configJson = String(input.config_json || "{}").trim() || "{}";
     const existing = this.db.prepare(
@@ -1399,15 +1425,32 @@ export class SqliteAppDatabase implements AppDatabase {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(platform, external_id) DO UPDATE
        SET display_name = excluded.display_name,
-           event_id = excluded.event_id,
+           event_id = channel_accounts.event_id,
            access_token = COALESCE(NULLIF(excluded.access_token, ''), channel_accounts.access_token),
            config_json = excluded.config_json,
            is_active = excluded.is_active,
            updated_at = CURRENT_TIMESTAMP`,
-    ).run(id, platform, externalId, displayName, eventId, accessToken, configJson, input.is_active === false ? 0 : 1);
+    ).run(id, platform, externalId, displayName, storageEventId, accessToken, configJson, input.is_active === false ? 0 : 1);
+
+    if (hasEventId) {
+      if (eventId) {
+        this.db.prepare(
+          `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
+           VALUES (?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(channel_id) DO UPDATE
+           SET event_id = excluded.event_id,
+               updated_at = CURRENT_TIMESTAMP`,
+        ).run(id, eventId);
+      } else {
+        this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(id);
+      }
+    }
 
     const row = this.db.prepare(
-      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE platform = ? AND external_id = ? LIMIT 1",
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+       FROM channel_accounts ca
+       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       WHERE ca.platform = ? AND ca.external_id = ? LIMIT 1`,
     ).get(platform, externalId) as Record<string, unknown> | undefined;
     if (!row) throw new Error("Failed to upsert channel account");
     return mapChannelRow(row);
@@ -1427,7 +1470,8 @@ export class SqliteAppDatabase implements AppDatabase {
     const platform = (String(input.platform || "facebook").trim() || "facebook") as ChannelPlatform;
     const externalId = String(input.external_id || "").trim();
     const displayName = String(input.display_name || "").trim() || externalId;
-    const eventId = String(input.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+    const hasEventId = Object.prototype.hasOwnProperty.call(input, "event_id");
+    const eventId = String(input.event_id || "").trim();
     const accessToken = String(input.access_token || "").trim();
     const configJson = String(input.config_json || "{}").trim() || "{}";
     const conflicting = this.db.prepare(
@@ -1442,24 +1486,78 @@ export class SqliteAppDatabase implements AppDatabase {
        SET platform = ?,
            external_id = ?,
            display_name = ?,
-           event_id = ?,
+           event_id = event_id,
            access_token = ?,
            config_json = ?,
            is_active = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-    ).run(platform, externalId, displayName, eventId, accessToken, configJson, input.is_active === false ? 0 : 1, original.id);
+    ).run(platform, externalId, displayName, accessToken, configJson, input.is_active === false ? 0 : 1, original.id);
+
+    if (hasEventId) {
+      if (eventId) {
+        this.db.prepare(
+          `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
+           VALUES (?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(channel_id) DO UPDATE
+           SET event_id = excluded.event_id,
+               updated_at = CURRENT_TIMESTAMP`,
+        ).run(original.id, eventId);
+      } else {
+        this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(original.id);
+      }
+    }
 
     const row = this.db.prepare(
-      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at FROM channel_accounts WHERE id = ? LIMIT 1",
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+       FROM channel_accounts ca
+       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       WHERE ca.id = ? LIMIT 1`,
     ).get(original.id) as Record<string, unknown> | undefined;
     if (!row) throw new Error("Failed to update channel account");
     return mapChannelRow(row);
   }
 
+  async assignChannelAccount(channelId: string, eventId: string) {
+    const normalizedChannelId = String(channelId || "").trim();
+    const normalizedEventId = String(eventId || "").trim();
+    if (!normalizedChannelId || !normalizedEventId) return undefined;
+    this.db.prepare(
+      `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(channel_id) DO UPDATE
+       SET event_id = excluded.event_id,
+           updated_at = CURRENT_TIMESTAMP`,
+    ).run(normalizedChannelId, normalizedEventId);
+    const row = this.db.prepare(
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+       FROM channel_accounts ca
+       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       WHERE ca.id = ? LIMIT 1`,
+    ).get(normalizedChannelId) as Record<string, unknown> | undefined;
+    return row ? mapChannelRow(row) : undefined;
+  }
+
+  async unassignChannelAccount(channelId: string) {
+    const normalizedChannelId = String(channelId || "").trim();
+    if (!normalizedChannelId) return undefined;
+    this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(normalizedChannelId);
+    const row = this.db.prepare(
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+       FROM channel_accounts ca
+       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       WHERE ca.id = ? LIMIT 1`,
+    ).get(normalizedChannelId) as Record<string, unknown> | undefined;
+    return row ? mapChannelRow(row) : undefined;
+  }
+
   async resolveEventIdForChannel(platform: ChannelPlatform, externalId: string) {
     const row = this.db.prepare(
-      "SELECT event_id FROM channel_accounts WHERE platform = ? AND external_id = ? AND is_active = 1 LIMIT 1",
+      `SELECT cea.event_id
+       FROM channel_accounts ca
+       JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       WHERE ca.platform = ? AND ca.external_id = ? AND ca.is_active = 1
+       LIMIT 1`,
     ).get(platform, String(externalId || "").trim()) as { event_id?: string } | undefined;
     return row?.event_id;
   }
@@ -2119,18 +2217,29 @@ export class SqliteAppDatabase implements AppDatabase {
            is_active = excluded.is_active,
            updated_at = CURRENT_TIMESTAMP`,
     );
+    const assign = this.db.prepare(
+      `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(channel_id) DO UPDATE
+       SET event_id = excluded.event_id,
+           updated_at = CURRENT_TIMESTAMP`,
+    );
 
     for (const row of rows) {
+      const eventId = String(row.event_id || "").trim();
       upsert.run(
         String(row.id),
         String(row.page_id),
         String(row.page_name),
-        String(row.event_id),
+        eventId || DEFAULT_EVENT_ID,
         typeof row.page_access_token === "string" ? row.page_access_token : "",
         Boolean(row.is_active) ? 1 : 0,
         String(row.created_at),
         String(row.updated_at),
       );
+      if (eventId) {
+        assign.run(String(row.id), eventId);
+      }
     }
   }
 
