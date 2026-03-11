@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
+import { EmailHtmlEditor } from "./components/EmailHtmlEditor";
 import { Ticket } from "./components/Ticket";
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
@@ -121,7 +122,7 @@ type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin" | "inbox";
 type AgentWorkspaceView = "console" | "setup";
-type EventWorkspaceView = "setup" | "mail" | "public";
+type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
 type EventWorkspaceSort = "event_start_desc" | "name_asc" | "modified_desc";
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
@@ -10983,294 +10984,6 @@ export default function App() {
                     )}
                   </div>
                     </>
-                  ) : eventWorkspaceView === "mail" ? (
-                    <>
-                      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="text-lg font-semibold flex items-center gap-2">
-                                <Send className="w-5 h-5 text-blue-600" />
-                                Event Mail
-                              </h3>
-                              <StatusBadge tone={settings.confirmation_email_enabled === "1" ? "emerald" : "neutral"}>
-                                {settings.confirmation_email_enabled === "1" ? "registration email on" : "registration email off"}
-                              </StatusBadge>
-                              <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
-                            </div>
-                            <StatusLine
-                              className="mt-1"
-                              items={[
-                                emailStatus?.provider ? <>Provider {emailStatus.provider}</> : "Provider resend",
-                                eventMailDirty ? "Unsaved changes" : "All changes saved",
-                              ]}
-                            />
-                          </div>
-                          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
-                            <ActionButton
-                              onClick={() => void saveEventMailSettings()}
-                              disabled={saving}
-                              tone="blue"
-                              active
-                              className="w-full text-sm sm:w-auto sm:shrink-0"
-                            >
-                              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                              Save Mail
-                            </ActionButton>
-                          </div>
-                        </div>
-
-                        {(eventMessage || settingsMessage) && (
-                          <div className="mb-4 space-y-1">
-                            {eventMessage && (
-                              <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                                {eventMessage}
-                              </p>
-                            )}
-                            {settingsMessage && (
-                              <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                                {settingsMessage}
-                              </p>
-                            )}
-                          </div>
-                        )}
-
-                        <PageBanner tone="blue" icon={<CircleHelp className="h-4 w-4" />} className="mb-4">
-                          Sender identity stays in Railway environment variables. This workspace manages per-event transactional templates, test sends, and readiness checks for registration, ticket, payment, and update flows.
-                        </PageBanner>
-
-                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-                          <div className="space-y-4">
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                <div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-sm font-semibold text-slate-900">Delivery Controls</p>
-                                    <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
-                                  </div>
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    Environment config defines sender identity. Per-event settings decide which mail flow is enabled and what each template says.
-                                  </p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => void fetchEmailStatus(selectedEventId)}
-                                  disabled={!selectedEventId || emailStatusLoading}
-                                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {emailStatusLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                                  Refresh
-                                </button>
-                              </div>
-                              <label className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                                <input
-                                  type="checkbox"
-                                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                  checked={settings.confirmation_email_enabled === "1"}
-                                  onChange={(e) =>
-                                    setSettings({
-                                      ...settings,
-                                      confirmation_email_enabled: e.target.checked ? "1" : "0",
-                                    })
-                                  }
-                                />
-                                Enable registration confirmation email
-                              </label>
-                              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
-                                  <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
-                                </div>
-                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Reply-To</p>
-                                  <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.replyToAddress || "Not set"}</p>
-                                </div>
-                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Provider</p>
-                                  <p className="mt-1 text-xs text-slate-700">{emailStatus?.provider || "resend"}</p>
-                                </div>
-                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">App URL</p>
-                                  <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.appUrl || "Not set"}</p>
-                                </div>
-                              </div>
-                              {emailStatus?.errorMessage && (
-                                <p className="mt-3 text-xs text-rose-600">{emailStatus.errorMessage}</p>
-                              )}
-                              {emailStatus?.missingFields?.length ? (
-                                <p className="mt-2 text-[11px] text-amber-700">
-                                  Missing: {emailStatus.missingFields.join(", ")}
-                                </p>
-                              ) : null}
-                            </div>
-
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <p className="text-sm font-semibold text-slate-900">Send Test Email</p>
-                              <p className="mt-1 text-xs text-slate-500">
-                                Sends the currently selected mail type using the selected event's data and current sender configuration.
-                              </p>
-                              <div className="mt-4 flex flex-col gap-3">
-                                <div>
-                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Destination</label>
-                                  <input
-                                    type="email"
-                                    value={emailTestAddress}
-                                    onChange={(e) => setEmailTestAddress(e.target.value)}
-                                    placeholder="you@example.com"
-                                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSendTestEmail()}
-                                  disabled={!selectedEventId || !emailTestAddress.trim() || emailTestSending}
-                                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {emailTestSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                                  Send {emailTemplateDefinition.label} Test
-                                </button>
-                              </div>
-                              {emailTestMessage && (
-                                <p className={`mt-3 text-xs ${emailTestMessage.toLowerCase().includes("failed") || emailTestMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-600"}`}>
-                                  {emailTestMessage}
-                                </p>
-                              )}
-                              {emailStatus?.lastTestResult && (
-                                <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
-                                  <p className="font-semibold text-slate-800">Last test result</p>
-                                  <p className="mt-1">{EMAIL_TEMPLATE_DEFAULTS[emailStatus.lastTestResult.kind].label}</p>
-                                  <p className="mt-1 break-all">
-                                    {emailStatus.lastTestResult.success ? "Sent" : "Failed"} to {emailStatus.lastTestResult.to}
-                                  </p>
-                                  <p className="mt-1">
-                                    {new Date(emailStatus.lastTestResult.attemptedAt).toLocaleString()}
-                                  </p>
-                                  {emailStatus.lastTestResult.error && (
-                                    <p className="mt-1 text-rose-600">{emailStatus.lastTestResult.error}</p>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-sm font-semibold text-slate-900">Mail Types</p>
-                                <StatusBadge tone={emailTemplateDirty ? "amber" : "neutral"}>
-                                  {emailTemplateDirty ? "Template edits pending" : "Templates saved"}
-                                </StatusBadge>
-                              </div>
-                              <p className="mt-1 text-xs text-slate-500">
-                                Keep copy separate per mail kind so ticket delivery, payment, and event updates can evolve independently from registration confirmation.
-                              </p>
-                              <div className="mt-4 space-y-2">
-                                {EMAIL_TEMPLATE_KIND_OPTIONS.map((option) => {
-                                  const optionDefinition = EMAIL_TEMPLATE_DEFAULTS[option.kind];
-                                  const selected = option.kind === selectedEmailTemplateKind;
-                                  const dirty = isEmailTemplateKindDirty(option.kind);
-                                  return (
-                                    <button
-                                      key={option.kind}
-                                      type="button"
-                                      onClick={() => setSelectedEmailTemplateKind(option.kind)}
-                                      className={`flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition ${
-                                        selected
-                                          ? "border-blue-200 bg-blue-50"
-                                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-                                      }`}
-                                    >
-                                      <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${selected ? "bg-blue-500" : dirty ? "bg-amber-400" : "bg-slate-200"}`} aria-hidden />
-                                      <div className="min-w-0 flex-1">
-                                        <div className="flex items-center gap-2">
-                                          <p className={`text-sm font-semibold ${selected ? "text-blue-700" : "text-slate-900"}`}>{option.label}</p>
-                                          {dirty && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">edited</span>}
-                                        </div>
-                                        <p className="mt-1 text-xs leading-5 text-slate-500">{optionDefinition.description}</p>
-                                      </div>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                              <div className="mt-4 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
-                                <p className="font-semibold text-slate-800">{emailTemplateDefinition.label}</p>
-                                <p className="mt-1">{emailTemplateDefinition.description}</p>
-                                <p className="mt-3 font-semibold text-slate-800">Supported tokens</p>
-                                <p className="mt-2 break-words">
-                                  {emailTemplateDefinition.supportedTokens.map((token) => `{{${token}}}`).join(", ")}
-                                </p>
-                                <p className="mt-3 text-[11px] leading-5 text-slate-500">
-                                  Ticket artwork and attachments can be added later. For now, templates link back to the event page and ticket URL generated from <span className="font-mono">APP_URL</span>.
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="space-y-4">
-                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                <div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-sm font-semibold text-slate-900">{emailTemplateDefinition.label} Template</p>
-                                    <StatusBadge tone={selectedEmailTemplateDirty ? "amber" : "neutral"}>
-                                      {selectedEmailTemplateDirty ? "Unsaved" : "Saved"}
-                                    </StatusBadge>
-                                  </div>
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    Edit subject, HTML, and plain text for this mail kind. Preview uses sample event data from the current workspace.
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="mt-4 space-y-4">
-                                <div>
-                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Subject</label>
-                                  <input
-                                    value={selectedEmailTemplateSubject}
-                                    onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "subject", e.target.value))}
-                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">HTML Body</label>
-                                  <textarea
-                                    value={selectedEmailTemplateHtml}
-                                    onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "html", e.target.value))}
-                                    rows={18}
-                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Plain Text Body</label>
-                                  <textarea
-                                    value={selectedEmailTemplateText}
-                                    onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "text", e.target.value))}
-                                    rows={10}
-                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Subject</p>
-                                <p className="mt-2 text-sm font-semibold text-slate-900">{renderedEmailPreviewSubject}</p>
-                                <p className="mt-4 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Text Preview</p>
-                                <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{renderedEmailPreviewText}</pre>
-                              </div>
-                              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">HTML Preview</p>
-                                <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                                  <iframe
-                                    title={`${emailTemplateDefinition.label} preview`}
-                                    srcDoc={renderedEmailPreviewHtml}
-                                    className="h-[560px] w-full border-0 bg-white"
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </>
                   ) : (
                     <>
                       <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
@@ -12456,15 +12169,12 @@ export default function App() {
                             className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                           />
                         </div>
-                        <div>
-                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">HTML Body</label>
-                          <textarea
-                            value={selectedEmailTemplateHtml}
-                            onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "html", e.target.value))}
-                            rows={18}
-                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                          />
-                        </div>
+                        <EmailHtmlEditor
+                          value={selectedEmailTemplateHtml}
+                          renderedPreviewHtml={renderedEmailPreviewHtml}
+                          supportedTokens={emailTemplateDefinition.supportedTokens}
+                          onChange={(nextHtml) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "html", nextHtml))}
+                        />
                         <div>
                           <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Plain Text Body</label>
                           <textarea
@@ -12477,23 +12187,11 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Subject</p>
-                        <p className="mt-2 text-sm font-semibold text-slate-900">{renderedEmailPreviewSubject}</p>
-                        <p className="mt-4 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Text Preview</p>
-                        <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{renderedEmailPreviewText}</pre>
-                      </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">HTML Preview</p>
-                        <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                          <iframe
-                            title={`${emailTemplateDefinition.label} preview`}
-                            srcDoc={renderedEmailPreviewHtml}
-                            className="h-[700px] w-full border-0 bg-white"
-                          />
-                        </div>
-                      </div>
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Subject</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-900">{renderedEmailPreviewSubject}</p>
+                      <p className="mt-4 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Text Preview</p>
+                      <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{renderedEmailPreviewText}</pre>
                     </div>
                   </div>
                 </div>
