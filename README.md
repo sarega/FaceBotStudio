@@ -16,7 +16,12 @@ This contains everything you need to run your app locally.
 1. Install dependencies:
    `npm install`
 2. Set the `OPENROUTER_API_KEY` in `.env` to your OpenRouter API key
-3. Run the app:
+3. If you want registration confirmation emails, also set:
+   - `RESEND_API_KEY`
+   - `EMAIL_FROM`
+   - `EMAIL_REPLY_TO`
+   - `APP_URL`
+4. Run the app:
    `npm run dev`
 
 Production runtime modes:
@@ -48,6 +53,9 @@ Recommended for low-traffic demos with SQLite:
    - `PAGE_ACCESS_TOKEN` (for real Messenger auto-replies)
    - `FACEBOOK_APP_SECRET` (recommended)
    - `REDIS_URL`
+   - `RESEND_API_KEY` (for transactional registration email)
+   - `EMAIL_FROM`
+   - `EMAIL_REPLY_TO`
    - `OPENROUTER_DEFAULT_MODEL=google/gemini-3-flash-preview`
    - `OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small` (optional, for queued document vectors + retrieval)
    - `EMBEDDING_HOOK_URL=https://your-worker-or-api.example.com/embeddings` (optional, receives a copy of embedding jobs after local vectors are stored)

@@ -48,7 +48,7 @@ import {
 import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
-import { AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_WORDS, countApproxWords, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./lib/publicEventPage";
 
@@ -2914,6 +2914,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [emailStatus, setEmailStatus] = useState<AdminEmailStatusResponse | null>(null);
+  const [emailStatusLoading, setEmailStatusLoading] = useState(false);
+  const [emailTestAddress, setEmailTestAddress] = useState("");
+  const [emailTestSending, setEmailTestSending] = useState(false);
+  const [emailTestMessage, setEmailTestMessage] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [publicEventPage, setPublicEventPage] = useState<PublicEventPageResponse | null>(null);
   const [publicEventLoading, setPublicEventLoading] = useState(false);
@@ -3329,6 +3334,16 @@ export default function App() {
   const eventMapEmbedUrl = buildGoogleMapsEmbedUrl(settings);
   const eventMapIsGenerated = !settings.event_map_url.trim() && Boolean(resolvedEventMapUrl);
   const selectedEvent = events.find((event) => event.id === selectedEventId) || null;
+  const emailReadinessTone: BadgeTone = emailStatus?.configured
+    ? "emerald"
+    : emailStatus?.readiness === "invalid_config"
+      ? "rose"
+      : "amber";
+  const emailReadinessLabel = emailStatus?.configured
+    ? "ready"
+    : emailStatus?.readiness === "invalid_config"
+      ? "invalid"
+      : "incomplete";
   const resolvedPublicPageSlug = resolveEnglishPublicSlug({
     customSlug: settings.event_public_slug,
     eventName: settings.event_name || selectedEvent?.name || "",
@@ -4665,6 +4680,7 @@ export default function App() {
           fetchDocuments(selectedEventId),
           canRunTest ? fetchLlmModels() : Promise.resolve(),
           canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
+          canEditSettings ? fetchEmailStatus(selectedEventId) : Promise.resolve(null),
           canManageCheckinAccess ? fetchCheckinSessions(selectedEventId) : Promise.resolve([]),
         ]);
       } finally {
@@ -4711,6 +4727,9 @@ export default function App() {
     setPublicInboxStatusUpdating(false);
     setRegistrations([]);
     setSelectedRegistrationId("");
+    setEmailStatus(null);
+    setEmailTestAddress("");
+    setEmailTestMessage("");
     setCheckinLatestResult(null);
     setCheckinSessionMessage("");
     setCheckinSessionReveal(null);
@@ -5176,6 +5195,74 @@ export default function App() {
       setSavedSettings(nextSettings);
     } catch (err) {
       console.error("Failed to fetch settings", err);
+    }
+  };
+
+  const fetchEmailStatus = async (eventId = selectedEventId) => {
+    if (!canEditSettings || !eventId) {
+      setEmailStatus(null);
+      return null;
+    }
+
+    setEmailStatusLoading(true);
+    try {
+      const res = await apiFetch(`/api/admin/email/status?event_id=${encodeURIComponent(eventId)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as any)?.error || "Failed to fetch email status");
+      }
+      const nextStatus = data as AdminEmailStatusResponse;
+      if (selectedEventIdRef.current !== eventId) return nextStatus;
+      setEmailStatus(nextStatus);
+      return nextStatus;
+    } catch (err) {
+      console.error("Failed to fetch email status", err);
+      if (selectedEventIdRef.current === eventId) {
+        setEmailStatus(null);
+        const message = err instanceof Error ? err.message : "Failed to fetch email status";
+        setEmailTestMessage(`Failed: ${message}`);
+      }
+      return null;
+    } finally {
+      if (selectedEventIdRef.current === eventId) {
+        setEmailStatusLoading(false);
+      }
+    }
+  };
+
+  const handleSendTestEmail = async () => {
+    if (!selectedEventId || !emailTestAddress.trim()) {
+      setEmailTestMessage("Enter a destination email first");
+      return;
+    }
+
+    setEmailTestSending(true);
+    setEmailTestMessage("");
+    try {
+      const res = await apiFetch("/api/admin/email/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          eventId: selectedEventId,
+          to: emailTestAddress.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as any)?.error || (data as any)?.message || "Failed to send test email");
+      }
+      const result = data as AdminEmailTestResponse;
+      setEmailTestMessage(`Test email sent to ${result.to}`);
+      await fetchEmailStatus(selectedEventId);
+    } catch (err) {
+      console.error("Failed to send test email", err);
+      const message = err instanceof Error ? err.message : "Failed to send test email";
+      setEmailTestMessage(`Failed: ${message}`);
+      await fetchEmailStatus(selectedEventId);
+    } finally {
+      setEmailTestSending(false);
     }
   };
 
@@ -10648,7 +10735,7 @@ export default function App() {
                         <div>
                           <p className="text-sm font-semibold text-slate-900">Confirmation Email</p>
                           <p className="mt-1 text-xs text-slate-500">
-                            Send a registration email when the attendee provides an email address. Server requires <span className="font-mono">RESEND_API_KEY</span> and <span className="font-mono">EMAIL_FROM</span>.
+                            Send a registration email when the attendee provides an email address. Server requires <span className="font-mono">RESEND_API_KEY</span>, <span className="font-mono">EMAIL_FROM</span>, <span className="font-mono">EMAIL_REPLY_TO</span>, and <span className="font-mono">APP_URL</span>.
                           </p>
                         </div>
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
@@ -10678,6 +10765,96 @@ export default function App() {
                         <p className="mt-2 text-[11px] text-slate-500">
                           Supported placeholders: <span className="font-mono">{"{{event_name}}"}</span>, <span className="font-mono">{"{{registration_id}}"}</span>, <span className="font-mono">{"{{full_name}}"}</span>.
                         </p>
+                      </div>
+                      <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-semibold text-slate-900">Email Status</p>
+                              <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500">
+                              Sender identity comes from environment config, not from per-event settings.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void fetchEmailStatus(selectedEventId)}
+                            disabled={!selectedEventId || emailStatusLoading}
+                            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {emailStatusLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                            Refresh
+                          </button>
+                        </div>
+                        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
+                            <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Reply-To</p>
+                            <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.replyToAddress || "Not set"}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Provider</p>
+                            <p className="mt-1 text-xs text-slate-700">{emailStatus?.provider || "resend"}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">App URL</p>
+                            <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.appUrl || "Not set"}</p>
+                          </div>
+                        </div>
+                        {emailStatus?.errorMessage && (
+                          <p className="mt-3 text-xs text-rose-600">{emailStatus.errorMessage}</p>
+                        )}
+                        {emailStatus?.missingFields?.length ? (
+                          <p className="mt-2 text-[11px] text-amber-700">
+                            Missing: {emailStatus.missingFields.join(", ")}
+                          </p>
+                        ) : null}
+                        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                            <div className="flex-1">
+                              <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Send Test Email</label>
+                              <input
+                                type="email"
+                                value={emailTestAddress}
+                                onChange={(e) => setEmailTestAddress(e.target.value)}
+                                placeholder="you@example.com"
+                                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleSendTestEmail()}
+                              disabled={!selectedEventId || !emailTestAddress.trim() || emailTestSending}
+                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {emailTestSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                              Send Test Email
+                            </button>
+                          </div>
+                          {emailTestMessage && (
+                            <p className={`mt-3 text-xs ${emailTestMessage.toLowerCase().includes("failed") || emailTestMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-600"}`}>
+                              {emailTestMessage}
+                            </p>
+                          )}
+                          {emailStatus?.lastTestResult && (
+                            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
+                              <p className="font-semibold text-slate-800">Last test result</p>
+                              <p className="mt-1 break-all">
+                                {emailStatus.lastTestResult.success ? "Sent" : "Failed"} to {emailStatus.lastTestResult.to}
+                              </p>
+                              <p className="mt-1">
+                                {new Date(emailStatus.lastTestResult.attemptedAt).toLocaleString()}
+                              </p>
+                              {emailStatus.lastTestResult.error && (
+                                <p className="mt-1 text-rose-600">{emailStatus.lastTestResult.error}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                     {timingInfo.registrationStatus === "invalid" && (

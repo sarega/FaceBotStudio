@@ -306,6 +306,41 @@ export interface Settings {
   reg_end: string;
 }
 
+export interface AdminEmailTestResult {
+  eventId: string;
+  to: string;
+  subject: string;
+  provider: string;
+  success: boolean;
+  attemptedAt: string;
+  error: string | null;
+}
+
+export interface AdminEmailStatusResponse {
+  provider: string;
+  configured: boolean;
+  hasApiKey: boolean;
+  hasFrom: boolean;
+  hasReplyTo: boolean;
+  hasAppUrl: boolean;
+  missingFields: string[];
+  fromAddress: string;
+  replyToAddress: string;
+  appUrl: string;
+  readiness: "ready" | "missing_config" | "invalid_config";
+  errorMessage: string | null;
+  lastTestResult: AdminEmailTestResult | null;
+}
+
+export interface AdminEmailTestResponse {
+  success: boolean;
+  provider: string;
+  to: string;
+  subject: string;
+  sentAt: string;
+  error: string | null;
+}
+
 export interface LlmUsageTotals {
   request_count: number;
   prompt_tokens: number;
