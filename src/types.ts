@@ -1,3 +1,5 @@
+import type { EmailTemplateKind } from "./lib/emailTemplateCatalog";
+
 export interface Message {
   id?: number;
   sender_id: string;
@@ -300,6 +302,21 @@ export interface Settings {
   event_public_contact_hours: string;
   confirmation_email_enabled: string;
   confirmation_email_subject: string;
+  email_template_registration_confirmation_subject: string;
+  email_template_registration_confirmation_html: string;
+  email_template_registration_confirmation_text: string;
+  email_template_ticket_delivery_subject: string;
+  email_template_ticket_delivery_html: string;
+  email_template_ticket_delivery_text: string;
+  email_template_payment_confirmation_subject: string;
+  email_template_payment_confirmation_html: string;
+  email_template_payment_confirmation_text: string;
+  email_template_event_update_subject: string;
+  email_template_event_update_html: string;
+  email_template_event_update_text: string;
+  email_template_magic_link_login_subject: string;
+  email_template_magic_link_login_html: string;
+  email_template_magic_link_login_text: string;
   reg_unique_name: string;
   reg_limit: string;
   reg_start: string;
@@ -308,6 +325,7 @@ export interface Settings {
 
 export interface AdminEmailTestResult {
   eventId: string;
+  kind: EmailTemplateKind;
   to: string;
   subject: string;
   provider: string;
@@ -334,6 +352,7 @@ export interface AdminEmailStatusResponse {
 
 export interface AdminEmailTestResponse {
   success: boolean;
+  kind: EmailTemplateKind;
   provider: string;
   to: string;
   subject: string;

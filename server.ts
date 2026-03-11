@@ -63,7 +63,12 @@ import {
 } from "./backend/datetime";
 import { getEmailConfig, logEmailStartupDiagnostics } from "./backend/email/config";
 import { sendTransactionalEmail } from "./backend/email/service";
-import { buildRegistrationConfirmationLinks, renderRegistrationConfirmationEmail } from "./backend/email/templates";
+import {
+  buildRegistrationConfirmationLinks,
+  renderRegistrationConfirmationEmail,
+  renderSampleTransactionalEmail,
+  type TransactionalEmailKind,
+} from "./backend/email/templates";
 import {
   createAppDatabase,
   type AuditLogRow,
@@ -234,6 +239,7 @@ type ManualOutboundTarget = {
 
 type AdminEmailTestResult = {
   eventId: string;
+  kind: TransactionalEmailKind;
   to: string;
   subject: string;
   provider: string;
@@ -2243,13 +2249,12 @@ function buildRegistrationConfirmationEmailTemplate(options: {
       firstName: options.firstName,
       lastName: options.lastName,
     },
-    subjectTemplate: options.settings.confirmation_email_subject,
     eventId: options.eventId,
     eventSlug: options.eventSlug,
     ticketPngUrl: links.ticketPngUrl,
     ticketSvgUrl: links.ticketSvgUrl,
     recoveryUrl: links.recoveryUrl,
-    sample: options.sample,
+    supportEmail: emailConfig.replyToAddress,
   });
 }
 
@@ -10963,9 +10968,25 @@ async function startServer() {
       const eventId =
         readOptionalString(body, "event_id", 64)
         || readOptionalString(body, "eventId", 64);
+      const kindRaw =
+        readOptionalString(body, "kind", 64)
+        || readOptionalString(body, "email_kind", 64)
+        || "registration_confirmation";
+      const kind = (
+        kindRaw === "registration_confirmation"
+        || kindRaw === "ticket_delivery"
+        || kindRaw === "payment_confirmation"
+        || kindRaw === "event_update"
+        || kindRaw === "magic_link_login"
+      )
+        ? kindRaw
+        : null;
       const to = readRequiredString(body, "to", issues, { label: "to", maxLength: 320 });
       if (!eventId) {
         issues.push({ field: "eventId", message: "eventId is required" });
+      }
+      if (!kind) {
+        issues.push({ field: "kind", message: "kind is invalid" });
       }
       if (to && !looksLikeEmailAddress(to)) {
         issues.push({ field: "to", message: "to must be a valid email address" });
@@ -10980,15 +11001,13 @@ async function startServer() {
       }
 
       const { settings } = await getEmailTemplateEventContext(eventId);
-      const template = buildRegistrationConfirmationEmailTemplate({
+      const template = renderSampleTransactionalEmail({
+        kind,
+        appUrl: getEmailConfig().appUrl,
+        settings,
         eventId,
         eventSlug: event.slug,
-        settings,
-        registrationId: `TEST-${Date.now().toString(36).toUpperCase()}`,
-        firstName: "Test",
-        lastName: "Attendee",
-        includeTicketLinks: false,
-        sample: true,
+        supportEmail: getEmailConfig().replyToAddress,
       });
 
       try {
@@ -10998,6 +11017,7 @@ async function startServer() {
         });
         const testResult: AdminEmailTestResult = {
           eventId,
+          kind,
           to,
           subject: template.subject,
           provider: result.provider,
@@ -11014,6 +11034,7 @@ async function startServer() {
         });
         return res.json({
           success: true,
+          kind,
           provider: result.provider,
           to,
           subject: template.subject,
@@ -11024,6 +11045,7 @@ async function startServer() {
         const message = error instanceof Error ? error.message : String(error);
         const testResult: AdminEmailTestResult = {
           eventId,
+          kind,
           to,
           subject: template.subject,
           provider: getEmailConfig().provider,
@@ -11050,6 +11072,7 @@ async function startServer() {
             : 500;
         return res.status(statusCode).json({
           success: false,
+          kind,
           provider: testResult.provider,
           to,
           subject: template.subject,

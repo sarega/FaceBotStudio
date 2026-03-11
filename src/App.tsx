@@ -49,6 +49,7 @@ import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { Ticket } from "./components/Ticket";
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_WORDS, countApproxWords, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./lib/publicEventPage";
 
@@ -118,9 +119,9 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin" | "inbox";
+type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin" | "inbox";
 type AgentWorkspaceView = "console" | "setup";
-type EventWorkspaceView = "setup" | "public";
+type EventWorkspaceView = "setup" | "mail" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
 type EventWorkspaceSort = "event_start_desc" | "name_asc" | "modified_desc";
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
@@ -193,6 +194,24 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       {
         label: "Lifecycle",
         body: "Manual status still matters, but the effective status can auto-close once the event end time is already in the past, or the start time if no end is set.",
+      },
+    ],
+  },
+  mail: {
+    title: "Mail Workspace Help",
+    summary: "Transactional email is managed separately so template editing, readiness checks, and test sends do not compete with event setup layout.",
+    points: [
+      {
+        label: "Sender readiness",
+        body: "Provider, sender address, reply-to, and app URL come from environment variables. This workspace surfaces whether that runtime config is actually ready to send.",
+      },
+      {
+        label: "Per-kind templates",
+        body: "Registration confirmation, ticket delivery, payment confirmation, and event update emails should evolve independently so one flow does not force wording compromises on another.",
+      },
+      {
+        label: "Preview before send",
+        body: "Use the rendered subject, text, and HTML preview with a test send before wiring new paid or operational flows into production delivery.",
       },
     ],
   },
@@ -2446,6 +2465,21 @@ const INITIAL_SETTINGS: Settings = {
   event_public_contact_hours: "",
   confirmation_email_enabled: "0",
   confirmation_email_subject: "Your registration for {{event_name}}",
+  email_template_registration_confirmation_subject: "",
+  email_template_registration_confirmation_html: "",
+  email_template_registration_confirmation_text: "",
+  email_template_ticket_delivery_subject: "",
+  email_template_ticket_delivery_html: "",
+  email_template_ticket_delivery_text: "",
+  email_template_payment_confirmation_subject: "",
+  email_template_payment_confirmation_html: "",
+  email_template_payment_confirmation_text: "",
+  email_template_event_update_subject: "",
+  email_template_event_update_html: "",
+  email_template_event_update_text: "",
+  email_template_magic_link_login_subject: "",
+  email_template_magic_link_login_html: "",
+  email_template_magic_link_login_text: "",
   reg_unique_name: "1",
   reg_limit: "200",
   reg_start: "",
@@ -2488,6 +2522,21 @@ function getBlankEventScopedSettings() {
     event_public_contact_hours: "",
     confirmation_email_enabled: "0",
     confirmation_email_subject: "Your registration for {{event_name}}",
+    email_template_registration_confirmation_subject: "",
+    email_template_registration_confirmation_html: "",
+    email_template_registration_confirmation_text: "",
+    email_template_ticket_delivery_subject: "",
+    email_template_ticket_delivery_html: "",
+    email_template_ticket_delivery_text: "",
+    email_template_payment_confirmation_subject: "",
+    email_template_payment_confirmation_html: "",
+    email_template_payment_confirmation_text: "",
+    email_template_event_update_subject: "",
+    email_template_event_update_html: "",
+    email_template_event_update_text: "",
+    email_template_magic_link_login_subject: "",
+    email_template_magic_link_login_html: "",
+    email_template_magic_link_login_text: "",
     reg_unique_name: "1",
     reg_limit: "200",
     reg_start: "",
@@ -2527,6 +2576,21 @@ function getBlankEventScopedSettings() {
     | "event_public_contact_hours"
     | "confirmation_email_enabled"
     | "confirmation_email_subject"
+    | "email_template_registration_confirmation_subject"
+    | "email_template_registration_confirmation_html"
+    | "email_template_registration_confirmation_text"
+    | "email_template_ticket_delivery_subject"
+    | "email_template_ticket_delivery_html"
+    | "email_template_ticket_delivery_text"
+    | "email_template_payment_confirmation_subject"
+    | "email_template_payment_confirmation_html"
+    | "email_template_payment_confirmation_text"
+    | "email_template_event_update_subject"
+    | "email_template_event_update_html"
+    | "email_template_event_update_text"
+    | "email_template_magic_link_login_subject"
+    | "email_template_magic_link_login_html"
+    | "email_template_magic_link_login_text"
     | "reg_unique_name"
     | "reg_limit"
     | "reg_start"
@@ -2545,12 +2609,34 @@ const EVENT_SETUP_SETTINGS_KEYS = [
   "event_end_date",
   "event_description",
   "event_travel",
-  "confirmation_email_enabled",
-  "confirmation_email_subject",
   "reg_unique_name",
   "reg_limit",
   "reg_start",
   "reg_end",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+const EMAIL_TEMPLATE_SETTINGS_KEYS = [
+  "email_template_registration_confirmation_subject",
+  "email_template_registration_confirmation_html",
+  "email_template_registration_confirmation_text",
+  "email_template_ticket_delivery_subject",
+  "email_template_ticket_delivery_html",
+  "email_template_ticket_delivery_text",
+  "email_template_payment_confirmation_subject",
+  "email_template_payment_confirmation_html",
+  "email_template_payment_confirmation_text",
+  "email_template_event_update_subject",
+  "email_template_event_update_html",
+  "email_template_event_update_text",
+  "email_template_magic_link_login_subject",
+  "email_template_magic_link_login_html",
+  "email_template_magic_link_login_text",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+const EVENT_MAIL_SETTINGS_KEYS = [
+  "confirmation_email_enabled",
+  "confirmation_email_subject",
+  ...EMAIL_TEMPLATE_SETTINGS_KEYS,
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 const EVENT_PUBLIC_SETTINGS_KEYS = [
@@ -2798,6 +2884,66 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.confirmation_email_subject === "string" && data.confirmation_email_subject.trim()
         ? data.confirmation_email_subject
         : INITIAL_SETTINGS.confirmation_email_subject,
+    email_template_registration_confirmation_subject:
+      typeof data.email_template_registration_confirmation_subject === "string"
+        ? data.email_template_registration_confirmation_subject
+        : (typeof data.confirmation_email_subject === "string" ? data.confirmation_email_subject : INITIAL_SETTINGS.email_template_registration_confirmation_subject),
+    email_template_registration_confirmation_html:
+      typeof data.email_template_registration_confirmation_html === "string"
+        ? data.email_template_registration_confirmation_html
+        : INITIAL_SETTINGS.email_template_registration_confirmation_html,
+    email_template_registration_confirmation_text:
+      typeof data.email_template_registration_confirmation_text === "string"
+        ? data.email_template_registration_confirmation_text
+        : INITIAL_SETTINGS.email_template_registration_confirmation_text,
+    email_template_ticket_delivery_subject:
+      typeof data.email_template_ticket_delivery_subject === "string"
+        ? data.email_template_ticket_delivery_subject
+        : INITIAL_SETTINGS.email_template_ticket_delivery_subject,
+    email_template_ticket_delivery_html:
+      typeof data.email_template_ticket_delivery_html === "string"
+        ? data.email_template_ticket_delivery_html
+        : INITIAL_SETTINGS.email_template_ticket_delivery_html,
+    email_template_ticket_delivery_text:
+      typeof data.email_template_ticket_delivery_text === "string"
+        ? data.email_template_ticket_delivery_text
+        : INITIAL_SETTINGS.email_template_ticket_delivery_text,
+    email_template_payment_confirmation_subject:
+      typeof data.email_template_payment_confirmation_subject === "string"
+        ? data.email_template_payment_confirmation_subject
+        : INITIAL_SETTINGS.email_template_payment_confirmation_subject,
+    email_template_payment_confirmation_html:
+      typeof data.email_template_payment_confirmation_html === "string"
+        ? data.email_template_payment_confirmation_html
+        : INITIAL_SETTINGS.email_template_payment_confirmation_html,
+    email_template_payment_confirmation_text:
+      typeof data.email_template_payment_confirmation_text === "string"
+        ? data.email_template_payment_confirmation_text
+        : INITIAL_SETTINGS.email_template_payment_confirmation_text,
+    email_template_event_update_subject:
+      typeof data.email_template_event_update_subject === "string"
+        ? data.email_template_event_update_subject
+        : INITIAL_SETTINGS.email_template_event_update_subject,
+    email_template_event_update_html:
+      typeof data.email_template_event_update_html === "string"
+        ? data.email_template_event_update_html
+        : INITIAL_SETTINGS.email_template_event_update_html,
+    email_template_event_update_text:
+      typeof data.email_template_event_update_text === "string"
+        ? data.email_template_event_update_text
+        : INITIAL_SETTINGS.email_template_event_update_text,
+    email_template_magic_link_login_subject:
+      typeof data.email_template_magic_link_login_subject === "string"
+        ? data.email_template_magic_link_login_subject
+        : INITIAL_SETTINGS.email_template_magic_link_login_subject,
+    email_template_magic_link_login_html:
+      typeof data.email_template_magic_link_login_html === "string"
+        ? data.email_template_magic_link_login_html
+        : INITIAL_SETTINGS.email_template_magic_link_login_html,
+    email_template_magic_link_login_text:
+      typeof data.email_template_magic_link_login_text === "string"
+        ? data.email_template_magic_link_login_text
+        : INITIAL_SETTINGS.email_template_magic_link_login_text,
     reg_unique_name:
       typeof data.reg_unique_name === "string" && data.reg_unique_name.trim()
         ? data.reg_unique_name.trim()
@@ -2901,6 +3047,31 @@ function mergeLogMessageRows(latestFirst: Message[], olderRows: Message[]) {
   return merged;
 }
 
+function getEmailTemplateFieldKey(kind: EmailTemplateKind, field: "subject" | "html" | "text") {
+  return getEmailTemplateSettingKey(kind, field) as keyof Settings;
+}
+
+function getResolvedEmailTemplateValue(settings: Settings, kind: EmailTemplateKind, field: "subject" | "html" | "text") {
+  const key = getEmailTemplateFieldKey(kind, field);
+  const raw = typeof settings[key] === "string" ? String(settings[key] || "") : "";
+  if (raw.trim()) return raw;
+  if (kind === "registration_confirmation" && field === "subject" && settings.confirmation_email_subject.trim()) {
+    return settings.confirmation_email_subject;
+  }
+  return EMAIL_TEMPLATE_DEFAULTS[kind][field];
+}
+
+function updateEmailTemplateValue(settings: Settings, kind: EmailTemplateKind, field: "subject" | "html" | "text", value: string) {
+  const key = getEmailTemplateFieldKey(kind, field);
+  return {
+    ...settings,
+    [key]: value,
+    ...(kind === "registration_confirmation" && field === "subject"
+      ? { confirmation_email_subject: value }
+      : {}),
+  } satisfies Settings;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("event");
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
@@ -2916,6 +3087,7 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [emailStatus, setEmailStatus] = useState<AdminEmailStatusResponse | null>(null);
   const [emailStatusLoading, setEmailStatusLoading] = useState(false);
+  const [selectedEmailTemplateKind, setSelectedEmailTemplateKind] = useState<EmailTemplateKind>("registration_confirmation");
   const [emailTestAddress, setEmailTestAddress] = useState("");
   const [emailTestSending, setEmailTestSending] = useState(false);
   const [emailTestMessage, setEmailTestMessage] = useState("");
@@ -3301,6 +3473,7 @@ export default function App() {
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const primaryTabs = [
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
+    ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: "Mail" }] : []),
     ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: "Context" }] : []),
     ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: "Test" }] : []),
     ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: "Agent" }] : []),
@@ -3354,6 +3527,34 @@ export default function App() {
   const publicPageAbsoluteUrl = typeof window !== "undefined"
     ? new URL(publicPagePreviewPath, window.location.origin).toString()
     : publicPagePreviewPath;
+  const emailTemplateDefinition = EMAIL_TEMPLATE_DEFAULTS[selectedEmailTemplateKind];
+  const selectedEmailTemplateSubject = getResolvedEmailTemplateValue(settings, selectedEmailTemplateKind, "subject");
+  const selectedEmailTemplateHtml = getResolvedEmailTemplateValue(settings, selectedEmailTemplateKind, "html");
+  const selectedEmailTemplateText = getResolvedEmailTemplateValue(settings, selectedEmailTemplateKind, "text");
+  const emailPreviewBaseUrl = typeof window !== "undefined" ? window.location.origin : publicPageAbsoluteUrl;
+  const emailPreviewTicketUrl = emailPreviewBaseUrl
+    ? new URL(`/api/tickets/${encodeURIComponent("TEST-TICKET")}.png`, emailPreviewBaseUrl).toString()
+    : "";
+  const emailPreviewTokens = {
+    app_url: emailPreviewBaseUrl,
+    event_name: settings.event_name || selectedEvent?.name || "Sample Event",
+    full_name: "Test Attendee",
+    registration_id: "TEST-TICKET",
+    event_date: timingInfo.eventDateLabel,
+    event_location: attendeeLocationLabel || "Main venue",
+    map_url: resolvedEventMapUrl || "",
+    travel_info: eventLocationSummary.travelInfo || "Follow the current event travel instructions.",
+    ticket_url: emailPreviewTicketUrl,
+    event_page_url: publicPageAbsoluteUrl,
+    support_email: emailStatus?.replyToAddress || "support@example.com",
+    payment_amount: "THB 1,500",
+    payment_status: "Paid",
+    update_summary: "Schedule or venue changes will be summarized here before this email goes live.",
+    magic_link_url: emailPreviewBaseUrl,
+  };
+  const renderedEmailPreviewSubject = replaceEmailTemplateTokens(selectedEmailTemplateSubject, emailPreviewTokens);
+  const renderedEmailPreviewHtml = replaceEmailTemplateTokens(selectedEmailTemplateHtml, emailPreviewTokens);
+  const renderedEmailPreviewText = replaceEmailTemplateTokens(selectedEmailTemplateText, emailPreviewTokens);
   const publicPageQrFileBase = `event-${resolvedPublicPageSlug || "public-page"}-qr`;
   const publicPageAutoSummary = resolvePublicSummary("", settings.event_description);
   const publicPageSummary = resolvePublicSummary(settings.event_public_summary, settings.event_description);
@@ -5151,6 +5352,7 @@ export default function App() {
 
     const allowedTabs = [
       ...(canEditSettings ? ["event"] : []),
+      ...(canEditSettings ? ["mail"] : []),
       ...(canEditSettings ? ["design"] : []),
       ...(canRunTest ? ["test"] : []),
       ...(canRunAgent ? ["agent"] : []),
@@ -5246,6 +5448,7 @@ export default function App() {
         },
         body: JSON.stringify({
           eventId: selectedEventId,
+          kind: selectedEmailTemplateKind,
           to: emailTestAddress.trim(),
         }),
       });
@@ -5254,7 +5457,7 @@ export default function App() {
         throw new Error((data as any)?.error || (data as any)?.message || "Failed to send test email");
       }
       const result = data as AdminEmailTestResponse;
-      setEmailTestMessage(`Test email sent to ${result.to}`);
+      setEmailTestMessage(`${EMAIL_TEMPLATE_DEFAULTS[result.kind].label} test email sent to ${result.to}`);
       await fetchEmailStatus(selectedEventId);
     } catch (err) {
       console.error("Failed to send test email", err);
@@ -5807,9 +6010,18 @@ export default function App() {
   };
   const areSettingsKeysDirty = (keys: ReadonlyArray<keyof Settings>) =>
     keys.some((key) => normalizedSettings[key] !== normalizedSavedSettings[key]);
+  const isEmailTemplateKindDirty = (kind: EmailTemplateKind) =>
+    (["subject", "html", "text"] as const).some((field) => {
+      const key = getEmailTemplateFieldKey(kind, field);
+      return normalizedSettings[key] !== normalizedSavedSettings[key];
+    });
   const eventSetupDirty = areSettingsKeysDirty(EVENT_SETUP_SETTINGS_KEYS);
+  const eventMailDirty = areSettingsKeysDirty(EVENT_MAIL_SETTINGS_KEYS);
   const eventPublicDirty = areSettingsKeysDirty(EVENT_PUBLIC_SETTINGS_KEYS);
-  const eventDetailsDirty = eventSetupDirty || eventPublicDirty;
+  const eventWorkspaceDirty = eventSetupDirty || eventPublicDirty;
+  const emailTemplateDirty = areSettingsKeysDirty(EMAIL_TEMPLATE_SETTINGS_KEYS);
+  const selectedEmailTemplateDirty = isEmailTemplateKindDirty(selectedEmailTemplateKind);
+  const eventDetailsDirty = eventWorkspaceDirty || eventMailDirty;
   const eventContextDirty = areSettingsKeysDirty(EVENT_CONTEXT_SETTINGS_KEYS);
   const aiSettingsDirty = areSettingsKeysDirty(AI_SETTINGS_KEYS);
   const agentSettingsDirty = areSettingsKeysDirty(AGENT_SETTINGS_KEYS);
@@ -5829,12 +6041,14 @@ export default function App() {
     const eventSwitching = typeof nextEventId === "string" && nextEventId !== selectedEventId;
 
     if (eventSwitching) {
-      if (eventDetailsDirty) dirtySections.add("Event");
+      if (eventWorkspaceDirty) dirtySections.add("Event");
+      if (eventMailDirty) dirtySections.add("Mail");
       if (eventContextDirty) dirtySections.add("Context");
       if (workspaceSetupDirty) dirtySections.add("Setup");
       if (agentSettingsDirty) dirtySections.add("Agent");
     } else if (nextTab && nextTab !== activeTab) {
-      if (activeTab === "event" && eventDetailsDirty) dirtySections.add("Event");
+      if (activeTab === "event" && eventWorkspaceDirty) dirtySections.add("Event");
+      if (activeTab === "mail" && eventMailDirty) dirtySections.add("Mail");
       if (activeTab === "design" && eventContextDirty) dirtySections.add("Context");
       if (activeTab === "settings" && workspaceSetupDirty) dirtySections.add("Setup");
       if (activeTab === "agent" && agentSettingsDirty) dirtySections.add("Agent");
@@ -6001,24 +6215,7 @@ export default function App() {
       return;
     }
 
-    const saved = await saveSettingsSubset([
-      "event_name",
-      "event_timezone",
-      "event_venue_name",
-      "event_room_detail",
-      "event_location",
-      "event_map_url",
-      "event_date",
-      "event_end_date",
-      "event_description",
-      "event_travel",
-      "confirmation_email_enabled",
-      "confirmation_email_subject",
-      "reg_unique_name",
-      "reg_limit",
-      "reg_start",
-      "reg_end",
-    ], "Event setup saved");
+    const saved = await saveSettingsSubset([...EVENT_SETUP_SETTINGS_KEYS], "Event setup saved");
 
     if (saved) {
       const nextEventName = settings.event_name.trim();
@@ -6032,6 +6229,10 @@ export default function App() {
         await fetchEvents();
       }
     }
+  };
+
+  const saveEventMailSettings = async () => {
+    await saveSettingsSubset([...EVENT_MAIL_SETTINGS_KEYS], "Mail settings saved");
   };
 
   const saveEventPublicPage = async () => {
@@ -9942,7 +10143,7 @@ export default function App() {
                       >
                         <selectedEventWorkspaceTab.icon className="h-4 w-4 shrink-0" />
                         <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
-                        {eventDetailsDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
+                        {eventWorkspaceDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
                         <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${eventWorkspaceMenuOpen ? "rotate-180" : ""}`} />
                       </button>
                       {eventWorkspaceMenuOpen && (
@@ -10078,6 +10279,9 @@ export default function App() {
                   >
                     <tab.icon className="h-4 w-4 shrink-0" />
                     <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
+                    {(tab.id === "mail" && eventMailDirty) && (
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
+                    )}
                     {(tab.id === "design" && eventContextDirty) && (
                       <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
                     )}
@@ -10730,130 +10934,35 @@ export default function App() {
                         <p className="mt-1 text-xs text-slate-700">{timingInfo.endLabel}</p>
                       </div>
                     </div>
-                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
-                          <p className="text-sm font-semibold text-slate-900">Confirmation Email</p>
+                          <p className="text-sm font-semibold text-slate-900">Transactional Mail</p>
                           <p className="mt-1 text-xs text-slate-500">
-                            Send a registration email when the attendee provides an email address. Server requires <span className="font-mono">RESEND_API_KEY</span>, <span className="font-mono">EMAIL_FROM</span>, <span className="font-mono">EMAIL_REPLY_TO</span>, and <span className="font-mono">APP_URL</span>.
+                            Registration confirmation, ticket delivery, and future event-update templates now live in the dedicated Mail workspace.
                           </p>
                         </div>
-                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            checked={settings.confirmation_email_enabled === "1"}
-                            onChange={(e) =>
-                              setSettings({
-                                ...settings,
-                                confirmation_email_enabled: e.target.checked ? "1" : "0",
-                              })
-                            }
-                          />
-                          Enable Email
-                        </label>
+                        <ActionButton
+                          onClick={() => handleNavigateToTab("mail")}
+                          tone="neutral"
+                          className="px-3 text-xs"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                          Open Mail Workspace
+                        </ActionButton>
                       </div>
-                      <div className="mt-3">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email Subject</label>
-                        <input
-                          value={settings.confirmation_email_subject}
-                          onChange={(e) => setSettings({ ...settings, confirmation_email_subject: e.target.value })}
-                          disabled={settings.confirmation_email_enabled !== "1"}
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                          placeholder="Your registration for {{event_name}}"
-                        />
-                        <p className="mt-2 text-[11px] text-slate-500">
-                          Supported placeholders: <span className="font-mono">{"{{event_name}}"}</span>, <span className="font-mono">{"{{registration_id}}"}</span>, <span className="font-mono">{"{{full_name}}"}</span>.
-                        </p>
-                      </div>
-                      <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="text-sm font-semibold text-slate-900">Email Status</p>
-                              <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
-                            </div>
-                            <p className="mt-1 text-xs text-slate-500">
-                              Sender identity comes from environment config, not from per-event settings.
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => void fetchEmailStatus(selectedEventId)}
-                            disabled={!selectedEventId || emailStatusLoading}
-                            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {emailStatusLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                            Refresh
-                          </button>
+                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration Email</p>
+                          <p className="mt-1 text-xs text-slate-700">{settings.confirmation_email_enabled === "1" ? "Enabled" : "Disabled"}</p>
                         </div>
-                        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
-                            <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
-                          </div>
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Reply-To</p>
-                            <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.replyToAddress || "Not set"}</p>
-                          </div>
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Provider</p>
-                            <p className="mt-1 text-xs text-slate-700">{emailStatus?.provider || "resend"}</p>
-                          </div>
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">App URL</p>
-                            <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.appUrl || "Not set"}</p>
-                          </div>
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Config Readiness</p>
+                          <p className="mt-1 text-xs text-slate-700">{emailReadinessLabel}</p>
                         </div>
-                        {emailStatus?.errorMessage && (
-                          <p className="mt-3 text-xs text-rose-600">{emailStatus.errorMessage}</p>
-                        )}
-                        {emailStatus?.missingFields?.length ? (
-                          <p className="mt-2 text-[11px] text-amber-700">
-                            Missing: {emailStatus.missingFields.join(", ")}
-                          </p>
-                        ) : null}
-                        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                            <div className="flex-1">
-                              <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Send Test Email</label>
-                              <input
-                                type="email"
-                                value={emailTestAddress}
-                                onChange={(e) => setEmailTestAddress(e.target.value)}
-                                placeholder="you@example.com"
-                                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => void handleSendTestEmail()}
-                              disabled={!selectedEventId || !emailTestAddress.trim() || emailTestSending}
-                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {emailTestSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                              Send Test Email
-                            </button>
-                          </div>
-                          {emailTestMessage && (
-                            <p className={`mt-3 text-xs ${emailTestMessage.toLowerCase().includes("failed") || emailTestMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-600"}`}>
-                              {emailTestMessage}
-                            </p>
-                          )}
-                          {emailStatus?.lastTestResult && (
-                            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
-                              <p className="font-semibold text-slate-800">Last test result</p>
-                              <p className="mt-1 break-all">
-                                {emailStatus.lastTestResult.success ? "Sent" : "Failed"} to {emailStatus.lastTestResult.to}
-                              </p>
-                              <p className="mt-1">
-                                {new Date(emailStatus.lastTestResult.attemptedAt).toLocaleString()}
-                              </p>
-                              {emailStatus.lastTestResult.error && (
-                                <p className="mt-1 text-rose-600">{emailStatus.lastTestResult.error}</p>
-                              )}
-                            </div>
-                          )}
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
+                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
                         </div>
                       </div>
                     </div>
@@ -10873,6 +10982,294 @@ export default function App() {
                       </InlineWarning>
                     )}
                   </div>
+                    </>
+                  ) : eventWorkspaceView === "mail" ? (
+                    <>
+                      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
+                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-lg font-semibold flex items-center gap-2">
+                                <Send className="w-5 h-5 text-blue-600" />
+                                Event Mail
+                              </h3>
+                              <StatusBadge tone={settings.confirmation_email_enabled === "1" ? "emerald" : "neutral"}>
+                                {settings.confirmation_email_enabled === "1" ? "registration email on" : "registration email off"}
+                              </StatusBadge>
+                              <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
+                            </div>
+                            <StatusLine
+                              className="mt-1"
+                              items={[
+                                emailStatus?.provider ? <>Provider {emailStatus.provider}</> : "Provider resend",
+                                eventMailDirty ? "Unsaved changes" : "All changes saved",
+                              ]}
+                            />
+                          </div>
+                          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                            <ActionButton
+                              onClick={() => void saveEventMailSettings()}
+                              disabled={saving}
+                              tone="blue"
+                              active
+                              className="w-full text-sm sm:w-auto sm:shrink-0"
+                            >
+                              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                              Save Mail
+                            </ActionButton>
+                          </div>
+                        </div>
+
+                        {(eventMessage || settingsMessage) && (
+                          <div className="mb-4 space-y-1">
+                            {eventMessage && (
+                              <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                                {eventMessage}
+                              </p>
+                            )}
+                            {settingsMessage && (
+                              <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                                {settingsMessage}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        <PageBanner tone="blue" icon={<CircleHelp className="h-4 w-4" />} className="mb-4">
+                          Sender identity stays in Railway environment variables. This workspace manages per-event transactional templates, test sends, and readiness checks for registration, ticket, payment, and update flows.
+                        </PageBanner>
+
+                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+                          <div className="space-y-4">
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">Delivery Controls</p>
+                                    <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
+                                  </div>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Environment config defines sender identity. Per-event settings decide which mail flow is enabled and what each template says.
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => void fetchEmailStatus(selectedEventId)}
+                                  disabled={!selectedEventId || emailStatusLoading}
+                                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {emailStatusLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                  Refresh
+                                </button>
+                              </div>
+                              <label className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                  checked={settings.confirmation_email_enabled === "1"}
+                                  onChange={(e) =>
+                                    setSettings({
+                                      ...settings,
+                                      confirmation_email_enabled: e.target.checked ? "1" : "0",
+                                    })
+                                  }
+                                />
+                                Enable registration confirmation email
+                              </label>
+                              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
+                                  <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
+                                </div>
+                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Reply-To</p>
+                                  <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.replyToAddress || "Not set"}</p>
+                                </div>
+                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Provider</p>
+                                  <p className="mt-1 text-xs text-slate-700">{emailStatus?.provider || "resend"}</p>
+                                </div>
+                                <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">App URL</p>
+                                  <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.appUrl || "Not set"}</p>
+                                </div>
+                              </div>
+                              {emailStatus?.errorMessage && (
+                                <p className="mt-3 text-xs text-rose-600">{emailStatus.errorMessage}</p>
+                              )}
+                              {emailStatus?.missingFields?.length ? (
+                                <p className="mt-2 text-[11px] text-amber-700">
+                                  Missing: {emailStatus.missingFields.join(", ")}
+                                </p>
+                              ) : null}
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <p className="text-sm font-semibold text-slate-900">Send Test Email</p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                Sends the currently selected mail type using the selected event's data and current sender configuration.
+                              </p>
+                              <div className="mt-4 flex flex-col gap-3">
+                                <div>
+                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Destination</label>
+                                  <input
+                                    type="email"
+                                    value={emailTestAddress}
+                                    onChange={(e) => setEmailTestAddress(e.target.value)}
+                                    placeholder="you@example.com"
+                                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleSendTestEmail()}
+                                  disabled={!selectedEventId || !emailTestAddress.trim() || emailTestSending}
+                                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {emailTestSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                                  Send {emailTemplateDefinition.label} Test
+                                </button>
+                              </div>
+                              {emailTestMessage && (
+                                <p className={`mt-3 text-xs ${emailTestMessage.toLowerCase().includes("failed") || emailTestMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-600"}`}>
+                                  {emailTestMessage}
+                                </p>
+                              )}
+                              {emailStatus?.lastTestResult && (
+                                <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
+                                  <p className="font-semibold text-slate-800">Last test result</p>
+                                  <p className="mt-1">{EMAIL_TEMPLATE_DEFAULTS[emailStatus.lastTestResult.kind].label}</p>
+                                  <p className="mt-1 break-all">
+                                    {emailStatus.lastTestResult.success ? "Sent" : "Failed"} to {emailStatus.lastTestResult.to}
+                                  </p>
+                                  <p className="mt-1">
+                                    {new Date(emailStatus.lastTestResult.attemptedAt).toLocaleString()}
+                                  </p>
+                                  {emailStatus.lastTestResult.error && (
+                                    <p className="mt-1 text-rose-600">{emailStatus.lastTestResult.error}</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold text-slate-900">Mail Types</p>
+                                <StatusBadge tone={emailTemplateDirty ? "amber" : "neutral"}>
+                                  {emailTemplateDirty ? "Template edits pending" : "Templates saved"}
+                                </StatusBadge>
+                              </div>
+                              <p className="mt-1 text-xs text-slate-500">
+                                Keep copy separate per mail kind so ticket delivery, payment, and event updates can evolve independently from registration confirmation.
+                              </p>
+                              <div className="mt-4 space-y-2">
+                                {EMAIL_TEMPLATE_KIND_OPTIONS.map((option) => {
+                                  const optionDefinition = EMAIL_TEMPLATE_DEFAULTS[option.kind];
+                                  const selected = option.kind === selectedEmailTemplateKind;
+                                  const dirty = isEmailTemplateKindDirty(option.kind);
+                                  return (
+                                    <button
+                                      key={option.kind}
+                                      type="button"
+                                      onClick={() => setSelectedEmailTemplateKind(option.kind)}
+                                      className={`flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition ${
+                                        selected
+                                          ? "border-blue-200 bg-blue-50"
+                                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                                      }`}
+                                    >
+                                      <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${selected ? "bg-blue-500" : dirty ? "bg-amber-400" : "bg-slate-200"}`} aria-hidden />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-2">
+                                          <p className={`text-sm font-semibold ${selected ? "text-blue-700" : "text-slate-900"}`}>{option.label}</p>
+                                          {dirty && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">edited</span>}
+                                        </div>
+                                        <p className="mt-1 text-xs leading-5 text-slate-500">{optionDefinition.description}</p>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div className="mt-4 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
+                                <p className="font-semibold text-slate-800">{emailTemplateDefinition.label}</p>
+                                <p className="mt-1">{emailTemplateDefinition.description}</p>
+                                <p className="mt-3 font-semibold text-slate-800">Supported tokens</p>
+                                <p className="mt-2 break-words">
+                                  {emailTemplateDefinition.supportedTokens.map((token) => `{{${token}}}`).join(", ")}
+                                </p>
+                                <p className="mt-3 text-[11px] leading-5 text-slate-500">
+                                  Ticket artwork and attachments can be added later. For now, templates link back to the event page and ticket URL generated from <span className="font-mono">APP_URL</span>.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-4">
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">{emailTemplateDefinition.label} Template</p>
+                                    <StatusBadge tone={selectedEmailTemplateDirty ? "amber" : "neutral"}>
+                                      {selectedEmailTemplateDirty ? "Unsaved" : "Saved"}
+                                    </StatusBadge>
+                                  </div>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Edit subject, HTML, and plain text for this mail kind. Preview uses sample event data from the current workspace.
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="mt-4 space-y-4">
+                                <div>
+                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Subject</label>
+                                  <input
+                                    value={selectedEmailTemplateSubject}
+                                    onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "subject", e.target.value))}
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">HTML Body</label>
+                                  <textarea
+                                    value={selectedEmailTemplateHtml}
+                                    onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "html", e.target.value))}
+                                    rows={18}
+                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Plain Text Body</label>
+                                  <textarea
+                                    value={selectedEmailTemplateText}
+                                    onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "text", e.target.value))}
+                                    rows={10}
+                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Subject</p>
+                                <p className="mt-2 text-sm font-semibold text-slate-900">{renderedEmailPreviewSubject}</p>
+                                <p className="mt-4 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Text Preview</p>
+                                <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{renderedEmailPreviewText}</pre>
+                              </div>
+                              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">HTML Preview</p>
+                                <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                                  <iframe
+                                    title={`${emailTemplateDefinition.label} preview`}
+                                    srcDoc={renderedEmailPreviewHtml}
+                                    className="h-[560px] w-full border-0 bg-white"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </>
                   ) : (
                     <>
@@ -11803,6 +12200,302 @@ export default function App() {
 
                   </div>
 
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === "mail" && (
+            <motion.div
+              key="mail"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-4"
+            >
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Send className="w-5 h-5 text-blue-600" />
+                        Event Mail
+                      </h3>
+                      <StatusBadge tone={settings.confirmation_email_enabled === "1" ? "emerald" : "neutral"}>
+                        {settings.confirmation_email_enabled === "1" ? "registration email on" : "registration email off"}
+                      </StatusBadge>
+                      <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
+                    </div>
+                    <StatusLine
+                      className="mt-1"
+                      items={[
+                        emailStatus?.provider ? <>Provider {emailStatus.provider}</> : "Provider resend",
+                        eventMailDirty ? "Unsaved changes" : "All changes saved",
+                      ]}
+                    />
+                  </div>
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                    <ActionButton
+                      onClick={() => void saveEventMailSettings()}
+                      disabled={saving}
+                      tone="blue"
+                      active
+                      className="w-full text-sm sm:w-auto sm:shrink-0"
+                    >
+                      {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      Save Mail
+                    </ActionButton>
+                  </div>
+                </div>
+
+                {(eventMessage || settingsMessage) && (
+                  <div className="mb-4 space-y-1">
+                    {eventMessage && (
+                      <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {eventMessage}
+                      </p>
+                    )}
+                    {settingsMessage && (
+                      <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
+                        {settingsMessage}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <PageBanner tone="blue" icon={<CircleHelp className="h-4 w-4" />} className="mb-4">
+                  Sender identity stays in Railway environment variables. This workspace manages per-event transactional templates, test sends, and readiness checks for registration, ticket, payment, and update flows.
+                </PageBanner>
+
+                <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[360px_minmax(0,1fr)]">
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">Delivery Controls</p>
+                            <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Environment config defines sender identity. Per-event settings decide which mail flow is enabled and what each template says.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void fetchEmailStatus(selectedEventId)}
+                          disabled={!selectedEventId || emailStatusLoading}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {emailStatusLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          Refresh
+                        </button>
+                      </div>
+                      <label className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          checked={settings.confirmation_email_enabled === "1"}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              confirmation_email_enabled: e.target.checked ? "1" : "0",
+                            })
+                          }
+                        />
+                        Enable registration confirmation email
+                      </label>
+                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-1">
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
+                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Reply-To</p>
+                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.replyToAddress || "Not set"}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Provider</p>
+                          <p className="mt-1 text-xs text-slate-700">{emailStatus?.provider || "resend"}</p>
+                        </div>
+                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">App URL</p>
+                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.appUrl || "Not set"}</p>
+                        </div>
+                      </div>
+                      {emailStatus?.errorMessage && (
+                        <p className="mt-3 text-xs text-rose-600">{emailStatus.errorMessage}</p>
+                      )}
+                      {emailStatus?.missingFields?.length ? (
+                        <p className="mt-2 text-[11px] text-amber-700">
+                          Missing: {emailStatus.missingFields.join(", ")}
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <p className="text-sm font-semibold text-slate-900">Send Test Email</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Sends the currently selected mail type using the selected event's data and current sender configuration.
+                      </p>
+                      <div className="mt-4 flex flex-col gap-3">
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Destination</label>
+                          <input
+                            type="email"
+                            value={emailTestAddress}
+                            onChange={(e) => setEmailTestAddress(e.target.value)}
+                            placeholder="you@example.com"
+                            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleSendTestEmail()}
+                          disabled={!selectedEventId || !emailTestAddress.trim() || emailTestSending}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {emailTestSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                          Send {emailTemplateDefinition.label} Test
+                        </button>
+                      </div>
+                      {emailTestMessage && (
+                        <p className={`mt-3 text-xs ${emailTestMessage.toLowerCase().includes("failed") || emailTestMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-600"}`}>
+                          {emailTestMessage}
+                        </p>
+                      )}
+                      {emailStatus?.lastTestResult && (
+                        <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
+                          <p className="font-semibold text-slate-800">Last test result</p>
+                          <p className="mt-1">{EMAIL_TEMPLATE_DEFAULTS[emailStatus.lastTestResult.kind].label}</p>
+                          <p className="mt-1 break-all">
+                            {emailStatus.lastTestResult.success ? "Sent" : "Failed"} to {emailStatus.lastTestResult.to}
+                          </p>
+                          <p className="mt-1">
+                            {new Date(emailStatus.lastTestResult.attemptedAt).toLocaleString()}
+                          </p>
+                          {emailStatus.lastTestResult.error && (
+                            <p className="mt-1 text-rose-600">{emailStatus.lastTestResult.error}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Mail Types</p>
+                        <StatusBadge tone={emailTemplateDirty ? "amber" : "neutral"}>
+                          {emailTemplateDirty ? "Template edits pending" : "Templates saved"}
+                        </StatusBadge>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Keep copy separate per mail kind so ticket delivery, payment, and event updates can evolve independently from registration confirmation.
+                      </p>
+                      <div className="mt-4 space-y-2">
+                        {EMAIL_TEMPLATE_KIND_OPTIONS.map((option) => {
+                          const optionDefinition = EMAIL_TEMPLATE_DEFAULTS[option.kind];
+                          const selected = option.kind === selectedEmailTemplateKind;
+                          const dirty = isEmailTemplateKindDirty(option.kind);
+                          return (
+                            <button
+                              key={option.kind}
+                              type="button"
+                              onClick={() => setSelectedEmailTemplateKind(option.kind)}
+                              className={`flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition ${
+                                selected
+                                  ? "border-blue-200 bg-blue-50"
+                                  : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                              }`}
+                            >
+                              <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${selected ? "bg-blue-500" : dirty ? "bg-amber-400" : "bg-slate-200"}`} aria-hidden />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <p className={`text-sm font-semibold ${selected ? "text-blue-700" : "text-slate-900"}`}>{option.label}</p>
+                                  {dirty && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">edited</span>}
+                                </div>
+                                <p className="mt-1 text-xs leading-5 text-slate-500">{optionDefinition.description}</p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-4 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
+                        <p className="font-semibold text-slate-800">{emailTemplateDefinition.label}</p>
+                        <p className="mt-1">{emailTemplateDefinition.description}</p>
+                        <p className="mt-3 font-semibold text-slate-800">Supported tokens</p>
+                        <p className="mt-2 break-words">
+                          {emailTemplateDefinition.supportedTokens.map((token) => `{{${token}}}`).join(", ")}
+                        </p>
+                        <p className="mt-3 text-[11px] leading-5 text-slate-500">
+                          Ticket artwork and attachments can be added later. For now, templates link back to the event page and ticket URL generated from <span className="font-mono">APP_URL</span>.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">{emailTemplateDefinition.label} Template</p>
+                            <StatusBadge tone={selectedEmailTemplateDirty ? "amber" : "neutral"}>
+                              {selectedEmailTemplateDirty ? "Unsaved" : "Saved"}
+                            </StatusBadge>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Edit subject, HTML, and plain text for this mail kind. Preview uses sample event data from the current workspace.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Subject</label>
+                          <input
+                            value={selectedEmailTemplateSubject}
+                            onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "subject", e.target.value))}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">HTML Body</label>
+                          <textarea
+                            value={selectedEmailTemplateHtml}
+                            onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "html", e.target.value))}
+                            rows={18}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Plain Text Body</label>
+                          <textarea
+                            value={selectedEmailTemplateText}
+                            onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "text", e.target.value))}
+                            rows={10}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Subject</p>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">{renderedEmailPreviewSubject}</p>
+                        <p className="mt-4 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Text Preview</p>
+                        <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{renderedEmailPreviewText}</pre>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">HTML Preview</p>
+                        <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                          <iframe
+                            title={`${emailTemplateDefinition.label} preview`}
+                            srcDoc={renderedEmailPreviewHtml}
+                            className="h-[700px] w-full border-0 bg-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </motion.div>
