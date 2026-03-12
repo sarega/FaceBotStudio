@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { CircleHelp } from "lucide-react";
 
 type EmailHtmlEditorMode = "code" | "visual" | "rendered";
 type EmailQuickBlockId = "hero" | "details" | "cta" | "footer";
@@ -9,6 +10,99 @@ type EmailHtmlEditorProps = {
   supportedTokens: string[];
   onChange: (value: string) => void;
 };
+
+const CODE_EDITOR_LINE_HEIGHT = 24;
+
+function EmailEditorHelpBubble({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelOffset, setPanelOffset] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!bubbleRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setPanelOffset(0);
+      return;
+    }
+
+    const updatePosition = () => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const margin = 16;
+      const rect = panel.getBoundingClientRect();
+      let nextOffset = 0;
+
+      if (rect.left < margin) {
+        nextOffset += margin - rect.left;
+      }
+      if (rect.right > window.innerWidth - margin) {
+        nextOffset -= rect.right - (window.innerWidth - margin);
+      }
+
+      setPanelOffset(nextOffset);
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0" ref={bubbleRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={label}
+        title={label}
+      >
+        <CircleHelp className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div
+          ref={panelRef}
+          className="absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl"
+          style={panelOffset ? { transform: `translateX(${panelOffset}px)` } : undefined}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function serializeDocumentWithDoctype(doc: Document) {
   const doctype = doc.doctype;
@@ -147,18 +241,129 @@ function insertBeforeBodyClose(html: string, snippet: string) {
   return `${html.trim()}\n${snippet}`;
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightTemplateTokens(value: string) {
+  return escapeHtml(value).replace(
+    /(\{\{[\s\S]*?\}\})/g,
+    '<span class="text-fuchsia-600">$1</span>',
+  );
+}
+
+function highlightHtmlAttributes(source: string) {
+  let output = "";
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const whitespace = source.slice(cursor).match(/^\s+/)?.[0];
+    if (whitespace) {
+      output += escapeHtml(whitespace);
+      cursor += whitespace.length;
+      continue;
+    }
+
+    const nameMatch = source.slice(cursor).match(/^([^\s=/>]+)/);
+    if (!nameMatch) {
+      output += highlightTemplateTokens(source.slice(cursor));
+      break;
+    }
+
+    const attrName = nameMatch[1];
+    const attrToneClass = attrName === "class"
+      ? "text-sky-700"
+      : attrName === "style"
+        ? "text-orange-700"
+        : "text-amber-700";
+
+    output += `<span class="${attrToneClass}">${escapeHtml(attrName)}</span>`;
+    cursor += attrName.length;
+
+    const equalsMatch = source.slice(cursor).match(/^\s*=\s*/)?.[0];
+    if (!equalsMatch) continue;
+
+    output += escapeHtml(equalsMatch);
+    cursor += equalsMatch.length;
+
+    const valueMatch = source.slice(cursor).match(/^(".*?"|'.*?'|[^\s>]+)/)?.[0];
+    if (!valueMatch) continue;
+
+    output += `<span class="text-emerald-700">${highlightTemplateTokens(valueMatch)}</span>`;
+    cursor += valueMatch.length;
+  }
+
+  return output;
+}
+
+function highlightHtmlTag(source: string) {
+  if (/^<!--/.test(source)) {
+    return `<span class="text-emerald-700">${escapeHtml(source)}</span>`;
+  }
+
+  if (/^<!DOCTYPE/i.test(source)) {
+    return `<span class="text-violet-600">${escapeHtml(source)}</span>`;
+  }
+
+  const tagMatch = source.match(/^<(\/?)([^\s/>]+)([\s\S]*?)(\/?)>$/);
+  if (!tagMatch) {
+    return `<span class="text-blue-600">${escapeHtml(source)}</span>`;
+  }
+
+  const [, closingSlash, tagName, rawAttributes, selfClosingSlash] = tagMatch;
+  return [
+    `<span class="text-blue-600">${escapeHtml(`<${closingSlash}${tagName}`)}</span>`,
+    highlightHtmlAttributes(rawAttributes),
+    `<span class="text-blue-600">${escapeHtml(`${selfClosingSlash}>`)}</span>`,
+  ].join("");
+}
+
+function highlightHtmlSource(source: string) {
+  return source
+    .split(/(<!--[\s\S]*?-->|<!DOCTYPE[\s\S]*?>|<\/?[^>]+>)/gi)
+    .filter(Boolean)
+    .map((segment) => (
+      segment.startsWith("<")
+        ? highlightHtmlTag(segment)
+        : highlightTemplateTokens(segment)
+    ))
+    .join("");
+}
+
+function getCodeLineNumberFromOffset(source: string, offset: number) {
+  return source.slice(0, Math.max(0, offset)).split("\n").length;
+}
+
 export function EmailHtmlEditor({
   value,
   renderedPreviewHtml,
   supportedTokens,
   onChange,
 }: EmailHtmlEditorProps) {
-  const [mode, setMode] = useState<EmailHtmlEditorMode>("code");
+  const [mode, setMode] = useState<EmailHtmlEditorMode>("rendered");
+  const [quickBlocksOpen, setQuickBlocksOpen] = useState(false);
   const [visualReady, setVisualReady] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const codeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const codeHighlightRef = useRef<HTMLPreElement | null>(null);
+  const codeLineNumbersRef = useRef<HTMLDivElement | null>(null);
   const frameCleanupRef = useRef<(() => void) | null>(null);
   const changeHandlerRef = useRef(onChange);
   const latestValueRef = useRef(value);
+  const lastVisualSelectionRef = useRef("");
+  const pendingCodeSelectionRef = useRef<string | null>(null);
+  const [codeActiveLine, setCodeActiveLine] = useState(1);
+  const [codeScrollTop, setCodeScrollTop] = useState(0);
+  const [codeScrollLeft, setCodeScrollLeft] = useState(0);
 
   useEffect(() => {
     changeHandlerRef.current = onChange;
@@ -167,6 +372,41 @@ export function EmailHtmlEditor({
   useEffect(() => {
     latestValueRef.current = value;
   }, [value]);
+
+  useEffect(() => {
+    if (mode !== "code") return;
+
+    const textarea = codeTextareaRef.current;
+    const selectionText = pendingCodeSelectionRef.current?.trim();
+    pendingCodeSelectionRef.current = null;
+
+    if (!textarea || !selectionText) return;
+
+    requestAnimationFrame(() => {
+      const exactIndex = value.indexOf(selectionText);
+      if (exactIndex >= 0) {
+        textarea.focus();
+        textarea.setSelectionRange(exactIndex, exactIndex + selectionText.length);
+        setCodeActiveLine(getCodeLineNumberFromOffset(value, exactIndex));
+        return;
+      }
+
+      const regex = new RegExp(escapeRegExp(selectionText).replace(/\s+/g, "\\s+"), "i");
+      const match = regex.exec(value);
+      if (!match || match.index == null) return;
+
+      textarea.focus();
+      textarea.setSelectionRange(match.index, match.index + match[0].length);
+      setCodeActiveLine(getCodeLineNumberFromOffset(value, match.index));
+    });
+  }, [mode, value]);
+
+  useEffect(() => {
+    if (mode !== "code") return;
+    const textarea = codeTextareaRef.current;
+    if (!textarea) return;
+    setCodeActiveLine(getCodeLineNumberFromOffset(value, textarea.selectionStart || 0));
+  }, [mode, value]);
 
   useEffect(() => {
     if (mode !== "visual") {
@@ -198,11 +438,20 @@ export function EmailHtmlEditor({
         syncHtmlFromDocument(doc);
       };
 
+      const handleSelectionChange = () => {
+        const selectedText = doc.getSelection?.()?.toString().replace(/\s+/g, " ").trim() || "";
+        if (selectedText) {
+          lastVisualSelectionRef.current = selectedText;
+        }
+      };
+
       doc.addEventListener("input", handleInput);
       doc.addEventListener("keyup", handleInput);
+      doc.addEventListener("selectionchange", handleSelectionChange);
       frameCleanupRef.current = () => {
         doc.removeEventListener("input", handleInput);
         doc.removeEventListener("keyup", handleInput);
+        doc.removeEventListener("selectionchange", handleSelectionChange);
       };
       setVisualReady(true);
     };
@@ -295,26 +544,39 @@ export function EmailHtmlEditor({
     { id: "cta", label: "CTA Button" },
     { id: "footer", label: "Footer" },
   ] as const satisfies ReadonlyArray<{ id: EmailQuickBlockId; label: string }>;
+  const highlightedSourceMarkup = highlightHtmlSource(value);
+  const lineNumbers = Array.from({ length: Math.max(1, value.split("\n").length) }, (_, index) => index + 1);
+  const codeActiveLineTop = (codeActiveLine - 1) * CODE_EDITOR_LINE_HEIGHT - codeScrollTop;
+  const codeLineHighlightVisible = codeActiveLineTop + CODE_EDITOR_LINE_HEIGHT > 0 && codeActiveLineTop < 720;
+  const updateCodeCursorState = (textarea: HTMLTextAreaElement) => {
+    setCodeActiveLine(getCodeLineNumberFromOffset(value, textarea.selectionStart || 0));
+  };
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+        <div className="flex items-center gap-2">
           <p className="text-sm font-semibold text-slate-900">HTML Composer</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Switch between source, inline visual editing, and final preview without leaving the same editor surface.
-          </p>
+          <EmailEditorHelpBubble label="Open note for HTML Composer">
+            <p>Switch between source editing, inline visual editing, and final rendered preview in one place.</p>
+            <p className="mt-2">Visual Edit writes changes back into the HTML body. Rendered Preview shows sample event data applied.</p>
+          </EmailEditorHelpBubble>
         </div>
         <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
           {([
-            { id: "code", label: "HTML Body" },
-            { id: "visual", label: "Visual Edit" },
             { id: "rendered", label: "Rendered Preview" },
+            { id: "visual", label: "Visual Edit" },
+            { id: "code", label: "HTML Body" },
           ] as const).map((tab) => (
             <button
               key={tab.id}
               type="button"
-              onClick={() => setMode(tab.id)}
+              onClick={() => {
+                if (tab.id === "code" && mode === "visual") {
+                  pendingCodeSelectionRef.current = lastVisualSelectionRef.current || null;
+                }
+                setMode(tab.id);
+              }}
               className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                 mode === tab.id
                   ? "bg-white text-blue-600 shadow-sm"
@@ -328,37 +590,49 @@ export function EmailHtmlEditor({
       </div>
 
       <div className="mt-4 space-y-3">
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Quick Blocks</p>
-              <p className="mt-1 text-xs text-slate-500">
-                Insert reusable email sections. In visual mode they appear at the current cursor position; in source mode they append into the HTML body.
-              </p>
+        {mode !== "rendered" && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Quick Blocks</p>
+                <EmailEditorHelpBubble label="Open note for Quick Blocks">
+                  <p>Insert reusable sections like a hero, details card, CTA, or footer without writing the full markup by hand.</p>
+                  <p className="mt-2">In Visual Edit blocks insert at the cursor. In HTML Body they append before the closing body tag.</p>
+                </EmailEditorHelpBubble>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuickBlocksOpen((current) => !current)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-600"
+              >
+                {quickBlocksOpen ? "Hide Blocks" : "Show Blocks"}
+              </button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {quickBlocks.map((block) => (
-                <button
-                  key={block.id}
-                  type="button"
-                  onClick={() => insertQuickBlock(block.id)}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-600"
-                >
-                  {block.label}
-                </button>
-              ))}
-            </div>
+            {quickBlocksOpen && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {quickBlocks.map((block) => (
+                  <button
+                    key={block.id}
+                    type="button"
+                    onClick={() => insertQuickBlock(block.id)}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-600"
+                  >
+                    {block.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
+        )}
 
         {mode === "visual" && (
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Formatting Toolbar</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Highlight text inside the editable preview, then apply formatting or structure inline.
-                </p>
+                <EmailEditorHelpBubble label="Open note for Formatting Toolbar">
+                  <p>Select text inside Visual Edit, then apply headings, lists, links, or inline formatting.</p>
+                </EmailEditorHelpBubble>
               </div>
               <div className="flex flex-wrap gap-2">
                 {formattingButtons.map((button) => (
@@ -382,13 +656,81 @@ export function EmailHtmlEditor({
       <div className="mt-4">
         {mode === "code" && (
           <div>
-            <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">HTML Body</label>
-            <textarea
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              rows={20}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">HTML Body</p>
+              <span className="text-[11px] text-slate-500">Syntax colors + line focus enabled.</span>
+            </div>
+            <div className="relative h-[720px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+              <div className="absolute inset-y-0 left-0 w-14 border-r border-slate-200 bg-white/75" />
+              {codeLineHighlightVisible && (
+                <>
+                  <div
+                    className="pointer-events-none absolute left-0 z-0 w-14 bg-blue-100/80"
+                    style={{
+                      top: `${codeActiveLineTop}px`,
+                      height: `${CODE_EDITOR_LINE_HEIGHT}px`,
+                    }}
+                  />
+                  <div
+                    className="pointer-events-none absolute left-14 right-0 z-0 bg-blue-100/60"
+                    style={{
+                      top: `${codeActiveLineTop}px`,
+                      height: `${CODE_EDITOR_LINE_HEIGHT}px`,
+                    }}
+                  />
+                </>
+              )}
+              <div className="absolute inset-y-0 left-0 z-10 w-14 overflow-hidden">
+                <div
+                  ref={codeLineNumbersRef}
+                  aria-hidden="true"
+                  className="pointer-events-none px-2 py-3 font-mono text-[11px] leading-6 text-right text-slate-400"
+                  style={{ transform: `translateY(${-codeScrollTop}px)` }}
+                >
+                  {lineNumbers.map((lineNumber) => (
+                    <div
+                      key={lineNumber}
+                      className={lineNumber === codeActiveLine ? "font-semibold text-blue-700" : ""}
+                    >
+                      {lineNumber}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="absolute inset-y-0 left-14 right-0 overflow-hidden">
+                <pre
+                  ref={codeHighlightRef}
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 overflow-hidden px-4 py-3 font-mono text-[12px] leading-6 whitespace-pre text-slate-800"
+                >
+                  <code
+                    className="block min-w-max"
+                    style={{ transform: `translate(${-codeScrollLeft}px, ${-codeScrollTop}px)` }}
+                    dangerouslySetInnerHTML={{ __html: `${highlightedSourceMarkup || "<br />"}\n` }}
+                  />
+                </pre>
+              </div>
+              <textarea
+                ref={codeTextareaRef}
+                value={value}
+                onChange={(event) => {
+                  onChange(event.target.value);
+                  updateCodeCursorState(event.currentTarget);
+                }}
+                onClick={(event) => updateCodeCursorState(event.currentTarget)}
+                onKeyUp={(event) => updateCodeCursorState(event.currentTarget)}
+                onSelect={(event) => updateCodeCursorState(event.currentTarget)}
+                onScroll={(event) => {
+                  const nextTarget = event.currentTarget;
+                  setCodeScrollTop(nextTarget.scrollTop);
+                  setCodeScrollLeft(nextTarget.scrollLeft);
+                }}
+                wrap="off"
+                spellCheck={false}
+                className="absolute inset-y-0 left-14 right-0 z-20 h-full w-auto resize-none overflow-auto bg-transparent px-4 py-3 font-mono text-[12px] leading-6 text-transparent caret-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
+                style={{ WebkitTextFillColor: "transparent" }}
+              />
+            </div>
           </div>
         )}
 
@@ -397,7 +739,7 @@ export function EmailHtmlEditor({
             <div className="mb-2 flex items-center justify-between gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Visual Edit</p>
               <span className="text-[11px] text-slate-500">
-                {visualReady ? "Click inside the email and edit directly." : "Preparing editable preview..."}
+                {visualReady ? "Select text to jump into HTML Body." : "Preparing visual editor..."}
               </span>
             </div>
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
@@ -414,7 +756,7 @@ export function EmailHtmlEditor({
           <div>
             <div className="mb-2 flex items-center justify-between gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Preview</p>
-              <span className="text-[11px] text-slate-500">Sample event data applied for final output preview.</span>
+              <span className="text-[11px] text-slate-500">Sample data applied.</span>
             </div>
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
               <iframe

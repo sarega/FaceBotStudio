@@ -40,6 +40,9 @@ import {
   MoreHorizontal,
   CircleHelp,
   Eye,
+  LayoutDashboard,
+  Maximize2,
+  Minimize2,
   PencilLine,
   Power,
   Phone,
@@ -159,6 +162,46 @@ type AdminAgentCommandTemplate = {
   command: string;
   note: string;
   keywords: string[];
+};
+
+type AdminAgentDashboardEventSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  effective_status: EventStatus;
+  registration_availability: EventRecord["registration_availability"] | null;
+  updated_at: string;
+  total_registrations: number;
+  registered_count: number;
+  cancelled_count: number;
+  checked_in_count: number;
+  is_selected: boolean;
+  is_default: boolean;
+};
+
+type AdminAgentDashboardResponse = {
+  generated_at: string;
+  selected_event_id: string | null;
+  summary: {
+    total_events: number;
+    operational_events: number;
+    active_events: number;
+    pending_events: number;
+    inactive_events: number;
+    history_events: number;
+    closed_events: number;
+    cancelled_events: number;
+    archived_events: number;
+    total_registrations: number;
+    registered_registrations: number;
+    cancelled_registrations: number;
+    checked_in_registrations: number;
+    selected_event_registrations: number;
+    selected_event_registered: number;
+    selected_event_cancelled: number;
+    selected_event_checked_in: number;
+  };
+  events: AdminAgentDashboardEventSummary[];
 };
 
 let qrReaderCtorPromise: Promise<typeof import("@zxing/browser").BrowserQRCodeReader> | null = null;
@@ -382,6 +425,34 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
 
 const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
   {
+    id: "list-events",
+    label: "List All Events",
+    command: "list events",
+    note: "ลิสต์ event ทั้งหมดจาก DB ตาม policy ที่เปิดไว้",
+    keywords: ["event", "list", "all", "workspace", "ทั้งหมด"],
+  },
+  {
+    id: "list-events-operational",
+    label: "List Operational Events",
+    command: "list events type:operational",
+    note: "ดูเฉพาะ active, pending, inactive",
+    keywords: ["event", "operational", "active", "pending", "inactive", "workspace"],
+  },
+  {
+    id: "list-events-pending",
+    label: "List Pending Events",
+    command: "list events status:pending",
+    note: "ดูเฉพาะงานที่ยังไม่เริ่ม",
+    keywords: ["event", "pending", "upcoming", "รอดำเนินการ"],
+  },
+  {
+    id: "list-events-history",
+    label: "List History Events",
+    command: "list events type:history",
+    note: "ดู closed, cancelled, archived",
+    keywords: ["event", "history", "closed", "cancelled", "archived", "ย้อนหลัง"],
+  },
+  {
     id: "find-event",
     label: "Find Event",
     command: 'find_event query="โปรแกรมสหจะโยคะ 5 สัปดาห์"',
@@ -522,6 +593,13 @@ const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
     keywords: ["event", "override", "scope", "ข้ามงาน"],
   },
 ];
+const ADMIN_AGENT_CONSOLE_QUICK_TEMPLATE_IDS = [
+  "list-events",
+  "list-events-operational",
+  "list-events-pending",
+  "list-events-history",
+  "event-overview",
+] as const;
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
@@ -1965,6 +2043,109 @@ function CompactStatRow({
   );
 }
 
+function AdminAgentDashboardMiniStat({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string | number;
+  tone?: BadgeTone;
+}) {
+  const toneClasses =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : tone === "amber"
+      ? "border-amber-200 bg-amber-50 text-amber-900"
+      : tone === "blue"
+      ? "border-blue-200 bg-blue-50 text-blue-900"
+      : tone === "violet"
+      ? "border-violet-200 bg-violet-50 text-violet-900"
+      : "border-slate-300 bg-white text-slate-900";
+
+  return (
+    <div className={`rounded-2xl border px-3 py-2 ${toneClasses}`.trim()}>
+      <div className="text-base font-semibold leading-none">{value}</div>
+      <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-600">{label}</div>
+    </div>
+  );
+}
+
+function AdminAgentDashboardMeter({
+  label,
+  totalLabel,
+  segments,
+  className = "",
+}: {
+  label: string;
+  totalLabel: string;
+  segments: Array<{ label: string; value: number; tone: "emerald" | "amber" | "blue" | "violet" | "slate" }>;
+  className?: string;
+}) {
+  const total = segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0);
+  const toneClassMap: Record<"emerald" | "amber" | "blue" | "violet" | "slate", { bar: string; dot: string; text: string }> = {
+    emerald: {
+      bar: "bg-emerald-500",
+      dot: "bg-emerald-500",
+      text: "text-emerald-800",
+    },
+    amber: {
+      bar: "bg-amber-400",
+      dot: "bg-amber-400",
+      text: "text-amber-800",
+    },
+    blue: {
+      bar: "bg-blue-500",
+      dot: "bg-blue-500",
+      text: "text-blue-800",
+    },
+    violet: {
+      bar: "bg-violet-500",
+      dot: "bg-violet-500",
+      text: "text-violet-800",
+    },
+    slate: {
+      bar: "bg-slate-500",
+      dot: "bg-slate-500",
+      text: "text-slate-800",
+    },
+  };
+
+  return (
+    <div className={`rounded-2xl border border-slate-300 bg-white px-3 py-2.5 ${className}`.trim()}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-700">{label}</p>
+        <p className="text-xs font-semibold text-slate-900">{totalLabel}</p>
+      </div>
+      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-200">
+        <div className="flex h-full w-full overflow-hidden rounded-full">
+          {total > 0 ? (
+            segments.filter((segment) => segment.value > 0).map((segment) => (
+              <div
+                key={segment.label}
+                className={toneClassMap[segment.tone].bar}
+                style={{ width: `${(segment.value / total) * 100}%` }}
+                title={`${segment.label}: ${segment.value}`}
+              />
+            ))
+          ) : (
+            <div className="h-full w-full bg-slate-300" />
+          )}
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+        {segments.map((segment) => (
+          <div key={segment.label} className="inline-flex items-center gap-1.5 text-[11px] text-slate-700">
+            <span className={`h-2 w-2 rounded-full ${toneClassMap[segment.tone].dot}`} />
+            <span className={`font-semibold ${toneClassMap[segment.tone].text}`}>{segment.value}</span>
+            <span>{segment.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function InlineWarning({
   tone = "amber",
   children,
@@ -2103,6 +2284,8 @@ function HelpPopover({
 }) {
   const [open, setOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelOffset, setPanelOffset] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -2127,6 +2310,36 @@ function HelpPopover({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      setPanelOffset(0);
+      return;
+    }
+
+    const updatePosition = () => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      const margin = 16;
+      const rect = panel.getBoundingClientRect();
+      let nextOffset = 0;
+
+      if (rect.left < margin) {
+        nextOffset += margin - rect.left;
+      }
+      if (rect.right > window.innerWidth - margin) {
+        nextOffset -= rect.right - (window.innerWidth - margin);
+      }
+
+      setPanelOffset(nextOffset);
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open]);
+
   return (
     <div className="relative shrink-0" ref={popoverRef}>
       <button
@@ -2140,7 +2353,11 @@ function HelpPopover({
         <CircleHelp className="h-3.5 w-3.5" />
       </button>
       {open && (
-        <div className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl">
+        <div
+          ref={panelRef}
+          className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl"
+          style={panelOffset ? { transform: `translateX(${panelOffset}px)` } : undefined}
+        >
           {children}
         </div>
       )}
@@ -3052,14 +3269,41 @@ function getEmailTemplateFieldKey(kind: EmailTemplateKind, field: "subject" | "h
   return getEmailTemplateSettingKey(kind, field) as keyof Settings;
 }
 
-function getResolvedEmailTemplateValue(settings: Settings, kind: EmailTemplateKind, field: "subject" | "html" | "text") {
+function getStoredEmailTemplateValue(settings: Settings, kind: EmailTemplateKind, field: "subject" | "html" | "text") {
   const key = getEmailTemplateFieldKey(kind, field);
-  const raw = typeof settings[key] === "string" ? String(settings[key] || "") : "";
+  return typeof settings[key] === "string" ? String(settings[key] || "") : "";
+}
+
+function getResolvedEmailTemplateValue(settings: Settings, kind: EmailTemplateKind, field: "subject" | "html" | "text") {
+  const raw = getStoredEmailTemplateValue(settings, kind, field);
   if (raw.trim()) return raw;
   if (kind === "registration_confirmation" && field === "subject" && settings.confirmation_email_subject.trim()) {
     return settings.confirmation_email_subject;
   }
   return EMAIL_TEMPLATE_DEFAULTS[kind][field];
+}
+
+function hasCustomEmailTemplateOverride(settings: Settings, kind: EmailTemplateKind) {
+  const html = getStoredEmailTemplateValue(settings, kind, "html").trim();
+  const text = getStoredEmailTemplateValue(settings, kind, "text").trim();
+  if (html || text) return true;
+
+  const subject = getStoredEmailTemplateValue(settings, kind, "subject").trim();
+  if (!subject) {
+    return kind === "registration_confirmation"
+      ? settings.confirmation_email_subject.trim() !== EMAIL_TEMPLATE_DEFAULTS.registration_confirmation.subject.trim()
+      : false;
+  }
+
+  if (
+    kind === "registration_confirmation"
+    && subject === EMAIL_TEMPLATE_DEFAULTS.registration_confirmation.subject.trim()
+    && settings.confirmation_email_subject.trim() === subject
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function updateEmailTemplateValue(settings: Settings, kind: EmailTemplateKind, field: "subject" | "html" | "text", value: string) {
@@ -3069,6 +3313,18 @@ function updateEmailTemplateValue(settings: Settings, kind: EmailTemplateKind, f
     [key]: value,
     ...(kind === "registration_confirmation" && field === "subject"
       ? { confirmation_email_subject: value }
+      : {}),
+  } satisfies Settings;
+}
+
+function resetEmailTemplateToDefault(settings: Settings, kind: EmailTemplateKind) {
+  return {
+    ...settings,
+    [getEmailTemplateFieldKey(kind, "subject")]: "",
+    [getEmailTemplateFieldKey(kind, "html")]: "",
+    [getEmailTemplateFieldKey(kind, "text")]: "",
+    ...(kind === "registration_confirmation"
+      ? { confirmation_email_subject: EMAIL_TEMPLATE_DEFAULTS.registration_confirmation.subject }
       : {}),
   } satisfies Settings;
 }
@@ -3189,6 +3445,14 @@ export default function App() {
   const [adminCommandPaletteOpen, setAdminCommandPaletteOpen] = useState(false);
   const [adminCommandPaletteQuery, setAdminCommandPaletteQuery] = useState("");
   const [adminAgentTyping, setAdminAgentTyping] = useState(false);
+  const [adminAgentDashboard, setAdminAgentDashboard] = useState<AdminAgentDashboardResponse | null>(null);
+  const [adminAgentDashboardLoading, setAdminAgentDashboardLoading] = useState(false);
+  const [adminAgentDashboardError, setAdminAgentDashboardError] = useState("");
+  const [adminAgentDashboardOpen, setAdminAgentDashboardOpen] = useState(true);
+  const [agentMobileFocusMode, setAgentMobileFocusMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 1024;
+  });
   const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useState(false);
   const [desktopNotifyPermission, setDesktopNotifyPermission] = useState<NotificationPermission | "unsupported">(() => {
     if (typeof window === "undefined" || typeof Notification === "undefined") {
@@ -3399,6 +3663,9 @@ export default function App() {
       template.keywords.join(" "),
     ]),
   );
+  const adminAgentConsoleQuickTemplates = ADMIN_AGENT_CONSOLE_QUICK_TEMPLATE_IDS
+    .map((id) => ADMIN_AGENT_COMMAND_TEMPLATES.find((template) => template.id === id) || null)
+    .filter((template): template is AdminAgentCommandTemplate => Boolean(template));
   const adminAgentPolicy = {
     readEvent: settings.admin_agent_policy_read_event !== "0",
     manageEventSetup: settings.admin_agent_policy_manage_event_setup === "1",
@@ -3425,6 +3692,8 @@ export default function App() {
     settings.admin_agent_enabled === "1"
       ? `Agent mode executes only enabled policy scopes (${adminAgentEnabledPolicies.length}/8): ${adminAgentEnabledPolicies.join(", ") || "none"}.`
       : "Enable Admin Agent in setup before running commands from UI or Telegram.";
+  const isAgentMobileFocusMode = activeTab === "agent" && agentWorkspaceView === "console" && agentMobileFocusMode;
+  const selectedAdminAgentDashboardEvent = adminAgentDashboard?.events.find((event) => event.is_selected) || null;
   const activeAttendeeCount = registrations.filter((reg) => reg.status !== "cancelled").length;
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
   const latestResultState: "success" | "already" | "invalid" | "cancelled" | "idle" =
@@ -3786,13 +4055,15 @@ export default function App() {
       : "Recent History";
   const inactiveWorkspaceHeading = eventWorkspaceFilter === "inactive" ? "Inactive Workspaces" : "Inactive";
   const archivedWorkspaceHeading = eventWorkspaceFilter === "archived" ? "Archived Workspaces" : "Archived";
-  const selectorEvents = (() => {
-    const base = nonHistoricalEvents.length > 0 ? [...nonHistoricalEvents] : [...events];
-    if (selectedEvent && !base.some((event) => event.id === selectedEvent.id)) {
-      base.unshift(selectedEvent);
-    }
-    return [...base].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
-  })();
+  const selectorEvents = [...nonHistoricalEvents].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
+  const selectedEventAvailableInSelector = Boolean(
+    selectedEvent && selectorEvents.some((event) => event.id === selectedEvent.id),
+  );
+  const selectorPlaceholderLabel = selectorEvents.length === 0
+    ? "No live, pending, or inactive workspaces"
+    : selectedEvent
+      ? "Historical workspace selected. Choose a live, pending, or inactive workspace."
+      : "Select a live, pending, or inactive workspace";
   const eventStatusToggle = (() => {
     if (!selectedEvent) {
       return {
@@ -5433,6 +5704,43 @@ export default function App() {
     }
   };
 
+  const fetchAdminAgentDashboard = async (eventId = selectedEventId, options?: { silent?: boolean }) => {
+    if (!canRunAgent) {
+      setAdminAgentDashboard(null);
+      return null;
+    }
+
+    const targetEventId = String(eventId || "").trim();
+    if (!options?.silent) {
+      setAdminAgentDashboardLoading(true);
+    }
+    setAdminAgentDashboardError("");
+    try {
+      const query = targetEventId ? `?event_id=${encodeURIComponent(targetEventId)}` : "";
+      const res = await apiFetch(`/api/admin-agent/dashboard${query}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string })?.error || "Failed to fetch agent dashboard");
+      }
+      const nextDashboard = data as AdminAgentDashboardResponse;
+      setAdminAgentDashboard(nextDashboard);
+      return nextDashboard;
+    } catch (err) {
+      console.error("Failed to fetch agent dashboard", err);
+      setAdminAgentDashboardError(err instanceof Error ? err.message : "Failed to fetch agent dashboard");
+      return null;
+    } finally {
+      setAdminAgentDashboardLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || activeTab !== "agent" || agentWorkspaceView !== "console" || !canRunAgent) {
+      return;
+    }
+    void fetchAdminAgentDashboard(selectedEventId);
+  }, [authStatus, activeTab, agentWorkspaceView, canRunAgent, selectedEventId]);
+
   const handleSendTestEmail = async () => {
     if (!selectedEventId || !emailTestAddress.trim()) {
       setEmailTestMessage("Enter a destination email first");
@@ -6022,6 +6330,7 @@ export default function App() {
   const eventWorkspaceDirty = eventSetupDirty || eventPublicDirty;
   const emailTemplateDirty = areSettingsKeysDirty(EMAIL_TEMPLATE_SETTINGS_KEYS);
   const selectedEmailTemplateDirty = isEmailTemplateKindDirty(selectedEmailTemplateKind);
+  const selectedEmailTemplateIsCustom = hasCustomEmailTemplateOverride(settings, selectedEmailTemplateKind);
   const eventDetailsDirty = eventWorkspaceDirty || eventMailDirty;
   const eventContextDirty = areSettingsKeysDirty(EVENT_CONTEXT_SETTINGS_KEYS);
   const aiSettingsDirty = areSettingsKeysDirty(AI_SETTINGS_KEYS);
@@ -7405,14 +7714,18 @@ export default function App() {
     setAdminCommandPaletteQuery("");
   };
 
-  const handleApplyAdminCommandTemplate = (template: AdminAgentCommandTemplate) => {
-    setAdminAgentInputText(template.command);
+  const applyAdminAgentCommand = (command: string) => {
+    setAdminAgentInputText(command);
     closeAdminCommandPalette();
     window.setTimeout(() => {
       adminAgentInputRef.current?.focus();
-      const nextLength = template.command.length;
+      const nextLength = command.length;
       adminAgentInputRef.current?.setSelectionRange(nextLength, nextLength);
     }, 0);
+  };
+
+  const handleApplyAdminCommandTemplate = (template: AdminAgentCommandTemplate) => {
+    applyAdminAgentCommand(template.command);
   };
 
   const handleToggleAdminCommandPalette = () => {
@@ -7469,6 +7782,7 @@ export default function App() {
 
       if (response.action?.name) {
         const actionEventId = String(response.event_id || selectedEventId || "").trim() || selectedEventId;
+        void fetchAdminAgentDashboard(actionEventId || selectedEventId, { silent: true });
         if (actionEventId && actionEventId === selectedEventId) {
           void Promise.all([
             fetchSettings(selectedEventId),
@@ -9987,7 +10301,9 @@ export default function App() {
         isChatConsoleTab ? "flex h-dvh flex-col overflow-hidden" : "min-h-dvh"
       }`}
     >
-      <header className="app-header-surface sticky top-0 z-20 border-b border-slate-200 bg-white backdrop-blur">
+      <header className={`app-header-surface sticky top-0 z-20 border-b border-slate-200 bg-white backdrop-blur ${
+        isAgentMobileFocusMode ? "hidden lg:block" : ""
+      }`}>
         <div className="max-w-7xl mx-auto px-3 py-2 sm:px-4 lg:px-6">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)_minmax(0,1fr)] lg:items-center">
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5">
@@ -10075,13 +10391,13 @@ export default function App() {
 
             <div className="col-span-2 row-start-2 lg:col-span-1 lg:col-start-2 lg:row-start-1 lg:flex lg:justify-center">
               <label htmlFor="event-selector" className="sr-only">
-                Active event
+                Workspace switcher
               </label>
               <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-1.5 lg:w-[min(32rem,100%)]">
                 <CalendarRange className="h-4 w-4 shrink-0 text-slate-400" />
                 <select
                   id="event-selector"
-                  value={selectedEventId}
+                  value={selectedEventAvailableInSelector ? selectedEventId : ""}
                   onChange={(e) => {
                     if (!handleSelectEvent(e.target.value)) {
                       e.currentTarget.value = selectedEventId;
@@ -10090,6 +10406,9 @@ export default function App() {
                   disabled={!selectorEvents.length || eventLoading}
                   className="min-w-0 w-full truncate bg-transparent text-sm font-medium outline-none disabled:opacity-60"
                 >
+                  <option value="" disabled>
+                    {selectorPlaceholderLabel}
+                  </option>
                   {selectorEvents.map((event) => (
                     <option key={event.id} value={event.id}>
                       {event.name} ({getEventStatusLabel(event.effective_status)}{event.registration_availability && event.registration_availability !== "open" ? ` • ${getRegistrationAvailabilityLabel(event.registration_availability)}` : ""})
@@ -10460,7 +10779,9 @@ export default function App() {
       <main
         className={
           isChatConsoleTab
-            ? "max-w-7xl mx-auto flex-1 min-h-0 overflow-hidden px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-5"
+            ? isAgentMobileFocusMode
+              ? "max-w-7xl mx-auto flex-1 min-h-0 overflow-hidden px-0 py-0 lg:px-6 lg:py-5"
+              : "max-w-7xl mx-auto flex-1 min-h-0 overflow-hidden px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-5"
             : `max-w-7xl mx-auto px-3 py-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4 lg:px-6 lg:py-5 ${canEditSettings ? "lg:pb-28" : ""}`
         }
       >
@@ -11642,8 +11963,12 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="space-y-3 xl:col-span-5">
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "p-3 sm:p-3" : "space-y-4 p-4 sm:p-5"}`}>
+                <div className="space-y-3 xl:col-span-5 xl:self-start">
+                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${
+                    isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)
+                      ? "p-3 sm:p-3"
+                      : "flex flex-col space-y-4 p-4 sm:p-5 xl:h-[calc(100dvh-10rem)] xl:min-h-[42rem]"
+                  }`}>
                     <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "items-center" : "items-start"}`}>
                       <div>
                         <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -11695,7 +12020,7 @@ export default function App() {
                       </div>
                     )}
 
-                    <div className="space-y-3">
+                    <div className={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "space-y-3" : "space-y-3 xl:flex-shrink-0"}>
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                         <div className="relative min-w-0 flex-1">
                           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -11764,7 +12089,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="max-h-[30rem] space-y-5 overflow-y-auto pr-1">
+                    <div className={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "space-y-5" : "min-h-0 flex-1 space-y-5 overflow-y-auto pr-1"}>
                       {filteredEventWorkspaceEvents.length === 0 ? (
                         <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
                           {deferredEventListQuery
@@ -11934,6 +12259,9 @@ export default function App() {
                         <Send className="w-5 h-5 text-blue-600" />
                         Event Mail
                       </h3>
+                      <HelpPopover label="Open note for Event Mail">
+                        Sender identity comes from Railway environment variables. This workspace manages per-event transactional templates, readiness checks, and test sends.
+                      </HelpPopover>
                       <StatusBadge tone={settings.confirmation_email_enabled === "1" ? "emerald" : "neutral"}>
                         {settings.confirmation_email_enabled === "1" ? "registration email on" : "registration email off"}
                       </StatusBadge>
@@ -11976,10 +12304,6 @@ export default function App() {
                   </div>
                 )}
 
-                <PageBanner tone="blue" icon={<CircleHelp className="h-4 w-4" />} className="mb-4">
-                  Sender identity stays in Railway environment variables. This workspace manages per-event transactional templates, test sends, and readiness checks for registration, ticket, payment, and update flows.
-                </PageBanner>
-
                 <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[360px_minmax(0,1fr)]">
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -11987,11 +12311,11 @@ export default function App() {
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="text-sm font-semibold text-slate-900">Delivery Controls</p>
+                            <HelpPopover label="Open note for Delivery Controls">
+                              Sender, reply-to, provider, and app URL come from environment config. This card only controls per-event delivery behavior and status checks.
+                            </HelpPopover>
                             <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
                           </div>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Environment config defines sender identity. Per-event settings decide which mail flow is enabled and what each template says.
-                          </p>
                         </div>
                         <button
                           type="button"
@@ -12046,10 +12370,12 @@ export default function App() {
                     </div>
 
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-sm font-semibold text-slate-900">Send Test Email</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Sends the currently selected mail type using the selected event's data and current sender configuration.
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold text-slate-900">Send Test Email</p>
+                        <HelpPopover label="Open note for Send Test Email">
+                          Sends the currently selected mail type with the selected event&apos;s sample data and current sender configuration.
+                        </HelpPopover>
+                      </div>
                       <div className="mt-4 flex flex-col gap-3">
                         <div>
                           <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Destination</label>
@@ -12096,18 +12422,26 @@ export default function App() {
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-semibold text-slate-900">Mail Types</p>
+                        <HelpPopover label="Open note for Mail Types">
+                          <div className="space-y-2">
+                            {EMAIL_TEMPLATE_KIND_OPTIONS.map((option) => (
+                              <p key={option.kind}>
+                                <span className="font-semibold text-slate-800">{option.label}</span>
+                                <span className="block">{option.description}</span>
+                              </p>
+                            ))}
+                            <p>Default uses the built-in template. Custom means this event has its own saved subject, HTML, or text.</p>
+                          </div>
+                        </HelpPopover>
                         <StatusBadge tone={emailTemplateDirty ? "amber" : "neutral"}>
                           {emailTemplateDirty ? "Template edits pending" : "Templates saved"}
                         </StatusBadge>
                       </div>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Keep copy separate per mail kind so ticket delivery, payment, and event updates can evolve independently from registration confirmation.
-                      </p>
                       <div className="mt-4 space-y-2">
                         {EMAIL_TEMPLATE_KIND_OPTIONS.map((option) => {
-                          const optionDefinition = EMAIL_TEMPLATE_DEFAULTS[option.kind];
                           const selected = option.kind === selectedEmailTemplateKind;
                           const dirty = isEmailTemplateKindDirty(option.kind);
+                          const custom = hasCustomEmailTemplateOverride(settings, option.kind);
                           return (
                             <button
                               key={option.kind}
@@ -12121,26 +12455,21 @@ export default function App() {
                             >
                               <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${selected ? "bg-blue-500" : dirty ? "bg-amber-400" : "bg-slate-200"}`} aria-hidden />
                               <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                   <p className={`text-sm font-semibold ${selected ? "text-blue-700" : "text-slate-900"}`}>{option.label}</p>
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                    custom
+                                      ? "bg-blue-100 text-blue-700"
+                                      : "bg-slate-100 text-slate-600"
+                                  }`}>
+                                    {custom ? "custom" : "default"}
+                                  </span>
                                   {dirty && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">edited</span>}
                                 </div>
-                                <p className="mt-1 text-xs leading-5 text-slate-500">{optionDefinition.description}</p>
                               </div>
                             </button>
                           );
                         })}
-                      </div>
-                      <div className="mt-4 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
-                        <p className="font-semibold text-slate-800">{emailTemplateDefinition.label}</p>
-                        <p className="mt-1">{emailTemplateDefinition.description}</p>
-                        <p className="mt-3 font-semibold text-slate-800">Supported tokens</p>
-                        <p className="mt-2 break-words">
-                          {emailTemplateDefinition.supportedTokens.map((token) => `{{${token}}}`).join(", ")}
-                        </p>
-                        <p className="mt-3 text-[11px] leading-5 text-slate-500">
-                          Ticket artwork and attachments can be added later. For now, templates link back to the event page and ticket URL generated from <span className="font-mono">APP_URL</span>.
-                        </p>
                       </div>
                     </div>
                   </div>
@@ -12148,16 +12477,32 @@ export default function App() {
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-slate-200 bg-white p-4">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
+                        <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="text-sm font-semibold text-slate-900">{emailTemplateDefinition.label} Template</p>
+                            <HelpPopover label={`Open note for ${emailTemplateDefinition.label} template`}>
+                              <p>{emailTemplateDefinition.description}</p>
+                              <p className="mt-2 font-semibold text-slate-800">Supported tokens</p>
+                              <p className="mt-1 break-words">{emailTemplateDefinition.supportedTokens.map((token) => `{{${token}}}`).join(", ")}</p>
+                              <p className="mt-2">Default uses the built-in template until this event saves its own subject, HTML, or text.</p>
+                            </HelpPopover>
                             <StatusBadge tone={selectedEmailTemplateDirty ? "amber" : "neutral"}>
                               {selectedEmailTemplateDirty ? "Unsaved" : "Saved"}
                             </StatusBadge>
+                            <StatusBadge tone={selectedEmailTemplateIsCustom ? "blue" : "neutral"}>
+                              {selectedEmailTemplateIsCustom ? "custom" : "default"}
+                            </StatusBadge>
                           </div>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Edit subject, HTML, and plain text for this mail kind. Preview uses sample event data from the current workspace.
-                          </p>
+                        </div>
+                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                          <ActionButton
+                            onClick={() => setSettings(resetEmailTemplateToDefault(settings, selectedEmailTemplateKind))}
+                            disabled={!selectedEmailTemplateIsCustom}
+                            tone="neutral"
+                            className="w-full text-sm sm:w-auto"
+                          >
+                            Reset to Default
+                          </ActionButton>
                         </div>
                       </div>
                       <div className="mt-4 space-y-4">
@@ -13284,7 +13629,11 @@ export default function App() {
               className={agentWorkspaceView === "console" ? "h-full min-h-0" : "space-y-4"}
             >
               {agentWorkspaceView === "console" && (
-              <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className={`flex h-full min-h-0 flex-col overflow-hidden bg-white ${
+                isAgentMobileFocusMode
+                  ? "rounded-none border-0 shadow-none sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-sm"
+                  : "rounded-2xl border border-slate-200 shadow-sm"
+              }`}>
                 <div className="border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                   <div className="flex min-w-0 items-start gap-2.5">
                     <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 sm:h-9 sm:w-9">
@@ -13298,16 +13647,53 @@ export default function App() {
                             {adminAgentGuardBody}
                           </HelpPopover>
                         </div>
-                        <InlineActionsMenu label="Agent actions" tone="neutral" iconOnly>
-                          <MenuActionItem
-                            onClick={() => void handleAdminAgentClearChat()}
-                            disabled={adminAgentMessages.length === 0}
-                            tone="neutral"
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setAdminAgentDashboardOpen((current) => !current)}
+                            className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border transition ${
+                              adminAgentDashboardOpen
+                                ? "border-violet-200 bg-violet-50 text-violet-700"
+                                : "border-slate-200 bg-white text-slate-500 hover:text-slate-700"
+                            }`}
+                            aria-label={adminAgentDashboardOpen ? "Hide dashboard" : "Show dashboard"}
+                            title={adminAgentDashboardOpen ? "Hide dashboard" : "Show dashboard"}
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            <span className="font-medium">Clear Chat</span>
-                          </MenuActionItem>
-                        </InlineActionsMenu>
+                            <LayoutDashboard className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void fetchAdminAgentDashboard(selectedEventId)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:text-slate-700"
+                            aria-label="Refresh agent dashboard"
+                            title="Refresh dashboard"
+                          >
+                            <RefreshCw className={`h-4 w-4 ${adminAgentDashboardLoading ? "animate-spin" : ""}`} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAgentMobileFocusMode((current) => !current)}
+                            className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border transition lg:hidden ${
+                              agentMobileFocusMode
+                                ? "border-violet-200 bg-violet-50 text-violet-700"
+                                : "border-slate-200 bg-white text-slate-500 hover:text-slate-700"
+                            }`}
+                            aria-label={agentMobileFocusMode ? "Exit focus mode" : "Enter focus mode"}
+                            title={agentMobileFocusMode ? "Exit focus mode" : "Enter focus mode"}
+                          >
+                            {agentMobileFocusMode ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                          </button>
+                          <InlineActionsMenu label="Agent actions" tone="neutral" iconOnly>
+                            <MenuActionItem
+                              onClick={() => void handleAdminAgentClearChat()}
+                              disabled={adminAgentMessages.length === 0}
+                              tone="neutral"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span className="font-medium">Clear Chat</span>
+                            </MenuActionItem>
+                          </InlineActionsMenu>
+                        </div>
                       </div>
                       <div className="mt-1.5 flex min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         <StatusLine
@@ -13316,6 +13702,7 @@ export default function App() {
                             `${activeAgentMessageCount} msgs`,
                             adminAgentGuardLabel,
                             selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
+                            agentMobileFocusMode ? "focus mode" : null,
                           ]}
                         />
                       </div>
@@ -13323,13 +13710,161 @@ export default function App() {
                   </div>
                 </div>
 
+                {adminAgentDashboardOpen && (
+                  <div className="border-b border-slate-200 bg-white px-3 py-2 sm:px-4 sm:py-2.5">
+                    <div className="rounded-2xl border border-slate-300 bg-slate-50/80 px-3 py-2.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-700">Overview</p>
+                            {adminAgentDashboardLoading && (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                                <RefreshCw className="h-2.5 w-2.5 animate-spin" />
+                                syncing
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                            <p className="truncate text-sm font-semibold text-slate-950">
+                              {selectedEvent?.name || "No workspace selected"}
+                            </p>
+                            {selectedEvent && (
+                              <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                                {getEventStatusLabel(selectedEvent.effective_status)}
+                              </StatusBadge>
+                            )}
+                          </div>
+                          <StatusLine
+                            className="mt-1 text-slate-700"
+                            items={[
+                              selectedAdminAgentDashboardEvent
+                                ? `updated ${formatEventWorkspaceDateLabel(selectedAdminAgentDashboardEvent.updated_at)}`
+                                : null,
+                              `${adminAgentDashboard?.summary.total_events ?? 0} workspaces`,
+                              `${adminAgentDashboard?.summary.total_registrations ?? 0} registrations`,
+                            ]}
+                          />
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setAdminAgentDashboardOpen(false)}
+                            className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-violet-300 hover:text-violet-700"
+                          >
+                            Hide
+                          </button>
+                          {selectedEventId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEventWorkspaceView("setup");
+                                setActiveTab("event");
+                              }}
+                              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-blue-300 hover:text-blue-700"
+                            >
+                              Workspace
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-2.5 space-y-2.5">
+                        {adminAgentDashboardError && (
+                          <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+                            {adminAgentDashboardError}
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                          <AdminAgentDashboardMiniStat
+                            label="events"
+                            value={adminAgentDashboard?.summary.total_events ?? "..."}
+                          />
+                          <AdminAgentDashboardMiniStat
+                            label="live"
+                            value={adminAgentDashboard?.summary.active_events ?? "..."}
+                            tone="emerald"
+                          />
+                          <AdminAgentDashboardMiniStat
+                            label="pending"
+                            value={adminAgentDashboard?.summary.pending_events ?? "..."}
+                            tone="amber"
+                          />
+                          <AdminAgentDashboardMiniStat
+                            label="current regs"
+                            value={adminAgentDashboard?.summary.selected_event_registrations ?? "..."}
+                            tone="blue"
+                          />
+                        </div>
+
+                        <AdminAgentDashboardMeter
+                          label="Workspace Status"
+                          totalLabel={`${adminAgentDashboard?.summary.total_events ?? 0} total`}
+                          segments={[
+                            { label: "live", value: adminAgentDashboard?.summary.active_events ?? 0, tone: "emerald" },
+                            { label: "pending", value: adminAgentDashboard?.summary.pending_events ?? 0, tone: "amber" },
+                            { label: "inactive", value: adminAgentDashboard?.summary.inactive_events ?? 0, tone: "slate" },
+                            { label: "history", value: adminAgentDashboard?.summary.history_events ?? 0, tone: "violet" },
+                          ]}
+                        />
+
+                        <div className="grid gap-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+                          <AdminAgentDashboardMeter
+                            label="Current Registrations"
+                            totalLabel={`${adminAgentDashboard?.summary.selected_event_registrations ?? 0} total`}
+                            segments={[
+                              { label: "registered", value: adminAgentDashboard?.summary.selected_event_registered ?? 0, tone: "blue" },
+                              { label: "checked-in", value: adminAgentDashboard?.summary.selected_event_checked_in ?? 0, tone: "emerald" },
+                              { label: "cancelled", value: adminAgentDashboard?.summary.selected_event_cancelled ?? 0, tone: "amber" },
+                            ]}
+                          />
+
+                          <div className="rounded-2xl border border-slate-300 bg-white px-3 py-2.5">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-700">Quick Actions</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => applyAdminAgentCommand("list events")}
+                                className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-violet-300 hover:text-violet-700"
+                              >
+                                List Events
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!selectedEventId) return;
+                                  applyAdminAgentCommand(`/event ${selectedEventId} get_event_overview`);
+                                }}
+                                disabled={!selectedEventId}
+                                className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-violet-300 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Event Overview
+                              </button>
+                            </div>
+                            <StatusLine
+                              className="mt-2 text-slate-700"
+                              items={[
+                                selectedAdminAgentDashboardEvent?.slug ? <span className="font-mono">{selectedAdminAgentDashboardEvent.slug}</span> : null,
+                                selectedAdminAgentDashboardEvent?.is_default ? "default workspace" : null,
+                              ]}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div ref={adminAgentScrollRef} className="chat-scroll chat-selectable flex-1 min-h-0 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                   {adminAgentMessages.length === 0 && (
                     <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                       <MonitorCog className="h-10 w-10" />
-                      <p className="text-sm max-w-xs">
-                        สั่งงาน Agent เช่น สร้าง/อัปเดต event, ตั้ง status/context, จัดการ registration, ส่งข้อความถึง user, หรือค้นทั้งระบบ (ตาม policy ที่เปิดไว้)
-                      </p>
+                      <div className="space-y-2">
+                        <p className="text-sm max-w-xs">
+                          สั่งงาน Agent เช่น สร้าง/อัปเดต event, ตั้ง status/context, จัดการ registration, ส่งข้อความถึง user, หรือค้นทั้งระบบตาม policy ที่เปิดไว้
+                        </p>
+                        <p className="text-xs">CLI shortcuts: <span className="font-medium">list events</span>, <span className="font-medium">list events status:pending</span>, <span className="font-medium">/event evt_xxx get_event_overview</span></p>
+                      </div>
                     </div>
                   )}
                   {adminAgentMessages.map((msg, index) => (
@@ -13499,7 +14034,7 @@ export default function App() {
                             handleAdminAgentSend();
                           }
                         }}
-                        placeholder="สั่งงาน Admin Agent..."
+                        placeholder="สั่งงาน Admin Agent หรือพิมพ์ CLI เช่น list events status:pending"
                         className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
                       />
                       <ActionButton
@@ -13511,6 +14046,18 @@ export default function App() {
                       >
                         <Send className="w-5 h-5" />
                       </ActionButton>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {adminAgentConsoleQuickTemplates.map((template) => (
+                        <button
+                          key={template.id}
+                          type="button"
+                          onClick={() => handleApplyAdminCommandTemplate(template)}
+                          className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700"
+                        >
+                          {template.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 </div>

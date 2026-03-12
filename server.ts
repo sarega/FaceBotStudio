@@ -337,7 +337,8 @@ const failedInboundTurns = new Map<string, FailedInboundTurn>();
 const publicChatAttentionSuppression = new Map<string, number>();
 const pendingCancellationIntents = new Map<string, PendingCancellationIntent>();
 const ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES = 120;
-let adminAgentSharedHistory: ChatHistoryMessage[] = [];
+const ADMIN_AGENT_SHARED_HISTORY_DEFAULT_SCOPE = "global";
+const adminAgentSharedHistoryByScope = new Map<string, ChatHistoryMessage[]>();
 
 function parseRegistrationLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
@@ -1297,19 +1298,42 @@ function normalizeAdminAgentHistory(history: ChatHistoryMessage[] = []) {
   return normalized.slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES);
 }
 
-function mergeAdminAgentSharedHistory(incomingHistory: ChatHistoryMessage[] = []) {
+function normalizeAdminAgentHistoryScopeKey(scopeKey?: string | null) {
+  return normalizeOptionalText(scopeKey) || ADMIN_AGENT_SHARED_HISTORY_DEFAULT_SCOPE;
+}
+
+function getAdminAgentSharedHistory(scopeKey?: string | null) {
+  return adminAgentSharedHistoryByScope.get(normalizeAdminAgentHistoryScopeKey(scopeKey)) || [];
+}
+
+function setAdminAgentSharedHistory(scopeKey: string | null | undefined, history: ChatHistoryMessage[] = []) {
+  const normalizedScopeKey = normalizeAdminAgentHistoryScopeKey(scopeKey);
+  const normalizedHistory = normalizeAdminAgentHistory(history);
+  if (normalizedHistory.length === 0) {
+    adminAgentSharedHistoryByScope.delete(normalizedScopeKey);
+    return;
+  }
+  adminAgentSharedHistoryByScope.set(normalizedScopeKey, normalizedHistory);
+}
+
+function clearAdminAgentSharedHistory(scopeKey?: string | null) {
+  adminAgentSharedHistoryByScope.delete(normalizeAdminAgentHistoryScopeKey(scopeKey));
+}
+
+function mergeAdminAgentSharedHistory(scopeKey: string | null | undefined, incomingHistory: ChatHistoryMessage[] = []) {
   const incoming = normalizeAdminAgentHistory(incomingHistory);
   if (incoming.length === 0) return;
-  if (incoming.length > adminAgentSharedHistory.length) {
-    adminAgentSharedHistory = incoming.slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES);
+  const existing = getAdminAgentSharedHistory(scopeKey);
+  if (incoming.length > existing.length) {
+    setAdminAgentSharedHistory(scopeKey, incoming.slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES));
   }
 }
 
-function getAdminAgentPlannerHistory() {
-  return normalizeAdminAgentHistory(adminAgentSharedHistory);
+function getAdminAgentPlannerHistory(scopeKey?: string | null) {
+  return normalizeAdminAgentHistory(getAdminAgentSharedHistory(scopeKey));
 }
 
-function appendAdminAgentSharedHistory(role: "user" | "model", text: string) {
+function appendAdminAgentSharedHistory(scopeKey: string | null | undefined, role: "user" | "model", text: string) {
   const normalizedText = normalizeOptionalText(text);
   if (!normalizedText) return;
 
@@ -1317,16 +1341,17 @@ function appendAdminAgentSharedHistory(role: "user" | "model", text: string) {
     role,
     parts: [{ text: truncateText(normalizedText, 1800) }],
   };
-  const last = adminAgentSharedHistory[adminAgentSharedHistory.length - 1];
+  const existing = getAdminAgentSharedHistory(scopeKey);
+  const last = existing[existing.length - 1];
   const lastText = last?.parts?.map((part) => (typeof part?.text === "string" ? normalizeOptionalText(part.text) : "")).filter(Boolean).join("\n") || "";
   if (last && last.role === candidate.role && lastText === candidate.parts[0]?.text) {
     return;
   }
 
-  adminAgentSharedHistory = [
-    ...adminAgentSharedHistory,
+  setAdminAgentSharedHistory(scopeKey, [
+    ...existing,
     candidate,
-  ].slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES);
+  ].slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES));
 }
 
 function normalizeRegistrationId(value: unknown) {
@@ -3864,6 +3889,39 @@ type AdminAgentEventSearchOptions = {
   registrationAvailability?: string[];
 };
 
+function readAdminAgentStringListArg(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => readAdminAgentStringListArg(entry));
+  }
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) return [];
+  return normalized.split(/[,\s]+/).map((part) => part.trim()).filter(Boolean);
+}
+
+function normalizeAdminAgentEventStatusFilter(value: string) {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return "";
+  if (normalized === "active" || normalized === "live" || normalized === "open") return "active";
+  if (normalized === "pending" || normalized === "upcoming") return "pending";
+  if (normalized === "inactive") return "inactive";
+  if (normalized === "closed") return "closed";
+  if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
+  if (normalized === "archived" || normalized === "archive") return "archived";
+  return "";
+}
+
+function expandAdminAgentEventFilterGroup(value: string) {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return [] as string[];
+  if (normalized === "operational" || normalized === "current" || normalized === "working") {
+    return ["active", "pending", "inactive"];
+  }
+  if (normalized === "history" || normalized === "historical") {
+    return ["closed", "cancelled", "archived"];
+  }
+  return [];
+}
+
 function sanitizeAdminAgentEventQuery(rawQuery: string) {
   const source = normalizeOptionalText(rawQuery);
   if (!source) return "";
@@ -3873,6 +3931,7 @@ function sanitizeAdminAgentEventQuery(rawQuery: string) {
     .replace(/(ค้นหา|search|find|show|list|แสดง|ลิสต์|ช่วย|ขอ|ลอง|บอก|ดู)/gi, " ")
     .replace(/(อีเวนต์|อีเว้นต์|งาน|รายการ|events?)/gi, " ")
     .replace(/(มีอะไรบ้าง|มีอะไร|อะไรบ้าง|ทั้งหมด|all events?)/gi, " ")
+    .replace(/(ในระบบ|ทั้งหมดในระบบ|ทั้งระบบ|อีกที|อีกครั้ง|อีกรอบ)/gi, " ")
     .replace(/(ที่จัดที่|ที่จัด|สถานที่จัดงาน|สถานที่)/g, " ")
     .replace(/(ครับ|ค่ะ|คะ|นะ|หน่อย|ที|ทีครับ|ไหม|มั้ย|หรือเปล่า|หรือไม่|บ้าง)$/g, " ")
     .replace(/(เปิดอยู่|กำลังเปิด|ยังไม่เริ่ม|รอดำเนินการ|จบแล้ว|ปิดแล้ว|ยกเลิก|รับสมัคร|ลงทะเบียน|เต็ม)/g, " ")
@@ -3885,12 +3944,36 @@ function parseAdminAgentEventSearchOptions(
   args: Record<string, unknown>,
   rawMessage: string,
 ): AdminAgentEventSearchOptions {
-  const source = `${normalizeOptionalText(args.query)} ${normalizeOptionalText(args.name)} ${normalizeOptionalText(rawMessage)}`.toLowerCase();
+  const source = [
+    normalizeOptionalText(args.query),
+    normalizeOptionalText(args.name),
+    normalizeOptionalText(args.status),
+    normalizeOptionalText(args.type),
+    readAdminAgentStringListArg(args.statuses).join(" "),
+    readAdminAgentStringListArg(args.effective_statuses).join(" "),
+    normalizeOptionalText(rawMessage),
+  ].join(" ").toLowerCase();
   const effectiveStatuses = new Set<string>();
   const registrationAvailability = new Set<string>();
   const normalizedStatus = normalizeComparableText(args.status);
   const normalizedAvailability = normalizeComparableText(args.registration_availability);
   const normalizedOpenOnly = normalizeComparableText(args.registration_open_only);
+  for (const token of [
+    ...readAdminAgentStringListArg(args.status),
+    ...readAdminAgentStringListArg(args.statuses),
+    ...readAdminAgentStringListArg(args.effective_statuses),
+    ...readAdminAgentStringListArg(args.type),
+    ...readAdminAgentStringListArg(args.group),
+    ...readAdminAgentStringListArg(args.category),
+  ]) {
+    const normalizedTokenStatus = normalizeAdminAgentEventStatusFilter(token);
+    if (normalizedTokenStatus) {
+      effectiveStatuses.add(normalizedTokenStatus);
+    }
+    for (const status of expandAdminAgentEventFilterGroup(token)) {
+      effectiveStatuses.add(status);
+    }
+  }
 
   if (normalizedStatus === "active" || /active|เปิดอยู่|กำลังเปิด|เปิดตอนนี้/.test(source)) {
     effectiveStatuses.add("active");
@@ -3931,6 +4014,75 @@ function parseAdminAgentEventSearchOptions(
     effectiveStatuses: [...effectiveStatuses],
     registrationAvailability: [...registrationAvailability],
   };
+}
+
+function getAdminAgentEventStatusRank(status: string) {
+  switch (normalizeComparableText(status)) {
+    case "active":
+      return 0;
+    case "pending":
+      return 1;
+    case "inactive":
+      return 2;
+    case "closed":
+      return 3;
+    case "cancelled":
+      return 4;
+    case "archived":
+      return 5;
+    default:
+      return 6;
+  }
+}
+
+function compareAdminAgentEventCandidates(left: AdminAgentEventCandidate, right: AdminAgentEventCandidate) {
+  const leftRank = getAdminAgentEventStatusRank(left.effectiveStatus);
+  const rightRank = getAdminAgentEventStatusRank(right.effectiveStatus);
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  return left.displayName.localeCompare(right.displayName, "th");
+}
+
+function sliceAdminAgentDefaultEventCandidates(candidates: AdminAgentEventCandidate[], limit: number) {
+  const maxResults = parsePositiveInteger(limit, 5, 20);
+  if (maxResults <= 0 || candidates.length <= maxResults) {
+    return candidates.slice(0, maxResults);
+  }
+
+  const grouped = new Map<string, AdminAgentEventCandidate[]>();
+  for (const candidate of candidates) {
+    const key = normalizeComparableText(candidate.effectiveStatus || "");
+    const existing = grouped.get(key) || [];
+    existing.push(candidate);
+    grouped.set(key, existing);
+  }
+
+  const result: AdminAgentEventCandidate[] = [];
+  const statusOrder = ["active", "pending", "inactive", "closed", "cancelled", "archived"];
+  let depth = 0;
+
+  while (result.length < maxResults) {
+    let added = false;
+    for (const status of statusOrder) {
+      const entry = grouped.get(status)?.[depth];
+      if (!entry) continue;
+      result.push(entry);
+      added = true;
+      if (result.length >= maxResults) break;
+    }
+    if (!added) break;
+    depth += 1;
+  }
+
+  if (result.length < maxResults) {
+    const seen = new Set(result.map((candidate) => candidate.id));
+    for (const candidate of candidates) {
+      if (seen.has(candidate.id)) continue;
+      result.push(candidate);
+      if (result.length >= maxResults) break;
+    }
+  }
+
+  return result;
 }
 
 async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> | null }): Promise<AdminAgentEventCandidate[]> {
@@ -3994,12 +4146,7 @@ async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> 
     };
   }));
 
-  return candidates.sort((left, right) => {
-    const leftActive = left.effectiveStatus === "active" ? 0 : 1;
-    const rightActive = right.effectiveStatus === "active" ? 0 : 1;
-    if (leftActive !== rightActive) return leftActive - rightActive;
-    return left.displayName.localeCompare(right.displayName, "th");
-  });
+  return candidates.sort(compareAdminAgentEventCandidates);
 }
 
 function buildCharacterNgramSet(value: string, size = 3) {
@@ -4122,7 +4269,7 @@ async function searchAdminAgentEvents(
   const normalizedCleanedQuery = normalizeComparableText(cleanedQuery);
   const effectiveQuery = normalizedCleanedQuery || normalizedQuery;
   if (!effectiveQuery) {
-    return filteredCandidates.slice(0, maxResults);
+    return sliceAdminAgentDefaultEventCandidates(filteredCandidates, maxResults);
   }
 
   const scored = filteredCandidates
@@ -4133,7 +4280,7 @@ async function searchAdminAgentEvents(
     .filter((entry) => entry.score > 0)
     .sort((left, right) => {
       if (left.score !== right.score) return right.score - left.score;
-      return left.candidate.displayName.localeCompare(right.candidate.displayName, "th");
+      return compareAdminAgentEventCandidates(left.candidate, right.candidate);
     })
     .slice(0, maxResults)
     .map((entry) => entry.candidate);
@@ -4154,7 +4301,7 @@ async function searchAdminAgentEvents(
     .filter((entry) => entry.overlap >= 0.34)
     .sort((left, right) => {
       if (left.overlap !== right.overlap) return right.overlap - left.overlap;
-      return left.candidate.displayName.localeCompare(right.candidate.displayName, "th");
+      return compareAdminAgentEventCandidates(left.candidate, right.candidate);
     })
     .slice(0, maxResults)
     .map((entry) => entry.candidate);
@@ -4163,7 +4310,7 @@ async function searchAdminAgentEvents(
     return fuzzyScored;
   }
   if (effectiveStatuses.length > 0 || registrationAvailability.length > 0) {
-    return filteredCandidates.slice(0, maxResults);
+    return sliceAdminAgentDefaultEventCandidates(filteredCandidates, maxResults);
   }
   return [];
 }
@@ -4187,11 +4334,125 @@ function buildAdminAgentFindEventReply(matches: AdminAgentEventCandidate[], quer
   }
   const header = query
     ? `พบอีเวนต์ ${matches.length} รายการที่ตรงกับ "${query}" (แสดงสูงสุด ${Math.min(limit, matches.length)})`
-    : `รายการอีเวนต์ที่ใช้งานล่าสุด ${Math.min(limit, matches.length)} รายการ`;
+    : `พบอีเวนต์ในระบบ ${Math.min(limit, matches.length)} รายการ`;
   const lines = matches.slice(0, limit).map((event, index) => (
     `${index + 1}. ${event.id} • ${event.displayName} • ${event.effectiveStatus}`
   ));
   return `${header}\n${lines.join("\n")}`;
+}
+
+async function buildAdminAgentDashboard(selectedEventId?: string | null) {
+  const normalizedSelectedEventId = normalizeOptionalText(selectedEventId) || null;
+  const [events, registrations] = await Promise.all([
+    appDb.listEvents(),
+    appDb.listRegistrations(undefined),
+  ]);
+
+  const registrationCountsByEvent = new Map<string, {
+    total: number;
+    registered: number;
+    cancelled: number;
+    checkedIn: number;
+  }>();
+
+  for (const registration of registrations) {
+    const eventId = normalizeOptionalText(registration.event_id) || DEFAULT_EVENT_ID;
+    const current = registrationCountsByEvent.get(eventId) || {
+      total: 0,
+      registered: 0,
+      cancelled: 0,
+      checkedIn: 0,
+    };
+    current.total += 1;
+    if (registration.status === "cancelled") {
+      current.cancelled += 1;
+    } else if (registration.status === "checked-in") {
+      current.checkedIn += 1;
+    } else {
+      current.registered += 1;
+    }
+    registrationCountsByEvent.set(eventId, current);
+  }
+
+  const eventRows = events
+    .map((event) => {
+      const counts = registrationCountsByEvent.get(event.id) || {
+        total: 0,
+        registered: 0,
+        cancelled: 0,
+        checkedIn: 0,
+      };
+      return {
+        id: event.id,
+        name: event.name,
+        slug: event.slug,
+        effective_status: event.effective_status,
+        registration_availability: event.registration_availability || null,
+        updated_at: event.updated_at,
+        total_registrations: counts.total,
+        registered_count: counts.registered,
+        cancelled_count: counts.cancelled,
+        checked_in_count: counts.checkedIn,
+        is_selected: normalizedSelectedEventId === event.id,
+        is_default: Boolean(event.is_default),
+      };
+    })
+    .sort((left, right) => {
+      const leftRank = getAdminAgentEventStatusRank(left.effective_status || "");
+      const rightRank = getAdminAgentEventStatusRank(right.effective_status || "");
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      const leftTimestamp = Date.parse(left.updated_at || "");
+      const rightTimestamp = Date.parse(right.updated_at || "");
+      if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp) && leftTimestamp !== rightTimestamp) {
+        return rightTimestamp - leftTimestamp;
+      }
+      return left.name.localeCompare(right.name, "th");
+    });
+
+  const summary = {
+    total_events: eventRows.length,
+    operational_events: eventRows.filter((event) => (
+      event.effective_status === "active"
+      || event.effective_status === "pending"
+      || event.effective_status === "inactive"
+    )).length,
+    active_events: eventRows.filter((event) => event.effective_status === "active").length,
+    pending_events: eventRows.filter((event) => event.effective_status === "pending").length,
+    inactive_events: eventRows.filter((event) => event.effective_status === "inactive").length,
+    history_events: eventRows.filter((event) => (
+      event.effective_status === "closed"
+      || event.effective_status === "cancelled"
+      || event.effective_status === "archived"
+    )).length,
+    closed_events: eventRows.filter((event) => event.effective_status === "closed").length,
+    cancelled_events: eventRows.filter((event) => event.effective_status === "cancelled").length,
+    archived_events: eventRows.filter((event) => event.effective_status === "archived").length,
+    total_registrations: registrations.length,
+    registered_registrations: registrations.filter((registration) => registration.status === "registered").length,
+    cancelled_registrations: registrations.filter((registration) => registration.status === "cancelled").length,
+    checked_in_registrations: registrations.filter((registration) => registration.status === "checked-in").length,
+    selected_event_registrations: 0,
+    selected_event_registered: 0,
+    selected_event_cancelled: 0,
+    selected_event_checked_in: 0,
+  };
+
+  if (normalizedSelectedEventId) {
+    const selectedCounts = registrationCountsByEvent.get(normalizedSelectedEventId);
+    if (selectedCounts) {
+      summary.selected_event_registrations = selectedCounts.total;
+      summary.selected_event_registered = selectedCounts.registered;
+      summary.selected_event_cancelled = selectedCounts.cancelled;
+      summary.selected_event_checked_in = selectedCounts.checkedIn;
+    }
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    selected_event_id: normalizedSelectedEventId,
+    summary,
+    events: eventRows,
+  };
 }
 
 async function resolveAdminAgentEventId(eventId: string, options?: { allowedEventId?: string; allowCrossEventSearch?: boolean }) {
@@ -4249,16 +4510,250 @@ function parseAdminAgentEventOverride(text: string, fallbackEventId: string) {
   };
 }
 
+function tokenizeAdminAgentCliInput(input: string) {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escape = false;
+
+  for (const char of input) {
+    if (escape) {
+      current += char;
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
+}
+
+function parseAdminAgentCliKeyValueToken(token: string) {
+  const match = String(token || "").match(/^([a-zA-Z0-9_-]+)\s*[:=](.+)$/);
+  if (!match) return null;
+  return {
+    key: String(match[1] || "").trim(),
+    value: String(match[2] || "").trim(),
+  };
+}
+
+function parseAdminAgentCliEventListToolCall(message: string): AdminAgentToolCall | null {
+  const tokens = tokenizeAdminAgentCliInput(message);
+  if (tokens.length < 2) return null;
+  const verb = normalizeComparableText(tokens[0]);
+  if (!["list", "show", "ls", "ลิสต์", "แสดง", "ดู"].includes(verb)) {
+    return null;
+  }
+
+  let cursor = 1;
+  const maybeAll = normalizeComparableText(tokens[cursor] || "");
+  if (maybeAll === "all" || maybeAll === "ทุก") {
+    cursor += 1;
+  }
+
+  const noun = normalizeComparableText(tokens[cursor] || "");
+  if (!["event", "events", "อีเวนต์", "อีเว้นต์"].includes(noun)) {
+    return null;
+  }
+  cursor += 1;
+
+  const args: Record<string, unknown> = { query: "" };
+  const effectiveStatuses = new Set<string>();
+  const queryTokens: string[] = [];
+
+  for (const token of tokens.slice(cursor)) {
+    const keyValue = parseAdminAgentCliKeyValueToken(token);
+    if (keyValue) {
+      const key = normalizeComparableText(keyValue.key).replace(/-/g, "_");
+      const value = normalizeOptionalText(keyValue.value);
+      if (!key || !value) continue;
+
+      if (key === "limit") {
+        args.limit = parsePositiveInteger(value, 20, 20);
+        continue;
+      }
+      if (key === "query" || key === "name" || key === "search") {
+        queryTokens.push(value);
+        continue;
+      }
+      if (key === "status" || key === "statuses" || key === "effective_status" || key === "effective_statuses") {
+        for (const part of readAdminAgentStringListArg(value)) {
+          const normalizedStatus = normalizeAdminAgentEventStatusFilter(part);
+          if (normalizedStatus) effectiveStatuses.add(normalizedStatus);
+          for (const groupedStatus of expandAdminAgentEventFilterGroup(part)) {
+            effectiveStatuses.add(groupedStatus);
+          }
+        }
+        continue;
+      }
+      if (key === "type" || key === "group" || key === "category") {
+        for (const groupedStatus of expandAdminAgentEventFilterGroup(value)) {
+          effectiveStatuses.add(groupedStatus);
+        }
+        const normalizedStatus = normalizeAdminAgentEventStatusFilter(value);
+        if (normalizedStatus) effectiveStatuses.add(normalizedStatus);
+        continue;
+      }
+      args[key] = value;
+      continue;
+    }
+
+    const normalizedStatus = normalizeAdminAgentEventStatusFilter(token);
+    if (normalizedStatus) {
+      effectiveStatuses.add(normalizedStatus);
+      continue;
+    }
+    const groupedStatuses = expandAdminAgentEventFilterGroup(token);
+    if (groupedStatuses.length > 0) {
+      groupedStatuses.forEach((status) => effectiveStatuses.add(status));
+      continue;
+    }
+    const normalizedToken = normalizeComparableText(token);
+    if (normalizedToken === "all" || normalizedToken === "ทั้งหมด") {
+      continue;
+    }
+    queryTokens.push(token);
+  }
+
+  if (effectiveStatuses.size > 0) {
+    args.effective_statuses = [...effectiveStatuses];
+  }
+  if (queryTokens.length > 0) {
+    args.query = queryTokens.join(" ").trim();
+  }
+
+  return {
+    name: "find_event",
+    args,
+    source: "rule",
+  };
+}
+
+function parseAdminAgentCliToolCall(
+  message: string,
+  allowedActions: Set<AdminAgentActionName>,
+): AdminAgentToolCall | null {
+  const eventListToolCall = parseAdminAgentCliEventListToolCall(message);
+  if (eventListToolCall && allowedActions.has(eventListToolCall.name)) {
+    return eventListToolCall;
+  }
+
+  const tokens = tokenizeAdminAgentCliInput(message);
+  if (tokens.length === 0) return null;
+  const commandName = normalizeComparableText(tokens[0]).replace(/-/g, "_");
+  if (!commandName || !allowedActions.has(commandName as AdminAgentActionName)) {
+    return null;
+  }
+
+  const args: Record<string, unknown> = {};
+  for (const token of tokens.slice(1)) {
+    const parsed = parseAdminAgentCliKeyValueToken(token);
+    if (!parsed) {
+      return null;
+    }
+    const key = normalizeComparableText(parsed.key).replace(/-/g, "_");
+    const value = normalizeOptionalText(parsed.value);
+    if (!key || !value) continue;
+    const existing = args[key];
+    if (existing === undefined) {
+      args[key] = value;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      args[key] = [String(existing), value];
+    }
+  }
+
+  return {
+    name: commandName as AdminAgentActionName,
+    args,
+    source: "rule",
+  };
+}
+
 function inferAdminAgentRuleToolCall(
   message: string,
   allowedActions: Set<AdminAgentActionName>,
 ): AdminAgentToolCall | null {
-  if (!allowedActions.has("view_ticket")) {
-    return null;
+  const cliToolCall = parseAdminAgentCliToolCall(message, allowedActions);
+  if (cliToolCall) {
+    return cliToolCall;
   }
 
   const normalized = normalizeComparableText(message);
   if (!normalized) return null;
+
+  if (allowedActions.has("find_event")) {
+    const mentionsEvent =
+      normalized.includes("event")
+      || normalized.includes("events")
+      || normalized.includes("อีเวนต์")
+      || normalized.includes("อีเว้นต์");
+    const asksForEventList =
+      normalized.includes("list all")
+      || normalized.includes("show all")
+      || normalized.includes("all events")
+      || normalized.includes("list events")
+      || normalized.includes("show events")
+      || normalized.includes("event ทั้งหมด")
+      || normalized.includes("ทุก event")
+      || normalized.includes("ทุก events")
+      || normalized.includes("ทุกอีเวนต์")
+      || normalized.includes("ทุกอีเว้นต์")
+      || normalized.includes("อีเวนต์ทั้งหมด")
+      || normalized.includes("อีเว้นต์ทั้งหมด")
+      || normalized.includes("ทั้งหมดในระบบ")
+      || normalized.includes("ในระบบทั้งหมด")
+      || normalized.includes("มีอีเวนต์อะไรบ้าง")
+      || normalized.includes("มีอีเว้นต์อะไรบ้าง")
+      || normalized.includes("มี event อะไรบ้าง")
+      || normalized.includes("ลิสต์ทุก")
+      || normalized.includes("แสดงทุก")
+      || normalized.includes("ดูทุก")
+      || normalized.includes("รายการทั้งหมด");
+    if (mentionsEvent && asksForEventList) {
+      return {
+        name: "find_event",
+        args: {
+          query: "",
+          limit: 20,
+        },
+        source: "rule",
+      };
+    }
+  }
+
+  if (!allowedActions.has("view_ticket")) {
+    return null;
+  }
+
   const hasTicketKeyword = normalized.includes("ticket") || normalized.includes("ตั๋ว");
   if (!hasTicketKeyword) return null;
 
@@ -5284,12 +5779,15 @@ async function executeAdminAgentToolCall(
       };
     }
     case "find_event": {
-      const query =
-        normalizeOptionalText(call.args.query)
-        || normalizeOptionalText(call.args.event_id)
-        || normalizeOptionalText(call.args.name)
-        || normalizeOptionalText(call.args.slug)
-        || normalizeOptionalText(rawMessage);
+      const hasExplicitQuery = Object.prototype.hasOwnProperty.call(call.args, "query");
+      const query = hasExplicitQuery
+        ? normalizeOptionalText(call.args.query)
+        : (
+          normalizeOptionalText(call.args.event_id)
+          || normalizeOptionalText(call.args.name)
+          || normalizeOptionalText(call.args.slug)
+          || normalizeOptionalText(rawMessage)
+        );
       const limit = parsePositiveInteger(call.args.limit, 5, 20);
       const searchOptions = parseAdminAgentEventSearchOptions(call.args, rawMessage);
       const searchScope = options.policy.searchAllEvents ? undefined : { eventIds: new Set([eventId]) };
@@ -6257,6 +6755,7 @@ async function runAdminAgentCommand(options: {
   actorUserId?: string | null;
   source: string;
   metadata?: Record<string, unknown>;
+  historyScopeKey?: string | null;
 }) {
   const requestedEventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
   const parsedCommand = parseAdminAgentEventOverride(options.message, requestedEventId);
@@ -6264,6 +6763,7 @@ async function runAdminAgentCommand(options: {
   if (!message) {
     throw new Error("Message is required");
   }
+  const historyScopeKey = normalizeAdminAgentHistoryScopeKey(options.historyScopeKey);
 
   const providedSettings = options.settings && typeof options.settings === "object"
     ? options.settings as Record<string, any>
@@ -6299,18 +6799,29 @@ async function runAdminAgentCommand(options: {
   const allowedActionSet = new Set<AdminAgentActionName>(allowedActions);
   const ruleToolCall = inferAdminAgentRuleToolCall(message, allowedActionSet);
   if (ruleToolCall) {
-    const action: AdminAgentToolCall = {
-      ...ruleToolCall,
-      args: {
-        ...ruleToolCall.args,
-        event_id: scopedEventId,
-      },
-    };
-    const execution = await executeAdminAgentToolCall(scopedEventId, action, message, {
+    const actionUsesEventScope = !new Set<AdminAgentActionName>(["find_event", "search_system", "create_event"]).has(ruleToolCall.name);
+    let executionEventId = scopedEventId;
+    if (actionUsesEventScope) {
+      const actionEventId = normalizeOptionalText(ruleToolCall.args.event_id) || scopedEventId;
+      executionEventId = await resolveAdminAgentEventId(actionEventId, {
+        allowedEventId: scopedEventId,
+        allowCrossEventSearch: policy.searchAllEvents,
+      });
+    }
+    const action: AdminAgentToolCall = actionUsesEventScope
+      ? {
+          ...ruleToolCall,
+          args: {
+            ...ruleToolCall.args,
+            event_id: executionEventId,
+          },
+        }
+      : ruleToolCall;
+    const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
       policy,
     });
-    appendAdminAgentSharedHistory("user", message);
-    appendAdminAgentSharedHistory("model", `[${action.name}] ${execution.reply}`);
+    appendAdminAgentSharedHistory(historyScopeKey, "user", message);
+    appendAdminAgentSharedHistory(historyScopeKey, "model", `[${action.name}] ${execution.reply}`);
     return {
       reply: execution.reply,
       action,
@@ -6319,14 +6830,14 @@ async function runAdminAgentCommand(options: {
         model: "rule-based",
         provider: "rule",
       },
-      eventId: scopedEventId,
+      eventId: actionUsesEventScope ? executionEventId : scopedEventId,
       targetType: execution.targetType || "event",
-      targetId: execution.targetId || scopedEventId,
+      targetId: execution.targetId || (actionUsesEventScope ? executionEventId : scopedEventId),
     };
   }
 
-  mergeAdminAgentSharedHistory(options.history || []);
-  const plannerHistory = getAdminAgentPlannerHistory();
+  mergeAdminAgentSharedHistory(historyScopeKey, options.history || []);
+  const plannerHistory = getAdminAgentPlannerHistory(historyScopeKey);
 
   const plan = await requestAdminAgentPlan(
     message,
@@ -6348,8 +6859,8 @@ async function runAdminAgentCommand(options: {
 
   if (!plan.toolCall) {
     const clarificationReply = plan.assistantText || "ขอรายละเอียดเพิ่มอีกนิด เพื่อให้ผมสั่งงานต่อได้ถูกต้อง";
-    appendAdminAgentSharedHistory("user", message);
-    appendAdminAgentSharedHistory("model", clarificationReply);
+    appendAdminAgentSharedHistory(historyScopeKey, "user", message);
+    appendAdminAgentSharedHistory(historyScopeKey, "model", clarificationReply);
     return {
       reply: clarificationReply,
       action: null as AdminAgentToolCall | null,
@@ -6388,8 +6899,8 @@ async function runAdminAgentCommand(options: {
   const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
     policy,
   });
-  appendAdminAgentSharedHistory("user", message);
-  appendAdminAgentSharedHistory("model", action ? `[${action.name}] ${execution.reply}` : execution.reply);
+  appendAdminAgentSharedHistory(historyScopeKey, "user", message);
+  appendAdminAgentSharedHistory(historyScopeKey, "model", action ? `[${action.name}] ${execution.reply}` : execution.reply);
   return {
     reply: execution.reply,
     action,
@@ -12153,7 +12664,7 @@ async function startServer() {
 
   app.post("/api/admin-agent/history/reset", requireRoles(["owner", "admin", "operator"]), adminAgentRateLimit, async (req: AuthenticatedRequest, res) => {
     try {
-      adminAgentSharedHistory = [];
+      clearAdminAgentSharedHistory(`ui:${req.auth?.user.id || "anonymous"}`);
       await recordAudit(req, "admin_agent.history_reset", "workspace", "admin_agent", {
         source: "ui",
       });
@@ -12163,6 +12674,21 @@ async function startServer() {
       return res.status(500).json({ error: "Failed to reset admin agent history" });
     }
   });
+
+  app.get(
+    "/api/admin-agent/dashboard",
+    requireRoles(["owner", "admin", "operator"]),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const selectedEventId = normalizeOptionalText(req.query?.event_id);
+        const dashboard = await buildAdminAgentDashboard(selectedEventId);
+        return res.json(dashboard);
+      } catch (error) {
+        console.error("Admin agent dashboard error:", error);
+        return res.status(500).json({ error: "Failed to fetch admin agent dashboard" });
+      }
+    },
+  );
 
   app.post(
     "/api/admin-agent/chat",
@@ -12203,6 +12729,7 @@ async function startServer() {
           actorUserId: req.auth?.user.id || null,
           source: "admin_agent_planner",
           metadata: { mode: "ui" },
+          historyScopeKey: `ui:${req.auth?.user.id || "anonymous"}`,
         });
         const effectiveEventId = normalizeOptionalText(execution.eventId) || requestedEventId;
 
@@ -12371,6 +12898,7 @@ async function startServer() {
               chat_id: normalized.chatId,
               update_id: normalized.updateId,
             },
+            historyScopeKey: `telegram:${normalized.chatId}`,
           });
 
           const replyText = execution.action
