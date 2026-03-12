@@ -1,4 +1,6 @@
-type ChatPart = {
+import type { ImageAttachment } from "../types";
+
+export type ChatPart = {
   text?: string;
   image?: {
     id?: string;
@@ -97,11 +99,12 @@ export async function getChatResponse(
   settings: any,
   history: ChatHistoryMessage[],
   eventId?: string,
+  attachments: ImageAttachment[] = [],
 ): Promise<ChatResponse> {
   const res = await fetch("/api/llm/chat", {
     method: "POST",
     headers: buildJsonPostHeaders(),
-    body: JSON.stringify({ message, settings, history, event_id: eventId }),
+    body: JSON.stringify({ message, settings, history, event_id: eventId, attachments }),
   });
 
   const data = await res.json().catch(() => null);

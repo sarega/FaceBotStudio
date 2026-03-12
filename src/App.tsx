@@ -49,11 +49,15 @@ import {
   ImagePlus,
   X,
 } from "lucide-react";
-import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
+import { getAdminAgentResponse, getChatResponse, type ChatPart } from "./services/gemini";
 import { ChatBubble } from "./components/ChatBubble";
 import { EmailHtmlEditor } from "./components/EmailHtmlEditor";
 import { Ticket } from "./components/Ticket";
-import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { LoadingScreen } from "./components/shared/LoadingScreen";
+import { AuthScreen } from "./features/auth/components/AuthScreen";
+import { CheckinAccessRoute } from "./features/checkin/components/CheckinAccessRoute";
+import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
+import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
@@ -96,20 +100,12 @@ type PublicChatMessage = {
   timestamp: string;
   mapUrl: string;
   tickets: PublicEventChatResponse["tickets"];
+  attachments: ImageAttachment[];
   serverMessageId?: number;
 };
 
 const PUBLIC_PAGE_QR_SIZE = 960;
 const PUBLIC_PAGE_QR_MARGIN = 2;
-
-function isRecoveredPublicRegistrationResult(
-  value: PublicEventRegistrationResponse | null,
-): value is PublicEventRecoveredRegistrationResponse {
-  return Boolean(
-    value
-    && (value.status === "success" || value.status === "duplicate" || value.status === "recovered"),
-  );
-}
 
 interface AuditLogEntry {
   id: number;
@@ -170,6 +166,18 @@ type AdminAgentImageAttachment = {
 };
 
 type PendingAdminAgentImageAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
+type PendingPublicChatImageAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
+type PendingTestImageAttachment = {
   id: string;
   file: File;
   previewUrl: string;
@@ -711,6 +719,8 @@ const ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY = "facebotstudio-admin-agent-d
 const ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-last-audit-v1";
 const ADMIN_AGENT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const ADMIN_AGENT_ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const PUBLIC_CHAT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const PUBLIC_CHAT_ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const CSRF_COOKIE_NAME = "fbs_csrf";
 const CSRF_HEADER_NAME = "x-csrf-token";
 const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -750,10 +760,47 @@ function getPublicEventChatHistoryStorageKey(slug: string) {
   return `${PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX}:${slug}`;
 }
 
+function normalizeImageAttachments(value: unknown) {
+  if (!Array.isArray(value)) return [] as ImageAttachment[];
+  return value
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const attachment = item as Record<string, unknown>;
+      const url = typeof attachment.url === "string" ? attachment.url.trim() : "";
+      if (!url) return null;
+      return {
+        id: typeof attachment.id === "string" ? attachment.id : undefined,
+        kind: "image" as const,
+        url,
+        absolute_url: typeof attachment.absolute_url === "string" && attachment.absolute_url.trim() ? attachment.absolute_url : null,
+        mime_type: typeof attachment.mime_type === "string" && attachment.mime_type.trim() ? attachment.mime_type : null,
+        name: typeof attachment.name === "string" && attachment.name.trim() ? attachment.name : null,
+        size_bytes: Number.isFinite(Number(attachment.size_bytes)) ? Number(attachment.size_bytes) : null,
+      } satisfies ImageAttachment;
+    })
+    .filter(Boolean) as ImageAttachment[];
+}
+
+function extractImageAttachmentsFromParts(
+  parts: Array<{ image?: unknown } | null | undefined>,
+) {
+  return normalizeImageAttachments(
+    parts
+      .map((part) => part?.image || null)
+      .filter(Boolean),
+  );
+}
+
 function createPublicChatMessage(
   role: PublicChatMessage["role"],
   text: string,
-  options?: { mapUrl?: string; tickets?: PublicEventChatResponse["tickets"]; timestamp?: string; serverMessageId?: number },
+  options?: {
+    mapUrl?: string;
+    tickets?: PublicEventChatResponse["tickets"];
+    attachments?: ImageAttachment[];
+    timestamp?: string;
+    serverMessageId?: number;
+  },
 ): PublicChatMessage {
   const timestamp = options?.timestamp || new Date().toISOString();
   return {
@@ -763,6 +810,7 @@ function createPublicChatMessage(
     timestamp,
     mapUrl: options?.mapUrl || "",
     tickets: Array.isArray(options?.tickets) ? options?.tickets : [],
+    attachments: normalizeImageAttachments(options?.attachments),
     serverMessageId: typeof options?.serverMessageId === "number" ? options.serverMessageId : undefined,
   };
 }
@@ -788,16 +836,20 @@ function mergeServerMessagesIntoPublicChatHistory(current: PublicChatMessage[], 
     const role = row.type === "incoming" ? "user" : "assistant";
     const text = String(row.text || "");
     const timestamp = String(row.timestamp || new Date().toISOString());
+    const attachments = normalizeImageAttachments(row.attachments);
+    const attachmentSignature = attachments.map((attachment) => attachment.url).join("|");
     const alreadyExists = next.some((message) =>
       (typeof rowId === "number" && typeof message.serverMessageId === "number" && message.serverMessageId === rowId)
       || (
         message.role === role
         && message.text.trim() === text.trim()
+        && message.attachments.map((attachment) => attachment.url).join("|") === attachmentSignature
         && Math.abs(new Date(message.timestamp).getTime() - new Date(timestamp).getTime()) < 15_000
       ),
     );
     if (alreadyExists) continue;
     next.push(createPublicChatMessage(role, text, {
+      attachments,
       timestamp,
       serverMessageId: rowId,
     }));
@@ -846,6 +898,7 @@ function readPublicEventChatHistory(slug: string) {
           timestamp,
           mapUrl: typeof row.mapUrl === "string" ? row.mapUrl : "",
           tickets,
+          attachments: normalizeImageAttachments(row.attachments),
           serverMessageId:
             typeof row.serverMessageId === "number"
               ? row.serverMessageId
@@ -3498,7 +3551,9 @@ export default function App() {
   const [publicChatLastMessageId, setPublicChatLastMessageId] = useState(0);
   const [publicChatSending, setPublicChatSending] = useState(false);
   const [publicChatError, setPublicChatError] = useState("");
+  const [publicChatPendingImages, setPublicChatPendingImages] = useState<PendingPublicChatImageAttachment[]>([]);
   const publicChatBodyRef = useRef<HTMLDivElement | null>(null);
+  const publicChatFileInputRef = useRef<HTMLInputElement | null>(null);
   const publicPosterFileInputRef = useRef<HTMLInputElement | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [logsHasMore, setLogsHasMore] = useState(false);
@@ -3558,8 +3613,10 @@ export default function App() {
   const [knowledgeResetting, setKnowledgeResetting] = useState(false);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
-  const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: { text?: string, functionCall?: any, functionResponse?: any }[], timestamp: string }[]>([]);
+  const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: ChatPart[], timestamp: string }[]>([]);
   const [inputText, setInputText] = useState("");
+  const [testPendingImages, setTestPendingImages] = useState<PendingTestImageAttachment[]>([]);
+  const [testAttachmentError, setTestAttachmentError] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [adminAgentMessages, setAdminAgentMessages] = useState<AdminAgentChatMessage[]>([]);
   const [adminAgentInputText, setAdminAgentInputText] = useState("");
@@ -3708,10 +3765,13 @@ export default function App() {
   const adminAgentBottomRef = useRef<HTMLDivElement | null>(null);
   const adminAgentInputRef = useRef<HTMLInputElement | null>(null);
   const adminAgentImageInputRef = useRef<HTMLInputElement | null>(null);
+  const testImageInputRef = useRef<HTMLInputElement | null>(null);
+  const publicChatPendingImagesRef = useRef<PendingPublicChatImageAttachment[]>([]);
   const adminCommandPaletteRef = useRef<HTMLDivElement | null>(null);
   const adminCommandPaletteSearchInputRef = useRef<HTMLInputElement | null>(null);
   const adminAgentHistoryLoadedKeyRef = useRef("");
   const adminAgentPendingImagesRef = useRef<PendingAdminAgentImageAttachment[]>([]);
+  const testPendingImagesRef = useRef<PendingTestImageAttachment[]>([]);
   const dirtyNavigationActionRef = useRef<null | (() => void)>(null);
   const desktopNotifyBootstrappedRef = useRef(false);
   const desktopNotifyLastAuditIdRef = useRef(0);
@@ -3720,6 +3780,8 @@ export default function App() {
   publicChatLastMessageIdRef.current = publicChatLastMessageId;
   settingsRef.current = settings;
   adminAgentPendingImagesRef.current = adminAgentPendingImages;
+  publicChatPendingImagesRef.current = publicChatPendingImages;
+  testPendingImagesRef.current = testPendingImages;
 
   const currentPathname = typeof window !== "undefined" ? window.location.pathname : "/";
   const publicEventSlug = getPublicEventSlugFromPath(currentPathname);
@@ -4055,8 +4117,17 @@ export default function App() {
       }
     : null;
   const publicRouteMapEmbedUrl = publicRouteLocationFields ? buildGoogleMapsEmbedUrl(publicRouteLocationFields) : "";
+  const publicRouteEventStatusTone: BadgeTone = publicEventPage
+    ? getEventStatusTone(publicEventPage.event.status)
+    : "neutral";
+  const publicRouteEventStatusLabel = publicEventPage
+    ? getEventStatusLabel(publicEventPage.event.status)
+    : "";
   const publicRouteAvailabilityTone = getRegistrationAvailabilityTone(publicEventPage?.event.registration_availability);
   const publicRouteAvailabilityLabel = getRegistrationAvailabilityLabel(publicEventPage?.event.registration_availability);
+  const publicRouteMessengerHref = publicEventPage ? normalizeExternalHref(publicEventPage.contact.messenger_url) : "";
+  const publicRouteLineHref = publicEventPage ? normalizeExternalHref(publicEventPage.contact.line_url) : "";
+  const publicRoutePhoneHref = publicEventPage ? normalizePhoneHref(publicEventPage.contact.phone) : "";
   const registrationCapacity = describeRegistrationCapacity(settings.reg_limit, activeAttendeeCount);
   const registrationAvailability = describeRegistrationAvailability(
     selectedEvent?.effective_status,
@@ -4655,6 +4726,7 @@ export default function App() {
       sender_email: row.sender_email == null ? null : String(row.sender_email || "").trim() || null,
       registration_id: row.registration_id == null ? null : String(row.registration_id || "").trim() || null,
       text,
+      attachments: normalizeImageAttachments(row.attachments),
       timestamp,
       type: row.type === "outgoing" ? "outgoing" : "incoming",
     };
@@ -4914,6 +4986,8 @@ export default function App() {
   useEffect(() => {
     return () => {
       adminAgentPendingImagesRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      publicChatPendingImagesRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      testPendingImagesRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     };
   }, []);
 
@@ -5150,6 +5224,10 @@ export default function App() {
       setPublicChatLastMessageId(0);
       setPublicChatSending(false);
       setPublicChatError("");
+      setPublicChatPendingImages((current) => {
+        current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+        return [];
+      });
       return;
     }
 
@@ -5157,6 +5235,10 @@ export default function App() {
     setPublicChatInput("");
     setPublicChatSending(false);
     setPublicChatError("");
+    setPublicChatPendingImages((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      return [];
+    });
     setPublicChatSenderId(getOrCreatePublicEventChatSenderId(publicEventSlug));
     const storedHistory = readPublicEventChatHistory(publicEventSlug);
     setPublicChatMessages(storedHistory);
@@ -6177,11 +6259,14 @@ export default function App() {
       const data = await res.json();
       if (selectedEventIdRef.current !== eventId) return;
 
-      const items = Array.isArray(data)
-        ? data as Message[]
+      const rawItems = Array.isArray(data)
+        ? data
         : Array.isArray((data as Record<string, unknown>)?.items)
-        ? (data as Record<string, unknown>).items as Message[]
+        ? (data as Record<string, unknown>).items as unknown[]
         : [];
+      const items = rawItems
+        .map((item) => normalizePublicInboxMessage(item))
+        .filter(Boolean) as Message[];
       const hasMore = !Array.isArray(data) && Boolean((data as Record<string, unknown>)?.has_more);
 
       if (append) {
@@ -6926,31 +7011,134 @@ export default function App() {
     }
   };
 
+  const clearPublicChatPendingImages = () => {
+    setPublicChatPendingImages((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      return [];
+    });
+    if (publicChatFileInputRef.current) {
+      publicChatFileInputRef.current.value = "";
+    }
+  };
+
+  const removePublicChatPendingImage = (id: string) => {
+    setPublicChatPendingImages((current) => {
+      const target = current.find((item) => item.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return current.filter((item) => item.id !== id);
+    });
+  };
+
+  const handlePublicChatImageSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+
+    const nextAttachments: PendingPublicChatImageAttachment[] = [];
+    const errors: string[] = [];
+    for (const file of files) {
+      if (!PUBLIC_CHAT_ALLOWED_IMAGE_TYPES.has(file.type)) {
+        errors.push(`${file.name}: PNG, JPG, or WebP only`);
+        continue;
+      }
+      if (file.size > PUBLIC_CHAT_IMAGE_MAX_BYTES) {
+        errors.push(`${file.name}: max 6 MB`);
+        continue;
+      }
+      nextAttachments.push({
+        id: `public-img:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+      });
+    }
+
+    setPublicChatPendingImages((current) => {
+      const remainingSlots = Math.max(0, 4 - current.length);
+      if (remainingSlots <= 0) {
+        nextAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+        return current;
+      }
+      const accepted = nextAttachments.slice(0, remainingSlots);
+      const rejected = nextAttachments.slice(remainingSlots);
+      rejected.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      if (nextAttachments.length > remainingSlots) {
+        errors.push("Up to 4 images per message");
+      }
+      return [...current, ...accepted];
+    });
+
+    setPublicChatError(errors.join(" · "));
+    event.target.value = "";
+  };
+
+  const uploadPublicChatImageAttachment = async (file: File): Promise<ImageAttachment> => {
+    if (!publicEventSlug) {
+      throw new Error("Public event page is not selected");
+    }
+    const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/chat/attachments/image`, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type,
+        "x-upload-filename": encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error((data as { error?: string }).error || "Failed to upload image");
+    }
+    const attachment = (data as { attachment?: Record<string, unknown> }).attachment || {};
+    const url = typeof attachment.url === "string" ? attachment.url : "";
+    if (!url) {
+      throw new Error("Image upload did not return a URL");
+    }
+    return {
+      id: typeof attachment.id === "string" ? attachment.id : undefined,
+      kind: "image",
+      url,
+      absolute_url: typeof attachment.absolute_url === "string" ? attachment.absolute_url : null,
+      mime_type: typeof attachment.mime_type === "string" ? attachment.mime_type : file.type,
+      name: typeof attachment.name === "string" ? attachment.name : file.name,
+      size_bytes: Number.isFinite(Number(attachment.size_bytes)) ? Number(attachment.size_bytes) : file.size,
+    };
+  };
+
   const handlePublicChatSubmit = async (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
     if (!publicEventSlug || !publicEventPage || !publicEventPage.support.bot_enabled) return;
 
     const trimmed = publicChatInput.trim();
-    if (!trimmed) return;
+    if (!trimmed && publicChatPendingImages.length === 0) return;
 
     const senderId = publicChatSenderId || getOrCreatePublicEventChatSenderId(publicEventSlug);
     if (!publicChatSenderId && senderId) {
       setPublicChatSenderId(senderId);
     }
 
-    const userMessage = createPublicChatMessage("user", trimmed);
-    setPublicChatMessages((current) => [...current, userMessage]);
-    setPublicChatInput("");
     setPublicChatError("");
     setPublicChatSending(true);
 
     try {
+      const uploadedAttachments = publicChatPendingImages.length > 0
+        ? await Promise.all(publicChatPendingImages.map((item) => uploadPublicChatImageAttachment(item.file)))
+        : [];
+      setPublicChatMessages((current) => [
+        ...current,
+        createPublicChatMessage("user", trimmed, {
+          attachments: uploadedAttachments,
+        }),
+      ]);
+      setPublicChatInput("");
+      clearPublicChatPendingImages();
+
       const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sender_id: senderId,
           text: trimmed,
+          attachments: uploadedAttachments,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -7706,6 +7894,99 @@ export default function App() {
     await handleCheckinById(searchId);
   };
 
+  const clearTestPendingImages = () => {
+    setTestPendingImages((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      return [];
+    });
+    setTestAttachmentError("");
+    if (testImageInputRef.current) {
+      testImageInputRef.current.value = "";
+    }
+  };
+
+  const removeTestPendingImage = (id: string) => {
+    setTestPendingImages((current) => {
+      const target = current.find((item) => item.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return current.filter((item) => item.id !== id);
+    });
+  };
+
+  const handleTestImageSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+
+    const nextAttachments: PendingTestImageAttachment[] = [];
+    const errors: string[] = [];
+    for (const file of files) {
+      if (!ADMIN_AGENT_ALLOWED_IMAGE_TYPES.has(file.type)) {
+        errors.push(`${file.name}: PNG, JPG, or WebP only`);
+        continue;
+      }
+      if (file.size > ADMIN_AGENT_IMAGE_MAX_BYTES) {
+        errors.push(`${file.name}: max 6 MB`);
+        continue;
+      }
+      nextAttachments.push({
+        id: `test-img:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+      });
+    }
+
+    setTestPendingImages((current) => {
+      const remainingSlots = Math.max(0, 4 - current.length);
+      if (remainingSlots <= 0) {
+        nextAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+        return current;
+      }
+      const accepted = nextAttachments.slice(0, remainingSlots);
+      const rejected = nextAttachments.slice(remainingSlots);
+      rejected.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      if (nextAttachments.length > remainingSlots) {
+        errors.push("Up to 4 images per message");
+      }
+      return [...current, ...accepted];
+    });
+
+    setTestAttachmentError(errors.join(" · "));
+    event.target.value = "";
+  };
+
+  const uploadTestImageAttachment = async (file: File): Promise<ImageAttachment> => {
+    const params = new URLSearchParams();
+    params.set("event_id", selectedEventId || "");
+    const res = await apiFetch(`/api/llm/attachments/image?${params.toString()}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type,
+        "x-upload-filename": encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error((data as { error?: string }).error || "Failed to upload image");
+    }
+    const attachment = (data as { attachment?: Record<string, unknown> }).attachment || {};
+    const url = typeof attachment.url === "string" ? attachment.url : "";
+    if (!url) {
+      throw new Error("Image upload did not return a URL");
+    }
+    return {
+      id: typeof attachment.id === "string" ? attachment.id : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "image",
+      url,
+      absolute_url: typeof attachment.absolute_url === "string" ? attachment.absolute_url : null,
+      mime_type: typeof attachment.mime_type === "string" ? attachment.mime_type : file.type,
+      name: typeof attachment.name === "string" ? attachment.name : file.name,
+      size_bytes: Number.isFinite(Number(attachment.size_bytes)) ? Number(attachment.size_bytes) : file.size,
+    };
+  };
+
   const handleCreateCheckinSession = async () => {
     if (!selectedEventId || !canManageCheckinAccess) return;
     const label = checkinSessionLabel.trim();
@@ -7908,20 +8189,35 @@ export default function App() {
   };
 
   const handleTestSend = async () => {
-    if (!inputText.trim()) return;
+    const outgoingText = inputText.trim();
+    const pendingImages = testPendingImages.slice();
+    if (!outgoingText && pendingImages.length === 0) return;
 
-    const userMsg = { role: "user" as const, parts: [{ text: inputText }], timestamp: new Date().toISOString() };
-    setTestMessages(prev => [...prev, userMsg]);
-    setInputText("");
     setIsTyping(true);
+    setTestAttachmentError("");
 
     try {
+      const uploadedAttachments = pendingImages.length > 0
+        ? await Promise.all(pendingImages.map((item) => uploadTestImageAttachment(item.file)))
+        : [];
+      const userMsg = {
+        role: "user" as const,
+        parts: [
+          ...(outgoingText ? [{ text: outgoingText }] : []),
+          ...uploadedAttachments.map((image) => ({ image })),
+        ],
+        timestamp: new Date().toISOString(),
+      };
+      setTestMessages(prev => [...prev, userMsg]);
+      setInputText("");
+      clearTestPendingImages();
+
       const history = testMessages.map(m => ({
         role: m.role,
         parts: m.parts
       }));
       
-      const response = await getChatResponse(inputText, settings, history, selectedEventId);
+      const response = await getChatResponse(outgoingText, settings, history, selectedEventId, uploadedAttachments);
       
       const parts = response.candidates[0].content.parts;
       const newModelMsg = { role: "model" as const, parts, timestamp: new Date().toISOString() };
@@ -7997,7 +8293,8 @@ export default function App() {
       }
     } catch (err) {
       console.error("LLM error", err);
-      setTestMessages(prev => [...prev, { role: "model", parts: [{ text: "Error: Failed to get response from OpenRouter." }], timestamp: new Date().toISOString() }]);
+      const message = err instanceof Error ? err.message : "Failed to get response from OpenRouter.";
+      setTestMessages(prev => [...prev, { role: "model", parts: [{ text: `Error: ${message}` }], timestamp: new Date().toISOString() }]);
     } finally {
       if (canEditSettings) {
         void fetchLlmUsageSummary(selectedEventId);
@@ -8966,298 +9263,55 @@ export default function App() {
     setGlobalSearchQuery("");
   };
 
-  if (authStatus === "checking") {
-    if (checkinAccessMode) {
-      return (
-        <div className="min-h-dvh bg-slate-50 flex items-center justify-center">
-          <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
-        </div>
-      );
-    }
-  }
-
   if (checkinAccessMode) {
-    if (checkinAccessLoading) {
-      return (
-        <div className="min-h-dvh bg-slate-50 flex items-center justify-center">
-          <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
-        </div>
-      );
-    }
-
-    if (!checkinAccessSession) {
-      return (
-        <div className="min-h-dvh bg-slate-50 text-slate-900 flex items-center justify-center p-6">
-          <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-8 shadow-sm space-y-4">
-            <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
-              <AlertCircle className="w-7 h-7" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold">Check-in link unavailable</h1>
-              <p className="text-sm text-slate-500 mt-2">
-                {checkinAccessError || "This check-in session is invalid, expired, or has already been revoked."}
-              </p>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
     return (
-      <div className="min-h-dvh overflow-x-hidden bg-slate-50 text-slate-900 font-sans">
-        <header className="app-header-surface sticky top-0 z-10 border-b border-slate-200 bg-white backdrop-blur">
-          <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 pb-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white">
-                  <QrCode className="w-5 h-5" />
-                </span>
-                <div className="min-w-0">
-                  <h1 className="truncate text-lg font-bold">{checkinAccessSession.event_name}</h1>
-                  <p className="truncate text-xs text-slate-500">
-                    Check-in session: <span className="font-semibold text-slate-700">{checkinAccessSession.label}</span>
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-              <StatusBadge tone={getEventStatusTone(checkinAccessSession.event_status)}>
-                {getEventStatusLabel(checkinAccessSession.event_status)}
-              </StatusBadge>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right">
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Expires</p>
-                <p className="mt-1 text-xs font-semibold text-slate-900">{new Date(checkinAccessSession.expires_at).toLocaleString()}</p>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:gap-6 sm:py-6">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Event Status</p>
-              <p className="mt-2 text-lg font-semibold text-blue-900 capitalize">{checkinAccessSession.event_status}</p>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last Used</p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">
-                {checkinAccessSession.last_used_at ? new Date(checkinAccessSession.last_used_at).toLocaleString() : "Not used yet"}
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                  <Camera className="w-5 h-5 text-blue-600" />
-                  QR Scanner
-                </h2>
-                <p className="text-sm text-slate-500">Allow camera access, then scan attendee tickets continuously.</p>
-              </div>
-              <div className="flex w-full gap-2 sm:w-auto">
-                <ActionButton
-                  onClick={startQrScanner}
-                  disabled={!canUseQrScanner || scannerActive || scannerStarting}
-                  tone="blue"
-                  active
-                  className="min-w-0 flex-1 text-sm sm:w-auto sm:flex-none"
-                >
-                  {scannerStarting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                  Start Camera
-                </ActionButton>
-                <ActionButton
-                  onClick={stopQrScanner}
-                  disabled={!scannerActive && !scannerStarting}
-                  tone="neutral"
-                  className="min-w-0 flex-1 text-sm sm:w-auto sm:flex-none"
-                >
-                  <Square className="w-4 h-4" />
-                  Stop
-                </ActionButton>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 overflow-hidden bg-slate-950">
-              <div className="aspect-video relative">
-                <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" muted playsInline />
-                {!scannerActive && !scannerStarting && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 gap-3 p-6 text-center">
-                    <Camera className="w-10 h-10 opacity-70" />
-                    <p className="text-sm max-w-sm">
-                      {canUseQrScanner
-                        ? "Tap Start Camera to request permission and begin scanning."
-                        : "This browser does not support camera access. Use manual check-in instead."}
-                    </p>
-                  </div>
-                )}
-                {scannerStarting && (
-                  <div className="absolute inset-0 flex items-center justify-center text-white">
-                    <RefreshCw className="w-6 h-6 animate-spin" />
-                  </div>
-                )}
-                {scannerActive && (
-                  <div className="absolute inset-x-8 top-1/2 -translate-y-1/2 h-32 border-2 border-blue-300/90 rounded-3xl shadow-[0_0_0_9999px_rgba(15,23,42,0.28)] pointer-events-none" />
-                )}
-              </div>
-            </div>
-            {lastScannedValue && (
-              <p className="mt-3 text-xs text-slate-500 break-all">
-                Last scan: <span className="font-mono">{lastScannedValue}</span>
-              </p>
-            )}
-            {scannerError && <p className="mt-2 text-xs text-rose-600">{scannerError}</p>}
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Search className="w-5 h-5 text-blue-600" />
-                Manual Check-in
-              </h2>
-              <p className="text-sm text-slate-500">Use registration ID if scanning fails.</p>
-            </div>
-            <div className="space-y-3">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input
-                  type="text"
-                  value={searchId}
-                  onChange={(e) => setSearchId(e.target.value.toUpperCase())}
-                  onKeyDown={(e) => e.key === "Enter" && handleCheckin()}
-                  placeholder="REG-XXXXXX"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-base font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <ActionButton
-                onClick={handleCheckin}
-                disabled={!searchId || checkinStatus === "loading"}
-                tone={checkinStatus === "success" ? "emerald" : checkinStatus === "error" ? "rose" : "blue"}
-                active
-                className="w-full text-sm"
-              >
-                {checkinStatus === "loading" && <RefreshCw className="w-4 h-4 animate-spin" />}
-                {checkinStatus === "success" && <CheckCircle2 className="w-4 h-4" />}
-                {checkinStatus === "error" && <AlertCircle className="w-4 h-4" />}
-                {checkinStatus === "success" ? "Checked In!" : checkinStatus === "error" ? "Check-in Failed" : "Check In Attendee"}
-              </ActionButton>
-              {checkinStatus === "error" && checkinErrorMessage && (
-                <p className="text-xs text-rose-600">{checkinErrorMessage}</p>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <div>
-                <h3 className="text-lg font-semibold">Latest Result</h3>
-                <StatusLine
-                  className="mt-1"
-                  items={[
-                    latestResultLabel,
-                    latestCheckinRegistration ? `ID ${latestCheckinRegistration.id}` : null,
-                  ]}
-                />
-              </div>
-            </div>
-
-            {!latestCheckinRegistration ? (
-              <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                No attendee checked in yet in this session.
-              </div>
-            ) : (
-              <div className={`rounded-2xl border p-4 space-y-3 ${latestResultToneClass}`}>
-                <div>
-                  <p className="text-lg font-semibold text-slate-900">
-                    {latestCheckinRegistration.first_name} {latestCheckinRegistration.last_name}
-                  </p>
-                  <p className="text-xs font-mono text-blue-600">{latestCheckinRegistration.id}</p>
-                </div>
-                <div className="grid grid-cols-1 gap-2 text-sm">
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Phone</p>
-                    <p className="text-slate-700">{latestCheckinRegistration.phone || "-"}</p>
-                  </div>
-                  <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Email</p>
-                    <p className="text-slate-700 break-all">{latestCheckinRegistration.email || "-"}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </main>
-      </div>
+      <CheckinAccessRoute
+        initializing={authStatus === "checking"}
+        loading={checkinAccessLoading}
+        session={checkinAccessSession}
+        errorMessage={checkinAccessError}
+        eventStatusTone={checkinAccessSession ? getEventStatusTone(checkinAccessSession.event_status) : "neutral"}
+        eventStatusLabel={checkinAccessSession ? getEventStatusLabel(checkinAccessSession.event_status) : ""}
+        canUseQrScanner={canUseQrScanner}
+        scannerActive={scannerActive}
+        scannerStarting={scannerStarting}
+        scannerError={scannerError}
+        videoRef={videoRef}
+        lastScannedValue={lastScannedValue}
+        onStartScanner={startQrScanner}
+        onStopScanner={stopQrScanner}
+        searchId={searchId}
+        onSearchIdChange={(value) => setSearchId(value.toUpperCase())}
+        onCheckin={handleCheckin}
+        checkinStatus={checkinStatus}
+        checkinErrorMessage={checkinErrorMessage}
+        latestResultLabel={latestResultLabel}
+        latestCheckinRegistration={latestCheckinRegistration}
+        latestResultToneClass={latestResultToneClass}
+      />
     );
   }
 
   if (!isPublicEventRoute && authStatus === "checking") {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!isPublicEventRoute && authStatus === "unauthenticated") {
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-4">
-        <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 backdrop-blur p-8 shadow-2xl">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center">
-              <Shield className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold">FaceBotStudio Admin</h1>
-              <p className="text-sm text-slate-300">Sign in to access registrations, logs, and event settings.</p>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Username</label>
-              <input
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !loginSubmitting && handleLogin()}
-                className="w-full rounded-2xl bg-slate-900 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="owner"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Password</label>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !loginSubmitting && handleLogin()}
-                className="w-full rounded-2xl bg-slate-900 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="••••••••"
-              />
-            </div>
-            {authError && (
-              <p className="text-sm text-rose-300">{authError}</p>
-            )}
-            <button
-              onClick={handleLogin}
-              disabled={!loginUsername.trim() || !loginPassword || loginSubmitting}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-4 py-3 font-semibold transition-colors"
-            >
-              {loginSubmitting && <RefreshCw className="w-4 h-4 animate-spin" />}
-              Sign In
-            </button>
-          </div>
-        </div>
-      </div>
+      <AuthScreen
+        errorMessage={authError}
+        username={loginUsername}
+        password={loginPassword}
+        submitting={loginSubmitting}
+        onUsernameChange={setLoginUsername}
+        onPasswordChange={setLoginPassword}
+        onSubmit={handleLogin}
+      />
     );
   }
 
   if (!isPublicEventRoute && loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   const appUrl = process.env.APP_URL || window.location.origin;
@@ -9942,6 +9996,26 @@ export default function App() {
                       : auditMarker.summary
                     : threadMessage.text}
                 </p>
+                {Array.isArray(threadMessage.attachments) && threadMessage.attachments.length > 0 && (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {threadMessage.attachments.map((attachment) => (
+                      <a
+                        key={`${threadMessage.id}:${attachment.url}`}
+                        href={attachment.absolute_url || attachment.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block overflow-hidden rounded-xl border border-slate-200 bg-white"
+                      >
+                        <img
+                          src={attachment.absolute_url || attachment.url}
+                          alt={attachment.name || "Attached image"}
+                          className="h-28 w-full object-cover"
+                          loading="lazy"
+                        />
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -9953,807 +10027,48 @@ export default function App() {
   const isChatConsoleTab = activeTab === "test" || (activeTab === "agent" && agentWorkspaceView === "console");
 
   if (isPublicEventRoute) {
-    const publicEventName = publicEventPage?.event.name || "Event";
-    const publicLocationLabel = publicEventPage?.location.compact || "Venue details will be announced soon";
-    const publicSummary = publicEventPage?.event.summary || publicEventPage?.event.description || "";
-    const publicRouteMessengerHref = publicEventPage ? normalizeExternalHref(publicEventPage.contact.messenger_url) : "";
-    const publicRouteLineHref = publicEventPage ? normalizeExternalHref(publicEventPage.contact.line_url) : "";
-    const publicRoutePhoneHref = publicEventPage ? normalizePhoneHref(publicEventPage.contact.phone) : "";
-    const publicRouteContactVisible = Boolean(
-      publicEventPage?.contact.enabled
-      && (
-        publicRouteMessengerHref
-        || publicRouteLineHref
-        || publicEventPage.contact.phone.trim()
-        || publicEventPage.contact.hours.trim()
-      ),
-    );
-    const publicRegistrationAvailable = Boolean(
-      publicEventPage
-      && publicEventPage.event.registration_enabled
-      && publicEventPage.event.registration_availability === "open",
-    );
-    const publicTicketRecoveryMode = publicEventPage?.event.ticket_recovery_mode || "shared_contact";
-    const publicRecoveredRegistrationResult = isRecoveredPublicRegistrationResult(publicRegistrationResult)
-      ? publicRegistrationResult
-      : null;
-    const publicTicketReady = Boolean(publicRecoveredRegistrationResult);
-    const publicNameVerificationRequired = publicRegistrationResult?.status === "name_verification_required";
-    const publicVerifiedRecoveryRequired = publicRegistrationResult?.status === "verification_required";
-    const publicAvailabilityHelper = (() => {
-      switch (publicEventPage?.event.registration_availability) {
-        case "full":
-          return "This event is full right now.";
-        case "closed":
-          return "Registration for this event has closed.";
-        case "not_started":
-          return "Registration has not opened yet.";
-        case "invalid":
-          return "Registration timing is being updated.";
-        default:
-          return "Register on this page and save your ticket image immediately.";
-      }
-    })();
-
     return (
-      <div className="public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans">
-        <header className="border-b border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6 lg:px-8">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.18)]">
-                <Bot className="h-5 w-5 text-white" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-slate-900">{publicEventName}</p>
-                <p className="truncate text-xs text-slate-500">{publicLocationLabel}</p>
-              </div>
-            </div>
-            {publicEventPage && (
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <StatusBadge tone={getEventStatusTone(publicEventPage.event.status)}>
-                  {getEventStatusLabel(publicEventPage.event.status)}
-                </StatusBadge>
-                <StatusBadge tone={publicRouteAvailabilityTone}>
-                  {publicRouteAvailabilityLabel}
-                </StatusBadge>
-              </div>
-            )}
-          </div>
-        </header>
-
-        <main className="mx-auto max-w-6xl px-4 py-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-8">
-          {publicEventLoading ? (
-            <div className="flex min-h-[50vh] items-center justify-center">
-              <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
-            </div>
-          ) : publicEventError || !publicEventPage ? (
-            <div className="mx-auto max-w-xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
-                <AlertCircle className="h-7 w-7" />
-              </div>
-              <h1 className="mt-5 text-2xl font-bold tracking-tight text-slate-900">Public page unavailable</h1>
-              <p className="mt-2 text-sm leading-6 text-slate-500">
-                {publicEventError || "This event page is not published or could not be found."}
-              </p>
-            </div>
-          ) : (
-            <>
-              <section className="grid gap-5 lg:items-start lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
-                <div className="self-start overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
-                  <div className="aspect-[800/1132] w-full">
-                    {publicEventPage.event.poster_url ? (
-                      <img
-                        src={publicEventPage.event.poster_url}
-                        alt={`${publicEventPage.event.name} poster`}
-                        className="h-full w-full object-cover object-top"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
-                        <Eye className="h-9 w-9 text-slate-400" />
-                        <div>
-                          <p className="text-sm font-semibold text-slate-700">Event poster</p>
-                          <p className="mt-1 text-xs text-slate-500">Recommended size 800 x 1132 px</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-5 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm lg:self-start sm:p-6">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <StatusBadge tone={getEventStatusTone(publicEventPage.event.status)}>
-                      {getEventStatusLabel(publicEventPage.event.status)}
-                    </StatusBadge>
-                    <StatusBadge tone={publicRouteAvailabilityTone}>
-                      {publicRouteAvailabilityLabel}
-                    </StatusBadge>
-                  </div>
-
-                  <div>
-                    <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-                      {publicEventPage.event.name}
-                    </h1>
-                    {publicSummary && (
-                      <p className="mt-2.5 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
-                        {publicSummary}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Date & Time</p>
-                      <p className="mt-1.5 text-sm font-semibold text-slate-900">{publicEventPage.event.date_label}</p>
-                      <p className="mt-1 text-xs text-slate-500">{publicEventPage.event.timezone}</p>
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Location</p>
-                      <p className="mt-1.5 text-sm font-semibold text-slate-900">
-                        {publicEventPage.location.title || publicLocationLabel}
-                      </p>
-                      {publicEventPage.location.address_line && (
-                        <p className="mt-1 text-xs text-slate-500">{publicEventPage.location.address_line}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={`grid gap-3 ${publicEventPage.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
-                    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration</p>
-                      <p className="mt-1.5 text-sm font-semibold text-slate-900">{publicAvailabilityHelper}</p>
-                    </div>
-                    {publicEventPage.event.show_seat_availability && (
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
-                        <p className="mt-1.5 text-sm font-semibold text-slate-900">
-                          {publicEventPage.event.registration_limit == null
-                            ? "Unlimited"
-                            : `${publicEventPage.event.active_registration_count}/${publicEventPage.event.registration_limit}`}
-                        </p>
-                      </div>
-                    )}
-                    {publicEventPage.event.show_seat_availability && (
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
-                        <p className="mt-1.5 text-sm font-semibold text-slate-900">
-                          {publicEventPage.event.remaining_seats == null ? "Open" : publicEventPage.event.remaining_seats}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <a
-                      href="#public-registration"
-                      className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
-                    >
-                      {publicEventPage.event.cta_label}
-                    </a>
-                    {publicEventPage.location.map_url && (
-                      <a
-                        href={publicEventPage.location.map_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="public-page-control inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        Open in Maps
-                      </a>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(20rem,24rem)]">
-                <div className="space-y-6">
-                  {publicEventPage.event.description && (
-                    <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                      <div className="flex items-center gap-2">
-                        <Eye className="h-4 w-4 text-blue-600" />
-                        <h2 className="text-lg font-semibold text-slate-900">About This Event</h2>
-                      </div>
-                      <p className="mt-4 whitespace-pre-line text-sm leading-7 text-slate-600">
-                        {publicEventPage.event.description}
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <h2 className="text-lg font-semibold text-slate-900">Location & Travel</h2>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {publicEventPage.location.title || publicLocationLabel}
-                        </p>
-                      </div>
-                      {publicEventPage.location.map_url && (
-                        <a
-                          href={publicEventPage.location.map_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-                        >
-                          <Link2 className="h-3.5 w-3.5" />
-                          Open in Maps
-                        </a>
-                      )}
-                    </div>
-
-                    <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                      {publicRouteMapEmbedUrl ? (
-                        <iframe
-                          title="Event location map"
-                          src={publicRouteMapEmbedUrl}
-                          className="h-80 w-full border-0"
-                          loading="lazy"
-                          referrerPolicy="no-referrer-when-downgrade"
-                          allowFullScreen
-                        />
-                      ) : (
-                        <div className="flex h-80 items-center justify-center px-6 text-center text-sm text-slate-500">
-                          Map preview will appear here when venue details are available.
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Venue</p>
-                        <p className="mt-2 text-sm font-semibold text-slate-900">
-                          {publicEventPage.location.title || publicLocationLabel}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Address</p>
-                        <p className="mt-2 text-sm font-semibold text-slate-900">
-                          {publicEventPage.location.address_line || publicEventPage.location.address || "-"}
-                        </p>
-                      </div>
-                    </div>
-
-                    {publicEventPage.location.travel_info && (
-                      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Travel Info</p>
-                        <p className="mt-2 whitespace-pre-line text-sm leading-7 text-slate-600">
-                          {publicEventPage.location.travel_info}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <aside id="public-registration" className="space-y-6 xl:sticky xl:top-6 xl:self-start">
-                  <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                    {!publicTicketReady ? (
-                      <>
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <h2 className="text-lg font-semibold text-slate-900">Register</h2>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Fill in one short form. Your ticket appears on this page immediately.
-                            </p>
-                          </div>
-                          <StatusBadge tone={publicRouteAvailabilityTone}>
-                            {publicRouteAvailabilityLabel}
-                          </StatusBadge>
-                        </div>
-
-                        {publicRegistrationAvailable ? (
-                          <form className="mt-5 space-y-3" onSubmit={handlePublicRegistrationSubmit}>
-                            <div>
-                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">First Name</label>
-                              <input
-                                value={publicRegistrationForm.first_name}
-                                onChange={(e) => handlePublicRegistrationFieldChange("first_name", e.target.value)}
-                                autoComplete="given-name"
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="First name"
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Last Name</label>
-                              <input
-                                value={publicRegistrationForm.last_name}
-                                onChange={(e) => handlePublicRegistrationFieldChange("last_name", e.target.value)}
-                                autoComplete="family-name"
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="Last name"
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Phone</label>
-                              <input
-                                value={publicRegistrationForm.phone}
-                                onChange={(e) => handlePublicRegistrationFieldChange("phone", e.target.value)}
-                                autoComplete="tel"
-                                inputMode="tel"
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="Phone number"
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Email</label>
-                              <input
-                                value={publicRegistrationForm.email}
-                                onChange={(e) => handlePublicRegistrationFieldChange("email", e.target.value)}
-                                autoComplete="email"
-                                inputMode="email"
-                                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="Email address"
-                              />
-                            </div>
-
-                            {publicRegistrationError && (
-                              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                                {publicRegistrationError}
-                              </div>
-                            )}
-
-                            <button
-                              type="submit"
-                              disabled={publicRegistrationSubmitting}
-                              className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {publicRegistrationSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
-                              {publicEventPage.event.cta_label}
-                            </button>
-
-                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-slate-500">
-                              <span>Save your ticket image to your phone after submitting.</span>
-                              {publicEventPage.privacy.enabled && (
-                                <button
-                                  type="button"
-                                  onClick={() => setPublicPrivacyOpen(true)}
-                                  className="public-page-control inline-flex items-center gap-1 font-semibold text-slate-700 transition-colors hover:text-blue-600"
-                                >
-                                  <Lock className="h-3.5 w-3.5" />
-                                  {publicEventPage.privacy.label}
-                                </button>
-                              )}
-                            </div>
-                          </form>
-                        ) : (
-                          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                            <p className="text-sm font-semibold text-slate-900">{publicAvailabilityHelper}</p>
-                            <p className="mt-2 text-sm leading-6 text-slate-500">
-                              This page stays here for event details, location, and ticket recovery when available.
-                            </p>
-                            {publicEventPage.privacy.enabled && (
-                              <button
-                                type="button"
-                                onClick={() => setPublicPrivacyOpen(true)}
-                              className="public-page-control mt-3 inline-flex items-center gap-1 text-xs font-semibold text-slate-700 transition-colors hover:text-blue-600"
-                              >
-                                <Lock className="h-3.5 w-3.5" />
-                                {publicEventPage.privacy.label}
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">Find My Ticket</p>
-                              <p className="mt-1 text-sm leading-6 text-slate-500">
-                                {publicTicketRecoveryMode === "verified_contact"
-                                  ? "This event is set up for verified ticket recovery. OTP or reference-based release will plug in here for paid events."
-                                  : "Already registered? Enter your phone number or email. If that contact has multiple attendees, we will ask for the attendee name next."}
-                              </p>
-                            </div>
-                            <StatusBadge tone="neutral">Recovery</StatusBadge>
-                          </div>
-
-                          <form className="mt-4 space-y-3" onSubmit={handlePublicTicketLookupSubmit}>
-                            <div>
-                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Phone</label>
-                              <input
-                                value={publicTicketLookupForm.phone}
-                                onChange={(e) => handlePublicTicketLookupFieldChange("phone", e.target.value)}
-                                autoComplete="tel"
-                                inputMode="tel"
-                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="Phone number"
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Email</label>
-                              <input
-                                value={publicTicketLookupForm.email}
-                                onChange={(e) => handlePublicTicketLookupFieldChange("email", e.target.value)}
-                                autoComplete="email"
-                                inputMode="email"
-                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="Email address"
-                              />
-                            </div>
-                            {publicNameVerificationRequired && (
-                              <div>
-                                <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Attendee Name</label>
-                                <input
-                                  value={publicTicketLookupForm.attendee_name}
-                                  onChange={(e) => handlePublicTicketLookupFieldChange("attendee_name", e.target.value)}
-                                  autoComplete="name"
-                                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  placeholder="Enter the attendee's first and last name"
-                                />
-                              </div>
-                            )}
-                            {publicNameVerificationRequired && publicRegistrationResult && (
-                              <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                                {publicRegistrationResult.message}
-                              </div>
-                            )}
-                            {publicVerifiedRecoveryRequired && publicRegistrationResult && (
-                              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                                {publicRegistrationResult.message}
-                              </div>
-                            )}
-                            {publicTicketLookupError && (
-                              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                                {publicTicketLookupError}
-                              </div>
-                            )}
-                            <button
-                              type="submit"
-                              disabled={publicTicketLookupSubmitting}
-                              className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {publicTicketLookupSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
-                              {publicNameVerificationRequired ? "Verify Attendee Name" : "Find My Ticket"}
-                            </button>
-                          </form>
-                        </div>
-                      </>
-                    ) : (
-                      <div id="public-ticket-ready" className="space-y-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              {publicRecoveredRegistrationResult?.status === "success" ? "Registration complete" : "Ticket found"}
-                            </div>
-                            <h2 className="mt-3 text-lg font-semibold text-slate-900">
-                              {publicRecoveredRegistrationResult?.registration.first_name} {publicRecoveredRegistrationResult?.registration.last_name}
-                            </h2>
-                            <p className="mt-1 text-sm leading-6 text-slate-500">
-                              {publicRecoveredRegistrationResult?.success_message}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-50">
-                          <a href={publicRecoveredRegistrationResult?.ticket.png_url} target="_blank" rel="noopener noreferrer">
-                            <img
-                              src={publicRecoveredRegistrationResult?.ticket.png_url}
-                              alt={`Ticket for ${publicRecoveredRegistrationResult?.registration.id}`}
-                              className="w-full"
-                            />
-                          </a>
-                        </div>
-
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <a
-                            href={publicRecoveredRegistrationResult?.ticket.png_url}
-                            download={`${publicRecoveredRegistrationResult?.registration.id}.png`}
-                            className="public-page-control inline-flex items-center justify-center rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
-                          >
-                            Save Ticket Image
-                          </a>
-                          {publicRecoveredRegistrationResult?.map_url ? (
-                            <a
-                              href={publicRecoveredRegistrationResult?.map_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="public-page-control inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-                            >
-                              <ExternalLink className="h-4 w-4" />
-                              View Map
-                            </a>
-                          ) : (
-                            <a
-                              href={publicRecoveredRegistrationResult?.ticket.svg_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="public-page-control inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-                            >
-                              <ExternalLink className="h-4 w-4" />
-                              Open SVG Copy
-                            </a>
-                          )}
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
-                          <p className="font-semibold text-slate-900">{publicRecoveredRegistrationResult?.event.name}</p>
-                          <p className="mt-1">{publicRecoveredRegistrationResult?.event.date_label}</p>
-                          <p className="mt-1">{publicRecoveredRegistrationResult?.event.location}</p>
-                          <p className="mt-3 text-xs text-slate-500">
-                            Save this image now. Email backup, if configured for this event, will arrive separately.
-                          </p>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={resetPublicRegistrationFlow}
-                          className="public-page-control inline-flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-                        >
-                          {publicRecoveredRegistrationResult?.status === "success" ? "Register Another Attendee" : "Back to Registration"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {publicRouteContactVisible && (
-                    <div className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h2 className="text-lg font-semibold text-slate-900">Help & Contact</h2>
-                          <p className="mt-1 text-sm leading-6 text-slate-500">
-                            {publicEventPage.contact.intro}
-                          </p>
-                        </div>
-                        <StatusBadge tone="neutral">Fallback</StatusBadge>
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {publicRouteMessengerHref && (
-                          <PublicContactActionLink href={publicRouteMessengerHref} label="Chat on Messenger" kind="messenger" />
-                        )}
-                        {publicRouteLineHref && (
-                          <PublicContactActionLink href={publicRouteLineHref} label="Chat on LINE" kind="line" />
-                        )}
-                        {publicRoutePhoneHref && (
-                          <PublicContactActionLink href={publicRoutePhoneHref} label={`Call ${publicEventPage.contact.phone}`} kind="phone" />
-                        )}
-                      </div>
-
-                      {publicEventPage.contact.hours && (
-                        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Support Hours</p>
-                          <p className="mt-2 text-sm font-semibold text-slate-900">{publicEventPage.contact.hours}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </aside>
-              </section>
-
-              {publicPrivacyOpen && publicEventPage.privacy.enabled && (
-                <div
-                  className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 px-4"
-                  onClick={() => setPublicPrivacyOpen(false)}
-                >
-                  <div
-                    className="w-full max-w-lg rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                          <Lock className="h-5 w-5" />
-                        </div>
-                        <h2 className="mt-4 text-xl font-bold text-slate-900">{publicEventPage.privacy.label}</h2>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setPublicPrivacyOpen(false)}
-                        className="public-page-control inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
-                        aria-label="Close privacy notice"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                    <p className="mt-4 whitespace-pre-line text-sm leading-7 text-slate-600">
-                      {publicEventPage.privacy.text}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </main>
-
-        {publicEventPage?.support.bot_enabled && (
-          <>
-            <AnimatePresence>
-              {publicChatOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 18, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                  transition={{ duration: 0.18, ease: "easeOut" }}
-                  className="fixed inset-x-4 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-50 sm:left-auto sm:right-6 sm:w-[25rem]"
-                >
-                  <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
-                    <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-slate-900">Event Help</p>
-                        <p className="mt-1 text-xs leading-5 text-slate-500">
-                          Ask about schedule, venue, travel, registration, or ticket recovery.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setPublicChatOpen(false)}
-                        className="public-page-control inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
-                        aria-label="Close help chat"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-
-                    <div
-                      ref={publicChatBodyRef}
-                      className="max-h-[min(56vh,34rem)] space-y-3 overflow-y-auto bg-slate-50/80 px-4 py-4"
-                    >
-                      {publicChatMessages.map((message) => {
-                        const isAssistant = message.role === "assistant";
-                        return (
-                          <div key={message.id} className={`flex ${isAssistant ? "justify-start" : "justify-end"}`}>
-                            <div
-                              className={`max-w-[88%] rounded-[1.5rem] px-4 py-3 text-sm shadow-sm ${
-                                isAssistant
-                                  ? "border border-slate-200 bg-white text-slate-800"
-                                  : "bg-blue-600 text-white"
-                              }`}
-                              style={{ fontFamily: "var(--font-edit)" }}
-                            >
-                              {message.text && <p className="whitespace-pre-line leading-6">{message.text}</p>}
-
-                              {message.tickets.length > 0 && (
-                                <div className={`${message.text ? "mt-3" : ""} space-y-2`}>
-                                  {message.tickets.map((ticket) => (
-                                    <div
-                                      key={`${message.id}:${ticket.registration_id}`}
-                                      className={`rounded-2xl border px-3 py-3 ${
-                                        isAssistant
-                                          ? "border-slate-200 bg-slate-50"
-                                          : "border-blue-400/60 bg-blue-500/30"
-                                      }`}
-                                    >
-                                      <p className={`text-[11px] font-bold uppercase tracking-[0.16em] ${isAssistant ? "text-slate-500" : "text-blue-100/90"}`}>
-                                        Ticket {ticket.registration_id}
-                                      </p>
-                                      {ticket.summary_text && (
-                                        <p className={`mt-2 whitespace-pre-line text-xs leading-5 ${isAssistant ? "text-slate-600" : "text-blue-50"}`}>
-                                          {ticket.summary_text}
-                                        </p>
-                                      )}
-                                      <div className="mt-3 flex flex-wrap gap-2">
-                                        {ticket.png_url && (
-                                          <a
-                                            href={ticket.png_url}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className={`public-page-control inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
-                                              isAssistant
-                                                ? "bg-blue-600 text-white"
-                                                : "bg-white text-blue-700"
-                                            }`}
-                                          >
-                                            <Download className="h-3.5 w-3.5" />
-                                            PNG
-                                          </a>
-                                        )}
-                                        {ticket.svg_url && (
-                                          <a
-                                            href={ticket.svg_url}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className={`public-page-control inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                                              isAssistant
-                                                ? "border-slate-200 bg-white text-slate-700"
-                                                : "border-blue-200/70 bg-transparent text-white"
-                                            }`}
-                                          >
-                                            <ExternalLink className="h-3.5 w-3.5" />
-                                            SVG
-                                          </a>
-                                        )}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                              {message.mapUrl && (
-                                <div className={`${message.text || message.tickets.length > 0 ? "mt-3" : ""}`}>
-                                  <a
-                                    href={message.mapUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={`public-page-control inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold ${
-                                      isAssistant
-                                        ? "border border-slate-200 bg-slate-50 text-slate-700"
-                                        : "bg-white text-blue-700"
-                                    }`}
-                                  >
-                                    <ExternalLink className="h-3.5 w-3.5" />
-                                    Open Map
-                                  </a>
-                                </div>
-                              )}
-
-                              <p className={`mt-2 text-[10px] ${isAssistant ? "text-slate-400" : "text-blue-100/80"}`}>
-                                {new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <form className="border-t border-slate-200 bg-white p-4" onSubmit={handlePublicChatSubmit}>
-                      {publicChatError && (
-                        <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                          {publicChatError}
-                        </div>
-                      )}
-                      <label className="sr-only" htmlFor="public-chat-input">Message</label>
-                      <div className="flex items-end gap-2">
-                        <textarea
-                          id="public-chat-input"
-                          value={publicChatInput}
-                          onChange={(e) => setPublicChatInput(e.target.value)}
-                          onKeyDown={handlePublicChatInputKeyDown}
-                          rows={2}
-                          placeholder="Ask a question"
-                          className="min-h-[4.25rem] flex-1 resize-none rounded-[1.5rem] border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          style={{ fontFamily: "var(--font-edit)" }}
-                        />
-                        <button
-                          type="submit"
-                          disabled={publicChatSending || !publicChatInput.trim()}
-                          className="public-page-control inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                          aria-label="Send message"
-                        >
-                          {publicChatSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                        </button>
-                      </div>
-
-                      {publicRouteContactVisible && (
-                        <div className="mt-3 rounded-[1.25rem] border border-slate-200 bg-slate-50 px-3 py-3">
-                          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Need a human instead?</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-600">
-                            {publicEventPage.contact.intro}
-                          </p>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {publicRouteMessengerHref && (
-                              <PublicContactActionLink href={publicRouteMessengerHref} label="Messenger" kind="messenger" compact />
-                            )}
-                            {publicRouteLineHref && (
-                              <PublicContactActionLink href={publicRouteLineHref} label="LINE" kind="line" compact />
-                            )}
-                            {publicRoutePhoneHref && (
-                              <PublicContactActionLink href={publicRoutePhoneHref} label="Call" kind="phone" compact />
-                            )}
-                          </div>
-                          {publicEventPage.contact.hours && (
-                            <p className="mt-3 text-[11px] text-slate-500">
-                              Available: <span className="font-semibold text-slate-700">{publicEventPage.contact.hours}</span>
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </form>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-50 sm:right-6">
-              <button
-                type="button"
-                onClick={() => setPublicChatOpen((current) => !current)}
-                className="public-page-control inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_48px_rgba(15,23,42,0.24)] transition-transform hover:-translate-y-0.5"
-              >
-                {publicChatOpen ? <X className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
-                {publicChatOpen ? "Close Help" : "Need Help?"}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+      <PublicEventPageScreen
+        page={publicEventPage}
+        loading={publicEventLoading}
+        errorMessage={publicEventError}
+        eventStatusTone={publicRouteEventStatusTone}
+        eventStatusLabel={publicRouteEventStatusLabel}
+        availabilityTone={publicRouteAvailabilityTone}
+        availabilityLabel={publicRouteAvailabilityLabel}
+        mapEmbedUrl={publicRouteMapEmbedUrl}
+        messengerHref={publicRouteMessengerHref}
+        lineHref={publicRouteLineHref}
+        phoneHref={publicRoutePhoneHref}
+        registrationForm={publicRegistrationForm}
+        onRegistrationFieldChange={handlePublicRegistrationFieldChange}
+        registrationSubmitting={publicRegistrationSubmitting}
+        registrationError={publicRegistrationError}
+        registrationResult={publicRegistrationResult}
+        onRegistrationSubmit={handlePublicRegistrationSubmit}
+        onResetRegistrationFlow={resetPublicRegistrationFlow}
+        ticketLookupForm={publicTicketLookupForm}
+        onTicketLookupFieldChange={handlePublicTicketLookupFieldChange}
+        ticketLookupSubmitting={publicTicketLookupSubmitting}
+        ticketLookupError={publicTicketLookupError}
+        onTicketLookupSubmit={handlePublicTicketLookupSubmit}
+        privacyOpen={publicPrivacyOpen}
+        onPrivacyOpenChange={setPublicPrivacyOpen}
+        chatOpen={publicChatOpen}
+        onChatOpenChange={setPublicChatOpen}
+        chatInput={publicChatInput}
+        onChatInputChange={setPublicChatInput}
+        chatPendingImages={publicChatPendingImages}
+        chatFileInputRef={publicChatFileInputRef}
+        chatBodyRef={publicChatBodyRef}
+        chatMessages={publicChatMessages}
+        chatSending={publicChatSending}
+        chatError={publicChatError}
+        onChatImageSelect={handlePublicChatImageSelection}
+        onChatRemoveImage={removePublicChatPendingImage}
+        onChatSubmit={handlePublicChatSubmit}
+        onChatInputKeyDown={handlePublicChatInputKeyDown}
+      />
     );
   }
 
@@ -14018,6 +13333,7 @@ export default function App() {
                 )}
                 {testMessages.map((msg, i) => {
                   const text = msg.parts.find((p) => p.text)?.text;
+                  const attachments = extractImageAttachmentsFromParts(msg.parts);
                   const funcCall = msg.parts.find((p) => p.functionCall)?.functionCall;
                   const funcResp = msg.parts.find((p) => p.functionResponse)?.functionResponse;
 
@@ -14052,6 +13368,7 @@ export default function App() {
                     <ChatBubble
                       key={i}
                       text={text || ""}
+                      attachments={attachments}
                       type={msg.role === "user" ? "outgoing" : "incoming"}
                       timestamp={msg.timestamp}
                     />
@@ -14069,18 +13386,80 @@ export default function App() {
               </div>
 
               <div className="border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
+                <input
+                  ref={testImageInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  multiple
+                  className="hidden"
+                  onChange={handleTestImageSelection}
+                />
+                {(testPendingImages.length > 0 || testAttachmentError) && (
+                  <div className="mb-2 space-y-2">
+                    {testPendingImages.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {testPendingImages.map((attachment) => (
+                          <div
+                            key={attachment.id}
+                            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-2"
+                          >
+                            <img
+                              src={attachment.previewUrl}
+                              alt={attachment.file.name}
+                              className="h-10 w-10 rounded-xl object-cover"
+                            />
+                            <div className="min-w-0">
+                              <p className="max-w-28 truncate text-xs font-medium text-slate-800">{attachment.file.name}</p>
+                              <p className="text-[10px] text-slate-500">{Math.max(1, Math.round(attachment.file.size / 1024))} KB</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeTestPendingImage(attachment.id)}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:text-slate-700"
+                              aria-label={`Remove ${attachment.file.name}`}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                        {testPendingImages.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={clearTestPendingImages}
+                            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-rose-300 hover:text-rose-700"
+                          >
+                            Clear Images
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {testAttachmentError && (
+                      <p className="text-xs text-rose-600">{testAttachmentError}</p>
+                    )}
+                  </div>
+                )}
                 <div className="flex gap-2 lg:pr-16">
+                  <ActionButton
+                    onClick={() => testImageInputRef.current?.click()}
+                    tone="neutral"
+                    className="px-2.5"
+                    disabled={isTyping || testPendingImages.length >= 4}
+                    aria-label="Attach image"
+                    title="Attach image"
+                  >
+                    <ImagePlus className="w-4 h-4" />
+                  </ActionButton>
                   <input
                     type="text"
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleTestSend()}
+                    onKeyDown={(e) => e.key === "Enter" && void handleTestSend()}
                     placeholder="Type a message..."
                     className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   <ActionButton
-                    onClick={handleTestSend}
-                    disabled={!inputText.trim() || isTyping}
+                    onClick={() => void handleTestSend()}
+                    disabled={(!inputText.trim() && testPendingImages.length === 0) || isTyping}
                     tone="blue"
                     active
                     className="px-3"
@@ -16088,6 +15467,7 @@ export default function App() {
                               <ChatBubble
                                 key={`${message.id || message.timestamp}-${message.type}`}
                                 text={message.text}
+                                attachments={message.attachments}
                                 type={message.type}
                                 timestamp={message.timestamp}
                               />

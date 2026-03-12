@@ -1,12 +1,14 @@
 import { Queue, Worker } from "bullmq";
 import { createHash } from "crypto";
 import { getBullConnectionOptions, getRedisClient, isRedisConfigured } from "./redis";
+import type { InboundImageReference } from "./inboundImage";
 
 export type WhatsAppInboundJob = {
   dedupKey: string;
   senderId: string;
   phoneNumberId: string;
   text: string;
+  attachments?: InboundImageReference[];
   messageId: string | null;
   eventTimestamp: number;
 };
@@ -39,9 +41,10 @@ export function buildWhatsAppWebhookDedupKey(message: any, phoneNumberId?: strin
   const senderId = String(message?.from || "").trim();
   const targetId = String(phoneNumberId || "").trim();
   const text = String(message?.text?.body || "").trim();
+  const attachmentKey = String(message?.image?.id || "").trim();
   const timestamp = Number(message?.timestamp || 0);
   const hash = createHash("sha256")
-    .update(`${senderId}|${targetId}|${timestamp}|${text}`)
+    .update(`${senderId}|${targetId}|${timestamp}|${text}|${attachmentKey}`)
     .digest("hex");
   return `wa-hash:${hash}`;
 }

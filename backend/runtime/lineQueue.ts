@@ -1,6 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { createHash } from "crypto";
 import { getBullConnectionOptions, getRedisClient, isRedisConfigured } from "./redis";
+import type { InboundImageReference } from "./inboundImage";
 
 export type LineInboundJob = {
   dedupKey: string;
@@ -8,6 +9,7 @@ export type LineInboundJob = {
   destination: string;
   replyToken: string | null;
   text: string;
+  attachments?: InboundImageReference[];
   eventTimestamp: number;
   webhookEventId: string | null;
 };
@@ -44,9 +46,10 @@ export function buildLineWebhookDedupKey(webhookEvent: any, destination: string)
 
   const senderId = String(webhookEvent?.source?.userId || "").trim();
   const text = String(webhookEvent?.message?.text || "").trim();
+  const attachmentKey = String(webhookEvent?.message?.id || "").trim();
   const timestamp = Number(webhookEvent?.timestamp || 0);
   const hash = createHash("sha256")
-    .update(`${senderId}|${destination}|${timestamp}|${text}`)
+    .update(`${senderId}|${destination}|${timestamp}|${text}|${attachmentKey}`)
     .digest("hex");
   return `line-hash:${hash}`;
 }

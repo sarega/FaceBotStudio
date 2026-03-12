@@ -18,6 +18,7 @@ import type {
   CheckinAccessSessionRow,
   CheckinSessionRow,
   CreateRegistrationEmailDeliveryInput,
+  CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
   ExchangeCheckinSessionTokenInput,
@@ -30,6 +31,7 @@ import type {
   EventRow,
   FacebookPageRow,
   ManualEventStatus,
+  MessageAttachmentRow,
   MessageRow,
   MessageType,
   LlmUsageModelSummaryRow,
@@ -182,6 +184,20 @@ function mapPageRow(row: Record<string, unknown>) {
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   } satisfies FacebookPageRow;
+}
+
+function mapMessageAttachmentRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""),
+    message_id: Number(row.message_id || 0),
+    kind: "image",
+    url: String(row.url || ""),
+    absolute_url: typeof row.absolute_url === "string" ? row.absolute_url : null,
+    mime_type: typeof row.mime_type === "string" ? row.mime_type : null,
+    name: typeof row.name === "string" ? row.name : null,
+    size_bytes: Number.isFinite(Number(row.size_bytes)) ? Number(row.size_bytes) : null,
+    created_at: String(row.created_at || ""),
+  } satisfies MessageAttachmentRow;
 }
 
 function mapChannelRow(row: Record<string, unknown>) {
@@ -676,10 +692,84 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string) {
-    await this.pool.query(
-      "INSERT INTO messages (sender_id, event_id, page_id, text, type) VALUES ($1, $2, $3, $4, $5)",
+    const result = await this.pool.query<{ id: number }>(
+      "INSERT INTO messages (sender_id, event_id, page_id, text, type) VALUES ($1, $2, $3, $4, $5) RETURNING id",
       [senderId, eventId || DEFAULT_EVENT_ID, pageId || null, text, type],
     );
+    return Number(result.rows[0]?.id || 0);
+  }
+
+  async saveMessageAttachments(messageId: number, attachments: CreateMessageAttachmentInput[]) {
+    const normalizedMessageId = Math.trunc(Number(messageId) || 0);
+    if (normalizedMessageId <= 0 || !Array.isArray(attachments) || attachments.length === 0) {
+      return [] as MessageAttachmentRow[];
+    }
+
+    const client = await this.pool.connect();
+    const createdIds: string[] = [];
+    try {
+      await client.query("BEGIN");
+      for (const attachment of attachments) {
+        const url = String(attachment?.url || "").trim();
+        if (!url) continue;
+        const id = generateEntityId("msgatt");
+        await client.query(
+          `INSERT INTO message_attachments
+             (id, message_id, kind, url, absolute_url, mime_type, name, size_bytes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            id,
+            normalizedMessageId,
+            "image",
+            url,
+            attachment?.absolute_url == null ? null : String(attachment.absolute_url || "").trim() || null,
+            attachment?.mime_type == null ? null : String(attachment.mime_type || "").trim() || null,
+            attachment?.name == null ? null : String(attachment.name || "").trim() || null,
+            Number.isFinite(Number(attachment?.size_bytes)) ? Math.max(0, Math.trunc(Number(attachment.size_bytes))) : null,
+          ],
+        );
+        createdIds.push(id);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    if (createdIds.length === 0) {
+      return [] as MessageAttachmentRow[];
+    }
+
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT id, message_id, kind, url, absolute_url, mime_type, name, size_bytes, created_at::text AS created_at
+       FROM message_attachments
+       WHERE message_id = $1 AND id = ANY($2::text[])
+       ORDER BY created_at ASC, id ASC`,
+      [normalizedMessageId, createdIds],
+    );
+    return result.rows.map(mapMessageAttachmentRow);
+  }
+
+  async listMessageAttachments(messageIds: number[]) {
+    const normalizedIds = [...new Set(
+      messageIds
+        .map((messageId) => Math.trunc(Number(messageId) || 0))
+        .filter((messageId) => messageId > 0),
+    )];
+    if (normalizedIds.length === 0) {
+      return [] as MessageAttachmentRow[];
+    }
+
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT id, message_id, kind, url, absolute_url, mime_type, name, size_bytes, created_at::text AS created_at
+       FROM message_attachments
+       WHERE message_id = ANY($1::int[])
+       ORDER BY message_id ASC, created_at ASC, id ASC`,
+      [normalizedIds],
+    );
+    return result.rows.map(mapMessageAttachmentRow);
   }
 
   async listMessages(limit: number, eventId?: string, beforeId?: number) {

@@ -1,12 +1,14 @@
 import { Queue, Worker } from "bullmq";
 import { createHash } from "crypto";
 import { getBullConnectionOptions, getRedisClient, isRedisConfigured } from "./redis";
+import type { InboundImageReference } from "./inboundImage";
 
 export type TelegramInboundJob = {
   dedupKey: string;
   senderId: string;
   botKey: string;
   text: string;
+  attachments?: InboundImageReference[];
   updateId: string | null;
   eventTimestamp: number;
 };
@@ -39,9 +41,15 @@ export function buildTelegramWebhookDedupKey(update: any, botKey?: string) {
   const senderId = String(update?.message?.chat?.id || update?.message?.from?.id || "").trim();
   const resolvedBotKey = String(botKey || "").trim();
   const text = String(update?.message?.text || "").trim();
+  const attachmentKey = Array.isArray(update?.message?.photo)
+    ? update.message.photo
+        .map((photo: any) => String(photo?.file_id || "").trim())
+        .filter(Boolean)
+        .join("|")
+    : "";
   const timestamp = Number(update?.message?.date || 0);
   const hash = createHash("sha256")
-    .update(`${senderId}|${resolvedBotKey}|${timestamp}|${text}`)
+    .update(`${senderId}|${resolvedBotKey}|${timestamp}|${text}|${attachmentKey}`)
     .digest("hex");
   return `tg-hash:${hash}`;
 }

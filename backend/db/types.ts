@@ -19,6 +19,28 @@ export interface MessageRow {
   text: string;
   timestamp: string;
   type: MessageType;
+  attachments?: MessageAttachmentRow[];
+}
+
+export interface MessageAttachmentRow {
+  id: string;
+  message_id: number;
+  kind: "image";
+  url: string;
+  absolute_url?: string | null;
+  mime_type?: string | null;
+  name?: string | null;
+  size_bytes?: number | null;
+  created_at: string;
+}
+
+export interface CreateMessageAttachmentInput {
+  kind: "image";
+  url: string;
+  absolute_url?: string | null;
+  mime_type?: string | null;
+  name?: string | null;
+  size_bytes?: number | null;
 }
 
 export interface RegistrationRow {
@@ -347,7 +369,9 @@ export interface AppDatabase {
   checkInRegistration(id: string): Promise<boolean>;
   updateRegistrationStatus(id: string, status: RegistrationStatus): Promise<boolean>;
   deleteRegistration(id: string): Promise<boolean>;
-  saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string): Promise<void>;
+  saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string): Promise<number>;
+  saveMessageAttachments(messageId: number, attachments: CreateMessageAttachmentInput[]): Promise<MessageAttachmentRow[]>;
+  listMessageAttachments(messageIds: number[]): Promise<MessageAttachmentRow[]>;
   listMessages(limit: number, eventId?: string, beforeId?: number): Promise<MessageRow[]>;
   getMessageHistoryRows(senderId: string, limit: number, eventId?: string): Promise<Array<{ text: string; type: MessageType }>>;
   getConversationRowsForSender(senderId: string, limit: number, eventId?: string): Promise<MessageRow[]>;

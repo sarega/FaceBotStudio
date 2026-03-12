@@ -13,6 +13,7 @@ import dotenv from "dotenv";
 import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
 import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
+import type { InboundImageReference } from "./backend/runtime/inboundImage";
 import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup, buildLineWebhookDedupKey, canUseLineWebhookQueue, type LineInboundJob } from "./backend/runtime/lineQueue";
 import { enqueueTelegramInboundJob, startEmbeddedTelegramWorker, acquireTelegramWebhookDedup, buildTelegramWebhookDedupKey, canUseTelegramWebhookQueue, type TelegramInboundJob } from "./backend/runtime/telegramQueue";
 import { enqueueWhatsAppInboundJob, startEmbeddedWhatsAppWorker, acquireWhatsAppWebhookDedup, buildWhatsAppWebhookDedupKey, canUseWhatsAppWebhookQueue, type WhatsAppInboundJob } from "./backend/runtime/whatsappQueue";
@@ -75,7 +76,9 @@ import {
   type AuthUserRow,
   type ChannelAccountRow,
   type ChannelPlatform,
+  type CreateMessageAttachmentInput,
   type EventDocumentChunkEmbeddingRow,
+  type MessageAttachmentRow,
   type MessageRow,
   type RegistrationInput,
   type RegistrationRow,
@@ -259,6 +262,7 @@ type AdminEmailTestResult = {
 
 type PendingConversationTurn = {
   inputText: string;
+  inputParts: ChatPart[];
   history: ChatHistoryMessage[];
   highestPendingMessageId: number;
   pendingMessageCount: number;
@@ -279,6 +283,7 @@ type PublicInboxConversationStatus = "open" | "waiting-admin" | "waiting-user" |
 
 type FailedInboundTurn = {
   inputText: string;
+  inputParts?: ChatPart[];
   history: ChatHistoryMessage[];
   recordedAt: number;
   reason?: string;
@@ -448,6 +453,10 @@ function getSystemInstruction(
     "Read the recent conversation history before replying and continue naturally from the current chat.",
     "Only greet on the first assistant reply of a conversation or after a long idle gap. Do not greet on every reply.",
     "If the user sent several back-to-back messages before your turn, answer them in one natural reply without restarting from the beginning.",
+    "If image attachments are present, inspect them before replying.",
+    "If the user asks you to check a ticket image, ticket screenshot, or QR/ticket photo, do not validate it from appearance alone.",
+    "When a readable Registration ID is visible in an attached ticket image or in the user's text, use the checkTicket tool to verify it against the current event database.",
+    "If the attached ticket image is blurry or no readable Registration ID is visible, ask for a clearer image or the typed Registration ID instead of guessing.",
     "Do not repeat the same event benefits, registration call-to-action, or required registration fields if they were already stated in recent history.",
     "When several user questions are pending, answer them concisely and avoid repeating information that was already answered.",
     "For short follow-up questions such as cost, date, location, dress code, or eligibility, answer the follow-up directly before adding any optional next step.",
@@ -485,13 +494,19 @@ function getInboundConversationChannelFromPlatform(platform: ChannelPlatform) {
   }
 }
 
-function rememberFailedInboundTurn(conversationKey: string, turn: { inputText: string; history: ChatHistoryMessage[] }, reason?: string) {
+function rememberFailedInboundTurn(
+  conversationKey: string,
+  turn: { inputText: string; inputParts?: ChatPart[]; history: ChatHistoryMessage[] },
+  reason?: string,
+) {
   const inputText = String(turn.inputText || "").trim();
-  if (!inputText) return;
+  const inputParts = Array.isArray(turn.inputParts) ? turn.inputParts.filter(Boolean) : [];
+  if (!inputText && inputParts.length === 0) return;
 
   const now = Date.now();
   failedInboundTurns.set(conversationKey, {
     inputText,
+    inputParts,
     history: Array.isArray(turn.history) ? turn.history : [],
     recordedAt: now,
     reason: String(reason || "").slice(0, 500) || undefined,
@@ -622,19 +637,111 @@ function isNearDuplicateReply(candidate: string, previous: string) {
   return overlap / Math.min(leftTokens.size, rightTokens.size) >= 0.88;
 }
 
-function buildChatHistoryFromRows(rows: MessageRow[]) {
-  return [...rows]
-    .map((row): { role: ChatHistoryMessage["role"]; text: string; id: number } => ({
+function toChatImagePart(attachment: MessageAttachmentRow): ChatPart {
+  return {
+    image: {
+      id: attachment.id,
+      kind: "image",
+      url: normalizeOptionalText(attachment.url),
+      absolute_url: normalizeOptionalText(attachment.absolute_url),
+      mime_type: normalizeOptionalText(attachment.mime_type),
+      name: normalizeOptionalText(attachment.name),
+      size_bytes: Number.isFinite(Number(attachment.size_bytes)) ? Number(attachment.size_bytes) : undefined,
+    },
+  };
+}
+
+function buildChatPartsFromStoredMessageRow(row: MessageRow & { attachments?: MessageAttachmentRow[] }) {
+  const parts: ChatPart[] = [];
+  const text = normalizeMessageTextForHistory(row.text || "");
+  if (text) {
+    parts.push({ text });
+  }
+  if (Array.isArray(row.attachments)) {
+    for (const attachment of row.attachments) {
+      const url = normalizeOptionalText(attachment?.url);
+      if (!url || attachment?.kind !== "image") continue;
+      parts.push(toChatImagePart(attachment));
+    }
+  }
+  return parts;
+}
+
+function buildStoredMessageComparableSignature(row?: MessageRow & { attachments?: MessageAttachmentRow[] }) {
+  if (!row) return "";
+  const text = normalizeReplyComparisonText(normalizeMessageTextForHistory(row.text || ""));
+  const attachmentSignature = (Array.isArray(row.attachments) ? row.attachments : [])
+    .map((attachment) => normalizeOptionalText(attachment?.url) || normalizeOptionalText(attachment?.id))
+    .filter(Boolean)
+    .join("|");
+  if (!text && !attachmentSignature) return "";
+  return `${text}::${attachmentSignature}`;
+}
+
+function buildStoredMessageInputText(row?: MessageRow & { attachments?: MessageAttachmentRow[] }) {
+  const text = normalizeOptionalText(row?.text);
+  if (text) return text;
+  if (Array.isArray(row?.attachments) && row.attachments.length > 0) {
+    return "The user attached image assets without text. Inspect the images and ask one short clarification question in Thai if intent is unclear.";
+  }
+  return "";
+}
+
+function summarizeStoredMessagePreview(row?: MessageRow & { attachments?: MessageAttachmentRow[] }, maxLength = 220) {
+  const text = normalizeOptionalText(normalizeMessageTextForHistory(row?.text || ""));
+  if (text) {
+    return truncateText(text, maxLength);
+  }
+  const imageCount = Array.isArray(row?.attachments) ? row.attachments.length : 0;
+  if (imageCount > 0) {
+    return imageCount === 1 ? "[image attachment]" : `[${imageCount} image attachments]`;
+  }
+  return "";
+}
+
+async function hydrateMessageRowsWithAttachments<T extends MessageRow>(rows: T[]) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return [] as Array<T & { attachments: MessageAttachmentRow[] }>;
+  }
+
+  const messageIds = rows
+    .map((row) => Math.trunc(Number(row.id) || 0))
+    .filter((id) => id > 0);
+  if (messageIds.length === 0) {
+    return rows.map((row) => ({ ...row, attachments: [] }));
+  }
+
+  const attachments = await appDb.listMessageAttachments(messageIds);
+  const attachmentsByMessageId = new Map<number, MessageAttachmentRow[]>();
+  for (const attachment of attachments) {
+    const messageId = Math.trunc(Number(attachment.message_id) || 0);
+    if (messageId <= 0) continue;
+    const list = attachmentsByMessageId.get(messageId) || [];
+    list.push(attachment);
+    attachmentsByMessageId.set(messageId, list);
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    attachments: attachmentsByMessageId.get(Math.trunc(Number(row.id) || 0)) || [],
+  }));
+}
+
+function buildChatHistoryFromRows(rows: MessageRow[]): ChatHistoryMessage[] {
+  const historyRows: Array<{ role: ChatHistoryMessage["role"]; id: number; parts: ChatPart[] }> = [];
+  for (const row of rows) {
+    const typedRow = row as MessageRow & { attachments?: MessageAttachmentRow[] };
+    const parts = buildChatPartsFromStoredMessageRow(typedRow);
+    if (parts.length === 0) continue;
+    historyRows.push({
       role: row.type === "incoming" ? "user" : "model",
-      text: normalizeMessageTextForHistory(row.text || ""),
       id: row.id,
-    }))
-    .filter((row) => row.text)
-    .sort((left, right) => left.id - right.id)
-    .map((row) => ({
-      role: row.role,
-      parts: [{ text: row.text }],
-    }) satisfies ChatHistoryMessage);
+      parts,
+    });
+  }
+
+  historyRows.sort((left, right) => left.id - right.id);
+  return historyRows.map(({ role, parts }) => ({ role, parts }));
 }
 
 function getReservedPendingMessageId(conversationKey: string, now = Date.now()) {
@@ -693,7 +800,9 @@ async function buildPendingConversationTurn(
   senderId: string,
   eventId: string,
 ): Promise<PendingConversationTurn | null> {
-  const rows = await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId);
+  const rows = await hydrateMessageRowsWithAttachments(
+    await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId),
+  );
   if (!rows.length) return null;
 
   const boundaryMessageId = getPendingBoundaryMessageId(conversationKey, rows);
@@ -703,11 +812,10 @@ async function buildPendingConversationTurn(
   if (!pendingRows.length) return null;
 
   const distinctPendingRows = pendingRows.filter((row, index, list) => {
-    const text = String(row.text || "").trim();
-    if (!text) return false;
+    const signature = buildStoredMessageComparableSignature(row);
+    if (!signature) return false;
     if (index === 0) return true;
-    const previousText = String(list[index - 1]?.text || "").trim();
-    return normalizeReplyComparisonText(text) !== normalizeReplyComparisonText(previousText);
+    return signature !== buildStoredMessageComparableSignature(list[index - 1]);
   });
   if (!distinctPendingRows.length) return null;
 
@@ -727,7 +835,8 @@ async function buildPendingConversationTurn(
     : "";
 
   return {
-    inputText: String(latestPendingRow?.text || "").trim(),
+    inputText: buildStoredMessageInputText(latestPendingRow),
+    inputParts: buildChatPartsFromStoredMessageRow(latestPendingRow),
     history: buildChatHistoryFromRows(historyRows),
     highestPendingMessageId: latestPendingRow?.id || 0,
     pendingMessageCount: distinctPendingRows.length,
@@ -818,7 +927,13 @@ async function generateReplyForPreparedTurn(
   eventId: string,
   preparedTurn: PreparedConversationTurn,
 ): Promise<BotReplyResult> {
-  const result = await generateBotReplyForSender(senderId, eventId, preparedTurn.inputText, preparedTurn.history);
+  const result = await generateBotReplyForSender(
+    senderId,
+    eventId,
+    preparedTurn.inputText,
+    preparedTurn.history,
+    preparedTurn.inputParts,
+  );
   const shouldSuppressDuplicate =
     preparedTurn.pendingMessageCount > 1 &&
     isNearDuplicateReply(result.text, preparedTurn.latestVisibleOutgoingText);
@@ -830,20 +945,24 @@ async function generateReplyForPreparedTurn(
 }
 
 async function buildLatestIncomingRetryTurn(senderId: string, eventId: string) {
-  const rows = await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId);
+  const rows = await hydrateMessageRowsWithAttachments(
+    await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId),
+  );
   if (!rows.length) return null;
 
   const latestIncomingRow = rows.find(
-    (row) => row.type === "incoming" && normalizeMessageTextForHistory(row.text || ""),
+    (row) => row.type === "incoming" && buildStoredMessageComparableSignature(row),
   );
   if (!latestIncomingRow) return null;
 
-  const inputText = normalizeMessageTextForHistory(latestIncomingRow.text || "");
-  if (!inputText) return null;
+  const inputText = buildStoredMessageInputText(latestIncomingRow);
+  const inputParts = buildChatPartsFromStoredMessageRow(latestIncomingRow);
+  if (!inputText && inputParts.length === 0) return null;
 
   const historyRows = rows.filter((row) => row.id < latestIncomingRow.id);
   return {
     inputText,
+    inputParts,
     history: buildChatHistoryFromRows(historyRows),
     source: "latest-incoming",
   } as const;
@@ -854,6 +973,7 @@ async function buildRetryTurnForConversation(conversationKey: string, senderId: 
   if (failedTurn) {
     return {
       inputText: failedTurn.inputText,
+      inputParts: failedTurn.inputParts || [],
       history: failedTurn.history,
       source: "failed-turn",
       reason: failedTurn.reason || null,
@@ -875,7 +995,11 @@ function isAbsoluteHttpUrl(value: string) {
 function resolveChatImageAbsolutePath(image: NonNullable<ChatPart["image"]>) {
   const storedUrl = normalizeOptionalText(image.url);
   if (!storedUrl) return "";
-  return resolveAdminAgentImageAbsolutePath(storedUrl) || resolvePublicPosterAbsolutePath(storedUrl);
+  return (
+    resolveAdminAgentImageAbsolutePath(storedUrl)
+    || resolveChannelImageAbsolutePath(storedUrl)
+    || resolvePublicPosterAbsolutePath(storedUrl)
+  );
 }
 
 function resolveChatImageMimeType(image: NonNullable<ChatPart["image"]>, filePath = "") {
@@ -924,6 +1048,7 @@ function buildChatImageDescriptor(image: NonNullable<ChatPart["image"]>) {
   const details = [
     fileName ? `filename: ${fileName}` : "",
     mimeType ? `mime_type: ${mimeType}` : "",
+    storedUrl ? `image_asset_url: ${storedUrl}` : "",
     storedUrl ? `poster_asset_url: ${storedUrl}` : "",
     absoluteUrl ? `public_image_url: ${absoluteUrl}` : "",
   ].filter(Boolean);
@@ -1590,15 +1715,19 @@ function readOptionalString(source: Record<string, unknown>, field: string, maxL
   return trimStringInput(source[field], maxLength);
 }
 
-function readAdminAgentImageAttachments(source: Record<string, unknown>, field: string, issues: ValidationIssue[]) {
+function readImageAttachments(
+  source: Record<string, unknown>,
+  field: string,
+  issues: ValidationIssue[],
+): CreateMessageAttachmentInput[] {
   const raw = source[field];
-  if (raw == null) return [] as NonNullable<ChatPart["image"]>[];
+  if (raw == null) return [];
   if (!Array.isArray(raw)) {
     issues.push({ field, message: `${field} must be an array` });
-    return [] as NonNullable<ChatPart["image"]>[];
+    return [];
   }
 
-  const attachments: NonNullable<ChatPart["image"]>[] = [];
+  const attachments: CreateMessageAttachmentInput[] = [];
   for (let index = 0; index < raw.length && attachments.length < 4; index += 1) {
     const value = raw[index];
     if (!isRecord(value)) {
@@ -1626,8 +1755,7 @@ function readAdminAgentImageAttachments(source: Record<string, unknown>, field: 
 
     attachments.push({
       kind: "image",
-      ...(trimStringInput(value.id, 160) ? { id: trimStringInput(value.id, 160) } : {}),
-      ...(url ? { url } : {}),
+      url: absoluteUrl || url,
       ...(absoluteUrl ? { absolute_url: absoluteUrl } : {}),
       ...(trimStringInput(value.name, 240) ? { name: trimStringInput(value.name, 240) } : {}),
       ...(mimeType ? { mime_type: mimeType } : {}),
@@ -2520,6 +2648,7 @@ function normalizePublicSlug(rawValue: unknown) {
 const DEFAULT_PUBLIC_UPLOADS_ROOT_DIR = path.join(__dirname, "public", "uploads");
 const PUBLIC_POSTER_MAX_BYTES = 2 * 1024 * 1024;
 const ADMIN_AGENT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const INBOUND_CHANNEL_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const ADMIN_AGENT_OPENROUTER_HISTORY_IMAGE_BUDGET = 3;
 const IS_RAILWAY_RUNTIME = Boolean(
   normalizeOptionalText(process.env.RAILWAY_ENVIRONMENT)
@@ -2532,8 +2661,9 @@ function resolvePublicUploadsRootDir() {
     String(process.env.PUBLIC_UPLOADS_DIR || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR).trim() || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR,
   );
   const ensureWritableRoot = (rootDir: string) => {
-    const posterDir = path.join(rootDir, "event-posters");
-    mkdirSync(posterDir, { recursive: true });
+    for (const dirName of ["event-posters", "admin-agent-images", "channel-images"]) {
+      mkdirSync(path.join(rootDir, dirName), { recursive: true });
+    }
     return rootDir;
   };
 
@@ -2554,8 +2684,9 @@ function resolvePublicUploadsRootDir() {
 const PUBLIC_UPLOADS_ROOT_DIR = resolvePublicUploadsRootDir();
 const PUBLIC_POSTER_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "event-posters");
 const ADMIN_AGENT_IMAGE_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "admin-agent-images");
+const CHANNEL_IMAGE_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "channel-images");
 
-function getPosterExtensionFromMimeType(mimeType: string) {
+function getImageExtensionFromMimeType(mimeType: string) {
   switch (mimeType) {
     case "image/png":
       return "png";
@@ -2576,12 +2707,24 @@ function buildAdminAgentImageRelativeUrl(fileName: string) {
   return `/uploads/admin-agent-images/${fileName}`;
 }
 
+function buildChannelImageRelativeUrl(fileName: string) {
+  return `/uploads/channel-images/${fileName}`;
+}
+
 function resolveAdminAgentImageAbsolutePath(relativeUrl: string) {
   const normalized = String(relativeUrl || "").trim();
   const prefix = "/uploads/admin-agent-images/";
   if (!normalized.startsWith(prefix)) return "";
   const fileName = path.basename(normalized);
   return path.join(ADMIN_AGENT_IMAGE_UPLOAD_DIR, fileName);
+}
+
+function resolveChannelImageAbsolutePath(relativeUrl: string) {
+  const normalized = String(relativeUrl || "").trim();
+  const prefix = "/uploads/channel-images/";
+  if (!normalized.startsWith(prefix)) return "";
+  const fileName = path.basename(normalized);
+  return path.join(CHANNEL_IMAGE_UPLOAD_DIR, fileName);
 }
 
 function resolvePublicPosterAbsolutePath(relativeUrl: string) {
@@ -2601,6 +2744,110 @@ function buildAbsoluteAppAssetUrl(relativeUrl: string) {
   } catch {
     return "";
   }
+}
+
+function sanitizeImageFileNameBase(value: string, fallback = "image") {
+  return path.basename(String(value || "").trim() || fallback)
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    || fallback;
+}
+
+async function fetchBinaryImage(url: string, init?: RequestInit) {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(`Image fetch failed (${response.status})`);
+  }
+  const contentType = String(response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  const extension = getImageExtensionFromMimeType(contentType);
+  if (!extension) {
+    throw new Error("Image must be PNG, JPG, or WebP");
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  const fileBuffer = Buffer.from(arrayBuffer);
+  if (!fileBuffer.length) {
+    throw new Error("Image payload is empty");
+  }
+  if (fileBuffer.length > INBOUND_CHANNEL_IMAGE_MAX_BYTES) {
+    throw new Error("Image must be 6 MB or smaller");
+  }
+  return {
+    fileBuffer,
+    contentType,
+    extension,
+  };
+}
+
+async function storeInboundChannelImageBuffer(options: {
+  eventId: string;
+  channelKey: string;
+  contentType: string;
+  fileBuffer: Buffer;
+  originalFileName?: string | null;
+}) {
+  const extension = getImageExtensionFromMimeType(options.contentType);
+  if (!extension) {
+    throw new Error("Image must be PNG, JPG, or WebP");
+  }
+  if (!options.fileBuffer || options.fileBuffer.length === 0) {
+    throw new Error("Image file is required");
+  }
+  if (options.fileBuffer.length > INBOUND_CHANNEL_IMAGE_MAX_BYTES) {
+    throw new Error("Image must be 6 MB or smaller");
+  }
+
+  mkdirSync(CHANNEL_IMAGE_UPLOAD_DIR, { recursive: true });
+  const nextFileName = [
+    sanitizeImageFileNameBase(options.eventId, "event"),
+    sanitizeImageFileNameBase(options.channelKey, "channel"),
+    Date.now().toString(36),
+    sanitizeImageFileNameBase(options.originalFileName || "image", "image"),
+  ].join("-") + `.${extension}`;
+  const nextAbsolutePath = path.join(CHANNEL_IMAGE_UPLOAD_DIR, nextFileName);
+  const nextRelativeUrl = buildChannelImageRelativeUrl(nextFileName);
+  const nextPublicUrl = buildAbsoluteAppAssetUrl(nextRelativeUrl);
+  writeFileSync(nextAbsolutePath, options.fileBuffer);
+
+  return {
+    kind: "image",
+    url: nextRelativeUrl,
+    absolute_url: nextPublicUrl || null,
+    mime_type: options.contentType,
+    name: normalizeOptionalText(options.originalFileName) || nextFileName,
+    size_bytes: options.fileBuffer.length,
+  } satisfies CreateMessageAttachmentInput & InboundImageReference;
+}
+
+async function storeInboundChannelImageFromUrl(options: {
+  eventId: string;
+  channelKey: string;
+  sourceUrl: string;
+  originalFileName?: string | null;
+  headers?: Record<string, string>;
+}) {
+  const normalizedUrl = normalizeOptionalText(options.sourceUrl);
+  if (!normalizedUrl) {
+    throw new Error("Image URL is required");
+  }
+  const downloaded = await fetchBinaryImage(normalizedUrl, {
+    headers: options.headers,
+  });
+  const fileNameFromUrl = (() => {
+    try {
+      return path.basename(new URL(normalizedUrl).pathname);
+    } catch {
+      return "";
+    }
+  })();
+  return storeInboundChannelImageBuffer({
+    eventId: options.eventId,
+    channelKey: options.channelKey,
+    contentType: downloaded.contentType,
+    fileBuffer: downloaded.fileBuffer,
+    originalFileName: options.originalFileName || fileNameFromUrl || "image",
+  });
 }
 
 function normalizeComparablePhone(value: unknown) {
@@ -3009,6 +3256,87 @@ function buildTicketArtifactUrls(registrationId: string) {
   };
 }
 
+async function executeAttendeeTicketCheckTool(
+  eventId: string,
+  args: Record<string, unknown>,
+  incomingText: string,
+) {
+  const registrationId =
+    normalizeRegistrationId(args.registration_id)
+    || normalizeRegistrationId(args.id)
+    || extractRegistrationId(incomingText);
+  if (!registrationId) {
+    return {
+      statusCode: 400,
+      content: {
+        status: "needs_registration_id",
+        error: "I need a readable Registration ID from the ticket image or typed text before I can check it.",
+      },
+    };
+  }
+
+  const registration = await getRegistrationById(registrationId);
+  if (!registration) {
+    return {
+      statusCode: 404,
+      content: {
+        status: "not_found",
+        registration_id: registrationId,
+        error: "I could not find that Registration ID.",
+      },
+    };
+  }
+
+  const registrationEventId = normalizeOptionalText(registration.event_id) || DEFAULT_EVENT_ID;
+  if (registrationEventId !== eventId) {
+    return {
+      statusCode: 409,
+      content: {
+        status: "event_mismatch",
+        registration_id: registration.id,
+        attendee_name: formatRegistrationDisplayName(registration),
+        registration_status: registration.status,
+        error: "That ticket belongs to a different event.",
+      },
+    };
+  }
+
+  const settings = await getSettingsMap(eventId);
+  const timeZone = normalizeTimeZone(settings.event_timezone);
+  const dateLabel = formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone);
+  const location = formatEventLocationFromSettings(settings);
+  const normalizedStatus = normalizeComparableText(registration.status);
+  const checkStatus =
+    normalizedStatus === "cancelled"
+      ? "cancelled"
+      : normalizedStatus === "checked-in"
+      ? "checked_in"
+      : "valid";
+
+  return {
+    statusCode: 200,
+    content: {
+      status: checkStatus,
+      registration_id: registration.id,
+      attendee_name: formatRegistrationDisplayName(registration),
+      registration_status: registration.status,
+      ticket: buildTicketArtifactUrls(registration.id),
+      event: {
+        id: eventId,
+        name: normalizeOptionalText(settings.event_name),
+        date_label: dateLabel,
+        location,
+      },
+      message:
+        checkStatus === "cancelled"
+          ? "This registration exists in this event but is cancelled."
+          : checkStatus === "checked_in"
+          ? "This ticket is for this event and has already been checked in."
+          : "This ticket is valid for the current event.",
+    },
+  };
+}
+
 function buildPublicRegistrationResponsePayload(
   payload: Awaited<ReturnType<typeof buildPublicEventPagePayload>>,
   registration: RegistrationRow,
@@ -3091,7 +3419,7 @@ async function findConflictingPublicSlug(slug: string, excludeEventId?: string) 
 
 async function listPublicConversationRows(eventId: string, senderId: string, limit = 240) {
   const pageId = `public-event:${eventId}`;
-  return (await appDb.getConversationRowsForSender(senderId, limit, eventId))
+  return (await hydrateMessageRowsWithAttachments(await appDb.getConversationRowsForSender(senderId, limit, eventId)))
     .filter((row) => normalizeOptionalText(row.page_id) === pageId)
     .sort((left, right) => Number(left.id || 0) - Number(right.id || 0));
 }
@@ -3320,8 +3648,19 @@ async function performCheckinForRegistration(registrationId: unknown, eventId?: 
   };
 }
 
-async function saveMessage(senderId: string, text: string, type: "incoming" | "outgoing", eventId?: string, pageId?: string) {
-  await appDb.saveMessage(senderId, text, type, eventId, pageId);
+async function saveMessage(
+  senderId: string,
+  text: string,
+  type: "incoming" | "outgoing",
+  eventId?: string,
+  pageId?: string,
+  attachments: CreateMessageAttachmentInput[] = [],
+) {
+  const messageId = await appDb.saveMessage(senderId, text, type, eventId, pageId);
+  if (attachments.length > 0 && messageId > 0) {
+    await appDb.saveMessageAttachments(messageId, attachments);
+  }
+  return messageId;
 }
 
 async function saveLineDeliveryTrace(
@@ -3420,6 +3759,115 @@ async function getTelegramWebhookSecret(botKey?: string) {
   const channel = await getTelegramChannel(botKey);
   const config = safeParseChannelConfig(channel?.config_json);
   return String(config.webhook_secret || "").trim();
+}
+
+function extractFacebookStyleImageAttachments(webhookEvent: any) {
+  return (Array.isArray(webhookEvent?.message?.attachments) ? webhookEvent.message.attachments : [])
+    .filter((attachment: any) => String(attachment?.type || "").trim() === "image")
+    .map((attachment: any) => {
+      const sourceUrl = normalizeOptionalText(attachment?.payload?.url);
+      if (!sourceUrl) return null;
+      return {
+        kind: "image",
+        url: sourceUrl,
+        absolute_url: sourceUrl,
+        mime_type: null,
+        name: "image",
+        size_bytes: null,
+      } satisfies InboundImageReference;
+    })
+    .filter(Boolean) as InboundImageReference[];
+}
+
+async function buildLineImageAttachments(destination: string, webhookEvent: any) {
+  const messageId = normalizeOptionalText(webhookEvent?.message?.id);
+  if (!messageId) return [] as InboundImageReference[];
+  const eventId = await appDb.resolveEventIdForChannel("line_oa", destination);
+  if (!eventId) return [] as InboundImageReference[];
+  const accessToken = await getLineAccessToken(destination);
+  if (!accessToken) return [] as InboundImageReference[];
+
+  const downloaded = await fetchBinaryImage(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  return [
+    await storeInboundChannelImageBuffer({
+      eventId,
+      channelKey: `line-${destination}`,
+      contentType: downloaded.contentType,
+      fileBuffer: downloaded.fileBuffer,
+      originalFileName: `line-${messageId}.${downloaded.extension}`,
+    }),
+  ];
+}
+
+async function buildWhatsAppImageAttachments(phoneNumberId: string, message: any) {
+  const mediaId = normalizeOptionalText(message?.image?.id);
+  if (!mediaId) return [] as InboundImageReference[];
+  const eventId = await appDb.resolveEventIdForChannel("whatsapp", phoneNumberId);
+  if (!eventId) return [] as InboundImageReference[];
+  const accessToken = await getWhatsAppAccessToken(phoneNumberId);
+  if (!accessToken) return [] as InboundImageReference[];
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const metaResponse = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  const metaPayload = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok) {
+    throw new Error(metaPayload?.error?.message || "Failed to load WhatsApp media metadata");
+  }
+  const mediaUrl = normalizeOptionalText(metaPayload?.url);
+  if (!mediaUrl) {
+    throw new Error("WhatsApp media URL is missing");
+  }
+  return [
+    await storeInboundChannelImageFromUrl({
+      eventId,
+      channelKey: `whatsapp-${phoneNumberId}`,
+      sourceUrl: mediaUrl,
+      originalFileName: `whatsapp-${mediaId}.${getImageExtensionFromMimeType(normalizeOptionalText(metaPayload?.mime_type)) || "jpg"}`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }),
+  ];
+}
+
+async function buildTelegramImageAttachments(botKey: string, update: any) {
+  const photoEntries = Array.isArray(update?.message?.photo) ? update.message.photo : [];
+  const selectedPhoto = photoEntries[photoEntries.length - 1];
+  const fileId = normalizeOptionalText(selectedPhoto?.file_id);
+  if (!fileId) return [] as InboundImageReference[];
+  const eventId = await appDb.resolveEventIdForChannel("telegram", botKey);
+  if (!eventId) return [] as InboundImageReference[];
+  const accessToken = await getTelegramAccessToken(botKey);
+  if (!accessToken) return [] as InboundImageReference[];
+
+  const fileResponse = await fetch(`https://api.telegram.org/bot${accessToken}/getFile?file_id=${encodeURIComponent(fileId)}`);
+  const filePayload = await fileResponse.json().catch(() => ({}));
+  if (!fileResponse.ok || filePayload?.ok === false) {
+    throw new Error(filePayload?.description || "Failed to load Telegram file metadata");
+  }
+  const filePath = normalizeOptionalText(filePayload?.result?.file_path);
+  if (!filePath) {
+    throw new Error("Telegram file path is missing");
+  }
+
+  const downloaded = await fetchBinaryImage(`https://api.telegram.org/file/bot${accessToken}/${filePath}`);
+  return [
+    await storeInboundChannelImageBuffer({
+      eventId,
+      channelKey: `telegram-${botKey}`,
+      contentType: downloaded.contentType,
+      fileBuffer: downloaded.fileBuffer,
+      originalFileName: path.basename(filePath || `telegram-${fileId}.${downloaded.extension}`),
+    }),
+  ];
 }
 
 async function resolveManualOutboundTarget(
@@ -3622,6 +4070,7 @@ async function retryBotReplyForOutboundTarget(target: ManualOutboundTarget) {
       target.eventId,
       retryTurn.inputText,
       retryTurn.history,
+      retryTurn.inputParts || [],
     );
 
     const replyText = String(result.text || "").trim();
@@ -8049,19 +8498,10 @@ function normalizeMessageTextForHistory(text: string) {
 }
 
 async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?: string): Promise<ChatHistoryMessage[]> {
-  const rows = await appDb.getMessageHistoryRows(senderId, limit, eventId);
-
-  return rows
-    .reverse()
-    .map((row) => ({
-      role: (row.type === "incoming" ? "user" : "model") as ChatHistoryMessage["role"],
-      text: normalizeMessageTextForHistory(row.text || ""),
-    }))
-    .filter((row) => row.text)
-    .map((row) => ({
-      role: row.role,
-      parts: [{ text: row.text }],
-    }));
+  const rows = await hydrateMessageRowsWithAttachments(
+    await appDb.getConversationRowsForSender(senderId, limit, eventId),
+  );
+  return buildChatHistoryFromRows(rows);
 }
 
 async function createRegistration(input: RegistrationInput, options?: { source?: string }) {
@@ -8295,6 +8735,7 @@ async function requestOpenRouterChat(
   knowledgeContext = "",
   usageContext?: LlmUsageContext,
   eventId?: string,
+  messageParts?: ChatPart[],
 ): Promise<NormalizedChatResponse> {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error("OPENROUTER_API_KEY is not configured in .env");
@@ -8306,6 +8747,15 @@ async function requestOpenRouterChat(
     ? settings.global_llm_model.trim()
     : DEFAULT_OPENROUTER_MODEL;
   const capacitySnapshot = eventId ? await getEventCapacitySnapshot(eventId, settings) : null;
+
+  const currentUserParts = Array.isArray(messageParts) && messageParts.length > 0
+    ? messageParts.filter(Boolean)
+    : message
+    ? [{ text: message }]
+    : [];
+  const currentUserContent = currentUserParts.length > 0
+    ? buildOpenRouterMessageContent(currentUserParts)
+    : message;
 
   const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -8320,7 +8770,7 @@ async function requestOpenRouterChat(
         ...normalizeHistoryForOpenRouter(history),
         {
           role: "user",
-          content: message,
+          content: currentUserContent,
         },
       ],
       tools: [
@@ -8368,6 +8818,23 @@ async function requestOpenRouterChat(
                 confirm: {
                   type: "boolean",
                   description: "Set true only after the user explicitly confirms the cancellation",
+                },
+              },
+              required: [],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "checkTicket",
+            description: "Check whether a ticket Registration ID is valid for the current event. Use this for ticket screenshots, QR/ticket photos, or pasted Registration IDs.",
+            parameters: {
+              type: "object",
+              properties: {
+                registration_id: {
+                  type: "string",
+                  description: "The Registration ID read from the ticket image or typed by the user (example: REG-XXXXXX).",
                 },
               },
               required: [],
@@ -8427,6 +8894,7 @@ async function requestOpenRouterChat(
         metadata: {
           history_length: history.length,
           has_knowledge_context: Boolean(String(knowledgeContext || "").trim()),
+          has_image_attachment: currentUserParts.some((part) => Boolean(part?.image)),
           ...usageContext.metadata,
         },
       });
@@ -8490,6 +8958,9 @@ async function buildToolResponseMessages(
     } else if (call.name === "cancelRegistration") {
       const result = await executeAttendeeCancellationTool(senderId, eventId, call.args, incomingText);
       content = result.content;
+    } else if (call.name === "checkTicket") {
+      const result = await executeAttendeeTicketCheckTool(eventId, call.args, incomingText);
+      content = result.content;
     } else {
       content = { error: `Unknown tool: ${call.name}` };
     }
@@ -8515,6 +8986,7 @@ async function generateBotReplyForSender(
   eventId: string,
   incomingText: string,
   historyOverride?: ChatHistoryMessage[],
+  incomingParts: ChatPart[] = [],
 ): Promise<BotReplyResult> {
   const settings = await getSettingsMap(eventId);
   const documents = await getEventDocuments(eventId);
@@ -8535,6 +9007,7 @@ async function generateBotReplyForSender(
       metadata: { stage: "initial" },
     },
     eventId,
+    incomingParts,
   );
   let finalResponse = firstResponse;
   let ticketRegistrationIds: string[] = [];
@@ -8552,7 +9025,7 @@ async function generateBotReplyForSender(
       "Continue based on the tool results. Reply to the user in plain text only.",
       [
         ...history,
-        { role: "user", parts: [{ text: incomingText }] },
+        { role: "user", parts: incomingParts.length > 0 ? incomingParts : [{ text: incomingText }] },
         assistantMessage,
         ...toolMessages,
       ],
@@ -8925,9 +9398,14 @@ async function sendTelegramImageMessage(chatId: string, imageUrl: string, botKey
   return payload;
 }
 
-async function handleIncomingFacebookText(senderId: string, text: string, pageId?: string) {
+async function handleIncomingFacebookText(
+  senderId: string,
+  text: string,
+  pageId?: string,
+  attachments: CreateMessageAttachmentInput[] = [],
+) {
   const trimmed = String(text || "").trim();
-  if (!trimmed) return;
+  if (!trimmed && attachments.length === 0) return;
 
   const resolvedEventId = pageId ? await appDb.resolveEventIdForPage(pageId) : DEFAULT_EVENT_ID;
   if (pageId && !resolvedEventId) {
@@ -8935,7 +9413,7 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
     return;
   }
   const eventId = resolvedEventId || DEFAULT_EVENT_ID;
-  await saveMessage(senderId, trimmed, "incoming", eventId, pageId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, pageId, attachments);
   const conversationKey = buildInboundConversationKey("facebook", senderId, eventId);
   markInboundConversationActivity(conversationKey);
 
@@ -9037,9 +9515,15 @@ async function handleIncomingFacebookText(senderId: string, text: string, pageId
   });
 }
 
-async function handleIncomingLineText(senderId: string, text: string, destination: string, replyToken?: string) {
+async function handleIncomingLineText(
+  senderId: string,
+  text: string,
+  destination: string,
+  replyToken?: string,
+  attachments: CreateMessageAttachmentInput[] = [],
+) {
   const trimmed = String(text || "").trim();
-  if (!trimmed) return;
+  if (!trimmed && attachments.length === 0) return;
 
   const resolvedEventId = await appDb.resolveEventIdForChannel("line_oa", destination);
   if (!resolvedEventId) {
@@ -9047,7 +9531,7 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
     return;
   }
   const eventId = resolvedEventId;
-  await saveMessage(senderId, trimmed, "incoming", eventId, destination);
+  await saveMessage(senderId, trimmed, "incoming", eventId, destination, attachments);
   markInboundConversationActivity(buildInboundConversationKey("line", senderId, eventId));
 
   if (!(await getLineAccessToken(destination))) {
@@ -9160,9 +9644,14 @@ async function handleIncomingLineText(senderId: string, text: string, destinatio
   }
 }
 
-async function handleIncomingInstagramText(senderId: string, text: string, accountId?: string) {
+async function handleIncomingInstagramText(
+  senderId: string,
+  text: string,
+  accountId?: string,
+  attachments: CreateMessageAttachmentInput[] = [],
+) {
   const trimmed = String(text || "").trim();
-  if (!trimmed) return;
+  if (!trimmed && attachments.length === 0) return;
 
   const resolvedEventId = accountId ? await appDb.resolveEventIdForChannel("instagram", accountId) : null;
   if (!resolvedEventId) {
@@ -9170,7 +9659,7 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
     return;
   }
   const eventId = resolvedEventId;
-  await saveMessage(senderId, trimmed, "incoming", eventId, accountId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, accountId, attachments);
   markInboundConversationActivity(buildInboundConversationKey("instagram", senderId, eventId));
 
   if (!(await getInstagramAccessToken(accountId))) {
@@ -9258,9 +9747,14 @@ async function handleIncomingInstagramText(senderId: string, text: string, accou
   }
 }
 
-async function handleIncomingWhatsAppText(senderId: string, text: string, phoneNumberId?: string) {
+async function handleIncomingWhatsAppText(
+  senderId: string,
+  text: string,
+  phoneNumberId?: string,
+  attachments: CreateMessageAttachmentInput[] = [],
+) {
   const trimmed = String(text || "").trim();
-  if (!trimmed) return;
+  if (!trimmed && attachments.length === 0) return;
 
   const resolvedEventId = phoneNumberId ? await appDb.resolveEventIdForChannel("whatsapp", phoneNumberId) : null;
   if (!resolvedEventId) {
@@ -9268,7 +9762,7 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
     return;
   }
   const eventId = resolvedEventId;
-  await saveMessage(senderId, trimmed, "incoming", eventId, phoneNumberId);
+  await saveMessage(senderId, trimmed, "incoming", eventId, phoneNumberId, attachments);
   markInboundConversationActivity(buildInboundConversationKey("whatsapp", senderId, eventId));
 
   if (!(await getWhatsAppAccessToken(phoneNumberId))) {
@@ -9356,9 +9850,14 @@ async function handleIncomingWhatsAppText(senderId: string, text: string, phoneN
   }
 }
 
-async function handleIncomingTelegramText(senderId: string, text: string, botKey?: string) {
+async function handleIncomingTelegramText(
+  senderId: string,
+  text: string,
+  botKey?: string,
+  attachments: CreateMessageAttachmentInput[] = [],
+) {
   const trimmed = String(text || "").trim();
-  if (!trimmed) return;
+  if (!trimmed && attachments.length === 0) return;
 
   const resolvedEventId = botKey ? await appDb.resolveEventIdForChannel("telegram", botKey) : null;
   if (!resolvedEventId) {
@@ -9366,7 +9865,7 @@ async function handleIncomingTelegramText(senderId: string, text: string, botKey
     return;
   }
   const eventId = resolvedEventId;
-  await saveMessage(senderId, trimmed, "incoming", eventId, botKey);
+  await saveMessage(senderId, trimmed, "incoming", eventId, botKey, attachments);
   markInboundConversationActivity(buildInboundConversationKey("telegram", senderId, eventId));
 
   if (!(await getTelegramAccessToken(botKey))) {
@@ -9458,9 +9957,10 @@ function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | nu
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
   const text = String(webhookEvent?.message?.text || "").trim();
+  const attachments = extractFacebookStyleImageAttachments(webhookEvent);
   const isEcho = Boolean(webhookEvent?.message?.is_echo);
 
-  if (!senderId || !text || isEcho) {
+  if (!senderId || (!text && attachments.length === 0) || isEcho) {
     return null;
   }
 
@@ -9469,19 +9969,23 @@ function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | nu
     senderId,
     pageId: pageId || null,
     text,
+    attachments,
     messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
     eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
   };
 }
 
-function normalizeLineTextEvent(event: any, destination: string) {
+async function normalizeLineInboundJob(event: any, destination: string) {
   const senderId = String(event?.source?.userId || "").trim();
-  const text = String(event?.message?.text || "").trim();
-  const replyToken = String(event?.replyToken || "").trim();
   const messageType = String(event?.message?.type || "").trim();
+  const text = messageType === "text" ? String(event?.message?.text || "").trim() : "";
+  const replyToken = String(event?.replyToken || "").trim();
   const eventType = String(event?.type || "").trim();
+  const attachments = messageType === "image"
+    ? await buildLineImageAttachments(destination, event)
+    : [] as InboundImageReference[];
 
-  if (!senderId || !destination || !text || eventType !== "message" || messageType !== "text") {
+  if (!senderId || !destination || eventType !== "message" || (!text && attachments.length === 0)) {
     return null;
   }
 
@@ -9491,6 +9995,7 @@ function normalizeLineTextEvent(event: any, destination: string) {
     destination,
     replyToken: replyToken || null,
     text,
+    attachments,
     eventTimestamp: Number(event?.timestamp || Date.now()),
     webhookEventId: String(event?.webhookEventId || event?.message?.id || "").trim() || null,
   } satisfies LineInboundJob;
@@ -9500,9 +10005,10 @@ function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: stri
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const accountId = String(webhookEvent?.recipient?.id || fallbackAccountId || "").trim();
   const text = String(webhookEvent?.message?.text || "").trim();
+  const attachments = extractFacebookStyleImageAttachments(webhookEvent);
   const isEcho = Boolean(webhookEvent?.message?.is_echo);
 
-  if (!senderId || !accountId || !text || isEcho) {
+  if (!senderId || !accountId || (!text && attachments.length === 0) || isEcho) {
     return null;
   }
 
@@ -9511,18 +10017,24 @@ function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: stri
     senderId,
     accountId,
     text,
+    attachments,
     messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
     eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
   } satisfies InstagramInboundJob;
 }
 
-function normalizeWhatsAppTextEvent(message: any, phoneNumberId?: string) {
+async function normalizeWhatsAppInboundJob(message: any, phoneNumberId?: string) {
   const senderId = String(message?.from || "").trim();
-  const text = String(message?.text?.body || "").trim();
   const messageType = String(message?.type || "").trim();
+  const text = messageType === "image"
+    ? String(message?.image?.caption || "").trim()
+    : String(message?.text?.body || "").trim();
   const resolvedPhoneNumberId = String(phoneNumberId || "").trim();
+  const attachments = messageType === "image" && resolvedPhoneNumberId
+    ? await buildWhatsAppImageAttachments(resolvedPhoneNumberId, message)
+    : [] as InboundImageReference[];
 
-  if (!senderId || !resolvedPhoneNumberId || !text || messageType !== "text") {
+  if (!senderId || !resolvedPhoneNumberId || (!text && attachments.length === 0) || (messageType !== "text" && messageType !== "image")) {
     return null;
   }
 
@@ -9531,16 +10043,20 @@ function normalizeWhatsAppTextEvent(message: any, phoneNumberId?: string) {
     senderId,
     phoneNumberId: resolvedPhoneNumberId,
     text,
+    attachments,
     messageId: typeof message?.id === "string" ? message.id.trim() : null,
     eventTimestamp: Number(message?.timestamp || Date.now()),
   } satisfies WhatsAppInboundJob;
 }
 
-function normalizeTelegramTextUpdate(update: any, botKey: string) {
+async function normalizeTelegramInboundJob(update: any, botKey: string) {
   const message = update?.message;
   const senderId = String(message?.chat?.id || message?.from?.id || "").trim();
-  const text = String(message?.text || "").trim();
-  if (!senderId || !text) {
+  const text = String(message?.text || message?.caption || "").trim();
+  const attachments = Array.isArray(message?.photo)
+    ? await buildTelegramImageAttachments(botKey, update)
+    : [] as InboundImageReference[];
+  if (!senderId || (!text && attachments.length === 0)) {
     return null;
   }
 
@@ -9549,29 +10065,30 @@ function normalizeTelegramTextUpdate(update: any, botKey: string) {
     senderId,
     botKey,
     text,
+    attachments,
     updateId: Number.isFinite(Number(update?.update_id)) ? String(update.update_id) : null,
     eventTimestamp: Number(message?.date || Date.now()),
   } satisfies TelegramInboundJob;
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
-  await handleIncomingFacebookText(job.senderId, job.text, job.pageId || undefined);
+  await handleIncomingFacebookText(job.senderId, job.text, job.pageId || undefined, job.attachments || []);
 }
 
 async function processInstagramInboundJob(job: InstagramInboundJob) {
-  await handleIncomingInstagramText(job.senderId, job.text, job.accountId);
+  await handleIncomingInstagramText(job.senderId, job.text, job.accountId, job.attachments || []);
 }
 
 async function processLineInboundJob(job: LineInboundJob) {
-  await handleIncomingLineText(job.senderId, job.text, job.destination, job.replyToken || undefined);
+  await handleIncomingLineText(job.senderId, job.text, job.destination, job.replyToken || undefined, job.attachments || []);
 }
 
 async function processWhatsAppInboundJob(job: WhatsAppInboundJob) {
-  await handleIncomingWhatsAppText(job.senderId, job.text, job.phoneNumberId);
+  await handleIncomingWhatsAppText(job.senderId, job.text, job.phoneNumberId, job.attachments || []);
 }
 
 async function processTelegramInboundJob(job: TelegramInboundJob) {
-  await handleIncomingTelegramText(job.senderId, job.text, job.botKey);
+  await handleIncomingTelegramText(job.senderId, job.text, job.botKey, job.attachments || []);
 }
 
 async function processEmbeddingJob(job: EmbeddingJob) {
@@ -11302,6 +11819,48 @@ async function startServer() {
     }
   });
 
+  app.post(
+    "/api/public/events/:slug/chat/attachments/image",
+    webChatRateLimit,
+    express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: INBOUND_CHANNEL_IMAGE_MAX_BYTES }),
+    async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+      if (!isTruthySetting(match.settings.event_public_bot_enabled ?? "1")) {
+        return res.status(400).json({ error: "Bot help is disabled for this event" });
+      }
+
+      const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return res.status(400).json({ error: "Image file is required" });
+      }
+      const rawFileNameHeader = Array.isArray(req.headers["x-upload-filename"])
+        ? req.headers["x-upload-filename"][0]
+        : req.headers["x-upload-filename"];
+      const attachment = await storeInboundChannelImageBuffer({
+        eventId: match.event.id,
+        channelKey: `public-${match.event.id}`,
+        contentType,
+        fileBuffer,
+        originalFileName: normalizeOptionalText(rawFileNameHeader),
+      });
+
+      return res.status(201).json({
+        status: "ok",
+        attachment,
+      });
+    } catch (error) {
+      console.error("Failed to upload public chat image:", error);
+      const message = error instanceof Error ? error.message : "Failed to upload image";
+      return res.status(/PNG|JPG|WebP|6 MB|required/i.test(message) ? 400 : 500).json({ error: message });
+    }
+    },
+  );
+
   app.post("/api/public/events/:slug/chat", webChatRateLimit, async (req, res) => {
     try {
       const match = await resolvePublicEventBySlug(req.params.slug);
@@ -11315,13 +11874,17 @@ async function startServer() {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
       const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 240 });
-      const text = readRequiredString(body, "text", issues, { label: "text", maxLength: 4000 });
+      const text = readOptionalString(body, "text", 4000);
+      const attachments = readImageAttachments(body, "attachments", issues);
+      if (!text && attachments.length === 0) {
+        issues.push({ field: "text", message: "text or attachments is required" });
+      }
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
 
       const pageId = `public-event:${match.event.id}`;
-      await saveMessage(senderId, text, "incoming", match.event.id, pageId);
+      await saveMessage(senderId, text, "incoming", match.event.id, pageId, attachments);
       const conversationKey = buildInboundConversationKey("public-web", senderId, match.event.id);
       markInboundConversationActivity(conversationKey);
 
@@ -11884,7 +12447,7 @@ async function startServer() {
     try {
       const eventId = getRequestedEventId(req);
       const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
-      const extension = getPosterExtensionFromMimeType(contentType);
+      const extension = getImageExtensionFromMimeType(contentType);
       if (!extension) {
         return res.status(400).json({ error: "Poster image must be PNG, JPG, or WebP" });
       }
@@ -12286,7 +12849,7 @@ async function startServer() {
       const eventId = getRequestedEventId(req);
       const pageId = `public-event:${eventId}`;
       const messageLimit = parsePositiveInteger(req.query?.limit, 400, 1200);
-      const rows = (await appDb.listMessages(messageLimit, eventId))
+      const rows = (await hydrateMessageRowsWithAttachments(await appDb.listMessages(messageLimit, eventId)))
         .filter((row) => normalizeOptionalText(row.page_id) === pageId);
 
       if (rows.length === 0) {
@@ -12366,7 +12929,7 @@ async function startServer() {
             status,
             needs_attention: status === "waiting-admin",
             attention_reason: latestAttentionAudit ? normalizeOptionalText(latestAttentionAudit.metadata?.reason) || null : null,
-            last_message_text: truncateText(normalizeOptionalText(lastMessage?.text), 220),
+            last_message_text: summarizeStoredMessagePreview(lastMessage, 220),
             last_message_type: lastMessage?.type === "incoming" ? "incoming" : "outgoing",
             last_message_at: normalizeOptionalText(lastMessage?.timestamp),
             last_incoming_at: lastIncoming ? normalizeOptionalText(lastIncoming.timestamp) : null,
@@ -12402,7 +12965,7 @@ async function startServer() {
       }
 
       const pageId = `public-event:${eventId}`;
-      const rows = (await appDb.getConversationRowsForSender(senderId, 240, eventId))
+      const rows = (await hydrateMessageRowsWithAttachments(await appDb.getConversationRowsForSender(senderId, 240, eventId)))
         .filter((row) => normalizeOptionalText(row.page_id) === pageId)
         .sort((left, right) => left.id - right.id);
       if (rows.length === 0) {
@@ -12452,7 +13015,7 @@ async function startServer() {
           status,
           needs_attention: status === "waiting-admin",
           attention_reason: latestAttentionAudit ? normalizeOptionalText(latestAttentionAudit.metadata?.reason) || null : null,
-          last_message_text: truncateText(normalizeOptionalText(lastMessage?.text), 220),
+          last_message_text: summarizeStoredMessagePreview(lastMessage, 220),
           last_message_type: lastMessage?.type === "incoming" ? "incoming" : "outgoing",
           last_message_at: normalizeOptionalText(lastMessage?.timestamp),
           last_incoming_at: lastIncoming ? normalizeOptionalText(lastIncoming.timestamp) : null,
@@ -12641,7 +13204,7 @@ async function startServer() {
         ? Math.trunc(beforeIdParsed)
         : undefined;
 
-      const rows = await appDb.listMessages(pageSize + 1, eventId, beforeId);
+      const rows = await hydrateMessageRowsWithAttachments(await appDb.listMessages(pageSize + 1, eventId, beforeId));
       const hasMore = rows.length > pageSize;
       const items = hasMore ? rows.slice(0, pageSize) : rows;
       const senderIds = [...new Set(items.map((row) => normalizeOptionalText(row.sender_id)).filter(Boolean))];
@@ -12892,6 +13455,60 @@ async function startServer() {
   );
 
   app.post(
+    "/api/llm/attachments/image",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    llmChatRateLimit,
+    express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: ADMIN_AGENT_IMAGE_MAX_BYTES }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      if (!getImageExtensionFromMimeType(contentType)) {
+        return res.status(400).json({ error: "Image must be PNG, JPG, or WebP" });
+      }
+
+      const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return res.status(400).json({ error: "Image file is required" });
+      }
+      if (fileBuffer.length > ADMIN_AGENT_IMAGE_MAX_BYTES) {
+        return res.status(400).json({ error: "Image must be 6 MB or smaller" });
+      }
+
+      const rawFileNameHeader = Array.isArray(req.headers["x-upload-filename"])
+        ? req.headers["x-upload-filename"][0]
+        : req.headers["x-upload-filename"];
+      let decodedFileName = "";
+      if (normalizeOptionalText(rawFileNameHeader)) {
+        try {
+          decodedFileName = decodeURIComponent(String(rawFileNameHeader || ""));
+        } catch {
+          decodedFileName = String(rawFileNameHeader || "");
+        }
+      }
+
+      const attachment = await storeInboundChannelImageBuffer({
+        eventId,
+        channelKey: "admin-test",
+        contentType,
+        fileBuffer,
+        originalFileName: normalizeOptionalText(decodedFileName),
+      });
+
+      return res.status(201).json({
+        status: "ok",
+        attachment,
+      });
+    } catch (error) {
+      console.error("Failed to upload LLM test image:", error);
+      const message = error instanceof Error ? error.message : "Failed to upload image";
+      return res.status(/PNG|JPG|WebP|6 MB|required/i.test(message) ? 400 : 500).json({ error: message });
+    }
+    },
+  );
+
+  app.post(
     "/api/llm/chat",
     requireRoles(["owner", "admin", "operator"]),
     requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
@@ -12900,7 +13517,11 @@ async function startServer() {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
-      const message = readRequiredString(body, "message", issues, { label: "message", maxLength: 8000 });
+      const message = readOptionalString(body, "message", 8000);
+      const attachments = readImageAttachments(body, "attachments", issues);
+      if (!message && attachments.length === 0) {
+        issues.push({ field: "message", message: "message or attachments is required" });
+      }
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
@@ -12926,9 +13547,16 @@ async function startServer() {
           eventId,
           actorUserId: req.auth?.user.id || null,
           source: "admin_test",
-          metadata: { stage: hasToolResponses ? "tool_followup" : "initial" },
+          metadata: {
+            stage: hasToolResponses ? "tool_followup" : "initial",
+            has_image_attachment: attachments.length > 0,
+          },
         },
         eventId,
+        [
+          ...(message ? [{ text: message } satisfies ChatPart] : []),
+          ...attachments.map((image) => ({ image } satisfies ChatPart)),
+        ],
       );
       res.json(response);
     } catch (error) {
@@ -12978,7 +13606,7 @@ async function startServer() {
     try {
       const eventId = getRequestedEventId(req);
       const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
-      const extension = getPosterExtensionFromMimeType(contentType);
+      const extension = getImageExtensionFromMimeType(contentType);
       if (!extension) {
         return res.status(400).json({ error: "Image must be PNG, JPG, or WebP" });
       }
@@ -13053,7 +13681,7 @@ async function startServer() {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
       const message = readOptionalString(body, "message", 8000);
-      const attachments = readAdminAgentImageAttachments(body, "attachments", issues);
+      const attachments = readImageAttachments(body, "attachments", issues);
       if (!message && attachments.length === 0) {
         issues.push({ field: "message", message: "message or attachments is required" });
       }
@@ -13477,7 +14105,7 @@ async function startServer() {
       void (async () => {
         for (const webhookEvent of events) {
           try {
-            const normalized = normalizeLineTextEvent(webhookEvent, destination);
+            const normalized = await normalizeLineInboundJob(webhookEvent, destination);
             if (!normalized) continue;
             const acquired = await acquireLineWebhookDedup(normalized.dedupKey);
             if (!acquired) {
@@ -13621,7 +14249,7 @@ async function startServer() {
           const messages = Array.isArray(value?.messages) ? value.messages : [];
           for (const message of messages) {
             try {
-              const normalized = normalizeWhatsAppTextEvent(message, phoneNumberId);
+              const normalized = await normalizeWhatsAppInboundJob(message, phoneNumberId);
               if (!normalized) continue;
               const acquired = await acquireWhatsAppWebhookDedup(normalized.dedupKey);
               if (!acquired) {
@@ -13669,7 +14297,7 @@ async function startServer() {
 
       res.status(200).json({ status: "ok" });
 
-      const normalized = normalizeTelegramTextUpdate(req.body, botKey);
+      const normalized = await normalizeTelegramInboundJob(req.body, botKey);
       if (!normalized) {
         return;
       }
@@ -13722,6 +14350,30 @@ async function startServer() {
     }
   });
 
+  app.options("/api/webchat/attachments/image", async (req, res) => {
+    try {
+      const widgetKey = String(req.query.widget_key || "").trim();
+      if (!widgetKey) {
+        return res.sendStatus(400);
+      }
+
+      const channel = await getWebChatChannel(widgetKey);
+      if (!channel) {
+        return res.sendStatus(404);
+      }
+
+      const config = safeParseChannelConfig(channel.config_json);
+      if (!applyWebChatCorsHeaders(res, typeof req.headers.origin === "string" ? req.headers.origin : "", config)) {
+        return res.sendStatus(403);
+      }
+
+      return res.sendStatus(204);
+    } catch (error) {
+      console.error("Failed to prepare web chat image upload CORS preflight:", error);
+      return res.sendStatus(500);
+    }
+  });
+
   app.get("/api/webchat/config/:widgetKey", async (req, res) => {
     try {
       const widgetKey = String(req.params.widgetKey || "").trim();
@@ -13757,14 +14409,15 @@ async function startServer() {
     }
   });
 
-  app.post("/api/webchat/messages", webChatRateLimit, async (req, res) => {
+  app.post(
+    "/api/webchat/attachments/image",
+    webChatRateLimit,
+    express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: INBOUND_CHANNEL_IMAGE_MAX_BYTES }),
+    async (req, res) => {
     try {
-      const widgetKey = String(req.body?.widget_key || req.query.widget_key || "").trim();
-      const senderId = String(req.body?.sender_id || "").trim();
-      const text = String(req.body?.text || "").trim();
-
-      if (!widgetKey || !senderId || !text) {
-        return res.status(400).json({ error: "widget_key, sender_id, and text are required" });
+      const widgetKey = String(req.query.widget_key || "").trim();
+      if (!widgetKey) {
+        return res.status(400).json({ error: "widget_key is required" });
       }
 
       const channel = await getWebChatChannel(widgetKey);
@@ -13782,7 +14435,66 @@ async function startServer() {
         return res.status(404).json({ error: "No active event mapping found for this widget" });
       }
 
-      await saveMessage(senderId, text, "incoming", eventId, widgetKey);
+      const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return res.status(400).json({ error: "Image file is required" });
+      }
+      const rawFileNameHeader = Array.isArray(req.headers["x-upload-filename"])
+        ? req.headers["x-upload-filename"][0]
+        : req.headers["x-upload-filename"];
+      const attachment = await storeInboundChannelImageBuffer({
+        eventId,
+        channelKey: `webchat-${widgetKey}`,
+        contentType,
+        fileBuffer,
+        originalFileName: normalizeOptionalText(rawFileNameHeader),
+      });
+
+      return res.status(201).json({
+        status: "ok",
+        attachment,
+      });
+    } catch (error) {
+      console.error("Failed to upload web chat image:", error);
+      const message = error instanceof Error ? error.message : "Failed to upload image";
+      return res.status(/PNG|JPG|WebP|6 MB|required/i.test(message) ? 400 : 500).json({ error: message });
+    }
+    },
+  );
+
+  app.post("/api/webchat/messages", webChatRateLimit, async (req, res) => {
+    try {
+      const widgetKey = String(req.body?.widget_key || req.query.widget_key || "").trim();
+      const senderId = String(req.body?.sender_id || "").trim();
+      const text = String(req.body?.text || "").trim();
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const attachments = readImageAttachments(body, "attachments", issues);
+
+      if (!widgetKey || !senderId || (!text && attachments.length === 0)) {
+        return res.status(400).json({ error: "widget_key, sender_id, and text or attachments are required" });
+      }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const channel = await getWebChatChannel(widgetKey);
+      if (!channel) {
+        return res.status(404).json({ error: "Web chat widget not found" });
+      }
+
+      const config = safeParseChannelConfig(channel.config_json);
+      if (!applyWebChatCorsHeaders(res, typeof req.headers.origin === "string" ? req.headers.origin : "", config)) {
+        return res.status(403).json({ error: "Origin is not allowed for this widget" });
+      }
+
+      const eventId = await appDb.resolveEventIdForChannel("web_chat", widgetKey);
+      if (!eventId) {
+        return res.status(404).json({ error: "No active event mapping found for this widget" });
+      }
+
+      await saveMessage(senderId, text, "incoming", eventId, widgetKey, attachments);
       markInboundConversationActivity(buildInboundConversationKey("webchat", senderId, eventId));
 
       const preparedTurn = await prepareBundledConversationTurnForSender("webchat", senderId, eventId, {

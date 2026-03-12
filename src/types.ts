@@ -1,5 +1,15 @@
 import type { EmailTemplateKind } from "./lib/emailTemplateCatalog";
 
+export interface ImageAttachment {
+  id?: string;
+  kind: "image";
+  url: string;
+  absolute_url?: string | null;
+  mime_type?: string | null;
+  name?: string | null;
+  size_bytes?: number | null;
+}
+
 export interface Message {
   id?: number;
   sender_id: string;
@@ -12,6 +22,7 @@ export interface Message {
   sender_email?: string | null;
   registration_id?: string | null;
   text: string;
+  attachments?: ImageAttachment[];
   timestamp: string;
   type: "incoming" | "outgoing";
 }

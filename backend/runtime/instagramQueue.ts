@@ -1,12 +1,14 @@
 import { Queue, Worker } from "bullmq";
 import { createHash } from "crypto";
 import { getBullConnectionOptions, getRedisClient, isRedisConfigured } from "./redis";
+import type { InboundImageReference } from "./inboundImage";
 
 export type InstagramInboundJob = {
   dedupKey: string;
   senderId: string;
   accountId: string;
   text: string;
+  attachments?: InboundImageReference[];
   messageMid: string | null;
   eventTimestamp: number;
 };
@@ -44,9 +46,13 @@ export function buildInstagramWebhookDedupKey(webhookEvent: any, fallbackAccount
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const accountId = String(webhookEvent?.recipient?.id || fallbackAccountId || "").trim();
   const text = String(webhookEvent?.message?.text || "").trim();
+  const attachmentKey = (Array.isArray(webhookEvent?.message?.attachments) ? webhookEvent.message.attachments : [])
+    .map((attachment: any) => String(attachment?.payload?.url || attachment?.type || "").trim())
+    .filter(Boolean)
+    .join("|");
   const timestamp = Number(webhookEvent?.timestamp || 0);
   const hash = createHash("sha256")
-    .update(`${senderId}|${accountId}|${timestamp}|${text}`)
+    .update(`${senderId}|${accountId}|${timestamp}|${text}|${attachmentKey}`)
     .digest("hex");
   return `ig-hash:${hash}`;
 }

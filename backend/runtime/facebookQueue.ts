@@ -1,12 +1,14 @@
 import { Queue, Worker } from "bullmq";
 import { createHash } from "crypto";
 import { getBullConnectionOptions, getRedisClient, isRedisConfigured } from "./redis";
+import type { InboundImageReference } from "./inboundImage";
 
 export type FacebookInboundJob = {
   dedupKey: string;
   senderId: string;
   pageId: string | null;
   text: string;
+  attachments?: InboundImageReference[];
   messageMid: string | null;
   eventTimestamp: number;
 };
@@ -39,9 +41,13 @@ export function buildFacebookWebhookDedupKey(webhookEvent: any) {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
   const text = String(webhookEvent?.message?.text || "").trim();
+  const attachmentKey = (Array.isArray(webhookEvent?.message?.attachments) ? webhookEvent.message.attachments : [])
+    .map((attachment: any) => String(attachment?.payload?.url || attachment?.type || "").trim())
+    .filter(Boolean)
+    .join("|");
   const timestamp = Number(webhookEvent?.timestamp || 0);
   const hash = createHash("sha256")
-    .update(`${senderId}|${pageId}|${timestamp}|${text}`)
+    .update(`${senderId}|${pageId}|${timestamp}|${text}|${attachmentKey}`)
     .digest("hex");
   return `fb-hash:${hash}`;
 }

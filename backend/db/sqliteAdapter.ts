@@ -15,6 +15,7 @@ import type {
   CheckinAccessSessionRow,
   CheckinSessionRow,
   CreateRegistrationEmailDeliveryInput,
+  CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
   ExchangeCheckinSessionTokenInput,
@@ -27,6 +28,7 @@ import type {
   EventRow,
   FacebookPageRow,
   ManualEventStatus,
+  MessageAttachmentRow,
   MessageRow,
   MessageType,
   LlmUsageModelSummaryRow,
@@ -186,6 +188,20 @@ function mapPageRow(row: Record<string, unknown>) {
   } satisfies FacebookPageRow;
 }
 
+function mapMessageAttachmentRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""),
+    message_id: Number(row.message_id || 0),
+    kind: "image",
+    url: String(row.url || ""),
+    absolute_url: typeof row.absolute_url === "string" ? row.absolute_url : null,
+    mime_type: typeof row.mime_type === "string" ? row.mime_type : null,
+    name: typeof row.name === "string" ? row.name : null,
+    size_bytes: Number.isFinite(Number(row.size_bytes)) ? Number(row.size_bytes) : null,
+    created_at: String(row.created_at || ""),
+  } satisfies MessageAttachmentRow;
+}
+
 function mapChannelRow(row: Record<string, unknown>) {
   return {
     id: String(row.id),
@@ -307,6 +323,18 @@ export class SqliteAppDatabase implements AppDatabase {
         text TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         type TEXT
+      );
+      CREATE TABLE IF NOT EXISTS message_attachments (
+        id TEXT PRIMARY KEY,
+        message_id INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'image',
+        url TEXT NOT NULL,
+        absolute_url TEXT,
+        mime_type TEXT,
+        name TEXT,
+        size_bytes INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS registrations (
         id TEXT PRIMARY KEY,
@@ -528,6 +556,7 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts (platform);
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_external_id ON channel_accounts (external_id);
       CREATE INDEX IF NOT EXISTS idx_channel_event_assignments_event_id ON channel_event_assignments (event_id);
+      CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON message_attachments (message_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_event_documents_event_id ON event_documents (event_id);
       CREATE INDEX IF NOT EXISTS idx_event_documents_active ON event_documents (event_id, is_active);
       CREATE INDEX IF NOT EXISTS idx_event_document_chunks_event_id ON event_document_chunks (event_id);
@@ -934,9 +963,76 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   async saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string) {
-    this.db.prepare(
+    const result = this.db.prepare(
       "INSERT INTO messages (sender_id, event_id, page_id, text, type) VALUES (?, ?, ?, ?, ?)",
     ).run(senderId, eventId || DEFAULT_EVENT_ID, pageId || null, text, type);
+    return Number(result.lastInsertRowid || 0);
+  }
+
+  async saveMessageAttachments(messageId: number, attachments: CreateMessageAttachmentInput[]) {
+    const normalizedMessageId = Math.trunc(Number(messageId) || 0);
+    if (normalizedMessageId <= 0 || !Array.isArray(attachments) || attachments.length === 0) {
+      return [] as MessageAttachmentRow[];
+    }
+
+    const createdIds = this.db.transaction((items: CreateMessageAttachmentInput[]) => {
+      const ids: string[] = [];
+      const insert = this.db.prepare(
+        `INSERT INTO message_attachments
+           (id, message_id, kind, url, absolute_url, mime_type, name, size_bytes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const attachment of items) {
+        const url = String(attachment?.url || "").trim();
+        if (!url) continue;
+        const id = generateEntityId("msgatt");
+        insert.run(
+          id,
+          normalizedMessageId,
+          "image",
+          url,
+          attachment?.absolute_url == null ? null : String(attachment.absolute_url || "").trim() || null,
+          attachment?.mime_type == null ? null : String(attachment.mime_type || "").trim() || null,
+          attachment?.name == null ? null : String(attachment.name || "").trim() || null,
+          Number.isFinite(Number(attachment?.size_bytes)) ? Math.max(0, Math.trunc(Number(attachment.size_bytes))) : null,
+        );
+        ids.push(id);
+      }
+      return ids;
+    })(attachments);
+
+    if (createdIds.length === 0) {
+      return [] as MessageAttachmentRow[];
+    }
+
+    const placeholders = createdIds.map(() => "?").join(", ");
+    const rows = this.db.prepare(
+      `SELECT id, message_id, kind, url, absolute_url, mime_type, name, size_bytes, created_at
+       FROM message_attachments
+       WHERE message_id = ? AND id IN (${placeholders})
+       ORDER BY created_at ASC, id ASC`,
+    ).all(normalizedMessageId, ...createdIds) as Record<string, unknown>[];
+    return rows.map(mapMessageAttachmentRow);
+  }
+
+  async listMessageAttachments(messageIds: number[]) {
+    const normalizedIds = [...new Set(
+      messageIds
+        .map((messageId) => Math.trunc(Number(messageId) || 0))
+        .filter((messageId) => messageId > 0),
+    )];
+    if (normalizedIds.length === 0) {
+      return [] as MessageAttachmentRow[];
+    }
+
+    const placeholders = normalizedIds.map(() => "?").join(", ");
+    const rows = this.db.prepare(
+      `SELECT id, message_id, kind, url, absolute_url, mime_type, name, size_bytes, created_at
+       FROM message_attachments
+       WHERE message_id IN (${placeholders})
+       ORDER BY message_id ASC, created_at ASC, id ASC`,
+    ).all(...normalizedIds) as Record<string, unknown>[];
+    return rows.map(mapMessageAttachmentRow);
   }
 
   async listMessages(limit: number, eventId?: string, beforeId?: number) {
