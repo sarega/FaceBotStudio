@@ -176,6 +176,7 @@
     background-color: rgba(124, 58, 237, 0.18) !important;
   }
 
+  html.theme-dark .text-slate-950,
   html.theme-dark .text-slate-900,
   html.theme-dark .text-slate-800 {
     color: #e2e8f0 !important;
@@ -371,6 +372,145 @@ html.theme-dark .log-tools-surface {
   background: linear-gradient(180deg, rgba(120, 53, 15, 0.24), rgba(15, 23, 42, 0.98)) !important;
   border-color: #f59e0b !important;
   box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.28), 0 22px 52px rgba(2, 6, 23, 0.46) !important;
+}
+
+.agent-console-shell {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.agent-console-header {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.94), rgba(241, 245, 249, 0.92));
+}
+
+.agent-dashboard-surface {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.agent-chat-canvas {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.07), transparent 26%),
+    linear-gradient(180deg, #f7f9fc 0%, #eef3f8 100%);
+}
+
+.agent-chat-composer {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
+}
+
+.agent-command-palette {
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 44px -28px rgba(15, 23, 42, 0.28);
+}
+
+.agent-command-input {
+  background-color: #ffffff;
+  box-shadow: inset 0 0 0 1px #cbd5e1;
+  color: #0f172a;
+}
+
+.agent-command-input::placeholder {
+  color: #64748b;
+}
+
+.agent-preset-chip {
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+}
+
+.agent-inline-asset {
+  box-shadow: 0 10px 24px -18px rgba(15, 23, 42, 0.35);
+}
+
+.agent-chat-bubble-incoming {
+  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.24);
+}
+
+.agent-chat-bubble-outgoing {
+  box-shadow: 0 16px 30px -24px rgba(37, 99, 235, 0.45);
+}
+
+.agent-typing-bubble {
+  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.24);
+}
+
+html.theme-dark .agent-console-shell {
+  background: linear-gradient(180deg, #020817 0%, #08101d 100%) !important;
+  border-color: #334155 !important;
+}
+
+html.theme-dark .agent-console-header {
+  background: linear-gradient(180deg, rgba(2, 8, 23, 0.98), rgba(7, 17, 34, 0.95)) !important;
+  border-color: #334155 !important;
+}
+
+html.theme-dark .agent-dashboard-surface {
+  background: linear-gradient(180deg, rgba(10, 19, 36, 0.98), rgba(8, 15, 28, 0.98)) !important;
+  border-color: #475569 !important;
+  box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.12), 0 16px 32px -30px rgba(2, 6, 23, 0.82) !important;
+}
+
+html.theme-dark .agent-chat-canvas {
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.1), transparent 26%),
+    linear-gradient(180deg, #07101d 0%, #0b1424 100%) !important;
+}
+
+html.theme-dark .agent-chat-composer {
+  background: linear-gradient(180deg, rgba(7, 17, 34, 0.98), rgba(2, 8, 23, 0.99)) !important;
+  border-color: #334155 !important;
+}
+
+html.theme-dark .agent-command-palette {
+  background: rgba(10, 19, 36, 0.98) !important;
+  border-color: #334155 !important;
+  box-shadow: 0 28px 56px -30px rgba(2, 6, 23, 0.88) !important;
+}
+
+html.theme-dark .agent-command-input {
+  background-color: #0f172a !important;
+  box-shadow: inset 0 0 0 1px #334155 !important;
+  color: #f8fafc !important;
+}
+
+html.theme-dark .agent-command-input::placeholder {
+  color: #94a3b8 !important;
+}
+
+html.theme-dark .agent-preset-chip {
+  background-color: rgba(15, 23, 42, 0.98) !important;
+  border-color: #475569 !important;
+  color: #e2e8f0 !important;
+  box-shadow: inset 0 0 0 1px rgba(71, 85, 105, 0.32) !important;
+}
+
+html.theme-dark .agent-preset-chip:hover {
+  background-color: rgba(76, 29, 149, 0.18) !important;
+  border-color: #7c3aed !important;
+  color: #ddd6fe !important;
+}
+
+html.theme-dark .agent-inline-asset {
+  background-color: #0f172a !important;
+  border-color: #475569 !important;
+  box-shadow: 0 16px 34px -26px rgba(2, 6, 23, 0.88) !important;
+}
+
+html.theme-dark .agent-chat-bubble-incoming {
+  background-color: #0f172a !important;
+  border-color: #334155 !important;
+  color: #e2e8f0 !important;
+  box-shadow: 0 18px 34px -28px rgba(2, 6, 23, 0.88) !important;
+}
+
+html.theme-dark .agent-chat-bubble-outgoing {
+  background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%) !important;
+  color: #eff6ff !important;
+  box-shadow: 0 18px 34px -24px rgba(37, 99, 235, 0.5) !important;
+}
+
+html.theme-dark .agent-typing-bubble {
+  background-color: #0f172a !important;
+  border-color: #334155 !important;
+  box-shadow: 0 18px 34px -28px rgba(2, 6, 23, 0.88) !important;
 }
 
 html.theme-dark .ring-offset-2 {

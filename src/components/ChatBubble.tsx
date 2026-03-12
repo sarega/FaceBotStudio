@@ -20,8 +20,8 @@ export function ChatBubble({ text, type, timestamp }: ChatBubbleProps) {
         className={cn(
           "chat-selectable max-w-[70%] rounded-2xl px-4 py-2 text-sm leading-relaxed shadow-sm",
           isIncoming
-            ? "bg-white text-slate-800 rounded-bl-none border border-slate-100"
-            : "bg-blue-600 text-white rounded-br-none"
+            ? "agent-chat-bubble agent-chat-bubble-incoming bg-white text-slate-800 rounded-bl-none border border-slate-100"
+            : "agent-chat-bubble agent-chat-bubble-outgoing bg-blue-600 text-white rounded-br-none"
         )}
         style={{ fontFamily: "var(--font-edit)" }}
       >

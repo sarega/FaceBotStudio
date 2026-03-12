@@ -13629,12 +13629,12 @@ export default function App() {
               className={agentWorkspaceView === "console" ? "h-full min-h-0" : "space-y-4"}
             >
               {agentWorkspaceView === "console" && (
-              <div className={`flex h-full min-h-0 flex-col overflow-hidden bg-white ${
+              <div className={`agent-console-shell flex h-full min-h-0 flex-col overflow-hidden bg-white ${
                 isAgentMobileFocusMode
                   ? "rounded-none border-0 shadow-none sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-sm"
                   : "rounded-2xl border border-slate-200 shadow-sm"
               }`}>
-                <div className="border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
+                <div className="agent-console-header border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
                   <div className="flex min-w-0 items-start gap-2.5">
                     <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 sm:h-9 sm:w-9">
                       <MonitorCog className="h-4 w-4 text-violet-700 sm:h-5 sm:w-5" />
@@ -13712,7 +13712,7 @@ export default function App() {
 
                 {adminAgentDashboardOpen && (
                   <div className="border-b border-slate-200 bg-white px-3 py-2 sm:px-4 sm:py-2.5">
-                    <div className="rounded-2xl border border-slate-300 bg-slate-50/80 px-3 py-2.5">
+                    <div className="agent-dashboard-surface rounded-2xl border border-slate-300 bg-slate-50/80 px-3 py-2.5">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="flex min-w-0 items-center gap-2">
@@ -13855,7 +13855,7 @@ export default function App() {
                   </div>
                 )}
 
-                <div ref={adminAgentScrollRef} className="chat-scroll chat-selectable flex-1 min-h-0 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
+                <div ref={adminAgentScrollRef} className="agent-chat-canvas chat-scroll chat-selectable flex-1 min-h-0 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                   {adminAgentMessages.length === 0 && (
                     <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
                       <MonitorCog className="h-10 w-10" />
@@ -13881,7 +13881,7 @@ export default function App() {
                               href={msg.ticketPngUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-block rounded-xl border border-slate-200 bg-white p-1"
+                              className="agent-inline-asset inline-block rounded-xl border border-slate-200 bg-white p-1"
                             >
                               <img
                                 src={msg.ticketPngUrl}
@@ -13896,7 +13896,7 @@ export default function App() {
                               href={msg.ticketSvgUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                              className="agent-inline-asset inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
                             >
                               Open ticket (SVG)
                             </a>
@@ -13906,7 +13906,7 @@ export default function App() {
                               href={msg.csvDownloadUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                              className="agent-inline-asset inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
                             >
                               Download CSV
                             </a>
@@ -13927,7 +13927,7 @@ export default function App() {
 
                   {adminAgentTyping && (
                     <div className="flex justify-start mb-4">
-                      <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-100 flex gap-1">
+                      <div className="agent-typing-bubble bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-100 flex gap-1">
                         <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
                         <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.2s]" />
                         <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.4s]" />
@@ -13937,7 +13937,7 @@ export default function App() {
                   <div ref={adminAgentBottomRef} className="h-px w-full" aria-hidden />
                 </div>
 
-                <div className="border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
+                <div className="agent-chat-composer border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
                   <div ref={adminCommandPaletteRef} className="relative">
                     <AnimatePresence>
                       {adminCommandPaletteOpen && (
@@ -13945,7 +13945,7 @@ export default function App() {
                           initial={{ opacity: 0, y: 6 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: 6 }}
-                          className="absolute bottom-[calc(100%+0.6rem)] left-0 right-0 z-30 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+                          className="agent-command-palette absolute bottom-[calc(100%+0.6rem)] left-0 right-0 z-30 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
                         >
                           <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2">
                             <Search className="h-3.5 w-3.5 text-slate-400" />
@@ -14035,7 +14035,7 @@ export default function App() {
                           }
                         }}
                         placeholder="สั่งงาน Admin Agent หรือพิมพ์ CLI เช่น list events status:pending"
-                        className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
+                        className="agent-command-input flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
                       />
                       <ActionButton
                         onClick={handleAdminAgentSend}
@@ -14053,7 +14053,7 @@ export default function App() {
                           key={template.id}
                           type="button"
                           onClick={() => handleApplyAdminCommandTemplate(template)}
-                          className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700"
+                          className="agent-preset-chip rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 transition hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 sm:px-3 sm:py-1.5 sm:text-xs"
                         >
                           {template.label}
                         </button>
