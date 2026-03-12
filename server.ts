@@ -10411,7 +10411,16 @@ async function startServer() {
   app.get("/api/events", requireAuth, async (_req, res) => {
     try {
       const events = await appDb.listEvents();
-      return res.json(events);
+      const enrichedEvents = await Promise.all(
+        events.map(async (event) => {
+          const settings = await getSettingsMap(event.id);
+          return {
+            ...event,
+            poster_url: String(settings.event_public_poster_url || "").trim(),
+          };
+        }),
+      );
+      return res.json(enrichedEvents);
     } catch (error) {
       console.error("Failed to fetch events:", error);
       return res.status(500).json({ error: "Failed to fetch events" });

@@ -2653,10 +2653,31 @@ function EventWorkspaceRow({
       onClick={onSelect}
       className="w-full overflow-hidden rounded-2xl text-left"
     >
-      <SelectionCard selected={selected} searchFocused={searchFocused} className="rounded-2xl border px-4 py-3 transition-colors">
-        <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+      <SelectionCard selected={selected} searchFocused={searchFocused} className="rounded-2xl border px-3 py-3 transition-colors sm:px-4">
+        <div className="grid min-h-[5.75rem] grid-cols-[4.5rem_minmax(0,1fr)] gap-3 sm:grid-cols-[5rem_minmax(0,1fr)_auto] sm:items-start">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+            {event.poster_url ? (
+              <img
+                src={event.poster_url}
+                alt={`${event.name} poster`}
+                className="h-[5.75rem] w-full object-cover sm:h-24"
+                loading="lazy"
+              />
+            ) : (
+              <div className="flex h-[5.75rem] w-full flex-col items-center justify-center gap-1 bg-gradient-to-br from-slate-100 via-white to-slate-200 text-slate-400 sm:h-24">
+                <CalendarRange className="h-4 w-4" />
+                <span className="text-[9px] font-semibold uppercase tracking-[0.16em]">No Poster</span>
+              </div>
+            )}
+          </div>
           <div className="min-w-0 flex-1">
-            <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900">{event.name}</p>
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-2 sm:hidden">
+              <StatusBadge tone={getEventStatusTone(event.effective_status)}>
+                {getEventStatusLabel(event.effective_status)}
+              </StatusBadge>
+              {selected && <SelectionMarker />}
+            </div>
+            <p className="mt-2 line-clamp-2 text-sm font-semibold leading-snug text-slate-900 sm:mt-0">{event.name}</p>
             <MetaRow
               className="mt-1"
               items={[
@@ -2672,7 +2693,7 @@ function EventWorkspaceRow({
               ]}
             />
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end lg:pl-3">
+          <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex sm:justify-end sm:pl-2">
             <StatusBadge tone={getEventStatusTone(event.effective_status)}>
               {getEventStatusLabel(event.effective_status)}
             </StatusBadge>

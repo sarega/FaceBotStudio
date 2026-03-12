@@ -65,6 +65,7 @@ export interface EventRecord {
   id: string;
   name: string;
   slug: string;
+  poster_url?: string;
   status: ManualEventStatus;
   effective_status: EventStatus;
   event_date?: string;
