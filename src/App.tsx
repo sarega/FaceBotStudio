@@ -56,7 +56,7 @@ import { Ticket } from "./components/Ticket";
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
-import { PUBLIC_SUMMARY_MAX_WORDS, countApproxWords, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./lib/publicEventPage";
+import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
 
 interface Registration {
   id: string;
@@ -132,6 +132,7 @@ type EventWorkspaceSort = "event_start_desc" | "name_asc" | "modified_desc";
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
 type BannerTone = "neutral" | "blue" | "emerald" | "amber" | "rose";
+type DirtyNavigationSectionId = "event" | "mail" | "context" | "setup" | "agent";
 
 type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
@@ -657,6 +658,26 @@ const ADMIN_AGENT_IMAGE_QUICK_TEMPLATE_IDS = [
   "image-use-as-poster",
   "image-create-event",
 ] as const;
+const DIRTY_NAVIGATION_SECTION_LABELS: Record<DirtyNavigationSectionId, string> = {
+  event: "Event",
+  mail: "Mail",
+  context: "Context",
+  setup: "Setup",
+  agent: "Agent",
+};
+const APP_TAB_LABELS: Record<AppTab, string> = {
+  event: "Event",
+  mail: "Mail",
+  design: "Context",
+  test: "Test",
+  agent: "Agent",
+  logs: "Logs",
+  settings: "Setup",
+  team: "Team",
+  registrations: "Registrations",
+  checkin: "Check-in",
+  inbox: "Inbox",
+};
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
@@ -3136,7 +3157,7 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
         : INITIAL_SETTINGS.event_public_poster_url,
     event_public_summary:
       typeof data.event_public_summary === "string"
-        ? data.event_public_summary
+        ? truncatePublicSummary(data.event_public_summary)
         : INITIAL_SETTINGS.event_public_summary,
     event_public_registration_enabled:
       typeof data.event_public_registration_enabled === "string" && data.event_public_registration_enabled.trim()
@@ -3551,6 +3572,21 @@ export default function App() {
   const [adminAgentDashboardLoading, setAdminAgentDashboardLoading] = useState(false);
   const [adminAgentDashboardError, setAdminAgentDashboardError] = useState("");
   const [adminAgentDashboardOpen, setAdminAgentDashboardOpen] = useState(false);
+  const [dirtyNavigationDialog, setDirtyNavigationDialog] = useState<{
+    open: boolean;
+    nextTab: AppTab | null;
+    nextEventId: string;
+    dirtySections: DirtyNavigationSectionId[];
+    saving: boolean;
+    error: string;
+  }>({
+    open: false,
+    nextTab: null,
+    nextEventId: "",
+    dirtySections: [],
+    saving: false,
+    error: "",
+  });
   const [agentMobileFocusMode, setAgentMobileFocusMode] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.innerWidth < 1024;
@@ -3676,6 +3712,7 @@ export default function App() {
   const adminCommandPaletteSearchInputRef = useRef<HTMLInputElement | null>(null);
   const adminAgentHistoryLoadedKeyRef = useRef("");
   const adminAgentPendingImagesRef = useRef<PendingAdminAgentImageAttachment[]>([]);
+  const dirtyNavigationActionRef = useRef<null | (() => void)>(null);
   const desktopNotifyBootstrappedRef = useRef(false);
   const desktopNotifyLastAuditIdRef = useRef(0);
   selectedEventIdRef.current = selectedEventId;
@@ -3937,7 +3974,7 @@ export default function App() {
   const publicPageQrFileBase = `event-${resolvedPublicPageSlug || "public-page"}-qr`;
   const publicPageAutoSummary = resolvePublicSummary("", settings.event_description);
   const publicPageSummary = resolvePublicSummary(settings.event_public_summary, settings.event_description);
-  const publicPageSummaryWordCount = countApproxWords(settings.event_public_summary);
+  const publicPageSummaryCharCount = countPublicSummaryChars(settings.event_public_summary);
   const publicPagePosterUrl = settings.event_public_poster_url.trim();
   const publicPageEnabled = settings.event_public_page_enabled === "1";
   const publicShowSeatAvailability = settings.event_public_show_seat_availability === "1";
@@ -6454,33 +6491,79 @@ export default function App() {
   const workspaceSetupDirty = aiSettingsDirty || webhookSettingsDirty;
   const setupDirty = workspaceSetupDirty || agentSettingsDirty;
   const hasAnyUnsavedSettings = eventDetailsDirty || eventContextDirty || setupDirty;
+  const dirtyNavigationSectionLabels = dirtyNavigationDialog.dirtySections.map((section) => DIRTY_NAVIGATION_SECTION_LABELS[section]);
+  const dirtyNavigationTargetLabel =
+    dirtyNavigationDialog.nextEventId && dirtyNavigationDialog.nextEventId !== selectedEventId
+      ? "switch workspaces"
+      : dirtyNavigationDialog.nextTab && dirtyNavigationDialog.nextTab !== activeTab
+      ? `open ${APP_TAB_LABELS[dirtyNavigationDialog.nextTab]}`
+      : "leave this page";
 
-  const confirmDiscardDirtyChanges = ({
+  const getDirtyNavigationSections = ({
     nextTab,
     nextEventId,
   }: {
     nextTab?: AppTab;
     nextEventId?: string;
   } = {}) => {
-    const dirtySections = new Set<string>();
+    const dirtySections = new Set<DirtyNavigationSectionId>();
     const eventSwitching = typeof nextEventId === "string" && nextEventId !== selectedEventId;
 
     if (eventSwitching) {
-      if (eventWorkspaceDirty) dirtySections.add("Event");
-      if (eventMailDirty) dirtySections.add("Mail");
-      if (eventContextDirty) dirtySections.add("Context");
-      if (workspaceSetupDirty) dirtySections.add("Setup");
-      if (agentSettingsDirty) dirtySections.add("Agent");
+      if (eventWorkspaceDirty) dirtySections.add("event");
+      if (eventMailDirty) dirtySections.add("mail");
+      if (eventContextDirty) dirtySections.add("context");
+      if (workspaceSetupDirty) dirtySections.add("setup");
+      if (agentSettingsDirty) dirtySections.add("agent");
     } else if (nextTab && nextTab !== activeTab) {
-      if (activeTab === "event" && eventWorkspaceDirty) dirtySections.add("Event");
-      if (activeTab === "mail" && eventMailDirty) dirtySections.add("Mail");
-      if (activeTab === "design" && eventContextDirty) dirtySections.add("Context");
-      if (activeTab === "settings" && workspaceSetupDirty) dirtySections.add("Setup");
-      if (activeTab === "agent" && agentSettingsDirty) dirtySections.add("Agent");
+      if (activeTab === "event" && eventWorkspaceDirty) dirtySections.add("event");
+      if (activeTab === "mail" && eventMailDirty) dirtySections.add("mail");
+      if (activeTab === "design" && eventContextDirty) dirtySections.add("context");
+      if (activeTab === "settings" && workspaceSetupDirty) dirtySections.add("setup");
+      if (activeTab === "agent" && agentSettingsDirty) dirtySections.add("agent");
     }
 
-    if (!dirtySections.size) return true;
-    return window.confirm(`You have unsaved ${Array.from(dirtySections).join(", ")} changes. Leave without saving?`);
+    return Array.from(dirtySections);
+  };
+
+  const closeDirtyNavigationDialog = () => {
+    if (dirtyNavigationDialog.saving) return;
+    dirtyNavigationActionRef.current = null;
+    setDirtyNavigationDialog({
+      open: false,
+      nextTab: null,
+      nextEventId: "",
+      dirtySections: [],
+      saving: false,
+      error: "",
+    });
+  };
+
+  const requestDirtyNavigationGuard = ({
+    nextTab,
+    nextEventId,
+    onProceed,
+  }: {
+    nextTab?: AppTab;
+    nextEventId?: string;
+    onProceed: () => void;
+  }) => {
+    const dirtySections = getDirtyNavigationSections({ nextTab, nextEventId });
+    if (dirtySections.length === 0) {
+      onProceed();
+      return true;
+    }
+
+    dirtyNavigationActionRef.current = onProceed;
+    setDirtyNavigationDialog({
+      open: true,
+      nextTab: nextTab || null,
+      nextEventId: nextEventId || "",
+      dirtySections,
+      saving: false,
+      error: "",
+    });
+    return false;
   };
 
   const forceScrollAdminAgentToBottom = () => {
@@ -6554,36 +6637,46 @@ export default function App() {
       }
       return true;
     }
-    if (!confirmDiscardDirtyChanges({ nextTab })) return false;
-    setActiveTab(nextTab);
-    if (nextTab === "agent") {
-      forceScrollAdminAgentToBottom();
-    }
-    setSetupMenuOpen(false);
-    setOperationsMenuOpen(false);
-    setAgentWorkspaceMenuOpen(false);
-    return true;
+    return requestDirtyNavigationGuard({
+      nextTab,
+      onProceed: () => {
+        setActiveTab(nextTab);
+        if (nextTab === "agent") {
+          forceScrollAdminAgentToBottom();
+        }
+        setSetupMenuOpen(false);
+        setOperationsMenuOpen(false);
+        setAgentWorkspaceMenuOpen(false);
+      },
+    });
   };
 
   const handleOpenEventWorkspaceView = (nextView: EventWorkspaceView) => {
-    if (!handleNavigateToTab("event")) return false;
-    setEventWorkspaceView(nextView);
-    setEventWorkspaceMenuOpen(false);
-    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
-    setSetupMenuOpen(false);
-    clearMenuCloseTimer(setupMenuCloseTimerRef);
-    setOperationsMenuOpen(false);
-    clearMenuCloseTimer(operationsMenuCloseTimerRef);
-    setAgentWorkspaceMenuOpen(false);
-    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-    return true;
+    return requestDirtyNavigationGuard({
+      nextTab: "event",
+      onProceed: () => {
+        setActiveTab("event");
+        setEventWorkspaceView(nextView);
+        setEventWorkspaceMenuOpen(false);
+        clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+        setSetupMenuOpen(false);
+        clearMenuCloseTimer(setupMenuCloseTimerRef);
+        setOperationsMenuOpen(false);
+        clearMenuCloseTimer(operationsMenuCloseTimerRef);
+        setAgentWorkspaceMenuOpen(false);
+        clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+      },
+    });
   };
 
   const handleSelectEvent = (nextEventId: string) => {
     if (!nextEventId || nextEventId === selectedEventId) return true;
-    if (!confirmDiscardDirtyChanges({ nextEventId })) return false;
-    setSelectedEventId(nextEventId);
-    return true;
+    return requestDirtyNavigationGuard({
+      nextEventId,
+      onProceed: () => {
+        setSelectedEventId(nextEventId);
+      },
+    });
   };
 
   useEffect(() => {
@@ -6633,31 +6726,31 @@ export default function App() {
   const saveEventDetails = async () => {
     if (timingInfo.registrationStatus === "invalid") {
       setSettingsMessage("Close Date must be later than or equal to Open Date");
-      return;
+      return false;
     }
     if (timingInfo.eventScheduleStatus === "invalid") {
       setSettingsMessage("Event end time must be later than or equal to the event start time");
-      return;
+      return false;
     }
 
     const saved = await saveSettingsSubset([...EVENT_SETUP_SETTINGS_KEYS], "Event setup saved");
+    if (!saved) return false;
 
-    if (saved) {
-      const nextEventName = settings.event_name.trim();
-      if (selectedEvent && nextEventName && nextEventName !== selectedEvent.name) {
-        const synced = await handleUpdateEvent({
-          name: nextEventName,
-          silent: true,
-        });
-        if (!synced) return;
-      } else {
-        await fetchEvents();
-      }
+    const nextEventName = settings.event_name.trim();
+    if (selectedEvent && nextEventName && nextEventName !== selectedEvent.name) {
+      const synced = await handleUpdateEvent({
+        name: nextEventName,
+        silent: true,
+      });
+      if (!synced) return false;
+    } else {
+      await fetchEvents();
     }
+    return true;
   };
 
   const saveEventMailSettings = async () => {
-    await saveSettingsSubset([...EVENT_MAIL_SETTINGS_KEYS], "Mail settings saved");
+    return saveSettingsSubset([...EVENT_MAIL_SETTINGS_KEYS], "Mail settings saved");
   };
 
   const saveEventPublicPage = async () => {
@@ -6696,6 +6789,7 @@ export default function App() {
     if (saved) {
       await fetchEvents();
     }
+    return saved;
   };
 
   const handlePublicPosterFileUpload = async (file: File | null) => {
@@ -7019,6 +7113,94 @@ export default function App() {
   ], "Agent settings saved");
 
   const saveWebhookSettings = async () => saveSettingsSubset(["verify_token"], "Webhook settings saved");
+
+  const saveDirtyNavigationSections = async (sections: DirtyNavigationSectionId[]) => {
+    for (const section of sections) {
+      if (section === "event") {
+        if (eventSetupDirty) {
+          const savedSetup = await saveEventDetails();
+          if (!savedSetup) return false;
+        }
+        if (eventPublicDirty) {
+          const savedPublic = await saveEventPublicPage();
+          if (!savedPublic) return false;
+        }
+        continue;
+      }
+      if (section === "mail") {
+        if (eventMailDirty) {
+          const savedMail = await saveEventMailSettings();
+          if (!savedMail) return false;
+        }
+        continue;
+      }
+      if (section === "context") {
+        if (eventContextDirty) {
+          const savedContext = await saveEventContext();
+          if (!savedContext) return false;
+        }
+        continue;
+      }
+      if (section === "setup") {
+        if (aiSettingsDirty) {
+          const savedAi = await saveAiSettings();
+          if (!savedAi) return false;
+        }
+        if (webhookSettingsDirty) {
+          const savedWebhook = await saveWebhookSettings();
+          if (!savedWebhook) return false;
+        }
+        continue;
+      }
+      if (section === "agent" && agentSettingsDirty) {
+        const savedAgent = await saveAgentSettings();
+        if (!savedAgent) return false;
+      }
+    }
+
+    return true;
+  };
+
+  const handleDirtyNavigationSaveAndLeave = async () => {
+    if (dirtyNavigationDialog.saving || dirtyNavigationDialog.dirtySections.length === 0) return;
+    setDirtyNavigationDialog((current) => ({ ...current, saving: true, error: "" }));
+    const saved = await saveDirtyNavigationSections(dirtyNavigationDialog.dirtySections);
+    if (!saved) {
+      setDirtyNavigationDialog((current) => ({
+        ...current,
+        saving: false,
+        error: "Save failed. Fix the issue above before leaving, or leave without saving.",
+      }));
+      return;
+    }
+
+    const onProceed = dirtyNavigationActionRef.current;
+    dirtyNavigationActionRef.current = null;
+    setDirtyNavigationDialog({
+      open: false,
+      nextTab: null,
+      nextEventId: "",
+      dirtySections: [],
+      saving: false,
+      error: "",
+    });
+    onProceed?.();
+  };
+
+  const handleDirtyNavigationLeaveWithoutSaving = () => {
+    if (dirtyNavigationDialog.saving) return;
+    const onProceed = dirtyNavigationActionRef.current;
+    dirtyNavigationActionRef.current = null;
+    setDirtyNavigationDialog({
+      open: false,
+      nextTab: null,
+      nextEventId: "",
+      dirtySections: [],
+      saving: false,
+      error: "",
+    });
+    onProceed?.();
+  };
 
   const resetDocumentForm = () => {
     setEditingDocumentId("");
@@ -8720,44 +8902,65 @@ export default function App() {
   const handleGlobalSearchSelect = (kind: GlobalSearchResultKind, id: string) => {
     if (kind === "event") {
       const event = events.find((item) => item.id === id);
-      if (!confirmDiscardDirtyChanges({ nextTab: "event", nextEventId: id })) return;
-      setEventListQuery(event?.slug || event?.name || "");
-      setSelectedEventId(id);
-      setActiveTab("event");
-      focusSearchTarget("event", id);
+      requestDirtyNavigationGuard({
+        nextTab: "event",
+        nextEventId: id,
+        onProceed: () => {
+          setEventListQuery(event?.slug || event?.name || "");
+          setSelectedEventId(id);
+          setActiveTab("event");
+          focusSearchTarget("event", id);
+        },
+      });
     }
     if (kind === "registration") {
       const registration = registrations.find((item) => item.id === id);
-      if (!confirmDiscardDirtyChanges({ nextTab: "registrations" })) return;
-      setRegistrationListQuery(registration?.id || "");
-      setActiveTab("registrations");
-      setSelectedRegistrationId(id);
-      focusSearchTarget("registration", id);
+      requestDirtyNavigationGuard({
+        nextTab: "registrations",
+        onProceed: () => {
+          setRegistrationListQuery(registration?.id || "");
+          setActiveTab("registrations");
+          setSelectedRegistrationId(id);
+          focusSearchTarget("registration", id);
+        },
+      });
     }
     if (kind === "channel") {
       const channel = channels.find((item) => item.id === id);
-      if (!confirmDiscardDirtyChanges({ nextTab: "settings" })) return;
-      if (channel) {
-        selectSetupChannel(channel);
-        loadChannelIntoForm(channel);
-        setChannelConfigDialogOpen(true);
-      }
-      setActiveTab("settings");
-      focusSearchTarget("channel", id);
+      requestDirtyNavigationGuard({
+        nextTab: "settings",
+        onProceed: () => {
+          if (channel) {
+            selectSetupChannel(channel);
+            loadChannelIntoForm(channel);
+            setChannelConfigDialogOpen(true);
+          }
+          setActiveTab("settings");
+          focusSearchTarget("channel", id);
+        },
+      });
     }
     if (kind === "document") {
       const document = documents.find((item) => item.id === id);
-      if (!confirmDiscardDirtyChanges({ nextTab: "design" })) return;
-      setDocumentListQuery(document?.title || "");
-      setActiveTab("design");
-      selectDocumentForChunks(id);
+      requestDirtyNavigationGuard({
+        nextTab: "design",
+        onProceed: () => {
+          setDocumentListQuery(document?.title || "");
+          setActiveTab("design");
+          selectDocumentForChunks(id);
+        },
+      });
     }
     if (kind === "log") {
       const message = messages.find((item) => String(item.id) === id);
-      if (!confirmDiscardDirtyChanges({ nextTab: "logs" })) return;
-      setLogListQuery(message?.sender_id || message?.text || "");
-      setActiveTab("logs");
-      focusSearchTarget("log", id);
+      requestDirtyNavigationGuard({
+        nextTab: "logs",
+        onProceed: () => {
+          setLogListQuery(message?.sender_id || message?.text || "");
+          setActiveTab("logs");
+          focusSearchTarget("log", id);
+        },
+      });
     }
     setGlobalSearchOpen(false);
     setGlobalSearchQuery("");
@@ -11720,35 +11923,57 @@ export default function App() {
                                 </label>
                               </div>
 
-                              <div className="md:col-span-2">
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Poster Image URL</label>
-                                <div className="flex flex-col gap-2 sm:flex-row">
-                                  <input
-                                    value={settings.event_public_poster_url}
-                                    onChange={(e) => setSettings({ ...settings, event_public_poster_url: e.target.value })}
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                    placeholder="/uploads/event-posters/... or https://.../event-poster.jpg"
-                                  />
-                                  <input
-                                    ref={publicPosterFileInputRef}
-                                    type="file"
-                                    accept="image/png,image/jpeg,image/webp"
-                                    className="hidden"
-                                    onChange={(event) => void handlePublicPosterFileUpload(event.target.files?.[0] || null)}
-                                  />
-                                  <ActionButton
-                                    onClick={() => publicPosterFileInputRef.current?.click()}
-                                    disabled={publicPosterUploading}
-                                    tone="neutral"
-                                    className="shrink-0 px-3 text-xs"
-                                  >
-                                    {publicPosterUploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                                    Upload Poster
-                                  </ActionButton>
+                              <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_15rem]">
+                                  <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Poster Image URL</label>
+                                    <div className="flex flex-col gap-2 sm:flex-row">
+                                      <input
+                                        value={settings.event_public_poster_url}
+                                        onChange={(e) => setSettings({ ...settings, event_public_poster_url: e.target.value })}
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        placeholder="/uploads/event-posters/... or https://.../event-poster.jpg"
+                                      />
+                                      <input
+                                        ref={publicPosterFileInputRef}
+                                        type="file"
+                                        accept="image/png,image/jpeg,image/webp"
+                                        className="hidden"
+                                        onChange={(event) => void handlePublicPosterFileUpload(event.target.files?.[0] || null)}
+                                      />
+                                      <ActionButton
+                                        onClick={() => publicPosterFileInputRef.current?.click()}
+                                        disabled={publicPosterUploading}
+                                        tone="blue"
+                                        className="shrink-0 px-3 text-xs"
+                                      >
+                                        {publicPosterUploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                                        Upload Poster
+                                      </ActionButton>
+                                    </div>
+                                    <p className="mt-1 text-[11px] text-slate-500">
+                                      Upload PNG, JPG, or WebP up to 2 MB, or paste a hosted image URL manually.
+                                    </p>
+                                  </div>
+
+                                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                                    {publicPagePosterUrl ? (
+                                      <img
+                                        src={publicPagePosterUrl}
+                                        alt={settings.event_name || selectedEvent?.name || "Event poster"}
+                                        className="aspect-[800/1132] w-full object-cover"
+                                      />
+                                    ) : (
+                                      <div className="flex aspect-[800/1132] w-full flex-col items-center justify-center gap-3 px-4 text-center text-slate-400">
+                                        <Eye className="h-7 w-7" />
+                                        <div>
+                                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Poster Preview</p>
+                                          <p className="mt-1 text-[11px] text-slate-500">Recommended size 800 x 1132 px</p>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                                <p className="mt-1 text-[11px] text-slate-500">
-                                  Upload PNG, JPG, or WebP up to 2 MB, or paste a hosted image URL manually.
-                                </p>
                               </div>
 
                               <div>
@@ -11797,7 +12022,7 @@ export default function App() {
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Public Summary</label>
                                 <textarea
                                   value={settings.event_public_summary}
-                                  onChange={(e) => setSettings({ ...settings, event_public_summary: e.target.value })}
+                                  onChange={(e) => setSettings({ ...settings, event_public_summary: truncatePublicSummary(e.target.value) })}
                                   rows={4}
                                   className="w-full min-h-[7rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
                                   placeholder="Leave blank to auto-generate a short public summary from the event description."
@@ -11821,8 +12046,8 @@ export default function App() {
                                   </ActionButton>
                                   <span className="text-[11px] text-slate-500">
                                     {settings.event_public_summary.trim()
-                                      ? `${publicPageSummaryWordCount} words in custom summary`
-                                      : `Auto summary stays within ${PUBLIC_SUMMARY_MAX_WORDS} words`}
+                                      ? `${publicPageSummaryCharCount}/${PUBLIC_SUMMARY_MAX_CHARS} characters in custom summary`
+                                      : `Auto summary stays within ${PUBLIC_SUMMARY_MAX_CHARS} characters`}
                                   </span>
                                 </div>
                                 <p className="mt-1 text-[11px] text-slate-500">
@@ -12077,81 +12302,70 @@ export default function App() {
                         </div>
 
                         <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-4 sm:p-5">
-                          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
-                            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-                              {publicPagePosterUrl ? (
-                                <img
-                                  src={publicPagePosterUrl}
-                                  alt={settings.event_name || selectedEvent?.name || "Event poster"}
-                                  className="aspect-[800/1132] w-full object-cover"
-                                />
-                              ) : (
-                                <div className="flex aspect-[800/1132] flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
-                                  <Eye className="h-8 w-8 text-slate-400" />
-                                  <div>
-                                    <p className="text-sm font-semibold text-slate-700">Poster Preview</p>
-                                    <p className="mt-1 text-xs text-slate-500">Recommended size 800 x 1132 px</p>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="space-y-4">
-                              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
-                                    {publicPageEnabled ? "Public page enabled" : "Draft mode"}
+                          <div className="space-y-4">
+                            <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
+                                  {publicPageEnabled ? "Public page enabled" : "Draft mode"}
+                                </StatusBadge>
+                                {selectedEvent?.registration_availability && (
+                                  <StatusBadge tone={selectedEvent.registration_availability === "open" ? "blue" : "amber"}>
+                                    {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
                                   </StatusBadge>
-                                  {selectedEvent?.registration_availability && (
-                                    <StatusBadge tone={selectedEvent.registration_availability === "open" ? "blue" : "amber"}>
-                                      {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                                    </StatusBadge>
-                                  )}
+                                )}
+                                {publicPagePosterUrl && (
+                                  <StatusBadge tone="blue">
+                                    Poster ready
+                                  </StatusBadge>
+                                )}
+                              </div>
+                              <div>
+                                <h4 className="text-2xl font-bold tracking-tight text-slate-900">
+                                  {settings.event_name || selectedEvent?.name || "Event title"}
+                                </h4>
+                                <p className="mt-2 text-sm leading-6 text-slate-600">
+                                  {publicPageSummary || "Public summary will appear here. Keep it short, easy to scan, and non-technical for attendees."}
+                                </p>
+                                <p className="mt-2 text-[11px] text-slate-500">
+                                  This is a compact setup preview. For the real attendee-facing layout, use <span className="font-semibold text-slate-700">Open Public Page</span>.
+                                </p>
+                              </div>
+                              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Date & Time</p>
+                                  <p className="mt-1 text-sm text-slate-800">{timingInfo.eventDateLabel}</p>
                                 </div>
-                                <div>
-                                  <h4 className="text-2xl font-bold tracking-tight text-slate-900">
-                                    {settings.event_name || selectedEvent?.name || "Event title"}
-                                  </h4>
-                                  <p className="mt-2 text-sm leading-6 text-slate-600">
-                                    {publicPageSummary || "Public summary will appear here. Keep it short, easy to scan, and non-technical for attendees."}
-                                  </p>
-                                </div>
-                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Date & Time</p>
-                                    <p className="mt-1 text-sm text-slate-800">{timingInfo.eventDateLabel}</p>
-                                  </div>
-                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Location</p>
-                                    <p className="mt-1 text-sm text-slate-800">{attendeeLocationLabel || "Venue details"}</p>
-                                  </div>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="inline-flex items-center rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm">
-                                    {settings.event_public_cta_label.trim() || INITIAL_SETTINGS.event_public_cta_label}
-                                  </span>
-                                  {publicPrivacyEnabled && (
-                                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                      <Lock className="mr-1.5 h-3.5 w-3.5" />
-                                      {settings.event_public_privacy_label.trim() || INITIAL_SETTINGS.event_public_privacy_label}
-                                    </span>
-                                  )}
-                                  {publicBotEnabled && (
-                                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                      <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-                                      Ask for help
-                                    </span>
-                                  )}
-                                  {publicContactEnabled && publicContactHasContent && (
-                                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                      <Phone className="mr-1.5 h-3.5 w-3.5" />
-                                      Contact fallback
-                                    </span>
-                                  )}
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Location</p>
+                                  <p className="mt-1 text-sm text-slate-800">{attendeeLocationLabel || "Venue details"}</p>
                                 </div>
                               </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm">
+                                  {settings.event_public_cta_label.trim() || INITIAL_SETTINGS.event_public_cta_label}
+                                </span>
+                                {publicPrivacyEnabled && (
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                    <Lock className="mr-1.5 h-3.5 w-3.5" />
+                                    {settings.event_public_privacy_label.trim() || INITIAL_SETTINGS.event_public_privacy_label}
+                                  </span>
+                                )}
+                                {publicBotEnabled && (
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                    <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
+                                    Ask for help
+                                  </span>
+                                )}
+                                {publicContactEnabled && publicContactHasContent && (
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+                                    <Phone className="mr-1.5 h-3.5 w-3.5" />
+                                    Contact fallback
+                                  </span>
+                                )}
+                              </div>
+                            </div>
 
-                              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                                 <div className="flex items-center justify-between gap-3">
                                   <div>
                                     <p className="text-sm font-semibold text-slate-900">Inline Registration</p>
@@ -12213,7 +12427,6 @@ export default function App() {
                                     )}
                                   </div>
                                 )}
-                              </div>
                             </div>
                           </div>
                         </div>
@@ -12239,9 +12452,9 @@ export default function App() {
                       <div className="flex shrink-0 items-center gap-2">
                         <ActionButton
                           onClick={() => setEventCreateOpen((current) => !current)}
-                          tone="neutral"
+                          tone="blue"
                           active={eventCreateOpen}
-                          className="text-sm"
+                          className="text-sm shadow-[0_10px_24px_rgba(37,99,235,0.12)]"
                         >
                           <Plus className="h-4 w-4" />
                           {eventCreateOpen ? "Close" : "New Event"}
@@ -16881,6 +17094,89 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {dirtyNavigationDialog.open && (
+          <>
+            <motion.div
+              className="fixed inset-0 z-40 bg-slate-950/30 backdrop-blur-[2px]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeDirtyNavigationDialog}
+            />
+            <motion.div
+              className="app-overlay-surface fixed inset-x-3 top-1/2 z-50 mx-auto w-[min(32rem,calc(100vw-1.5rem))] -translate-y-1/2 rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.22)]"
+              initial={{ opacity: 0, y: 16, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="border-b border-slate-100 px-5 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-amber-600">Unsaved Changes</p>
+                    <h2 className="mt-1 text-lg font-semibold text-slate-900">Save before you {dirtyNavigationTargetLabel}?</h2>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                      You have unsaved changes in {dirtyNavigationSectionLabels.join(", ")}. You can save first, leave without saving, or stay here.
+                    </p>
+                  </div>
+                  <button
+                    onClick={closeDirtyNavigationDialog}
+                    disabled={dirtyNavigationDialog.saving}
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="Close unsaved changes dialog"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-3 px-5 py-4">
+                <div className="flex flex-wrap gap-2">
+                  {dirtyNavigationSectionLabels.map((label) => (
+                    <span
+                      key={label}
+                      className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </div>
+                {dirtyNavigationDialog.error && (
+                  <InlineWarning tone="rose">
+                    {dirtyNavigationDialog.error}
+                  </InlineWarning>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 px-5 py-4">
+                <ActionButton
+                  onClick={closeDirtyNavigationDialog}
+                  tone="neutral"
+                  disabled={dirtyNavigationDialog.saving}
+                >
+                  Stay Here
+                </ActionButton>
+                <ActionButton
+                  onClick={handleDirtyNavigationLeaveWithoutSaving}
+                  tone="rose"
+                  disabled={dirtyNavigationDialog.saving}
+                >
+                  Leave Without Saving
+                </ActionButton>
+                <ActionButton
+                  onClick={() => void handleDirtyNavigationSaveAndLeave()}
+                  tone="blue"
+                  active
+                  disabled={dirtyNavigationDialog.saving}
+                >
+                  {dirtyNavigationDialog.saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  Save & Leave
+                </ActionButton>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {channelConfigDialogOpen && (

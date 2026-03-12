@@ -1,4 +1,4 @@
-export const PUBLIC_SUMMARY_MAX_WORDS = 80;
+export const PUBLIC_SUMMARY_MAX_CHARS = 60;
 export const PUBLIC_SLUG_MAX_LENGTH = 48;
 
 function normalizeWhitespace(value: string) {
@@ -30,23 +30,36 @@ function buildEnglishFallbackSeed(eventId?: string | null) {
   return compactId ? compactId.slice(0, 8) : "page";
 }
 
-export function buildPublicAutoSummary(description: string, maxWords = PUBLIC_SUMMARY_MAX_WORDS) {
-  const normalized = normalizeWhitespace(description);
-  if (!normalized) return "";
-  const words = normalized.split(" ").filter(Boolean);
-  if (words.length <= maxWords) {
-    return normalized;
-  }
-  return `${words.slice(0, maxWords).join(" ")}...`;
+export function countPublicSummaryChars(text: string) {
+  return Array.from(normalizeWhitespace(text)).length;
 }
 
-export function countApproxWords(text: string) {
-  const normalized = normalizeWhitespace(text);
-  return normalized ? normalized.split(" ").filter(Boolean).length : 0;
+function truncateTextByCharacters(value: string, maxChars: number) {
+  if (!value) return "";
+  return Array.from(value).slice(0, maxChars).join("");
+}
+
+export function truncatePublicSummary(value: string, maxChars = PUBLIC_SUMMARY_MAX_CHARS) {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) return "";
+  return truncateTextByCharacters(normalized, maxChars);
+}
+
+export function buildPublicAutoSummary(description: string, maxChars = PUBLIC_SUMMARY_MAX_CHARS) {
+  const normalized = normalizeWhitespace(description);
+  if (!normalized) return "";
+  const length = countPublicSummaryChars(normalized);
+  if (length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 3) {
+    return truncateTextByCharacters(normalized, maxChars);
+  }
+  return `${truncateTextByCharacters(normalized, maxChars - 3).trimEnd()}...`;
 }
 
 export function resolvePublicSummary(overrideSummary: string | null | undefined, description: string | null | undefined) {
-  const manual = normalizeWhitespace(String(overrideSummary || ""));
+  const manual = truncatePublicSummary(String(overrideSummary || ""));
   if (manual) return manual;
   return buildPublicAutoSummary(String(description || ""));
 }
