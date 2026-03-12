@@ -131,6 +131,15 @@ const CSRF_HEADER_NAME = "x-csrf-token";
 
 type ChatPart = {
   text?: string;
+  image?: {
+    id?: string;
+    kind?: "image";
+    url?: string;
+    absolute_url?: string;
+    mime_type?: string;
+    name?: string;
+    size_bytes?: number;
+  };
   functionCall?: { name?: string; args?: Record<string, unknown> };
   functionResponse?: {
     name?: string;
@@ -859,30 +868,154 @@ async function buildRetryTurnForConversation(conversationKey: string, senderId: 
   } as const;
 }
 
-function normalizeHistoryForOpenRouter(history: ChatHistoryMessage[] = []) {
-  const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+function isAbsoluteHttpUrl(value: string) {
+  return /^https?:\/\//i.test(String(value || "").trim());
+}
 
-  for (const item of history) {
-    if (!item?.parts?.length) continue;
+function resolveChatImageAbsolutePath(image: NonNullable<ChatPart["image"]>) {
+  const storedUrl = normalizeOptionalText(image.url);
+  if (!storedUrl) return "";
+  return resolveAdminAgentImageAbsolutePath(storedUrl) || resolvePublicPosterAbsolutePath(storedUrl);
+}
 
-    const textParts = item.parts
-      .map((part) => (typeof part.text === "string" ? part.text : ""))
-      .filter(Boolean);
+function resolveChatImageMimeType(image: NonNullable<ChatPart["image"]>, filePath = "") {
+  const explicitMimeType = normalizeOptionalText(image.mime_type).toLowerCase();
+  if (explicitMimeType) return explicitMimeType;
+  const extension = path.extname(filePath || normalizeOptionalText(image.url) || normalizeOptionalText(image.name)).toLowerCase();
+  switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "";
+  }
+}
 
-    if (textParts.length > 0) {
-      messages.push({
-        role: item.role === "user" ? "user" : "assistant",
-        content: textParts.join("\n"),
-      });
+function buildChatImageVisionUrl(image: NonNullable<ChatPart["image"]>) {
+  const absoluteUrl = normalizeOptionalText(image.absolute_url);
+  if (isAbsoluteHttpUrl(absoluteUrl)) {
+    return absoluteUrl;
+  }
+
+  const localFilePath = resolveChatImageAbsolutePath(image);
+  if (!localFilePath || !existsSync(localFilePath)) return "";
+
+  try {
+    const mimeType = resolveChatImageMimeType(image, localFilePath);
+    if (!mimeType) return "";
+    const buffer = readFileSync(localFilePath);
+    if (!buffer || buffer.length === 0) return "";
+    return `data:${mimeType};base64,${buffer.toString("base64")}`;
+  } catch (error) {
+    console.warn("Failed to inline admin agent image for LLM vision:", error);
+    return "";
+  }
+}
+
+function buildChatImageDescriptor(image: NonNullable<ChatPart["image"]>) {
+  const storedUrl = normalizeOptionalText(image.url);
+  const absoluteUrl = normalizeOptionalText(image.absolute_url);
+  const fileName = normalizeOptionalText(image.name);
+  const mimeType = normalizeOptionalText(image.mime_type);
+  const details = [
+    fileName ? `filename: ${fileName}` : "",
+    mimeType ? `mime_type: ${mimeType}` : "",
+    storedUrl ? `poster_asset_url: ${storedUrl}` : "",
+    absoluteUrl ? `public_image_url: ${absoluteUrl}` : "",
+  ].filter(Boolean);
+  return details.length > 0
+    ? `Attached image asset\n${details.join("\n")}`
+    : "Attached image asset";
+}
+
+function buildOpenRouterMessageContent(parts: ChatPart[] = [], options?: { includeVisionImages?: boolean }) {
+  const includeVisionImages = options?.includeVisionImages !== false;
+  const plainTextParts: string[] = [];
+  const structuredBlocks: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [];
+  let useStructuredBlocks = false;
+
+  const flushPlainTextToStructured = () => {
+    if (plainTextParts.length === 0) return;
+    structuredBlocks.push({
+      type: "text",
+      text: plainTextParts.join("\n"),
+    });
+    plainTextParts.length = 0;
+  };
+
+  for (const part of parts) {
+    const text = typeof part?.text === "string" ? normalizeOptionalText(part.text) : "";
+    if (text) {
+      if (useStructuredBlocks) {
+        structuredBlocks.push({ type: "text", text });
+      } else {
+        plainTextParts.push(text);
+      }
     }
 
-    for (const part of item.parts) {
-      if (!part.functionResponse?.name) continue;
-      const result = part.functionResponse.response?.content;
-      messages.push({
-        role: "assistant",
-        content: `Tool ${part.functionResponse.name} result: ${JSON.stringify(result ?? {})}`,
+    if (part?.image && typeof part.image === "object") {
+      useStructuredBlocks = true;
+      flushPlainTextToStructured();
+      structuredBlocks.push({
+        type: "text",
+        text: buildChatImageDescriptor(part.image),
       });
+      const visionImageUrl = includeVisionImages ? buildChatImageVisionUrl(part.image) : "";
+      if (visionImageUrl) {
+        structuredBlocks.push({
+          type: "image_url",
+          image_url: { url: visionImageUrl },
+        });
+      }
+    }
+
+    if (part?.functionResponse?.name) {
+      const result = part.functionResponse.response?.content;
+      const toolText = `Tool ${part.functionResponse.name} result: ${JSON.stringify(result ?? {})}`;
+      if (useStructuredBlocks) {
+        structuredBlocks.push({ type: "text", text: toolText });
+      } else {
+        plainTextParts.push(toolText);
+      }
+    }
+  }
+
+  if (useStructuredBlocks) {
+    return structuredBlocks;
+  }
+
+  return plainTextParts.join("\n");
+}
+
+function normalizeHistoryForOpenRouter(history: ChatHistoryMessage[] = []) {
+  const messages: Array<{
+    role: "user" | "assistant";
+    content:
+      | string
+      | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+  }> = [];
+  let remainingVisionImages = ADMIN_AGENT_OPENROUTER_HISTORY_IMAGE_BUDGET;
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index];
+    if (!item?.parts?.length) continue;
+    const imageCount = item.parts.reduce((count, part) => count + (part?.image ? 1 : 0), 0);
+    const allowVisionImages = imageCount > 0 && remainingVisionImages > 0;
+    const content = buildOpenRouterMessageContent(item.parts, { includeVisionImages: allowVisionImages });
+    if (!content || (Array.isArray(content) && content.length === 0)) continue;
+    messages.unshift({
+      role: item.role === "user" ? "user" : "assistant",
+      content,
+    });
+    if (allowVisionImages) {
+      remainingVisionImages = Math.max(0, remainingVisionImages - imageCount);
     }
   }
 
@@ -1284,14 +1417,39 @@ function normalizeAdminAgentHistory(history: ChatHistoryMessage[] = []) {
   for (const item of history) {
     const role = item?.role === "user" ? "user" : "model";
     const parts = Array.isArray(item?.parts) ? item.parts : [];
-    const text = parts
-      .map((part) => (typeof part?.text === "string" ? normalizeOptionalText(part.text) : ""))
-      .filter(Boolean)
-      .join("\n");
-    if (!text) continue;
+    const nextParts: ChatPart[] = [];
+
+    for (const part of parts) {
+      const text = typeof part?.text === "string" ? normalizeOptionalText(part.text) : "";
+      if (text) {
+        nextParts.push({ text: truncateText(text, 1800) });
+      }
+
+      if (part?.image && typeof part.image === "object") {
+        const storedUrl = normalizeOptionalText(part.image.url);
+        const absoluteUrl = normalizeOptionalText(part.image.absolute_url);
+        const name = normalizeOptionalText(part.image.name);
+        const mimeType = normalizeOptionalText(part.image.mime_type);
+        const id = normalizeOptionalText(part.image.id);
+        if (storedUrl || absoluteUrl) {
+          nextParts.push({
+            image: {
+              kind: "image",
+              ...(id ? { id } : {}),
+              ...(storedUrl ? { url: storedUrl } : {}),
+              ...(absoluteUrl ? { absolute_url: absoluteUrl } : {}),
+              ...(name ? { name: truncateText(name, 240) } : {}),
+              ...(mimeType ? { mime_type: mimeType } : {}),
+            },
+          });
+        }
+      }
+    }
+
+    if (nextParts.length === 0) continue;
     normalized.push({
       role,
-      parts: [{ text: truncateText(text, 1800) }],
+      parts: nextParts,
     });
   }
 
@@ -1333,18 +1491,21 @@ function getAdminAgentPlannerHistory(scopeKey?: string | null) {
   return normalizeAdminAgentHistory(getAdminAgentSharedHistory(scopeKey));
 }
 
-function appendAdminAgentSharedHistory(scopeKey: string | null | undefined, role: "user" | "model", text: string) {
-  const normalizedText = normalizeOptionalText(text);
-  if (!normalizedText) return;
+function appendAdminAgentSharedHistory(scopeKey: string | null | undefined, role: "user" | "model", content: string | ChatPart[]) {
+  const candidateParts = Array.isArray(content)
+    ? normalizeAdminAgentHistory([{ role, parts: content }])[0]?.parts || []
+    : normalizeAdminAgentHistory([{ role, parts: [{ text: content }] }])[0]?.parts || [];
+  if (candidateParts.length === 0) return;
 
   const candidate: ChatHistoryMessage = {
     role,
-    parts: [{ text: truncateText(normalizedText, 1800) }],
+    parts: candidateParts,
   };
   const existing = getAdminAgentSharedHistory(scopeKey);
   const last = existing[existing.length - 1];
-  const lastText = last?.parts?.map((part) => (typeof part?.text === "string" ? normalizeOptionalText(part.text) : "")).filter(Boolean).join("\n") || "";
-  if (last && last.role === candidate.role && lastText === candidate.parts[0]?.text) {
+  const lastSignature = JSON.stringify(last || null);
+  const candidateSignature = JSON.stringify(candidate);
+  if (last && last.role === candidate.role && lastSignature === candidateSignature) {
     return;
   }
 
@@ -1427,6 +1588,56 @@ function readRequiredString(
 function readOptionalString(source: Record<string, unknown>, field: string, maxLength = 4096) {
   if (source[field] == null) return "";
   return trimStringInput(source[field], maxLength);
+}
+
+function readAdminAgentImageAttachments(source: Record<string, unknown>, field: string, issues: ValidationIssue[]) {
+  const raw = source[field];
+  if (raw == null) return [] as NonNullable<ChatPart["image"]>[];
+  if (!Array.isArray(raw)) {
+    issues.push({ field, message: `${field} must be an array` });
+    return [] as NonNullable<ChatPart["image"]>[];
+  }
+
+  const attachments: NonNullable<ChatPart["image"]>[] = [];
+  for (let index = 0; index < raw.length && attachments.length < 4; index += 1) {
+    const value = raw[index];
+    if (!isRecord(value)) {
+      issues.push({ field: `${field}[${index}]`, message: "attachment must be an object" });
+      continue;
+    }
+
+    const kind = normalizeComparableText(value.kind || "image");
+    if (kind && kind !== "image") {
+      issues.push({ field: `${field}[${index}].kind`, message: "only image attachments are supported" });
+      continue;
+    }
+
+    const url = trimStringInput(value.url, 2000);
+    const absoluteUrl = trimStringInput(value.absolute_url, 2000);
+    const mimeType = trimStringInput(value.mime_type, 160).toLowerCase();
+    if (!url && !absoluteUrl) {
+      issues.push({ field: `${field}[${index}]`, message: "attachment url is required" });
+      continue;
+    }
+    if (mimeType && !["image/png", "image/jpeg", "image/webp"].includes(mimeType)) {
+      issues.push({ field: `${field}[${index}].mime_type`, message: "image must be PNG, JPG, or WebP" });
+      continue;
+    }
+
+    attachments.push({
+      kind: "image",
+      ...(trimStringInput(value.id, 160) ? { id: trimStringInput(value.id, 160) } : {}),
+      ...(url ? { url } : {}),
+      ...(absoluteUrl ? { absolute_url: absoluteUrl } : {}),
+      ...(trimStringInput(value.name, 240) ? { name: trimStringInput(value.name, 240) } : {}),
+      ...(mimeType ? { mime_type: mimeType } : {}),
+      ...(Number.isFinite(Number(value.size_bytes)) && Number(value.size_bytes) > 0
+        ? { size_bytes: Math.trunc(Number(value.size_bytes)) }
+        : {}),
+    });
+  }
+
+  return attachments;
 }
 
 function isLikelyEmailAddress(value: string) {
@@ -2308,6 +2519,8 @@ function normalizePublicSlug(rawValue: unknown) {
 
 const DEFAULT_PUBLIC_UPLOADS_ROOT_DIR = path.join(__dirname, "public", "uploads");
 const PUBLIC_POSTER_MAX_BYTES = 2 * 1024 * 1024;
+const ADMIN_AGENT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const ADMIN_AGENT_OPENROUTER_HISTORY_IMAGE_BUDGET = 3;
 const IS_RAILWAY_RUNTIME = Boolean(
   normalizeOptionalText(process.env.RAILWAY_ENVIRONMENT)
   || normalizeOptionalText(process.env.RAILWAY_SERVICE_ID)
@@ -2340,6 +2553,7 @@ function resolvePublicUploadsRootDir() {
 
 const PUBLIC_UPLOADS_ROOT_DIR = resolvePublicUploadsRootDir();
 const PUBLIC_POSTER_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "event-posters");
+const ADMIN_AGENT_IMAGE_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "admin-agent-images");
 
 function getPosterExtensionFromMimeType(mimeType: string) {
   switch (mimeType) {
@@ -2358,12 +2572,35 @@ function buildPublicPosterRelativeUrl(fileName: string) {
   return `/uploads/event-posters/${fileName}`;
 }
 
+function buildAdminAgentImageRelativeUrl(fileName: string) {
+  return `/uploads/admin-agent-images/${fileName}`;
+}
+
+function resolveAdminAgentImageAbsolutePath(relativeUrl: string) {
+  const normalized = String(relativeUrl || "").trim();
+  const prefix = "/uploads/admin-agent-images/";
+  if (!normalized.startsWith(prefix)) return "";
+  const fileName = path.basename(normalized);
+  return path.join(ADMIN_AGENT_IMAGE_UPLOAD_DIR, fileName);
+}
+
 function resolvePublicPosterAbsolutePath(relativeUrl: string) {
   const normalized = String(relativeUrl || "").trim();
   const prefix = "/uploads/event-posters/";
   if (!normalized.startsWith(prefix)) return "";
   const fileName = path.basename(normalized);
   return path.join(PUBLIC_POSTER_UPLOAD_DIR, fileName);
+}
+
+function buildAbsoluteAppAssetUrl(relativeUrl: string) {
+  const normalizedPath = normalizeOptionalText(relativeUrl);
+  const appUrl = normalizeOptionalText(process.env.APP_URL);
+  if (!normalizedPath || !appUrl) return "";
+  try {
+    return new URL(normalizedPath, appUrl).toString();
+  } catch {
+    return "";
+  }
 }
 
 function normalizeComparablePhone(value: unknown) {
@@ -4872,6 +5109,12 @@ function parseAdminAgentEventSetupPatch(args: Record<string, unknown>) {
   const travel = normalizeOptionalText(args.event_travel) || normalizeOptionalText(args.travel);
   if (travel) put("event_travel", travel);
 
+  const publicPosterUrl =
+    normalizeOptionalText(args.event_public_poster_url)
+    || normalizeOptionalText(args.poster_url)
+    || normalizeOptionalText(args.public_poster_url);
+  if (publicPosterUrl) put("event_public_poster_url", publicPosterUrl);
+
   const regLimitRaw = normalizeOptionalText(args.reg_limit) || normalizeOptionalText(args.registration_limit);
   if (regLimitRaw) {
     const parsed = parseRegistrationLimit(regLimitRaw);
@@ -5090,6 +5333,7 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
 
 async function requestAdminAgentPlan(
   message: string,
+  currentMessageParts: ChatPart[],
   history: ChatHistoryMessage[],
   settings: Record<string, any>,
   allowedActions: AdminAgentActionName[],
@@ -5129,6 +5373,13 @@ async function requestAdminAgentPlan(
     "If required fields are missing, do not call a tool and ask one short clarification question in Thai.",
     "Never invent registration IDs, sender IDs, channel IDs, emails, or counts.",
     "When matching by name, pass full_name or first_name/last_name.",
+    "If image attachments are present, inspect them before deciding the tool call.",
+    "If admin only asks to extract poster details or summarize the attached poster without applying changes, do not call a tool. Reply in concise Thai with the extracted event draft fields only.",
+    "If admin asks to use an attached image as the event poster, call update_event_setup or create_event with event_public_poster_url set to the attachment poster_asset_url exactly.",
+    "If admin asks to create an event from an attached poster, extract the event name, visible date/time, venue/location, room, and short description from the poster before calling create_event.",
+    "When creating an event from a poster, include event_public_poster_url on create_event if the attached image should become the poster for the new event.",
+    "When extracting from a poster, prefer exact visible Thai/English text. If a critical field like event name or date/time is unreadable, ask one short clarification question in Thai instead of guessing.",
+    "If a poster clearly belongs to the currently selected event and the admin asks to use it there, prefer update_event_setup over create_event.",
     "Use create_event when admin asks to create a new event from natural language details.",
     "Use update_event_setup to fill event detail/rules fields after event creation.",
     "Use update_event_status for live/inactive/pending/cancelled/archived updates.",
@@ -5166,7 +5417,7 @@ async function requestAdminAgentPlan(
         ...normalizeHistoryForOpenRouter(history),
         {
           role: "user",
-          content: message,
+          content: buildOpenRouterMessageContent(currentMessageParts),
         },
       ],
       tools: [
@@ -5194,6 +5445,8 @@ async function requestAdminAgentPlan(
                 event_end_date: { type: "string" },
                 event_description: { type: "string" },
                 event_travel: { type: "string" },
+                event_public_poster_url: { type: "string" },
+                poster_url: { type: "string" },
                 reg_limit: { type: "string" },
                 reg_start: { type: "string" },
                 reg_end: { type: "string" },
@@ -5208,7 +5461,7 @@ async function requestAdminAgentPlan(
           type: "function",
           function: {
             name: "update_event_setup",
-            description: "Update event detail/rules fields: schedule, location, map, description, travel, registration open/close/limit, unique-name, email confirmation.",
+            description: "Update event detail/rules fields: schedule, location, map, description, travel, public poster URL, registration open/close/limit, unique-name, email confirmation.",
             parameters: {
               type: "object",
               properties: {
@@ -5231,6 +5484,9 @@ async function requestAdminAgentPlan(
                 description: { type: "string" },
                 event_travel: { type: "string" },
                 travel: { type: "string" },
+                event_public_poster_url: { type: "string" },
+                poster_url: { type: "string" },
+                public_poster_url: { type: "string" },
                 reg_limit: { type: "string" },
                 registration_limit: { type: "string" },
                 reg_start: { type: "string" },
@@ -6749,6 +7005,7 @@ async function sendAdminAgentPublicChatAttentionNotification(options: {
 
 async function runAdminAgentCommand(options: {
   message: string;
+  messageParts?: ChatPart[];
   eventId: string;
   history?: ChatHistoryMessage[];
   settings?: Record<string, any>;
@@ -6759,8 +7016,19 @@ async function runAdminAgentCommand(options: {
 }) {
   const requestedEventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
   const parsedCommand = parseAdminAgentEventOverride(options.message, requestedEventId);
-  const message = normalizeOptionalText(parsedCommand.command);
-  if (!message) {
+  const rawMessage = normalizeOptionalText(parsedCommand.command);
+  const messageParts = Array.isArray(options.messageParts) && options.messageParts.length > 0
+    ? options.messageParts
+    : rawMessage
+    ? [{ text: rawMessage }]
+    : [];
+  const hasImageAttachment = messageParts.some((part) => Boolean(part?.image));
+  const message = rawMessage || (
+    hasImageAttachment
+      ? "The admin attached image assets without text. Ask one short clarification question in Thai if intent is unclear."
+      : ""
+  );
+  if (!message && messageParts.length === 0) {
     throw new Error("Message is required");
   }
   const historyScopeKey = normalizeAdminAgentHistoryScopeKey(options.historyScopeKey);
@@ -6820,7 +7088,7 @@ async function runAdminAgentCommand(options: {
     const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
       policy,
     });
-    appendAdminAgentSharedHistory(historyScopeKey, "user", message);
+    appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
     appendAdminAgentSharedHistory(historyScopeKey, "model", `[${action.name}] ${execution.reply}`);
     return {
       reply: execution.reply,
@@ -6841,6 +7109,7 @@ async function runAdminAgentCommand(options: {
 
   const plan = await requestAdminAgentPlan(
     message,
+    messageParts.length > 0 ? messageParts : [{ text: message }],
     plannerHistory,
     settings,
     allowedActions,
@@ -6859,7 +7128,7 @@ async function runAdminAgentCommand(options: {
 
   if (!plan.toolCall) {
     const clarificationReply = plan.assistantText || "ขอรายละเอียดเพิ่มอีกนิด เพื่อให้ผมสั่งงานต่อได้ถูกต้อง";
-    appendAdminAgentSharedHistory(historyScopeKey, "user", message);
+    appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
     appendAdminAgentSharedHistory(historyScopeKey, "model", clarificationReply);
     return {
       reply: clarificationReply,
@@ -6899,7 +7168,7 @@ async function runAdminAgentCommand(options: {
   const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
     policy,
   });
-  appendAdminAgentSharedHistory(historyScopeKey, "user", message);
+  appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
   appendAdminAgentSharedHistory(historyScopeKey, "model", action ? `[${action.name}] ${execution.reply}` : execution.reply);
   return {
     reply: execution.reply,
@@ -12691,6 +12960,81 @@ async function startServer() {
   );
 
   app.post(
+    "/api/admin-agent/attachments/image",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    adminAgentRateLimit,
+    express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: ADMIN_AGENT_IMAGE_MAX_BYTES }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      const extension = getPosterExtensionFromMimeType(contentType);
+      if (!extension) {
+        return res.status(400).json({ error: "Image must be PNG, JPG, or WebP" });
+      }
+
+      const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return res.status(400).json({ error: "Image file is required" });
+      }
+      if (fileBuffer.length > ADMIN_AGENT_IMAGE_MAX_BYTES) {
+        return res.status(400).json({ error: "Image must be 6 MB or smaller" });
+      }
+
+      mkdirSync(ADMIN_AGENT_IMAGE_UPLOAD_DIR, { recursive: true });
+      const rawFileNameHeader = Array.isArray(req.headers["x-upload-filename"])
+        ? req.headers["x-upload-filename"][0]
+        : req.headers["x-upload-filename"];
+      let decodedFileName = "";
+      if (normalizeOptionalText(rawFileNameHeader)) {
+        try {
+          decodedFileName = decodeURIComponent(String(rawFileNameHeader || ""));
+        } catch {
+          decodedFileName = String(rawFileNameHeader || "");
+        }
+      }
+      const safeNameBase = path.basename(decodedFileName || `image.${extension}`).replace(/\.[^.]+$/, "");
+      const normalizedNameBase = safeNameBase
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60)
+        || "image";
+      const nextFileName = `${eventId}-${Date.now().toString(36)}-${normalizedNameBase}.${extension}`;
+      const nextAbsolutePath = path.join(ADMIN_AGENT_IMAGE_UPLOAD_DIR, nextFileName);
+      const nextRelativeUrl = buildAdminAgentImageRelativeUrl(nextFileName);
+      const nextPublicUrl = buildAbsoluteAppAssetUrl(nextRelativeUrl);
+
+      writeFileSync(nextAbsolutePath, fileBuffer);
+
+      await recordAudit(req, "admin_agent.image_uploaded", "event", eventId, {
+        event_id: eventId,
+        image_url: nextRelativeUrl,
+        public_image_url: nextPublicUrl || null,
+        content_type: contentType,
+        size_bytes: fileBuffer.length,
+      });
+
+      return res.status(201).json({
+        status: "ok",
+        attachment: {
+          id: nextFileName,
+          kind: "image",
+          url: nextRelativeUrl,
+          absolute_url: nextPublicUrl,
+          mime_type: contentType,
+          name: decodedFileName || nextFileName,
+          size_bytes: fileBuffer.length,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to upload admin agent image:", error);
+      return res.status(500).json({ error: "Failed to upload image" });
+    }
+    },
+  );
+
+  app.post(
     "/api/admin-agent/chat",
     requireRoles(["owner", "admin", "operator"]),
     requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
@@ -12699,7 +13043,11 @@ async function startServer() {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
-      const message = readRequiredString(body, "message", issues, { label: "message", maxLength: 8000 });
+      const message = readOptionalString(body, "message", 8000);
+      const attachments = readAdminAgentImageAttachments(body, "attachments", issues);
+      if (!message && attachments.length === 0) {
+        issues.push({ field: "message", message: "message or attachments is required" });
+      }
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
@@ -12719,6 +13067,10 @@ async function startServer() {
       try {
         const execution = await runAdminAgentCommand({
           message,
+          messageParts: [
+            ...(message ? [{ text: message } satisfies ChatPart] : []),
+            ...attachments.map((image) => ({ image } satisfies ChatPart)),
+          ],
           eventId,
           history,
           settings: {

@@ -1,4 +1,4 @@
-import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import QRCode from "qrcode";
@@ -46,6 +46,7 @@ import {
   PencilLine,
   Power,
   Phone,
+  ImagePlus,
   X,
 } from "lucide-react";
 import { getAdminAgentResponse, getChatResponse } from "./services/gemini";
@@ -149,11 +150,28 @@ type AdminAgentChatMessage = {
   role: "user" | "agent";
   text: string;
   timestamp: string;
+  attachments?: AdminAgentImageAttachment[];
   actionName?: string;
   actionSource?: "llm" | "rule";
   ticketPngUrl?: string;
   ticketSvgUrl?: string;
   csvDownloadUrl?: string;
+};
+
+type AdminAgentImageAttachment = {
+  id: string;
+  kind: "image";
+  url: string;
+  absolute_url?: string;
+  mime_type?: string;
+  name?: string;
+  size_bytes?: number;
+};
+
+type PendingAdminAgentImageAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
 };
 
 type AdminAgentCommandTemplate = {
@@ -162,6 +180,7 @@ type AdminAgentCommandTemplate = {
   command: string;
   note: string;
   keywords: string[];
+  autoSendWithPendingImages?: boolean;
 };
 
 type AdminAgentDashboardEventSummary = {
@@ -425,6 +444,38 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
 
 const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
   {
+    id: "image-replace-poster",
+    label: "Replace Current Poster",
+    command: "แทนที่ poster ปัจจุบันของ event นี้ด้วยรูปที่แนบมา และอัปเดต event_public_poster_url ให้ใช้รูปนี้ทันที",
+    note: "แทนที่โปสเตอร์ปัจจุบันของ event ที่เลือกอยู่",
+    keywords: ["image", "poster", "replace", "current", "cover", "แทนที่โปสเตอร์"],
+    autoSendWithPendingImages: true,
+  },
+  {
+    id: "image-extract-details",
+    label: "Extract Poster Details Only",
+    command: "อ่านข้อความและรายละเอียดจาก poster ที่แนบมา แล้วสรุปเป็น draft ของชื่ออีเวนต์ วันเวลา สถานที่ ห้อง และคำอธิบายสั้นๆ โดยยังไม่ต้องสร้าง event หรืออัปเดตข้อมูลใดๆ",
+    note: "ดึงข้อมูลจาก poster อย่างเดียว ยังไม่สร้างหรือแก้ event",
+    keywords: ["image", "poster", "extract", "details", "ocr", "summary", "ดึงข้อมูลจากโปสเตอร์"],
+    autoSendWithPendingImages: true,
+  },
+  {
+    id: "image-use-as-poster",
+    label: "Use Attached Image as Poster",
+    command: "ใช้รูปที่แนบมาล่าสุดเป็น poster ของ event นี้ และอัปเดต event_public_poster_url ให้เลย",
+    note: "ใช้รูปที่แนบมาเป็นโปสเตอร์ของ event ปัจจุบันทันที",
+    keywords: ["image", "poster", "cover", "attached", "โปสเตอร์", "รูป"],
+    autoSendWithPendingImages: true,
+  },
+  {
+    id: "image-create-event",
+    label: "Create Event From Poster",
+    command: "สร้าง event ใหม่จากรูป poster ที่แนบมา ดึงชื่ออีเวนต์ วันเวลา สถานที่ และรายละเอียดที่อ่านได้จากภาพ แล้วตั้งรูปนี้เป็น poster ของ event ใหม่ ถ้าข้อมูลหลักอ่านไม่ชัดให้ถามฉันสั้นๆ",
+    note: "ให้ agent อ่านข้อมูลจาก poster แล้วสร้าง event draft ให้อัตโนมัติ",
+    keywords: ["image", "poster", "create", "event", "extract", "ocr", "สร้างงานจากรูป"],
+    autoSendWithPendingImages: true,
+  },
+  {
     id: "list-events",
     label: "List All Events",
     command: "list events",
@@ -600,6 +651,12 @@ const ADMIN_AGENT_CONSOLE_QUICK_TEMPLATE_IDS = [
   "list-events-history",
   "event-overview",
 ] as const;
+const ADMIN_AGENT_IMAGE_QUICK_TEMPLATE_IDS = [
+  "image-replace-poster",
+  "image-extract-details",
+  "image-use-as-poster",
+  "image-create-event",
+] as const;
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
@@ -631,6 +688,8 @@ const CHANNEL_PLATFORM_WEBHOOK_MAP: Record<ChannelPlatform, WebhookConfigKey[]> 
 };
 const ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-pref-v1";
 const ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-last-audit-v1";
+const ADMIN_AGENT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const ADMIN_AGENT_ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const CSRF_COOKIE_NAME = "fbs_csrf";
 const CSRF_HEADER_NAME = "x-csrf-token";
 const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -823,7 +882,26 @@ function readAdminAgentChatStore() {
           const role = row.role === "user" ? "user" : row.role === "agent" ? "agent" : null;
           const text = typeof row.text === "string" ? row.text : "";
           const timestamp = typeof row.timestamp === "string" ? row.timestamp : "";
-          if (!role || !text || !timestamp) return null;
+          const attachments = Array.isArray(row.attachments)
+            ? row.attachments
+                .filter((attachment) => attachment && typeof attachment === "object")
+                .map((attachment) => {
+                  const value = attachment as Record<string, unknown>;
+                  const url = typeof value.url === "string" ? value.url : "";
+                  if (!url) return null;
+                  return {
+                    id: typeof value.id === "string" ? value.id : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+                    kind: "image" as const,
+                    url,
+                    absolute_url: typeof value.absolute_url === "string" ? value.absolute_url : "",
+                    mime_type: typeof value.mime_type === "string" ? value.mime_type : "",
+                    name: typeof value.name === "string" ? value.name : "",
+                    size_bytes: Number.isFinite(Number(value.size_bytes)) ? Number(value.size_bytes) : undefined,
+                  } satisfies AdminAgentImageAttachment;
+                })
+                .filter(Boolean) as AdminAgentImageAttachment[]
+            : [];
+          if (!role || !timestamp || (!text && attachments.length === 0)) return null;
           const actionSource = row.actionSource === "rule" ? "rule" : "llm";
           const ticketPngUrl = typeof row.ticketPngUrl === "string" ? row.ticketPngUrl : "";
           const ticketSvgUrl = typeof row.ticketSvgUrl === "string" ? row.ticketSvgUrl : "";
@@ -832,6 +910,7 @@ function readAdminAgentChatStore() {
             role,
             text,
             timestamp,
+            attachments,
             actionName: typeof row.actionName === "string" ? row.actionName : "",
             actionSource,
             ticketPngUrl,
@@ -3442,13 +3521,15 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [adminAgentMessages, setAdminAgentMessages] = useState<AdminAgentChatMessage[]>([]);
   const [adminAgentInputText, setAdminAgentInputText] = useState("");
+  const [adminAgentPendingImages, setAdminAgentPendingImages] = useState<PendingAdminAgentImageAttachment[]>([]);
+  const [adminAgentAttachmentError, setAdminAgentAttachmentError] = useState("");
   const [adminCommandPaletteOpen, setAdminCommandPaletteOpen] = useState(false);
   const [adminCommandPaletteQuery, setAdminCommandPaletteQuery] = useState("");
   const [adminAgentTyping, setAdminAgentTyping] = useState(false);
   const [adminAgentDashboard, setAdminAgentDashboard] = useState<AdminAgentDashboardResponse | null>(null);
   const [adminAgentDashboardLoading, setAdminAgentDashboardLoading] = useState(false);
   const [adminAgentDashboardError, setAdminAgentDashboardError] = useState("");
-  const [adminAgentDashboardOpen, setAdminAgentDashboardOpen] = useState(true);
+  const [adminAgentDashboardOpen, setAdminAgentDashboardOpen] = useState(false);
   const [agentMobileFocusMode, setAgentMobileFocusMode] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.innerWidth < 1024;
@@ -3569,15 +3650,18 @@ export default function App() {
   const adminAgentScrollRef = useRef<HTMLDivElement | null>(null);
   const adminAgentBottomRef = useRef<HTMLDivElement | null>(null);
   const adminAgentInputRef = useRef<HTMLInputElement | null>(null);
+  const adminAgentImageInputRef = useRef<HTMLInputElement | null>(null);
   const adminCommandPaletteRef = useRef<HTMLDivElement | null>(null);
   const adminCommandPaletteSearchInputRef = useRef<HTMLInputElement | null>(null);
   const adminAgentHistoryLoadedKeyRef = useRef("");
+  const adminAgentPendingImagesRef = useRef<PendingAdminAgentImageAttachment[]>([]);
   const desktopNotifyBootstrappedRef = useRef(false);
   const desktopNotifyLastAuditIdRef = useRef(0);
   selectedEventIdRef.current = selectedEventId;
   selectedPublicInboxSenderIdRef.current = selectedPublicInboxSenderId;
   publicChatLastMessageIdRef.current = publicChatLastMessageId;
   settingsRef.current = settings;
+  adminAgentPendingImagesRef.current = adminAgentPendingImages;
 
   const currentPathname = typeof window !== "undefined" ? window.location.pathname : "/";
   const publicEventSlug = getPublicEventSlugFromPath(currentPathname);
@@ -3663,7 +3747,11 @@ export default function App() {
       template.keywords.join(" "),
     ]),
   );
-  const adminAgentConsoleQuickTemplates = ADMIN_AGENT_CONSOLE_QUICK_TEMPLATE_IDS
+  const adminAgentQuickTemplateIds = [...ADMIN_AGENT_CONSOLE_QUICK_TEMPLATE_IDS];
+  const adminAgentConsoleQuickTemplates = adminAgentQuickTemplateIds
+    .map((id) => ADMIN_AGENT_COMMAND_TEMPLATES.find((template) => template.id === id) || null)
+    .filter((template): template is AdminAgentCommandTemplate => Boolean(template));
+  const adminAgentImageQuickTemplates = ADMIN_AGENT_IMAGE_QUICK_TEMPLATE_IDS
     .map((id) => ADMIN_AGENT_COMMAND_TEMPLATES.find((template) => template.id === id) || null)
     .filter((template): template is AdminAgentCommandTemplate => Boolean(template));
   const adminAgentPolicy = {
@@ -4764,6 +4852,12 @@ export default function App() {
     }
     writeAdminAgentChatStore(store);
   }, [adminAgentMessages, adminAgentChatStorageKey]);
+
+  useEffect(() => {
+    return () => {
+      adminAgentPendingImagesRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    };
+  }, []);
 
   useEffect(() => {
     const allChannelIds = allChannelIdsKey ? allChannelIdsKey.split("|") : [];
@@ -7725,6 +7819,15 @@ export default function App() {
   };
 
   const handleApplyAdminCommandTemplate = (template: AdminAgentCommandTemplate) => {
+    if (
+      template.autoSendWithPendingImages
+      && adminAgentPendingImages.length > 0
+      && !adminAgentTyping
+      && !adminAgentInputText.trim()
+    ) {
+      void handleAdminAgentSend(template.command);
+      return;
+    }
     applyAdminAgentCommand(template.command);
   };
 
@@ -7738,30 +7841,149 @@ export default function App() {
     });
   };
 
-  const handleAdminAgentSend = async () => {
-    if (!adminAgentInputText.trim()) return;
+  const clearAdminAgentPendingImages = () => {
+    setAdminAgentPendingImages((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      return [];
+    });
+    setAdminAgentAttachmentError("");
+    if (adminAgentImageInputRef.current) {
+      adminAgentImageInputRef.current.value = "";
+    }
+  };
 
-    const outgoingText = adminAgentInputText.trim();
-    closeAdminCommandPalette();
-    const userMsg: AdminAgentChatMessage = {
-      role: "user",
-      text: outgoingText,
-      timestamp: new Date().toISOString(),
+  const removeAdminAgentPendingImage = (id: string) => {
+    setAdminAgentPendingImages((current) => {
+      const target = current.find((item) => item.id === id);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return current.filter((item) => item.id !== id);
+    });
+  };
+
+  const handleAdminAgentImageSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+
+    const nextAttachments: PendingAdminAgentImageAttachment[] = [];
+    const errors: string[] = [];
+    for (const file of files) {
+      if (!ADMIN_AGENT_ALLOWED_IMAGE_TYPES.has(file.type)) {
+        errors.push(`${file.name}: PNG, JPG, or WebP only`);
+        continue;
+      }
+      if (file.size > ADMIN_AGENT_IMAGE_MAX_BYTES) {
+        errors.push(`${file.name}: max 6 MB`);
+        continue;
+      }
+      nextAttachments.push({
+        id: `img:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+      });
+    }
+
+    setAdminAgentPendingImages((current) => {
+      const remainingSlots = Math.max(0, 4 - current.length);
+      if (remainingSlots <= 0) {
+        nextAttachments.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+        return current;
+      }
+      const accepted = nextAttachments.slice(0, remainingSlots);
+      const rejected = nextAttachments.slice(remainingSlots);
+      rejected.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+      if (nextAttachments.length > remainingSlots) {
+        errors.push("Up to 4 images per message");
+      }
+      return [...current, ...accepted];
+    });
+
+    setAdminAgentAttachmentError(errors.join(" · "));
+    event.target.value = "";
+  };
+
+  const uploadAdminAgentImageAttachment = async (file: File): Promise<AdminAgentImageAttachment> => {
+    const params = new URLSearchParams();
+    params.set("event_id", selectedEventId || "");
+    const res = await apiFetch(`/api/admin-agent/attachments/image?${params.toString()}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type,
+        "x-upload-filename": encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error((data as { error?: string }).error || "Failed to upload image");
+    }
+    const attachment = (data as { attachment?: Record<string, unknown> }).attachment || {};
+    const url = typeof attachment.url === "string" ? attachment.url : "";
+    if (!url) {
+      throw new Error("Image upload did not return a URL");
+    }
+    return {
+      id: typeof attachment.id === "string" ? attachment.id : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "image",
+      url,
+      absolute_url: typeof attachment.absolute_url === "string" ? attachment.absolute_url : "",
+      mime_type: typeof attachment.mime_type === "string" ? attachment.mime_type : file.type,
+      name: typeof attachment.name === "string" ? attachment.name : file.name,
+      size_bytes: Number.isFinite(Number(attachment.size_bytes)) ? Number(attachment.size_bytes) : file.size,
     };
-    setAdminAgentMessages((prev) => [...prev, userMsg]);
-    setAdminAgentInputText("");
+  };
+
+  const buildAdminAgentHistoryParts = (message: AdminAgentChatMessage) => {
+    const parts: Array<{
+      text?: string;
+      image?: AdminAgentImageAttachment;
+    }> = [];
+    const normalizedText = message.role === "agent" && message.actionName
+      ? `[${message.actionName}] ${message.text}`
+      : message.text;
+    if (normalizedText.trim()) {
+      parts.push({ text: normalizedText });
+    }
+    if (message.role === "user" && Array.isArray(message.attachments)) {
+      for (const attachment of message.attachments) {
+        parts.push({ image: attachment });
+      }
+    }
+    return parts;
+  };
+
+  const handleAdminAgentSend = async (overrideMessage?: string) => {
+    const outgoingText = typeof overrideMessage === "string" && overrideMessage.trim()
+      ? overrideMessage.trim()
+      : adminAgentInputText.trim();
+    if (!outgoingText && adminAgentPendingImages.length === 0) return;
+    const pendingImages = adminAgentPendingImages.slice();
+    closeAdminCommandPalette();
     setAdminAgentTyping(true);
+    setAdminAgentAttachmentError("");
 
     try {
+      const uploadedAttachments = pendingImages.length > 0
+        ? await Promise.all(pendingImages.map((item) => uploadAdminAgentImageAttachment(item.file)))
+        : [];
+
+      const userMsg: AdminAgentChatMessage = {
+        role: "user",
+        text: outgoingText,
+        timestamp: new Date().toISOString(),
+        attachments: uploadedAttachments,
+      };
       const history = adminAgentMessages.map((msg) => ({
         role: msg.role === "user" ? "user" as const : "model" as const,
-        parts: [{
-          text: msg.role === "agent" && msg.actionName
-            ? `[${msg.actionName}] ${msg.text}`
-            : msg.text,
-        }],
+        parts: buildAdminAgentHistoryParts(msg),
       }));
-      const response = await getAdminAgentResponse(outgoingText, settings, history, selectedEventId);
+
+      setAdminAgentMessages((prev) => [...prev, userMsg]);
+      setAdminAgentInputText("");
+      clearAdminAgentPendingImages();
+
+      const response = await getAdminAgentResponse(outgoingText, settings, history, selectedEventId, uploadedAttachments);
       const replyText = String(response.reply || "").trim() || "ดำเนินการแล้ว";
       const ticketUrls = extractAdminAgentTicketUrls(response.result || null);
       const csvDownloadUrl = extractAdminAgentCsvDownloadUrl(response.result || null);
@@ -7781,13 +8003,29 @@ export default function App() {
       ]);
 
       if (response.action?.name) {
-        const actionEventId = String(response.event_id || selectedEventId || "").trim() || selectedEventId;
+        const resultEventId = response.result && typeof response.result === "object" && typeof response.result.event_id === "string"
+          ? response.result.event_id.trim()
+          : "";
+        const actionEventId = String(
+          (response.action.name === "create_event" ? resultEventId : "")
+          || response.event_id
+          || resultEventId
+          || selectedEventId
+          || "",
+        ).trim() || selectedEventId;
+        const shouldSwitchToCreatedEvent =
+          response.action.name === "create_event"
+          && actionEventId
+          && actionEventId !== selectedEventId;
+        if (shouldSwitchToCreatedEvent) {
+          setSelectedEventId(actionEventId);
+        }
         void fetchAdminAgentDashboard(actionEventId || selectedEventId, { silent: true });
-        if (actionEventId && actionEventId === selectedEventId) {
+        if (actionEventId && !shouldSwitchToCreatedEvent) {
           void Promise.all([
-            fetchSettings(selectedEventId),
-            fetchMessages(selectedEventId),
-            fetchRegistrations(selectedEventId),
+            fetchSettings(actionEventId),
+            fetchMessages(actionEventId),
+            fetchRegistrations(actionEventId),
             fetchEvents(),
           ]);
         } else {
@@ -13869,11 +14107,35 @@ export default function App() {
                   )}
                   {adminAgentMessages.map((msg, index) => (
                     <div key={`${msg.timestamp}-${index}`} className="space-y-1">
-                      <ChatBubble
-                        text={msg.text}
-                        type={msg.role === "user" ? "outgoing" : "incoming"}
-                        timestamp={msg.timestamp}
-                      />
+                      {msg.text.trim() && (
+                        <ChatBubble
+                          text={msg.text}
+                          type={msg.role === "user" ? "outgoing" : "incoming"}
+                          timestamp={msg.timestamp}
+                        />
+                      )}
+                      {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
+                        <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                          <div className={`flex max-w-[75%] flex-wrap gap-2 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                            {msg.attachments.map((attachment) => (
+                              <a
+                                key={attachment.id}
+                                href={attachment.absolute_url || attachment.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="agent-inline-asset inline-block overflow-hidden rounded-2xl border border-slate-200 bg-white p-1"
+                              >
+                                <img
+                                  src={attachment.absolute_url || attachment.url}
+                                  alt={attachment.name || "Attached image"}
+                                  className="h-24 w-24 rounded-xl object-cover sm:h-28 sm:w-28"
+                                  loading="lazy"
+                                />
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {msg.role === "agent" && (msg.ticketPngUrl || msg.ticketSvgUrl || msg.csvDownloadUrl) && (
                         <div className="ml-2 space-y-2 pb-1">
                           {msg.ticketPngUrl && (
@@ -14014,6 +14276,74 @@ export default function App() {
                       )}
                     </AnimatePresence>
 
+                    <input
+                      ref={adminAgentImageInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      multiple
+                      className="hidden"
+                      onChange={handleAdminAgentImageSelection}
+                    />
+
+                    {(adminAgentPendingImages.length > 0 || adminAgentAttachmentError) && (
+                      <div className="mb-2 space-y-2">
+                        {adminAgentPendingImages.length > 0 && (
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap gap-2">
+                              {adminAgentPendingImages.map((attachment) => (
+                                <div
+                                  key={attachment.id}
+                                  className="agent-inline-asset flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-2"
+                                >
+                                  <img
+                                    src={attachment.previewUrl}
+                                    alt={attachment.file.name}
+                                    className="h-10 w-10 rounded-xl object-cover"
+                                  />
+                                  <div className="min-w-0">
+                                    <p className="max-w-28 truncate text-xs font-medium text-slate-800">{attachment.file.name}</p>
+                                    <p className="text-[10px] text-slate-500">{Math.max(1, Math.round(attachment.file.size / 1024))} KB</p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeAdminAgentPendingImage(attachment.id)}
+                                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:text-slate-700"
+                                    aria-label={`Remove ${attachment.file.name}`}
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                              {adminAgentPendingImages.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={clearAdminAgentPendingImages}
+                                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-rose-300 hover:text-rose-700"
+                                >
+                                  Clear Images
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {adminAgentImageQuickTemplates.map((template) => (
+                                <button
+                                  key={template.id}
+                                  type="button"
+                                  onClick={() => handleApplyAdminCommandTemplate(template)}
+                                  className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-[11px] font-medium text-violet-700 transition hover:border-violet-300 hover:bg-violet-100"
+                                >
+                                  {template.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {adminAgentAttachmentError && (
+                          <p className="text-xs text-rose-600">{adminAgentAttachmentError}</p>
+                        )}
+                      </div>
+                    )}
+
                     <div className="flex gap-2 lg:pr-16">
                       <ActionButton
                         onClick={handleToggleAdminCommandPalette}
@@ -14023,6 +14353,16 @@ export default function App() {
                         title="Command Palette (Ctrl/Cmd + Shift + P)"
                       >
                         <Code className="h-4 w-4" />
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => adminAgentImageInputRef.current?.click()}
+                        tone="neutral"
+                        className="px-2.5"
+                        disabled={adminAgentTyping || adminAgentPendingImages.length >= 4}
+                        aria-label="Attach image"
+                        title="Attach image"
+                      >
+                        <ImagePlus className="h-4 w-4" />
                       </ActionButton>
                       <input
                         ref={adminAgentInputRef}
@@ -14038,8 +14378,10 @@ export default function App() {
                         className="agent-command-input flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
                       />
                       <ActionButton
-                        onClick={handleAdminAgentSend}
-                        disabled={!adminAgentInputText.trim() || adminAgentTyping || settings.admin_agent_enabled !== "1"}
+                        onClick={() => {
+                          void handleAdminAgentSend();
+                        }}
+                        disabled={(!adminAgentInputText.trim() && adminAgentPendingImages.length === 0) || adminAgentTyping || settings.admin_agent_enabled !== "1"}
                         tone="violet"
                         active
                         className="px-3"

@@ -1,5 +1,14 @@
 type ChatPart = {
   text?: string;
+  image?: {
+    id?: string;
+    kind?: "image";
+    url?: string;
+    absolute_url?: string;
+    mime_type?: string;
+    name?: string;
+    size_bytes?: number;
+  };
   functionCall?: any;
   functionResponse?: any;
 };
@@ -56,6 +65,16 @@ type AdminAgentAction = {
   source?: "llm" | "rule";
 };
 
+export type AdminAgentImageAttachment = {
+  id: string;
+  kind: "image";
+  url: string;
+  absolute_url?: string;
+  mime_type?: string;
+  name?: string;
+  size_bytes?: number;
+};
+
 export type AdminAgentResponse = {
   reply: string;
   action: AdminAgentAction | null;
@@ -101,11 +120,12 @@ export async function getAdminAgentResponse(
   settings: any,
   history: ChatHistoryMessage[],
   eventId?: string,
+  attachments: AdminAgentImageAttachment[] = [],
 ): Promise<AdminAgentResponse> {
   const res = await fetch("/api/admin-agent/chat", {
     method: "POST",
     headers: buildJsonPostHeaders(),
-    body: JSON.stringify({ message, settings, history, event_id: eventId }),
+    body: JSON.stringify({ message, settings, history, event_id: eventId, attachments }),
   });
 
   const data = await res.json().catch(() => ({}));
