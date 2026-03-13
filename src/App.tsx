@@ -1951,7 +1951,7 @@ function getChannelTokenStatusMeta(channel: ChannelAccountRecord): { label: stri
 }
 
 const RECOMMENDED_ADMIN_AGENT_PROMPT = [
-  "You are an internal Admin Operations Agent for FB Bot Studio.",
+  "You are an internal Admin Operations Agent for Meetrix.",
   "Your user is an admin/operator, not an attendee.",
   "Use concise operational Thai.",
   "Follow Agent policy scopes strictly. If required action is disabled, tell admin to enable it in Advanced Action Policy.",

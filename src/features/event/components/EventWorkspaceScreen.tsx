@@ -919,91 +919,73 @@ export function EventWorkspaceScreen({
                             Keep the poster, public slug, full link, and QR asset in one workflow because these are the main publish outputs for the public route. This is the fastest place to prepare something that can be shared on chat, print, or signage.
                           </HelpPopover>
                         </div>
-                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_15rem]">
-                          <div>
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Poster Image URL</label>
-                            <div className="flex flex-col gap-2 sm:flex-row">
-                              <input
-                                value={settings.event_public_poster_url}
-                                onChange={(event) => setSettings({ ...settings, event_public_poster_url: event.target.value })}
-                                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="/uploads/event-posters/... or https://.../event-poster.jpg"
-                              />
-                              <input
-                                ref={publicPosterFileInputRef}
-                                type="file"
-                                accept="image/png,image/jpeg,image/webp"
-                                className="hidden"
-                                onChange={(event) => void handlePublicPosterFileUpload(event.target.files?.[0] || null)}
-                              />
-                              <ActionButton
-                                onClick={() => publicPosterFileInputRef.current?.click()}
-                                disabled={publicPosterUploading}
-                                tone="blue"
-                                className="shrink-0 px-3 text-xs"
-                              >
-                                {publicPosterUploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                                Upload Poster
-                              </ActionButton>
-                            </div>
-                            <p className="mt-1 text-[11px] text-slate-500">
-                              Upload PNG, JPG, or WebP up to 2 MB, or paste a hosted image URL manually.
-                            </p>
-                          </div>
-
-                          <div className="surface-frame overflow-hidden rounded-2xl">
-                            {publicPagePosterUrl ? (
-                              <img
-                                src={publicPagePosterUrl}
-                                alt={settings.event_name || selectedEvent?.name || "Event poster"}
-                                className="aspect-[800/1132] w-full object-cover"
-                              />
-                            ) : (
-                              <div className="flex aspect-[800/1132] w-full flex-col items-center justify-center gap-3 px-4 text-center text-slate-400">
-                                <Eye className="h-7 w-7" />
-                                <div>
-                                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Poster Preview</p>
-                                  <p className="mt-1 text-[11px] text-slate-500">Recommended size 800 x 1132 px</p>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,22rem)]">
                           <div className="space-y-4">
-                            <div>
-                              <div className="mb-1 flex items-center justify-between gap-2">
-                                <label className="block text-xs font-bold uppercase text-slate-500">Public Slug</label>
-                                <HelpPopover label="Open note for Public Slug">
-                                  Use lowercase English letters, numbers, and hyphens only. Keep it short and stable so the public URL is easy to share and print.
-                                </HelpPopover>
+                            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                              <div>
+                                <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Poster Image URL</label>
+                                <div className="flex flex-col gap-2">
+                                  <input
+                                    value={settings.event_public_poster_url}
+                                    onChange={(event) => setSettings({ ...settings, event_public_poster_url: event.target.value })}
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="/uploads/event-posters/... or https://.../event-poster.jpg"
+                                  />
+                                  <input
+                                    ref={publicPosterFileInputRef}
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/webp"
+                                    className="hidden"
+                                    onChange={(event) => void handlePublicPosterFileUpload(event.target.files?.[0] || null)}
+                                  />
+                                  <ActionButton
+                                    onClick={() => publicPosterFileInputRef.current?.click()}
+                                    disabled={publicPosterUploading}
+                                    tone="blue"
+                                    className="w-full px-3 text-xs sm:w-auto"
+                                  >
+                                    {publicPosterUploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                                    Upload Poster
+                                  </ActionButton>
+                                </div>
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  Upload PNG, JPG, or WebP up to 2 MB, or paste a hosted image URL manually.
+                                </p>
                               </div>
-                              <input
-                                value={settings.event_public_slug}
-                                onChange={(event) => setSettings({ ...settings, event_public_slug: sanitizeEnglishSlugInput(event.target.value) })}
-                                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder={publicPagePreviewPath || "event-page"}
-                              />
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <ActionButton
-                                  onClick={() =>
-                                    setSettings({
-                                      ...settings,
-                                      event_public_slug: resolveEnglishPublicSlug({
-                                        eventName: settings.event_name || selectedEvent?.name || "",
-                                        eventSlug: selectedEvent?.slug || "",
-                                        eventId: selectedEvent?.id || selectedEventId,
-                                      }),
-                                    })}
-                                  tone="neutral"
-                                  className="px-3 text-xs"
-                                >
-                                  Generate English Slug
-                                </ActionButton>
-                                <span className="text-[11px] text-slate-500">
+
+                              <div>
+                                <div className="mb-1 flex items-center justify-between gap-2">
+                                  <label className="block text-xs font-bold uppercase text-slate-500">Public Slug</label>
+                                  <HelpPopover label="Open note for Public Slug">
+                                    Use lowercase English letters, numbers, and hyphens only. Keep it short and stable so the public URL is easy to share and print.
+                                  </HelpPopover>
+                                </div>
+                                <input
+                                  value={settings.event_public_slug}
+                                  onChange={(event) => setSettings({ ...settings, event_public_slug: sanitizeEnglishSlugInput(event.target.value) })}
+                                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder={publicPagePreviewPath || "event-page"}
+                                />
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <ActionButton
+                                    onClick={() =>
+                                      setSettings({
+                                        ...settings,
+                                        event_public_slug: resolveEnglishPublicSlug({
+                                          eventName: settings.event_name || selectedEvent?.name || "",
+                                          eventSlug: selectedEvent?.slug || "",
+                                          eventId: selectedEvent?.id || selectedEventId,
+                                        }),
+                                      })}
+                                    tone="neutral"
+                                    className="px-3 text-xs"
+                                  >
+                                    Generate English Slug
+                                  </ActionButton>
+                                </div>
+                                <p className="mt-2 text-[11px] text-slate-500">
                                   Target route: <span className="font-mono text-slate-700">{publicPagePreviewPath}</span>
-                                </span>
+                                </p>
                               </div>
                             </div>
 
@@ -1012,6 +994,9 @@ export function EventWorkspaceScreen({
                                 <div className="min-w-0">
                                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Full Public URL</p>
                                   <p className="mt-2 break-all font-mono text-xs leading-6 text-slate-700">{publicPageAbsoluteUrl}</p>
+                                  <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                                    Use the full link for chat or email, then export the QR asset for posters, printouts, or signage.
+                                  </p>
                                 </div>
                                 <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-blue-600 shadow-sm">
                                   <QrCode className="h-5 w-5" />
@@ -1060,24 +1045,49 @@ export function EventWorkspaceScreen({
                             </div>
                           </div>
 
-                          <div className="surface-frame rounded-2xl px-4 py-4">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">QR Preview</p>
-                            <div className="mt-3 overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
-                              {publicPageQrDataUrl ? (
-                                <img
-                                  src={publicPageQrDataUrl}
-                                  alt={`QR code for ${publicPageAbsoluteUrl}`}
-                                  className="mx-auto w-full max-w-[14rem]"
-                                />
-                              ) : (
-                                <div className="flex aspect-square w-full items-center justify-center rounded-[1.25rem] bg-slate-50 text-slate-400">
-                                  <RefreshCw className="h-6 w-6 animate-spin" />
+                          <div className="surface-frame rounded-2xl p-3">
+                            <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_8.75rem]">
+                              <div>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Poster Preview</p>
+                                <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                                  {publicPagePosterUrl ? (
+                                    <img
+                                      src={publicPagePosterUrl}
+                                      alt={settings.event_name || selectedEvent?.name || "Event poster"}
+                                      className="aspect-[800/1132] w-full object-cover"
+                                    />
+                                  ) : (
+                                    <div className="flex aspect-[800/1132] w-full flex-col items-center justify-center gap-3 px-4 text-center text-slate-400">
+                                      <Eye className="h-7 w-7" />
+                                      <div>
+                                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Poster Preview</p>
+                                        <p className="mt-1 text-[11px] text-slate-500">Recommended size 800 x 1132 px</p>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
+                              </div>
+
+                              <div>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">QR Preview</p>
+                                <div className="mt-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                                  {publicPageQrDataUrl ? (
+                                    <img
+                                      src={publicPageQrDataUrl}
+                                      alt={`QR code for ${publicPageAbsoluteUrl}`}
+                                      className="mx-auto w-full max-w-[7rem]"
+                                    />
+                                  ) : (
+                                    <div className="flex aspect-square w-full items-center justify-center rounded-[1rem] bg-slate-50 text-slate-400">
+                                      <RefreshCw className="h-5 w-5 animate-spin" />
+                                    </div>
+                                  )}
+                                </div>
+                                <p className="mt-2 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                  Scan to register
+                                </p>
+                              </div>
                             </div>
-                            <p className="mt-3 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                              Scan to register
-                            </p>
                           </div>
                         </div>
                       </div>

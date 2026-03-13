@@ -86,7 +86,7 @@ export function AdminWorkspaceHeader({
               </div>
               <div className="min-w-0">
                 <p className="truncate text-[1.02rem] font-bold tracking-tight text-slate-900">
-                  FB Bot Studio
+                  Meetrix
                 </p>
               </div>
             </div>
