@@ -101,12 +101,12 @@ function AboutSection({ description }: { description: string }) {
   if (!description) return null;
 
   return (
-    <section className="py-4 sm:py-5">
+    <section className="py-3.5 sm:py-4">
       <div className="flex items-center gap-2">
         <Eye className="h-4 w-4 text-blue-600" />
-        <h2 className="text-lg font-semibold text-slate-900">About This Event</h2>
+        <h2 className="text-base font-semibold text-slate-900 sm:text-lg">About This Event</h2>
       </div>
-      <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-600">
+      <p className="mt-2.5 whitespace-pre-line text-sm leading-6 text-slate-600">
         {description}
       </p>
     </section>
@@ -123,10 +123,10 @@ function LocationTravelSection({
   publicLocationLabel: string;
 }) {
   return (
-    <section className="py-4 sm:py-5">
+    <section className="py-3.5 sm:py-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Location & Travel</h2>
+          <h2 className="text-base font-semibold text-slate-900 sm:text-lg">Location & Travel</h2>
           <p className="mt-1 text-sm text-slate-500">
             {location.title || publicLocationLabel}
           </p>
@@ -149,35 +149,27 @@ function LocationTravelSection({
           <iframe
             title="Event location map"
             src={mapEmbedUrl}
-            className="h-64 w-full border-0 sm:h-72"
+            className="h-56 w-full border-0 sm:h-64"
             loading="lazy"
             referrerPolicy="no-referrer-when-downgrade"
             allowFullScreen
           />
         ) : (
-          <div className="flex h-80 items-center justify-center px-6 text-center text-sm text-slate-500">
+          <div className="flex h-56 items-center justify-center px-6 text-center text-sm text-slate-500 sm:h-64">
             Map preview will appear here when venue details are available.
           </div>
         )}
       </div>
 
-      <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
-        <div className="surface-tile rounded-xl px-3.5 py-3.5">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Venue</p>
-          <p className="mt-1.5 text-sm font-semibold text-slate-900">
-            {location.title || publicLocationLabel}
-          </p>
-        </div>
-        <div className="surface-tile rounded-xl px-3.5 py-3.5">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Address</p>
-          <p className="mt-1.5 text-sm font-semibold text-slate-900">
-            {location.address_line || location.address || "-"}
-          </p>
-        </div>
-      </div>
+      <dl className="mt-3 grid gap-x-5 gap-y-2 border-t border-slate-200 pt-3 text-sm sm:grid-cols-[5.5rem_minmax(0,1fr)]">
+        <dt className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Venue</dt>
+        <dd className="font-semibold text-slate-900">{location.title || publicLocationLabel}</dd>
+        <dt className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Address</dt>
+        <dd className="text-slate-700">{location.address_line || location.address || "-"}</dd>
+      </dl>
 
       {location.travel_info && (
-        <div className="surface-subpanel mt-3 rounded-xl px-3.5 py-3.5">
+        <div className="mt-3 border-t border-slate-200 pt-3">
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Travel Info</p>
           <p className="mt-1.5 whitespace-pre-line text-sm leading-6 text-slate-600">
             {location.travel_info}

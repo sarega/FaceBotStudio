@@ -26,9 +26,9 @@ function getRemainingParts(targetIso: string): CountdownParts {
 
 function CountdownStat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="surface-tile rounded-xl px-3 py-3 text-center">
-      <p className="text-[2rem] font-bold tracking-tight text-slate-900 sm:text-[2.35rem]">{value}</p>
-      <p className="mt-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+    <div className="surface-tile rounded-lg px-2.5 py-2.5 text-center">
+      <p className="text-[1.7rem] font-bold tracking-tight text-slate-900 sm:text-[2rem]">{value}</p>
+      <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{label}</p>
     </div>
   );
 }
@@ -50,10 +50,10 @@ export function CountdownSection({ countdown }: CountdownSectionProps) {
   }
 
   return (
-    <section className="py-4 sm:py-5">
+    <section className="py-3.5 sm:py-4">
       <div className="flex items-center gap-2">
         <CalendarClock className="h-4 w-4 text-blue-600" />
-        <h2 className="text-lg font-semibold text-slate-900">
+        <h2 className="text-base font-semibold text-slate-900 sm:text-lg">
           {countdown.state === "ongoing" ? "Happening Now" : "Countdown to Event"}
         </h2>
       </div>
@@ -65,14 +65,14 @@ export function CountdownSection({ countdown }: CountdownSectionProps) {
       </p>
 
       {countdown.state === "upcoming" ? (
-        <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <div className="mt-3.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <CountdownStat label="Days" value={parts.days} />
           <CountdownStat label="Hours" value={parts.hours} />
           <CountdownStat label="Minutes" value={parts.minutes} />
           <CountdownStat label="Seconds" value={parts.seconds} />
         </div>
       ) : (
-        <div className="surface-subpanel mt-4 rounded-xl px-3.5 py-3.5">
+        <div className="mt-3 border-t border-slate-200 pt-3">
           <p className="text-sm font-semibold text-slate-900">Doors are open</p>
           <p className="mt-1 text-sm leading-6 text-slate-600">
             Registration and venue details remain available on this page while the event is live.

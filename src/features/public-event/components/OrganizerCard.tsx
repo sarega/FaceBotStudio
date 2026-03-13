@@ -12,7 +12,7 @@ function normalizeExternalHref(value: string) {
 function LogoPanel({ name, logoUrl }: { name: string; logoUrl: string }) {
   if (logoUrl) {
     return (
-      <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+      <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
         <img
           src={logoUrl}
           alt={`${name} logo`}
@@ -27,8 +27,8 @@ function LogoPanel({ name, logoUrl }: { name: string; logoUrl: string }) {
   }
 
   return (
-    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
-      <Building2 className="h-6 w-6" />
+    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+      <Building2 className="h-5 w-5" />
     </div>
   );
 }
@@ -53,21 +53,21 @@ export function OrganizerCard({ organizer }: OrganizerCardProps) {
   );
 
   return (
-    <section className="py-4 sm:py-5">
+    <section className="py-3.5 sm:py-4">
       <div className={`flex gap-3 ${hasExtendedDetails ? "flex-col sm:flex-row" : "items-center"}`}>
         <LogoPanel name={name} logoUrl={organizer.logo_url} />
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Organized by</p>
-          <h2 className="mt-1.5 text-lg font-semibold text-slate-900">{name}</h2>
+          <h2 className="mt-1 text-base font-semibold text-slate-900 sm:text-lg">{name}</h2>
 
           {organizer.description.trim() && (
-            <p className="mt-2.5 whitespace-pre-line text-sm leading-6 text-slate-600">
+            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-600">
               {organizer.description}
             </p>
           )}
 
           {(websiteHref || facebookHref || lineHref) && (
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-2.5 flex flex-wrap gap-2">
               {websiteHref && (
                 <a
                   href={websiteHref}
@@ -105,7 +105,7 @@ export function OrganizerCard({ organizer }: OrganizerCardProps) {
           )}
 
           {organizer.contact_text.trim() && (
-            <div className="surface-subpanel mt-3 rounded-xl px-3.5 py-3.5">
+            <div className="mt-3 border-t border-slate-200 pt-3">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Contact</p>
               <p className="mt-1.5 whitespace-pre-line text-sm leading-6 text-slate-600">{organizer.contact_text}</p>
             </div>

@@ -42,13 +42,13 @@ export function SponsorsSection({ sponsors }: SponsorsSectionProps) {
   const groups = groupPublicSponsorsByTier(sponsors.entries);
 
   return (
-    <section className="py-4 sm:py-5">
+    <section className="py-3.5 sm:py-4">
       <div className="flex items-center gap-2">
         <Handshake className="h-4 w-4 text-blue-600" />
-        <h2 className="text-lg font-semibold text-slate-900">Sponsors & Partners</h2>
+        <h2 className="text-base font-semibold text-slate-900 sm:text-lg">Sponsors & Partners</h2>
       </div>
 
-      <div className="mt-4 space-y-4">
+      <div className="mt-3.5 space-y-3.5">
         {groups.map((group) => (
           <div key={group.key}>
             {group.label && (
@@ -57,13 +57,13 @@ export function SponsorsSection({ sponsors }: SponsorsSectionProps) {
               </p>
             )}
 
-            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {group.items.map((sponsor, index) => {
                 const href = normalizeExternalHref(sponsor.linkUrl);
                 const key = `${group.key}:${sponsor.name || sponsor.logoUrl || index}`;
                 const content = (
                   <>
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+                    <div className="rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2.5">
                       <SponsorLogo name={sponsor.name} logoUrl={sponsor.logoUrl} />
                     </div>
 
@@ -84,7 +84,7 @@ export function SponsorsSection({ sponsors }: SponsorsSectionProps) {
                       href={href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="public-page-control flex min-h-[7.25rem] flex-col justify-between rounded-[1.25rem] border border-slate-200 bg-white p-3.5 text-left shadow-sm transition-colors hover:border-blue-200"
+                      className="public-page-control flex min-h-[6.5rem] flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition-colors hover:border-blue-200"
                     >
                       {content}
                     </a>
@@ -94,7 +94,7 @@ export function SponsorsSection({ sponsors }: SponsorsSectionProps) {
                 return (
                   <div
                     key={key}
-                    className="flex min-h-[7.25rem] flex-col justify-between rounded-[1.25rem] border border-slate-200 bg-white p-3.5 text-left shadow-sm"
+                    className="flex min-h-[6.5rem] flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm"
                   >
                     {content}
                   </div>

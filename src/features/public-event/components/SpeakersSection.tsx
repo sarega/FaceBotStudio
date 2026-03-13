@@ -5,7 +5,7 @@ import type { PublicEventPageResponse } from "../../../types";
 function SpeakerPhoto({ name, photoUrl }: { name: string; photoUrl: string }) {
   if (photoUrl) {
     return (
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
         <img
           src={photoUrl}
           alt={name}
@@ -20,8 +20,8 @@ function SpeakerPhoto({ name, photoUrl }: { name: string; photoUrl: string }) {
   }
 
   return (
-    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
-      <UserRound className="h-6 w-6" />
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+      <UserRound className="h-5 w-5" />
     </div>
   );
 }
@@ -35,35 +35,32 @@ export function SpeakersSection({ speakers }: SpeakersSectionProps) {
   if (visibleSpeakers.length === 0) return null;
 
   return (
-    <section className="py-4 sm:py-5">
+    <section className="py-3.5 sm:py-4">
       <div className="flex items-center gap-2">
         <Mic2 className="h-4 w-4 text-blue-600" />
-        <h2 className="text-lg font-semibold text-slate-900">Speakers</h2>
+        <h2 className="text-base font-semibold text-slate-900 sm:text-lg">Speakers</h2>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-3 divide-y divide-slate-200">
         {visibleSpeakers.map((speaker, index) => (
           <article
             key={`${speaker.name}:${speaker.photoUrl}:${index}`}
-            className="rounded-[1.25rem] border border-slate-200 bg-white p-3.5 shadow-sm"
+            className={`flex gap-3 ${index === 0 ? "pt-0" : "pt-3"}`}
           >
-            <div className="flex items-start gap-3">
-              <SpeakerPhoto name={speaker.name} photoUrl={speaker.photoUrl} />
-              <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-slate-900 sm:text-[15px]">{speaker.name}</h3>
-                {(speaker.title || speaker.company) && (
-                  <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
-                    {[speaker.title, speaker.company].filter(Boolean).join(" · ")}
-                  </p>
-                )}
-              </div>
+            <SpeakerPhoto name={speaker.name} photoUrl={speaker.photoUrl} />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-slate-900 sm:text-[15px]">{speaker.name}</h3>
+              {(speaker.title || speaker.company) && (
+                <p className="mt-0.5 text-xs text-slate-500 sm:text-sm">
+                  {[speaker.title, speaker.company].filter(Boolean).join(" · ")}
+                </p>
+              )}
+              {speaker.bio && (
+                <p className="mt-1.5 whitespace-pre-line text-sm leading-6 text-slate-600">
+                  {speaker.bio}
+                </p>
+              )}
             </div>
-
-            {speaker.bio && (
-              <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-600">
-                {speaker.bio}
-              </p>
-            )}
           </article>
         ))}
       </div>
