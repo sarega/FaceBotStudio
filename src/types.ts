@@ -34,6 +34,7 @@ export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" 
 export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram" | "web_chat";
 export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
+export type OrganizerVerificationStatus = "draft" | "pending_review" | "verified" | "rejected" | "needs_update";
 
 export interface AuthUser {
   id: string;
@@ -45,6 +46,24 @@ export interface AuthUser {
   is_active: boolean;
   created_at: string;
   last_login_at: string | null;
+}
+
+export interface OrganizerProfileRecord {
+  organization_id: string;
+  organization_name: string;
+  organization_slug: string;
+  legal_name: string;
+  display_name: string;
+  description: string;
+  logo_url: string;
+  website_url: string;
+  facebook_url: string;
+  line_url: string;
+  contact_text: string;
+  verification_status: OrganizerVerificationStatus;
+  verification_notes: string;
+  public_profile_source: "organization_profile" | "event_settings_fallback" | "organization_name_fallback" | "empty";
+  applies_to_all_events: boolean;
 }
 
 export interface CheckinSessionRecord {
@@ -78,6 +97,8 @@ export interface EventRecord {
   id: string;
   name: string;
   slug: string;
+  organizer_id: string;
+  organizer_name?: string;
   poster_url?: string;
   status: ManualEventStatus;
   effective_status: EventStatus;

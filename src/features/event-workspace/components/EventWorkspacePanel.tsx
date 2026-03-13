@@ -205,7 +205,7 @@ export function EventWorkspacePanel({
       className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${
         collapsed
           ? "p-3 sm:p-3"
-          : "flex flex-col space-y-4 p-4 sm:p-5 xl:h-[calc(100dvh-10rem)] xl:min-h-[42rem]"
+          : "flex flex-col space-y-4 p-4 sm:p-5 xl:max-h-[calc(100dvh-10rem)] xl:overflow-hidden"
       }`}
     >
       <div className={`flex justify-between gap-3 ${collapsed ? "items-center" : "items-start"}`}>
@@ -330,7 +330,7 @@ export function EventWorkspacePanel({
         </div>
       </div>
 
-      <div className={collapsed ? "space-y-5" : "min-h-0 flex-1 space-y-5 overflow-y-auto pr-1"}>
+      <div className={collapsed ? "space-y-5" : "min-h-0 flex-1 space-y-5 overflow-y-auto pr-1 xl:overscroll-contain"}>
         {filteredEventWorkspaceEvents.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
             {deferredEventListQuery

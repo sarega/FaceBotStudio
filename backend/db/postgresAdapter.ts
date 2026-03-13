@@ -37,6 +37,8 @@ import type {
   LlmUsageModelSummaryRow,
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
+  OrganizerProfileRow,
+  OrganizerVerificationStatus,
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
@@ -46,6 +48,7 @@ import type {
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
+  UpdateOrganizerProfileInput,
   UpsertChannelAccountInput,
   UpsertEventDocumentInput,
   UpsertFacebookPageInput,
@@ -166,11 +169,34 @@ function mapEventBaseRow(row: Record<string, unknown>) {
     id: String(row.id),
     name: String(row.name),
     slug: String(row.slug),
+    organizer_id: typeof row.organizer_id === "string" && row.organizer_id.trim() ? row.organizer_id : DEFAULT_ORGANIZATION_ID,
+    organizer_name: typeof row.organizer_name === "string" && row.organizer_name.trim() ? row.organizer_name : DEFAULT_ORGANIZATION_NAME,
     status: (String(row.status || "active") as ManualEventStatus),
     is_default: Boolean(row.is_default),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
+}
+
+function mapOrganizerProfileRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    id: String(row.id || ""),
+    name: String(row.name || ""),
+    slug: String(row.slug || ""),
+    legal_name: typeof row.legal_name === "string" && row.legal_name ? row.legal_name : null,
+    public_display_name: typeof row.public_display_name === "string" && row.public_display_name ? row.public_display_name : null,
+    public_description: typeof row.public_description === "string" && row.public_description ? row.public_description : null,
+    public_logo_url: typeof row.public_logo_url === "string" && row.public_logo_url ? row.public_logo_url : null,
+    public_website_url: typeof row.public_website_url === "string" && row.public_website_url ? row.public_website_url : null,
+    public_facebook_url: typeof row.public_facebook_url === "string" && row.public_facebook_url ? row.public_facebook_url : null,
+    public_line_url: typeof row.public_line_url === "string" && row.public_line_url ? row.public_line_url : null,
+    public_contact_text: typeof row.public_contact_text === "string" && row.public_contact_text ? row.public_contact_text : null,
+    verification_status: String(row.verification_status || "draft") as OrganizerVerificationStatus,
+    verification_notes: typeof row.verification_notes === "string" && row.verification_notes ? row.verification_notes : null,
+    created_at: String(row.created_at || ""),
+    updated_at: String(row.updated_at || row.created_at || ""),
+  } satisfies OrganizerProfileRow;
 }
 
 function mapPageRow(row: Record<string, unknown>) {
@@ -835,14 +861,38 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async listEvents() {
     const result = await this.pool.query<Record<string, unknown>>(
-      "SELECT id, name, slug, status, is_default, created_at::text AS created_at, updated_at::text AS updated_at FROM events ORDER BY is_default DESC, created_at ASC",
+      `SELECT
+         e.id,
+         e.name,
+         e.slug,
+         e.status,
+         e.organizer_id,
+         o.name AS organizer_name,
+         e.is_default,
+         e.created_at::text AS created_at,
+         e.updated_at::text AS updated_at
+       FROM events e
+       LEFT JOIN organizations o ON o.id = e.organizer_id
+       ORDER BY e.is_default DESC, e.created_at ASC`,
     );
     return Promise.all(result.rows.map((row) => this.hydrateEventRow(row)));
   }
 
   async getEventById(eventId: string) {
     const result = await this.pool.query<Record<string, unknown>>(
-      "SELECT id, name, slug, status, is_default, created_at::text AS created_at, updated_at::text AS updated_at FROM events WHERE id = $1",
+      `SELECT
+         e.id,
+         e.name,
+         e.slug,
+         e.status,
+         e.organizer_id,
+         o.name AS organizer_name,
+         e.is_default,
+         e.created_at::text AS created_at,
+         e.updated_at::text AS updated_at
+       FROM events e
+       LEFT JOIN organizations o ON o.id = e.organizer_id
+       WHERE e.id = $1`,
       [String(eventId || "").trim()],
     );
     return result.rows[0] ? this.hydrateEventRow(result.rows[0]) : undefined;
@@ -852,13 +902,14 @@ export class PostgresAppDatabase implements AppDatabase {
     const id = generateEntityId("evt");
     const baseName = String(input.name || "").trim() || "New Event";
     const slug = await this.uniqueEventSlug(baseName);
+    const organizerId = String(input.organizer_id || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query(
-        `INSERT INTO events (id, name, slug, status, is_default)
-         VALUES ($1, $2, $3, 'pending', FALSE)`,
-        [id, baseName, slug],
+        `INSERT INTO events (id, name, slug, status, organizer_id, is_default)
+         VALUES ($1, $2, $3, 'pending', $4, FALSE)`,
+        [id, baseName, slug, organizerId],
       );
       for (const key of EVENT_SETTING_KEYS) {
         await client.query(
@@ -895,6 +946,10 @@ export class PostgresAppDatabase implements AppDatabase {
       values.push(input.status.trim());
       updates.push(`status = $${values.length}`);
     }
+    if (typeof input.organizer_id === "string" && input.organizer_id.trim()) {
+      values.push(input.organizer_id.trim());
+      updates.push(`organizer_id = $${values.length}`);
+    }
     if (!updates.length) return false;
     updates.push("updated_at = CURRENT_TIMESTAMP");
     values.push(String(eventId || "").trim());
@@ -903,6 +958,79 @@ export class PostgresAppDatabase implements AppDatabase {
       values,
     );
     return result.rowCount > 0;
+  }
+
+  async getOrganizerProfile(organizationId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+         id,
+         name,
+         slug,
+         legal_name,
+         public_display_name,
+         public_description,
+         public_logo_url,
+         public_website_url,
+         public_facebook_url,
+         public_line_url,
+         public_contact_text,
+         verification_status,
+         verification_notes,
+         created_at::text AS created_at,
+         updated_at::text AS updated_at
+       FROM organizations
+       WHERE id = $1`,
+      [String(organizationId || "").trim()],
+    );
+    return mapOrganizerProfileRow(result.rows[0]);
+  }
+
+  async updateOrganizerProfile(organizationId: string, input: UpdateOrganizerProfileInput) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `UPDATE organizations
+       SET legal_name = $2,
+           public_display_name = $3,
+           public_description = $4,
+           public_logo_url = $5,
+           public_website_url = $6,
+           public_facebook_url = $7,
+           public_line_url = $8,
+           public_contact_text = $9,
+           verification_status = $10,
+           verification_notes = $11,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING
+         id,
+         name,
+         slug,
+         legal_name,
+         public_display_name,
+         public_description,
+         public_logo_url,
+         public_website_url,
+         public_facebook_url,
+         public_line_url,
+         public_contact_text,
+         verification_status,
+         verification_notes,
+         created_at::text AS created_at,
+         updated_at::text AS updated_at`,
+      [
+        String(organizationId || "").trim(),
+        input.legal_name ?? null,
+        input.public_display_name ?? null,
+        input.public_description ?? null,
+        input.public_logo_url ?? null,
+        input.public_website_url ?? null,
+        input.public_facebook_url ?? null,
+        input.public_line_url ?? null,
+        input.public_contact_text ?? null,
+        input.verification_status ?? "draft",
+        input.verification_notes ?? null,
+      ],
+    );
+    return mapOrganizerProfileRow(result.rows[0]);
   }
 
   async getEventDeletionImpact(eventId: string) {
@@ -2207,14 +2335,18 @@ export class PostgresAppDatabase implements AppDatabase {
       || DEFAULT_SETTINGS_ENTRIES.event_name,
     );
     await this.pool.query(
-      `INSERT INTO events (id, name, slug, status, is_default)
-       VALUES ($1, $2, $3, 'active', TRUE)
+      `INSERT INTO events (id, name, slug, status, organizer_id, is_default)
+       VALUES ($1, $2, $3, 'active', $4, TRUE)
        ON CONFLICT (id) DO NOTHING`,
-      [DEFAULT_EVENT_ID, defaultName, "default-event"],
+      [DEFAULT_EVENT_ID, defaultName, "default-event", DEFAULT_ORGANIZATION_ID],
     );
     await this.pool.query(
-      "UPDATE events SET name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-      [defaultName, DEFAULT_EVENT_ID],
+      `UPDATE events
+       SET name = $1,
+           organizer_id = COALESCE(NULLIF(BTRIM(organizer_id), ''), $2),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [defaultName, DEFAULT_ORGANIZATION_ID, DEFAULT_EVENT_ID],
     );
 
     for (const key of EVENT_SETTING_KEYS) {
@@ -2237,6 +2369,10 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.pool.query(
       "UPDATE messages SET event_id = $1 WHERE event_id IS NULL OR BTRIM(event_id) = ''",
       [DEFAULT_EVENT_ID],
+    );
+    await this.pool.query(
+      "UPDATE events SET organizer_id = $1 WHERE organizer_id IS NULL OR BTRIM(organizer_id) = ''",
+      [DEFAULT_ORGANIZATION_ID],
     );
   }
 

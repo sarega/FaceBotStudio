@@ -80,6 +80,7 @@ import {
   type EventDocumentChunkEmbeddingRow,
   type MessageAttachmentRow,
   type MessageRow,
+  type OrganizerProfileRow,
   type RegistrationInput,
   type RegistrationRow,
   type RegistrationStatus,
@@ -3466,6 +3467,61 @@ async function resolvePublicEventBySlug(rawSlug: string) {
   ) || null;
 }
 
+function hasOrganizerProfilePublicContent(profile?: OrganizerProfileRow) {
+  if (!profile) return false;
+  return Boolean(
+    normalizeOptionalText(profile.public_display_name)
+    || normalizeOptionalText(profile.public_description)
+    || normalizeOptionalText(profile.public_logo_url)
+    || normalizeOptionalText(profile.public_website_url)
+    || normalizeOptionalText(profile.public_facebook_url)
+    || normalizeOptionalText(profile.public_line_url)
+    || normalizeOptionalText(profile.public_contact_text),
+  );
+}
+
+function buildOrganizerProfileResponse(
+  profile: OrganizerProfileRow | undefined,
+  fallbackSettings?: Record<string, string> | null,
+  fallbackOrganizationId = "",
+  fallbackOrganizationName = "",
+) {
+  const fallbackName = normalizeOptionalText(fallbackSettings?.event_public_organizer_name);
+  const fallbackDescription = normalizeOptionalText(fallbackSettings?.event_public_organizer_description);
+  const fallbackLogoUrl = normalizeOptionalText(fallbackSettings?.event_public_organizer_logo_url);
+  const fallbackWebsiteUrl = normalizeOptionalText(fallbackSettings?.event_public_organizer_website_url);
+  const fallbackFacebookUrl = normalizeOptionalText(fallbackSettings?.event_public_organizer_facebook_url);
+  const fallbackLineUrl = normalizeOptionalText(fallbackSettings?.event_public_organizer_line_url);
+  const fallbackContactText = normalizeOptionalText(fallbackSettings?.event_public_organizer_contact_text);
+  const profileHasPublicContent = hasOrganizerProfilePublicContent(profile);
+  const nameFromProfile = normalizeOptionalText(profile?.public_display_name) || normalizeOptionalText(profile?.name);
+  const source = profileHasPublicContent
+    ? "organization_profile"
+    : fallbackName || fallbackDescription || fallbackLogoUrl || fallbackWebsiteUrl || fallbackFacebookUrl || fallbackLineUrl || fallbackContactText
+    ? "event_settings_fallback"
+    : nameFromProfile || fallbackOrganizationName
+    ? "organization_name_fallback"
+    : "empty";
+
+  return {
+    organization_id: normalizeOptionalText(profile?.id) || fallbackOrganizationId,
+    organization_name: normalizeOptionalText(profile?.name) || fallbackOrganizationName,
+    organization_slug: normalizeOptionalText(profile?.slug),
+    legal_name: normalizeOptionalText(profile?.legal_name),
+    display_name: nameFromProfile || fallbackName || fallbackOrganizationName,
+    description: normalizeOptionalText(profile?.public_description) || fallbackDescription,
+    logo_url: normalizeOptionalText(profile?.public_logo_url) || fallbackLogoUrl,
+    website_url: normalizeOptionalText(profile?.public_website_url) || fallbackWebsiteUrl,
+    facebook_url: normalizeOptionalText(profile?.public_facebook_url) || fallbackFacebookUrl,
+    line_url: normalizeOptionalText(profile?.public_line_url) || fallbackLineUrl,
+    contact_text: normalizeOptionalText(profile?.public_contact_text) || fallbackContactText,
+    verification_status: normalizeOptionalText(profile?.verification_status) || "draft",
+    verification_notes: normalizeOptionalText(profile?.verification_notes),
+    public_profile_source: source as "organization_profile" | "event_settings_fallback" | "organization_name_fallback" | "empty",
+    applies_to_all_events: true,
+  };
+}
+
 async function buildPublicEventPagePayload(
   event: Awaited<ReturnType<typeof appDb.getEventById>>,
   settings: Record<string, string>,
@@ -3479,6 +3535,13 @@ async function buildPublicEventPagePayload(
   const sponsorEntries = parsePublicSponsorEntries(settings.event_public_sponsors_json);
   const speakerEntries = parsePublicSpeakerEntries(settings.event_public_speakers_json);
   const sectionEntries = parsePublicEventSections(settings.event_public_sections_json);
+  const organizerProfile = await appDb.getOrganizerProfile(event.organizer_id);
+  const organizer = buildOrganizerProfileResponse(
+    organizerProfile,
+    settings,
+    event.organizer_id,
+    event.organizer_name || "",
+  );
   const publicSlug = resolveEnglishPublicSlug({
     customSlug: settings.event_public_slug,
     eventName: String(settings.event_name || event.name || ""),
@@ -3549,13 +3612,13 @@ async function buildPublicEventPagePayload(
       contact_url: String(settings.event_public_brand_contact_url || "").trim(),
     },
     organizer: {
-      name: String(settings.event_public_organizer_name || "").trim(),
-      description: String(settings.event_public_organizer_description || "").trim(),
-      logo_url: String(settings.event_public_organizer_logo_url || "").trim(),
-      website_url: String(settings.event_public_organizer_website_url || "").trim(),
-      facebook_url: String(settings.event_public_organizer_facebook_url || "").trim(),
-      line_url: String(settings.event_public_organizer_line_url || "").trim(),
-      contact_text: String(settings.event_public_organizer_contact_text || "").trim(),
+      name: organizer.display_name,
+      description: organizer.description,
+      logo_url: organizer.logo_url,
+      website_url: organizer.website_url,
+      facebook_url: organizer.facebook_url,
+      line_url: organizer.line_url,
+      contact_text: organizer.contact_text,
     },
     sponsors: {
       entries: sponsorEntries,
@@ -11001,7 +11064,8 @@ async function startServer() {
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
-      const event = await appDb.createEvent({ name });
+      const organizerId = req.auth?.user.organization_id || "";
+      const event = await appDb.createEvent({ name, organizer_id: organizerId });
       await recordAudit(req, "event.created", "event", event.id, { name: event.name });
       return res.status(201).json(event);
     } catch (error) {
@@ -11037,7 +11101,10 @@ async function startServer() {
           return respondValidationError(res, issues);
         }
 
-        const clonedEvent = await appDb.createEvent({ name: cloneName });
+        const clonedEvent = await appDb.createEvent({
+          name: cloneName,
+          organizer_id: sourceEvent.organizer_id || req.auth?.user.organization_id,
+        });
         const clonedSettings = Object.fromEntries(
           EVENT_SETTING_KEYS.map((key) => [key, sourceSettings[key] ?? ""]),
         );
@@ -12259,6 +12326,88 @@ async function startServer() {
       res.status(500).send("Failed to render ticket");
     }
   });
+
+  app.get(
+    "/api/organizer-profile",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const event = await appDb.getEventById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+      const fallbackSettings = await getSettingsMap(eventId);
+      const organizerProfile = await appDb.getOrganizerProfile(event.organizer_id);
+      return res.json(
+        buildOrganizerProfileResponse(
+          organizerProfile,
+          fallbackSettings,
+          event.organizer_id,
+          event.organizer_name || req.auth?.user.organization_name || "",
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to fetch organizer profile:", error);
+      return res.status(500).json({ error: "Failed to fetch organizer profile" });
+    }
+    },
+  );
+
+  app.post(
+    "/api/organizer-profile",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const event = await appDb.getEventById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+
+      const body = readObjectBody(req);
+      const input = {
+        legal_name: normalizeOptionalText(readOptionalString(body, "legal_name", 180)) || null,
+        public_display_name: normalizeOptionalText(readOptionalString(body, "display_name", 180)) || null,
+        public_description: normalizeOptionalText(readOptionalString(body, "description", 2000)) || null,
+        public_logo_url: normalizeOptionalText(readOptionalString(body, "logo_url", 2048)) || null,
+        public_website_url: normalizeOptionalText(readOptionalString(body, "website_url", 2048)) || null,
+        public_facebook_url: normalizeOptionalText(readOptionalString(body, "facebook_url", 2048)) || null,
+        public_line_url: normalizeOptionalText(readOptionalString(body, "line_url", 2048)) || null,
+        public_contact_text: normalizeOptionalText(readOptionalString(body, "contact_text", 2000)) || null,
+      };
+
+      const existingProfile = await appDb.getOrganizerProfile(event.organizer_id);
+      const updatedProfile = await appDb.updateOrganizerProfile(event.organizer_id, {
+        ...input,
+        verification_status: existingProfile?.verification_status || "draft",
+        verification_notes: existingProfile?.verification_notes || null,
+      });
+      if (!updatedProfile) {
+        return res.status(404).json({ error: "Organizer not found" });
+      }
+
+      await recordAudit(req, "organizer.profile_updated", "organization", event.organizer_id, {
+        event_id: eventId,
+        organizer_id: event.organizer_id,
+      });
+
+      return res.json(
+        buildOrganizerProfileResponse(
+          updatedProfile,
+          null,
+          event.organizer_id,
+          event.organizer_name || req.auth?.user.organization_name || "",
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to update organizer profile:", error);
+      return res.status(500).json({ error: "Failed to update organizer profile" });
+    }
+    },
+  );
 
   app.get(
     "/api/settings",

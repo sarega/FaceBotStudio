@@ -34,6 +34,8 @@ import type {
   LlmUsageModelSummaryRow,
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
+  OrganizerProfileRow,
+  OrganizerVerificationStatus,
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
@@ -43,6 +45,7 @@ import type {
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
+  UpdateOrganizerProfileInput,
   UpsertChannelAccountInput,
   UpsertEventDocumentInput,
   UpsertFacebookPageInput,
@@ -168,11 +171,34 @@ function mapEventBaseRow(row: Record<string, unknown>) {
     id: String(row.id),
     name: String(row.name),
     slug: String(row.slug),
+    organizer_id: typeof row.organizer_id === "string" && row.organizer_id.trim() ? row.organizer_id : DEFAULT_ORGANIZATION_ID,
+    organizer_name: typeof row.organizer_name === "string" && row.organizer_name.trim() ? row.organizer_name : DEFAULT_ORGANIZATION_NAME,
     status: (String(row.status || "active") as ManualEventStatus),
     is_default: Boolean(row.is_default),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
+}
+
+function mapOrganizerProfileRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    id: String(row.id || ""),
+    name: String(row.name || ""),
+    slug: String(row.slug || ""),
+    legal_name: typeof row.legal_name === "string" && row.legal_name ? row.legal_name : null,
+    public_display_name: typeof row.public_display_name === "string" && row.public_display_name ? row.public_display_name : null,
+    public_description: typeof row.public_description === "string" && row.public_description ? row.public_description : null,
+    public_logo_url: typeof row.public_logo_url === "string" && row.public_logo_url ? row.public_logo_url : null,
+    public_website_url: typeof row.public_website_url === "string" && row.public_website_url ? row.public_website_url : null,
+    public_facebook_url: typeof row.public_facebook_url === "string" && row.public_facebook_url ? row.public_facebook_url : null,
+    public_line_url: typeof row.public_line_url === "string" && row.public_line_url ? row.public_line_url : null,
+    public_contact_text: typeof row.public_contact_text === "string" && row.public_contact_text ? row.public_contact_text : null,
+    verification_status: String(row.verification_status || "draft") as OrganizerVerificationStatus,
+    verification_notes: typeof row.verification_notes === "string" && row.verification_notes ? row.verification_notes : null,
+    created_at: String(row.created_at || ""),
+    updated_at: String(row.updated_at || row.created_at || ""),
+  } satisfies OrganizerProfileRow;
 }
 
 function mapPageRow(row: Record<string, unknown>) {
@@ -367,7 +393,18 @@ export class SqliteAppDatabase implements AppDatabase {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         slug TEXT NOT NULL UNIQUE,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        legal_name TEXT,
+        public_display_name TEXT,
+        public_description TEXT,
+        public_logo_url TEXT,
+        public_website_url TEXT,
+        public_facebook_url TEXT,
+        public_line_url TEXT,
+        public_contact_text TEXT,
+        verification_status TEXT NOT NULL DEFAULT 'draft',
+        verification_notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -465,10 +502,12 @@ export class SqliteAppDatabase implements AppDatabase {
         name TEXT NOT NULL,
         slug TEXT NOT NULL UNIQUE,
         status TEXT NOT NULL DEFAULT 'active',
+        organizer_id TEXT NOT NULL DEFAULT 'org_default',
         is_default INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (organizer_id) REFERENCES organizations(id) ON DELETE RESTRICT
       );
       CREATE TABLE IF NOT EXISTS event_settings (
         event_id TEXT NOT NULL,
@@ -585,8 +624,34 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("event_document_chunks", "embedding_vector", "TEXT");
     this.ensureColumn("event_document_chunks", "embedding_dimensions", "INTEGER");
     this.ensureColumn("events", "status", "TEXT NOT NULL DEFAULT 'active'");
+    this.ensureColumn("events", "organizer_id", "TEXT");
+    this.ensureColumn("organizations", "legal_name", "TEXT");
+    this.ensureColumn("organizations", "public_display_name", "TEXT");
+    this.ensureColumn("organizations", "public_description", "TEXT");
+    this.ensureColumn("organizations", "public_logo_url", "TEXT");
+    this.ensureColumn("organizations", "public_website_url", "TEXT");
+    this.ensureColumn("organizations", "public_facebook_url", "TEXT");
+    this.ensureColumn("organizations", "public_line_url", "TEXT");
+    this.ensureColumn("organizations", "public_contact_text", "TEXT");
+    this.ensureColumn("organizations", "verification_status", "TEXT NOT NULL DEFAULT 'draft'");
+    this.ensureColumn("organizations", "verification_notes", "TEXT");
+    this.ensureColumn("organizations", "updated_at", "DATETIME");
     this.ensureColumn("checkin_sessions", "exchanged_at", "DATETIME");
     this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_events_organizer_id ON events (organizer_id);
+
+      UPDATE events
+      SET organizer_id = '${DEFAULT_ORGANIZATION_ID}'
+      WHERE organizer_id IS NULL OR TRIM(organizer_id) = '';
+
+      UPDATE organizations
+      SET verification_status = 'draft'
+      WHERE verification_status IS NULL OR TRIM(verification_status) = '';
+
+      UPDATE organizations
+      SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)
+      WHERE updated_at IS NULL OR TRIM(updated_at) = '';
+
       INSERT OR IGNORE INTO channel_event_assignments (channel_id, event_id)
       SELECT id, event_id
       FROM channel_accounts
@@ -1082,14 +1147,38 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async listEvents() {
     const rows = this.db.prepare(
-      "SELECT id, name, slug, status, is_default, created_at, updated_at FROM events ORDER BY is_default DESC, created_at ASC",
+      `SELECT
+         e.id,
+         e.name,
+         e.slug,
+         e.status,
+         e.organizer_id,
+         o.name AS organizer_name,
+         e.is_default,
+         e.created_at,
+         e.updated_at
+       FROM events e
+       LEFT JOIN organizations o ON o.id = e.organizer_id
+       ORDER BY e.is_default DESC, e.created_at ASC`,
     ).all() as Array<Record<string, unknown>>;
     return Promise.all(rows.map((row) => this.hydrateEventRow(row)));
   }
 
   async getEventById(eventId: string) {
     const row = this.db.prepare(
-      "SELECT id, name, slug, status, is_default, created_at, updated_at FROM events WHERE id = ?",
+      `SELECT
+         e.id,
+         e.name,
+         e.slug,
+         e.status,
+         e.organizer_id,
+         o.name AS organizer_name,
+         e.is_default,
+         e.created_at,
+         e.updated_at
+       FROM events e
+       LEFT JOIN organizations o ON o.id = e.organizer_id
+       WHERE e.id = ?`,
     ).get(String(eventId || "").trim()) as Record<string, unknown> | undefined;
     return row ? this.hydrateEventRow(row) : undefined;
   }
@@ -1098,10 +1187,11 @@ export class SqliteAppDatabase implements AppDatabase {
     const id = generateEntityId("evt");
     const baseName = String(input.name || "").trim() || "New Event";
     const slug = this.uniqueEventSlug(baseName);
+    const organizerId = String(input.organizer_id || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
     this.db.prepare(
-      `INSERT INTO events (id, name, slug, status, is_default, is_active, updated_at)
-       VALUES (?, ?, ?, 'pending', 0, 1, CURRENT_TIMESTAMP)`,
-    ).run(id, baseName, slug);
+      `INSERT INTO events (id, name, slug, status, organizer_id, is_default, is_active, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, 0, 1, CURRENT_TIMESTAMP)`,
+    ).run(id, baseName, slug, organizerId);
 
     await this.upsertSettings(
       Object.fromEntries(EVENT_SETTING_KEYS.map((key) => [key, NEW_EVENT_TEMPLATE_ENTRIES[key] ?? DEFAULT_SETTINGS_ENTRIES[key]])),
@@ -1127,11 +1217,73 @@ export class SqliteAppDatabase implements AppDatabase {
       updates.push("status = ?");
       values.push(input.status.trim());
     }
+    if (typeof input.organizer_id === "string" && input.organizer_id.trim()) {
+      updates.push("organizer_id = ?");
+      values.push(input.organizer_id.trim());
+    }
     if (!updates.length) return false;
     updates.push("updated_at = CURRENT_TIMESTAMP");
     values.push(String(eventId || "").trim());
     const result = this.db.prepare(`UPDATE events SET ${updates.join(", ")} WHERE id = ?`).run(...values);
     return result.changes > 0;
+  }
+
+  async getOrganizerProfile(organizationId: string) {
+    const row = this.db.prepare(
+      `SELECT
+         id,
+         name,
+         slug,
+         legal_name,
+         public_display_name,
+         public_description,
+         public_logo_url,
+         public_website_url,
+         public_facebook_url,
+         public_line_url,
+         public_contact_text,
+         verification_status,
+         verification_notes,
+         created_at,
+         updated_at
+       FROM organizations
+       WHERE id = ?`,
+    ).get(String(organizationId || "").trim()) as Record<string, unknown> | undefined;
+    return mapOrganizerProfileRow(row);
+  }
+
+  async updateOrganizerProfile(organizationId: string, input: UpdateOrganizerProfileInput) {
+    const updates = [
+      "legal_name = ?",
+      "public_display_name = ?",
+      "public_description = ?",
+      "public_logo_url = ?",
+      "public_website_url = ?",
+      "public_facebook_url = ?",
+      "public_line_url = ?",
+      "public_contact_text = ?",
+      "verification_status = ?",
+      "verification_notes = ?",
+      "updated_at = CURRENT_TIMESTAMP",
+    ];
+    const values = [
+      input.legal_name ?? null,
+      input.public_display_name ?? null,
+      input.public_description ?? null,
+      input.public_logo_url ?? null,
+      input.public_website_url ?? null,
+      input.public_facebook_url ?? null,
+      input.public_line_url ?? null,
+      input.public_contact_text ?? null,
+      input.verification_status ?? "draft",
+      input.verification_notes ?? null,
+      String(organizationId || "").trim(),
+    ];
+    const result = this.db.prepare(
+      `UPDATE organizations SET ${updates.join(", ")} WHERE id = ?`,
+    ).run(...values);
+    if (result.changes <= 0) return undefined;
+    return this.getOrganizerProfile(organizationId);
   }
 
   async getEventDeletionImpact(eventId: string) {
@@ -2314,12 +2466,16 @@ export class SqliteAppDatabase implements AppDatabase {
         || DEFAULT_SETTINGS_ENTRIES.event_name,
       );
     this.db.prepare(
-      `INSERT OR IGNORE INTO events (id, name, slug, status, is_default, is_active)
-       VALUES (?, ?, ?, 'active', 1, 1)`,
-    ).run(DEFAULT_EVENT_ID, defaultName, "default-event");
+      `INSERT OR IGNORE INTO events (id, name, slug, status, organizer_id, is_default, is_active)
+       VALUES (?, ?, ?, 'active', ?, 1, 1)`,
+    ).run(DEFAULT_EVENT_ID, defaultName, "default-event", DEFAULT_ORGANIZATION_ID);
     this.db.prepare(
-      `UPDATE events SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-    ).run(defaultName, DEFAULT_EVENT_ID);
+      `UPDATE events
+       SET name = ?,
+           organizer_id = COALESCE(NULLIF(TRIM(organizer_id), ''), ?),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(defaultName, DEFAULT_ORGANIZATION_ID, DEFAULT_EVENT_ID);
 
     const existingEventSettingsMap = Object.fromEntries(existingEventSettings.map((row) => [row.key, row.value])) as Record<string, string>;
     const legacyGlobalSettingsMap = Object.fromEntries(legacyGlobalEventSettings.map((row) => [row.key, row.value])) as Record<string, string>;
@@ -2338,6 +2494,9 @@ export class SqliteAppDatabase implements AppDatabase {
 
     this.db.prepare("UPDATE registrations SET event_id = ? WHERE event_id IS NULL OR TRIM(event_id) = ''").run(DEFAULT_EVENT_ID);
     this.db.prepare("UPDATE messages SET event_id = ? WHERE event_id IS NULL OR TRIM(event_id) = ''").run(DEFAULT_EVENT_ID);
+    this.db.prepare(
+      "UPDATE events SET organizer_id = ? WHERE organizer_id IS NULL OR TRIM(organizer_id) = ''",
+    ).run(DEFAULT_ORGANIZATION_ID);
   }
 
   private async bootstrapChannelAccounts() {

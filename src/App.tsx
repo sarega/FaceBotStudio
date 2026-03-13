@@ -94,7 +94,7 @@ import { RegistrationsScreen } from "./features/registrations/components/Registr
 import { SettingsScreen } from "./features/settings/components/SettingsScreen";
 import { TestConsoleScreen } from "./features/test/components/TestConsoleScreen";
 import { TeamAccessPanel } from "./features/team/components/TeamAccessPanel";
-import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
+import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, OrganizerProfileRecord, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
@@ -2252,6 +2252,18 @@ const EVENT_MAIL_SETTINGS_KEYS = [
   ...EMAIL_TEMPLATE_SETTINGS_KEYS,
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
+const ORGANIZER_PROFILE_SETTINGS_KEYS = [
+  "event_public_organizer_name",
+  "event_public_organizer_description",
+  "event_public_organizer_logo_url",
+  "event_public_organizer_website_url",
+  "event_public_organizer_facebook_url",
+  "event_public_organizer_line_url",
+  "event_public_organizer_contact_text",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+const ORGANIZER_PROFILE_SETTINGS_KEY_SET = new Set<keyof Settings>(ORGANIZER_PROFILE_SETTINGS_KEYS);
+
 const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_page_enabled",
   "event_public_show_seat_availability",
@@ -2278,17 +2290,15 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_brand_about_url",
   "event_public_brand_privacy_url",
   "event_public_brand_contact_url",
-  "event_public_organizer_name",
-  "event_public_organizer_description",
-  "event_public_organizer_logo_url",
-  "event_public_organizer_website_url",
-  "event_public_organizer_facebook_url",
-  "event_public_organizer_line_url",
-  "event_public_organizer_contact_text",
+  ...ORGANIZER_PROFILE_SETTINGS_KEYS,
   "event_public_sponsors_json",
   "event_public_sections_json",
   "event_public_speakers_json",
 ] as const satisfies ReadonlyArray<keyof Settings>;
+
+const EVENT_PUBLIC_EVENT_SETTING_KEYS = EVENT_PUBLIC_SETTINGS_KEYS.filter(
+  (key) => !ORGANIZER_PROFILE_SETTINGS_KEY_SET.has(key),
+) as Array<keyof Settings>;
 
 const EVENT_CONTEXT_SETTINGS_KEYS = ["context"] as const satisfies ReadonlyArray<keyof Settings>;
 
@@ -2648,6 +2658,32 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
   } satisfies Settings;
 }
 
+function applyOrganizerProfileToSettings(current: Settings, profile: OrganizerProfileRecord | null) {
+  if (!profile) return current;
+  return {
+    ...current,
+    event_public_organizer_name: profile.display_name || profile.organization_name || "",
+    event_public_organizer_description: profile.description,
+    event_public_organizer_logo_url: profile.logo_url,
+    event_public_organizer_website_url: profile.website_url,
+    event_public_organizer_facebook_url: profile.facebook_url,
+    event_public_organizer_line_url: profile.line_url,
+    event_public_organizer_contact_text: profile.contact_text,
+  };
+}
+
+function buildOrganizerProfilePayloadFromSettings(source: Settings) {
+  return {
+    display_name: source.event_public_organizer_name.trim(),
+    description: source.event_public_organizer_description.trim(),
+    logo_url: source.event_public_organizer_logo_url.trim(),
+    website_url: source.event_public_organizer_website_url.trim(),
+    facebook_url: source.event_public_organizer_facebook_url.trim(),
+    line_url: source.event_public_organizer_line_url.trim(),
+    contact_text: source.event_public_organizer_contact_text.trim(),
+  };
+}
+
 function normalizeSearchQuery(value: string | null | undefined) {
   return String(value || "").trim().toLowerCase();
 }
@@ -2814,6 +2850,7 @@ export default function App() {
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
   const [savedSettings, setSavedSettings] = useState<Settings>(INITIAL_SETTINGS);
+  const [organizerProfile, setOrganizerProfile] = useState<OrganizerProfileRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
@@ -5185,6 +5222,16 @@ export default function App() {
     return match?.[0] || "";
   };
 
+  const loadOrganizerProfile = async (eventId: string) => {
+    if (!eventId) return null;
+    const res = await apiFetch(`/api/organizer-profile?event_id=${encodeURIComponent(eventId)}`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error((data as { error?: string } | null)?.error || "Failed to fetch organizer profile");
+    }
+    return data as OrganizerProfileRecord;
+  };
+
   const fetchSettings = async (eventId = selectedEventId) => {
     if (!eventId) {
       const nextSettings = {
@@ -5193,17 +5240,28 @@ export default function App() {
       };
       setSettings(nextSettings);
       setSavedSettings(nextSettings);
+      setOrganizerProfile(null);
       return;
     }
 
     try {
-      const res = await apiFetch(`/api/settings?event_id=${encodeURIComponent(eventId)}`);
+      const [res, nextOrganizerProfile] = await Promise.all([
+        apiFetch(`/api/settings?event_id=${encodeURIComponent(eventId)}`),
+        loadOrganizerProfile(eventId).catch((error) => {
+          console.error("Failed to fetch organizer profile", error);
+          return null;
+        }),
+      ]);
       if (!res.ok) {
         throw new Error("Failed to fetch settings");
       }
       const data = await res.json();
       if (selectedEventIdRef.current !== eventId) return;
-      const nextSettings = buildSettingsFromResponse(settingsRef.current, data);
+      const nextSettings = applyOrganizerProfileToSettings(
+        buildSettingsFromResponse(settingsRef.current, data),
+        nextOrganizerProfile,
+      );
+      setOrganizerProfile(nextOrganizerProfile);
       setSettings(nextSettings);
       setSavedSettings(nextSettings);
     } catch (err) {
@@ -6168,6 +6226,41 @@ export default function App() {
     return saveSettingsSubset([...EVENT_MAIL_SETTINGS_KEYS], "Mail settings saved");
   };
 
+  const saveOrganizerProfile = async (eventId: string, sourceSettings: Settings) => {
+    if (!eventId) return false;
+
+    setSaving(true);
+    try {
+      const payload = buildOrganizerProfilePayloadFromSettings(normalizeSettingsForSave(sourceSettings));
+      const res = await apiFetch("/api/organizer-profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: eventId, ...payload }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to save organizer profile");
+      }
+      const nextProfile = data as OrganizerProfileRecord;
+      const nextSettings = applyOrganizerProfileToSettings(sourceSettings, nextProfile);
+      setOrganizerProfile(nextProfile);
+      setSettings(nextSettings);
+      setSavedSettings((prev) => ({
+        ...prev,
+        ...(Object.fromEntries(
+          ORGANIZER_PROFILE_SETTINGS_KEYS.map((key) => [key, nextSettings[key]]),
+        ) as Partial<Settings>),
+      }));
+      return true;
+    } catch (err) {
+      console.error("Failed to save organizer profile", err);
+      setSettingsMessage(err instanceof Error ? err.message : "Failed to save organizer profile");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveEventPublicPage = async () => {
     const nextSettings = {
       ...settings,
@@ -6179,45 +6272,27 @@ export default function App() {
       }),
     };
     setSettings(nextSettings);
-    const saved = await saveSettingsSubset([
-      "event_public_page_enabled",
-      "event_public_show_seat_availability",
-      "event_public_slug",
-      "event_public_poster_url",
-      "event_public_summary",
-      "event_public_registration_enabled",
-      "event_public_ticket_recovery_mode",
-      "event_public_bot_enabled",
-      "event_public_success_message",
-      "event_public_cta_label",
-      "event_public_privacy_enabled",
-      "event_public_privacy_label",
-      "event_public_privacy_text",
-      "event_public_contact_enabled",
-      "event_public_contact_intro",
-      "event_public_contact_messenger_url",
-      "event_public_contact_line_url",
-      "event_public_contact_phone",
-      "event_public_contact_hours",
-      "event_public_brand_mode",
-      "event_public_brand_label",
-      "event_public_brand_logo_url",
-      "event_public_brand_about_url",
-      "event_public_brand_privacy_url",
-      "event_public_brand_contact_url",
-      "event_public_organizer_name",
-      "event_public_organizer_description",
-      "event_public_organizer_logo_url",
-      "event_public_organizer_website_url",
-      "event_public_organizer_facebook_url",
-      "event_public_organizer_line_url",
-      "event_public_organizer_contact_text",
-      "event_public_sponsors_json",
-      "event_public_sections_json",
-      "event_public_speakers_json",
-    ], "Public page settings saved", nextSettings);
+    const saved = await saveSettingsSubset(
+      [...EVENT_PUBLIC_EVENT_SETTING_KEYS],
+      "Public page settings saved",
+      nextSettings,
+    );
+    if (!saved) return false;
+
+    const organizerDirty = ORGANIZER_PROFILE_SETTINGS_KEYS.some(
+      (key) => normalizeSettingsForSave(nextSettings)[key] !== normalizedSavedSettings[key],
+    );
+    if (organizerDirty) {
+      const organizerSaved = await saveOrganizerProfile(selectedEventId, nextSettings);
+      if (!organizerSaved) {
+        setSettingsMessage("Organizer profile could not be saved, but other public page settings were saved");
+        return false;
+      }
+    }
 
     if (saved) {
+      setSettingsMessage("Public page settings saved");
+      window.setTimeout(() => setSettingsMessage(""), 2500);
       await fetchEvents();
     }
     return saved;
@@ -7993,6 +8068,7 @@ export default function App() {
     } finally {
       setAuthStatus("unauthenticated");
       setAuthUser(null);
+      setOrganizerProfile(null);
       setMessages([]);
       setLogsHasMore(false);
       setLogsLoadingMore(false);
@@ -9490,6 +9566,7 @@ export default function App() {
               publicPageQrError={publicPageQrError}
               publicPageSummary={publicPageSummary}
               attendeeLocationLabel={attendeeLocationLabel}
+              organizerProfile={organizerProfile}
               initialSettings={{
                 event_public_brand_label: INITIAL_SETTINGS.event_public_brand_label,
                 event_public_cta_label: INITIAL_SETTINGS.event_public_cta_label,

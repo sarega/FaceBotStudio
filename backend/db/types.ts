@@ -5,6 +5,7 @@ export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" 
 export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram" | "web_chat";
 export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
+export type OrganizerVerificationStatus = "draft" | "pending_review" | "verified" | "rejected" | "needs_update";
 
 export interface SettingRow {
   key: string;
@@ -170,6 +171,8 @@ export interface EventRow {
   id: string;
   name: string;
   slug: string;
+  organizer_id: string;
+  organizer_name?: string;
   status: ManualEventStatus;
   effective_status: EventStatus;
   event_date?: string;
@@ -266,11 +269,44 @@ export interface PersistChunkEmbeddingInput {
 
 export interface CreateEventInput {
   name: string;
+  organizer_id?: string;
 }
 
 export interface UpdateEventInput {
   name?: string;
   status?: ManualEventStatus;
+  organizer_id?: string;
+}
+
+export interface OrganizerProfileRow {
+  id: string;
+  name: string;
+  slug: string;
+  legal_name: string | null;
+  public_display_name: string | null;
+  public_description: string | null;
+  public_logo_url: string | null;
+  public_website_url: string | null;
+  public_facebook_url: string | null;
+  public_line_url: string | null;
+  public_contact_text: string | null;
+  verification_status: OrganizerVerificationStatus;
+  verification_notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateOrganizerProfileInput {
+  legal_name?: string | null;
+  public_display_name?: string | null;
+  public_description?: string | null;
+  public_logo_url?: string | null;
+  public_website_url?: string | null;
+  public_facebook_url?: string | null;
+  public_line_url?: string | null;
+  public_contact_text?: string | null;
+  verification_status?: OrganizerVerificationStatus;
+  verification_notes?: string | null;
 }
 
 export interface UpsertFacebookPageInput {
@@ -379,6 +415,8 @@ export interface AppDatabase {
   getEventById(eventId: string): Promise<EventRow | undefined>;
   createEvent(input: CreateEventInput): Promise<EventRow>;
   updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
+  getOrganizerProfile(organizationId: string): Promise<OrganizerProfileRow | undefined>;
+  updateOrganizerProfile(organizationId: string, input: UpdateOrganizerProfileInput): Promise<OrganizerProfileRow | undefined>;
   getEventDeletionImpact(eventId: string): Promise<EventDeletionImpact>;
   deleteEvent(eventId: string): Promise<boolean>;
   listEventDocuments(eventId: string): Promise<EventDocumentRow[]>;

@@ -77,6 +77,7 @@ import type {
   AdminEmailStatusResponse,
   EventRecord,
   EventStatus,
+  OrganizerProfileRecord,
   Settings,
 } from "../../../types";
 
@@ -178,6 +179,7 @@ type EventWorkspaceScreenProps = {
   publicPageQrError: string;
   publicPageSummary: string;
   attendeeLocationLabel: string;
+  organizerProfile: OrganizerProfileRecord | null;
   initialSettings: Pick<
     Settings,
     | "event_public_brand_label"
@@ -482,6 +484,7 @@ export function EventWorkspaceScreen({
   publicPageQrError,
   publicPageSummary,
   attendeeLocationLabel,
+  organizerProfile,
   initialSettings,
   publicContactIntro,
   publicContactMessengerHref,
@@ -507,6 +510,7 @@ export function EventWorkspaceScreen({
   const activeMainSectionLabels = publicSectionEntries
     .filter((section) => section.enabled)
     .map((section) => PUBLIC_EVENT_SECTION_CATALOG.find((item) => item.id === section.id)?.label || section.id);
+  const desktopPublicWorkspaceLayout = eventWorkspaceView === "public";
 
   const updatePublicSponsorEntries = (updater: (entries: PublicSponsorEntry[]) => PublicSponsorEntry[]) => {
     setSettings((current) => ({
@@ -560,9 +564,17 @@ export function EventWorkspaceScreen({
   };
 
   return (
-    <div className="space-y-4 overflow-x-hidden">
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-        <div className="min-w-0 space-y-4 xl:col-span-7">
+    <div
+      className={`space-y-4 overflow-x-hidden ${
+        desktopPublicWorkspaceLayout ? "xl:max-h-[calc(100dvh-10rem)] xl:min-h-0 xl:overflow-hidden" : ""
+      }`}
+    >
+      <div className={`grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start ${desktopPublicWorkspaceLayout ? "xl:h-full" : ""}`}>
+        <div
+          className={`min-w-0 space-y-4 xl:col-span-7 xl:self-start ${
+            desktopPublicWorkspaceLayout ? "xl:min-h-0 xl:overflow-y-auto xl:pr-1" : ""
+          }`}
+        >
           {eventWorkspaceView === "setup" ? (
             <>
               <div className="surface-panel rounded-2xl p-4 sm:p-5">
@@ -1719,12 +1731,27 @@ export function EventWorkspaceScreen({
                               <Building2 className="h-4 w-4 text-blue-600" />
                               Organizer Info
                             </h5>
-                            <p className="mt-1 text-xs text-slate-500">Optional profile card rendered in the main content column.</p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              Shared organizer profile used across events under the same organizer.
+                            </p>
                           </div>
                           <HelpPopover label="Open note for Organizer Info">
-                            Keep organizer content concise. This block should support trust and identity without turning the page into a full company profile.
+                            This no longer saves per event. Updating it here refreshes the organizer card for all events under the same organizer context.
                           </HelpPopover>
                         </div>
+
+                        {organizerProfile && (
+                          <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                            <p className="font-semibold text-slate-800">
+                              {organizerProfile.organization_name || settings.event_public_organizer_name.trim() || "Current organizer"}
+                            </p>
+                            <p className="mt-1">
+                              Source: {organizerProfile.public_profile_source.replace(/_/g, " ")}
+                              {" · "}
+                              Verification: {organizerProfile.verification_status.replace(/_/g, " ")}
+                            </p>
+                          </div>
+                        )}
 
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div>
@@ -2312,7 +2339,7 @@ export function EventWorkspaceScreen({
           )}
         </div>
 
-        <div className="hidden min-w-0 space-y-3 xl:col-span-5 xl:self-start xl:block">
+        <div className={`hidden min-w-0 space-y-3 xl:col-span-5 xl:self-start xl:block ${desktopPublicWorkspaceLayout ? "xl:min-h-0" : ""}`}>
           {eventWorkspacePanel}
         </div>
       </div>
