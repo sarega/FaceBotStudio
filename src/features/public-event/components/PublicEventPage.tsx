@@ -1,8 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
-import type { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import {
   AlertCircle,
-  Bot,
   Download,
   ExternalLink,
   Eye,
@@ -16,6 +15,12 @@ import {
 } from "lucide-react";
 
 import { PublicContactActionLink, StatusBadge, type BadgeTone } from "../../../components/shared/AppUi";
+import { CountdownSection } from "./CountdownSection";
+import { OrganizerCard } from "./OrganizerCard";
+import { PlatformBrandPane } from "./PlatformBrandPane";
+import { PlatformFooter } from "./PlatformFooter";
+import { SpeakersSection } from "./SpeakersSection";
+import { SponsorsSection } from "./SponsorsSection";
 import type { ImageAttachment, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse } from "../../../types";
 
 type PublicRegistrationFormState = {
@@ -92,6 +97,97 @@ function isRecoveredPublicRegistrationResult(
   );
 }
 
+function AboutSection({ description }: { description: string }) {
+  if (!description) return null;
+
+  return (
+    <section className="py-4 sm:py-5">
+      <div className="flex items-center gap-2">
+        <Eye className="h-4 w-4 text-blue-600" />
+        <h2 className="text-lg font-semibold text-slate-900">About This Event</h2>
+      </div>
+      <p className="mt-3 whitespace-pre-line text-sm leading-6 text-slate-600">
+        {description}
+      </p>
+    </section>
+  );
+}
+
+function LocationTravelSection({
+  location,
+  mapEmbedUrl,
+  publicLocationLabel,
+}: {
+  location: PublicEventPageResponse["location"];
+  mapEmbedUrl: string;
+  publicLocationLabel: string;
+}) {
+  return (
+    <section className="py-4 sm:py-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Location & Travel</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {location.title || publicLocationLabel}
+          </p>
+        </div>
+        {location.map_url && (
+          <a
+            href={location.map_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            Open in Maps
+          </a>
+        )}
+      </div>
+
+      <div className="surface-frame mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        {mapEmbedUrl ? (
+          <iframe
+            title="Event location map"
+            src={mapEmbedUrl}
+            className="h-64 w-full border-0 sm:h-72"
+            loading="lazy"
+            referrerPolicy="no-referrer-when-downgrade"
+            allowFullScreen
+          />
+        ) : (
+          <div className="flex h-80 items-center justify-center px-6 text-center text-sm text-slate-500">
+            Map preview will appear here when venue details are available.
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+        <div className="surface-tile rounded-xl px-3.5 py-3.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Venue</p>
+          <p className="mt-1.5 text-sm font-semibold text-slate-900">
+            {location.title || publicLocationLabel}
+          </p>
+        </div>
+        <div className="surface-tile rounded-xl px-3.5 py-3.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Address</p>
+          <p className="mt-1.5 text-sm font-semibold text-slate-900">
+            {location.address_line || location.address || "-"}
+          </p>
+        </div>
+      </div>
+
+      {location.travel_info && (
+        <div className="surface-subpanel mt-3 rounded-xl px-3.5 py-3.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Travel Info</p>
+          <p className="mt-1.5 whitespace-pre-line text-sm leading-6 text-slate-600">
+            {location.travel_info}
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function PublicEventPage({
   page,
   loading,
@@ -133,6 +229,7 @@ export function PublicEventPage({
   onChatSubmit,
   onChatInputKeyDown,
 }: PublicEventPageProps) {
+  const [headerCondensed, setHeaderCondensed] = useState(false);
   const publicEventName = page?.event.name || "Event";
   const publicLocationLabel = page?.location.compact || "Venue details will be announced soon";
   const publicSummary = page?.event.summary || page?.event.description || "";
@@ -171,34 +268,106 @@ export function PublicEventPage({
         return "Register on this page and save your ticket image immediately.";
     }
   })();
+  const mainColumnSections = page
+    ? page.sections
+        .filter((section) => section.enabled)
+        .sort((left, right) => left.order - right.order)
+        .map((section) => {
+          switch (section.id) {
+            case "about":
+              return <AboutSection key="about" description={page.event.description} />;
+            case "countdown":
+              return <CountdownSection key="countdown" countdown={page.countdown} />;
+            case "organizer":
+              return <OrganizerCard key="organizer" organizer={page.organizer} />;
+            case "speakers":
+              return <SpeakersSection key="speakers" speakers={page.speakers} />;
+            case "sponsors":
+              return <SponsorsSection key="sponsors" sponsors={page.sponsors} />;
+            case "location":
+              return (
+                <LocationTravelSection
+                  key="location"
+                  location={page.location}
+                  mapEmbedUrl={mapEmbedUrl}
+                  publicLocationLabel={publicLocationLabel}
+                />
+              );
+            default:
+              return null;
+          }
+        })
+        .filter(Boolean)
+    : [];
+
+  useEffect(() => {
+    let frameId = 0;
+
+    const updateHeaderState = () => {
+      frameId = 0;
+      const nextCondensed = window.scrollY > 40;
+      setHeaderCondensed((current) => (current === nextCondensed ? current : nextCondensed));
+    };
+
+    const handleScroll = () => {
+      if (frameId !== 0) return;
+      frameId = window.requestAnimationFrame(updateHeaderState);
+    };
+
+    updateHeaderState();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, []);
 
   return (
     <div className="public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.18)]">
-              <Bot className="h-5 w-5 text-white" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-slate-900">{publicEventName}</p>
-              <p className="truncate text-xs text-slate-500">{publicLocationLabel}</p>
-            </div>
-          </div>
-          {page && (
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <StatusBadge tone={eventStatusTone}>
-                {eventStatusLabel}
-              </StatusBadge>
-              <StatusBadge tone={availabilityTone}>
-                {availabilityLabel}
-              </StatusBadge>
-            </div>
+      <header className="sticky top-0 z-40 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+        <AnimatePresence initial={false}>
+          {page && !headerCondensed && (
+            <motion.div
+              key="platform-brand-pane"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="overflow-hidden"
+            >
+              <PlatformBrandPane brand={page.brand} />
+            </motion.div>
           )}
+        </AnimatePresence>
+
+        <div className="border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/90">
+          <div className={`mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 ${headerCondensed ? "py-2" : "py-3"} transition-[padding] duration-200`}>
+            <div className="min-w-0">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-900">{publicEventName}</p>
+                {!headerCondensed && (
+                  <p className="truncate text-xs text-slate-500">{publicLocationLabel}</p>
+                )}
+              </div>
+            </div>
+            {page && (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StatusBadge tone={eventStatusTone}>
+                  {eventStatusLabel}
+                </StatusBadge>
+                <StatusBadge tone={availabilityTone}>
+                  {availabilityLabel}
+                </StatusBadge>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-8">
+      <main className="mx-auto max-w-6xl px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-5">
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center">
             <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
@@ -215,8 +384,8 @@ export function PublicEventPage({
           </div>
         ) : (
           <>
-            <section className="grid gap-5 lg:items-start lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
-              <div className="surface-panel self-start overflow-hidden rounded-[2rem]">
+            <section className="grid gap-4 lg:items-start lg:grid-cols-[minmax(0,18.5rem)_minmax(0,1fr)]">
+              <div className="surface-panel self-start overflow-hidden rounded-[1.75rem]">
                 <div className="aspect-[800/1132] w-full">
                   {page.event.poster_url ? (
                     <img
@@ -236,7 +405,7 @@ export function PublicEventPage({
                 </div>
               </div>
 
-              <div className="surface-panel space-y-5 rounded-[2rem] p-5 lg:self-start sm:p-6">
+              <div className="surface-panel space-y-4 rounded-[1.75rem] p-4 lg:self-start sm:p-5">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <StatusBadge tone={eventStatusTone}>
                     {eventStatusLabel}
@@ -247,25 +416,25 @@ export function PublicEventPage({
                 </div>
 
                 <div>
-                  <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+                  <h1 className="text-[1.9rem] font-bold tracking-tight text-slate-900 sm:text-[2.35rem]">
                     {page.event.name}
                   </h1>
                   {publicSummary && (
-                    <p className="mt-2.5 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
                       {publicSummary}
                     </p>
                   )}
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="surface-tile rounded-2xl px-4 py-3.5">
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  <div className="surface-tile rounded-xl px-3.5 py-3">
                     <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Date & Time</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-900">{page.event.date_label}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{page.event.date_label}</p>
                     <p className="mt-1 text-xs text-slate-500">{page.event.timezone}</p>
                   </div>
-                  <div className="surface-tile rounded-2xl px-4 py-3.5">
+                  <div className="surface-tile rounded-xl px-3.5 py-3">
                     <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Location</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-900">
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
                       {page.location.title || publicLocationLabel}
                     </p>
                     {page.location.address_line && (
@@ -274,15 +443,15 @@ export function PublicEventPage({
                   </div>
                 </div>
 
-                <div className={`grid gap-3 ${page.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
-                  <div className="surface-tile rounded-2xl px-4 py-3.5">
+                <div className={`grid gap-2.5 ${page.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
+                  <div className="surface-tile rounded-xl px-3.5 py-3">
                     <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration</p>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-900">{availabilityHelper}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{availabilityHelper}</p>
                   </div>
                   {page.event.show_seat_availability && (
-                    <div className="surface-tile rounded-2xl px-4 py-3.5">
+                    <div className="surface-tile rounded-xl px-3.5 py-3">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
-                      <p className="mt-1.5 text-sm font-semibold text-slate-900">
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
                         {page.event.registration_limit == null
                           ? "Unlimited"
                           : `${page.event.active_registration_count}/${page.event.registration_limit}`}
@@ -290,19 +459,19 @@ export function PublicEventPage({
                     </div>
                   )}
                   {page.event.show_seat_availability && (
-                    <div className="surface-tile rounded-2xl px-4 py-3.5">
+                    <div className="surface-tile rounded-xl px-3.5 py-3">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
-                      <p className="mt-1.5 text-sm font-semibold text-slate-900">
+                      <p className="mt-1 text-sm font-semibold text-slate-900">
                         {page.event.remaining_seats == null ? "Open" : page.event.remaining_seats}
                       </p>
                     </div>
                   )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2">
                   <a
                     href="#public-registration"
-                    className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
+                    className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-4.5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                   >
                     {page.event.cta_label}
                   </a>
@@ -311,7 +480,7 @@ export function PublicEventPage({
                       href={page.location.map_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="public-page-control inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                      className="public-page-control inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                     >
                       <ExternalLink className="h-4 w-4" />
                       Open in Maps
@@ -321,86 +490,13 @@ export function PublicEventPage({
               </div>
             </section>
 
-            <section className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(20rem,24rem)]">
-              <div className="space-y-6">
-                {page.event.description && (
-                  <div className="surface-panel rounded-[2rem] p-5 sm:p-6">
-                    <div className="flex items-center gap-2">
-                      <Eye className="h-4 w-4 text-blue-600" />
-                      <h2 className="text-lg font-semibold text-slate-900">About This Event</h2>
-                    </div>
-                    <p className="mt-4 whitespace-pre-line text-sm leading-7 text-slate-600">
-                      {page.event.description}
-                    </p>
-                  </div>
-                )}
-
-                <div className="surface-panel rounded-[2rem] p-5 sm:p-6">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <h2 className="text-lg font-semibold text-slate-900">Location & Travel</h2>
-                      <p className="mt-1 text-sm text-slate-500">
-                        {page.location.title || publicLocationLabel}
-                      </p>
-                    </div>
-                    {page.location.map_url && (
-                      <a
-                        href={page.location.map_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-                      >
-                        <Link2 className="h-3.5 w-3.5" />
-                        Open in Maps
-                      </a>
-                    )}
-                  </div>
-
-                  <div className="surface-frame mt-4 overflow-hidden rounded-2xl">
-                    {mapEmbedUrl ? (
-                      <iframe
-                        title="Event location map"
-                        src={mapEmbedUrl}
-                        className="h-80 w-full border-0"
-                        loading="lazy"
-                        referrerPolicy="no-referrer-when-downgrade"
-                        allowFullScreen
-                      />
-                    ) : (
-                      <div className="flex h-80 items-center justify-center px-6 text-center text-sm text-slate-500">
-                        Map preview will appear here when venue details are available.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <div className="surface-tile rounded-2xl px-4 py-4">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Venue</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">
-                        {page.location.title || publicLocationLabel}
-                      </p>
-                    </div>
-                    <div className="surface-tile rounded-2xl px-4 py-4">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Address</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">
-                        {page.location.address_line || page.location.address || "-"}
-                      </p>
-                    </div>
-                  </div>
-
-                  {page.location.travel_info && (
-                    <div className="surface-subpanel mt-4 rounded-2xl px-4 py-4">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Travel Info</p>
-                      <p className="mt-2 whitespace-pre-line text-sm leading-7 text-slate-600">
-                        {page.location.travel_info}
-                      </p>
-                    </div>
-                  )}
-                </div>
+            <section className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,21.5rem)]">
+              <div className="divide-y divide-slate-200">
+                {mainColumnSections}
               </div>
 
-              <aside id="public-registration" className="space-y-6 xl:sticky xl:top-6 xl:self-start">
-                <div className="surface-panel rounded-[2rem] p-5 sm:p-6">
+              <aside id="public-registration" className="space-y-4 xl:sticky xl:top-5 xl:self-start">
+                <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
                   {!ticketReady ? (
                     <>
                       <div className="flex items-start justify-between gap-3">
@@ -416,14 +512,14 @@ export function PublicEventPage({
                       </div>
 
                       {registrationAvailable ? (
-                        <form className="mt-5 space-y-3" onSubmit={(event) => void onRegistrationSubmit(event)}>
+                        <form className="mt-4 space-y-2.5" onSubmit={(event) => void onRegistrationSubmit(event)}>
                           <div>
                             <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">First Name</label>
                             <input
                               value={registrationForm.first_name}
                               onChange={(event) => onRegistrationFieldChange("first_name", event.target.value)}
                               autoComplete="given-name"
-                              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               placeholder="First name"
                             />
                           </div>
@@ -433,7 +529,7 @@ export function PublicEventPage({
                               value={registrationForm.last_name}
                               onChange={(event) => onRegistrationFieldChange("last_name", event.target.value)}
                               autoComplete="family-name"
-                              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               placeholder="Last name"
                             />
                           </div>
@@ -444,7 +540,7 @@ export function PublicEventPage({
                               onChange={(event) => onRegistrationFieldChange("phone", event.target.value)}
                               autoComplete="tel"
                               inputMode="tel"
-                              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               placeholder="Phone number"
                             />
                           </div>
@@ -455,7 +551,7 @@ export function PublicEventPage({
                               onChange={(event) => onRegistrationFieldChange("email", event.target.value)}
                               autoComplete="email"
                               inputMode="email"
-                              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               placeholder="Email address"
                             />
                           </div>
@@ -469,7 +565,7 @@ export function PublicEventPage({
                           <button
                             type="submit"
                             disabled={registrationSubmitting}
-                            className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {registrationSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
                             {page.event.cta_label}
@@ -490,7 +586,7 @@ export function PublicEventPage({
                           </div>
                         </form>
                       ) : (
-                        <div className="surface-subpanel mt-5 rounded-2xl px-4 py-4">
+                        <div className="surface-subpanel mt-4 rounded-xl px-3.5 py-3.5">
                           <p className="text-sm font-semibold text-slate-900">{availabilityHelper}</p>
                           <p className="mt-2 text-sm leading-6 text-slate-500">
                             This page stays here for event details, location, and ticket recovery when available.
@@ -508,7 +604,7 @@ export function PublicEventPage({
                         </div>
                       )}
 
-                      <div className="surface-subpanel mt-4 rounded-2xl px-4 py-4">
+                      <div className="surface-subpanel mt-3 rounded-xl px-3.5 py-3.5">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-slate-900">Find My Ticket</p>
@@ -521,7 +617,7 @@ export function PublicEventPage({
                           <StatusBadge tone="neutral">Recovery</StatusBadge>
                         </div>
 
-                        <form className="mt-4 space-y-3" onSubmit={(event) => void onTicketLookupSubmit(event)}>
+                        <form className="mt-3 space-y-2.5" onSubmit={(event) => void onTicketLookupSubmit(event)}>
                           <div>
                             <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Phone</label>
                             <input
@@ -529,7 +625,7 @@ export function PublicEventPage({
                               onChange={(event) => onTicketLookupFieldChange("phone", event.target.value)}
                               autoComplete="tel"
                               inputMode="tel"
-                              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               placeholder="Phone number"
                             />
                           </div>
@@ -540,7 +636,7 @@ export function PublicEventPage({
                               onChange={(event) => onTicketLookupFieldChange("email", event.target.value)}
                               autoComplete="email"
                               inputMode="email"
-                              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               placeholder="Email address"
                             />
                           </div>
@@ -550,7 +646,7 @@ export function PublicEventPage({
                               <input
                                 value={ticketLookupForm.attendee_name}
                                 onChange={(event) => onTicketLookupFieldChange("attendee_name", event.target.value)}
-                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                                 placeholder="First and last name"
                               />
                             </div>
@@ -565,7 +661,7 @@ export function PublicEventPage({
                           <button
                             type="submit"
                             disabled={ticketLookupSubmitting}
-                            className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="public-page-control inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {ticketLookupSubmitting && <RefreshCw className="h-4 w-4 animate-spin" />}
                             Find My Ticket
@@ -643,7 +739,7 @@ export function PublicEventPage({
                 </div>
 
                 {contactVisible && (
-                  <div className="surface-panel rounded-[2rem] p-5 sm:p-6">
+                  <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h2 className="text-lg font-semibold text-slate-900">Help & Contact</h2>
@@ -654,7 +750,7 @@ export function PublicEventPage({
                       <StatusBadge tone="neutral">Fallback</StatusBadge>
                     </div>
 
-                    <div className="mt-4 flex flex-wrap gap-2">
+                    <div className="mt-3 flex flex-wrap gap-2">
                       {messengerHref && (
                         <PublicContactActionLink href={messengerHref} label="Chat on Messenger" kind="messenger" />
                       )}
@@ -667,7 +763,7 @@ export function PublicEventPage({
                     </div>
 
                     {page.contact.hours && (
-                      <div className="surface-tile mt-4 rounded-2xl px-4 py-4">
+                      <div className="surface-tile mt-3 rounded-xl px-3.5 py-3.5">
                         <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Support Hours</p>
                         <p className="mt-2 text-sm font-semibold text-slate-900">{page.contact.hours}</p>
                       </div>
@@ -711,6 +807,8 @@ export function PublicEventPage({
           </>
         )}
       </main>
+
+      {!loading && !errorMessage && page && <PlatformFooter brand={page.brand} />}
 
       {page?.support.bot_enabled && (
         <>

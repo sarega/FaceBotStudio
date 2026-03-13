@@ -98,6 +98,8 @@ import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAcco
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
+import { parsePublicSponsorEntries, resolvePublicBrandMode, serializePublicSponsorEntries } from "./lib/publicEventPageBranding";
+import { parsePublicEventSections, parsePublicSpeakerEntries, serializePublicEventSections, serializePublicSpeakerEntries } from "./lib/publicEventPageLayout";
 
 interface Registration {
   id: string;
@@ -2026,6 +2028,22 @@ const INITIAL_SETTINGS: Settings = {
   event_public_contact_line_url: "",
   event_public_contact_phone: "",
   event_public_contact_hours: "",
+  event_public_brand_mode: "subtle",
+  event_public_brand_label: "Meetrix",
+  event_public_brand_logo_url: "",
+  event_public_brand_about_url: "",
+  event_public_brand_privacy_url: "",
+  event_public_brand_contact_url: "",
+  event_public_organizer_name: "",
+  event_public_organizer_description: "",
+  event_public_organizer_logo_url: "",
+  event_public_organizer_website_url: "",
+  event_public_organizer_facebook_url: "",
+  event_public_organizer_line_url: "",
+  event_public_organizer_contact_text: "",
+  event_public_sponsors_json: "",
+  event_public_sections_json: "",
+  event_public_speakers_json: "",
   confirmation_email_enabled: "0",
   confirmation_email_subject: "Your registration for {{event_name}}",
   email_template_registration_confirmation_subject: "",
@@ -2083,6 +2101,22 @@ function getBlankEventScopedSettings() {
     event_public_contact_line_url: "",
     event_public_contact_phone: "",
     event_public_contact_hours: "",
+    event_public_brand_mode: "subtle",
+    event_public_brand_label: "Meetrix",
+    event_public_brand_logo_url: "",
+    event_public_brand_about_url: "",
+    event_public_brand_privacy_url: "",
+    event_public_brand_contact_url: "",
+    event_public_organizer_name: "",
+    event_public_organizer_description: "",
+    event_public_organizer_logo_url: "",
+    event_public_organizer_website_url: "",
+    event_public_organizer_facebook_url: "",
+    event_public_organizer_line_url: "",
+    event_public_organizer_contact_text: "",
+    event_public_sponsors_json: "",
+    event_public_sections_json: "",
+    event_public_speakers_json: "",
     confirmation_email_enabled: "0",
     confirmation_email_subject: "Your registration for {{event_name}}",
     email_template_registration_confirmation_subject: "",
@@ -2137,6 +2171,22 @@ function getBlankEventScopedSettings() {
     | "event_public_contact_line_url"
     | "event_public_contact_phone"
     | "event_public_contact_hours"
+    | "event_public_brand_mode"
+    | "event_public_brand_label"
+    | "event_public_brand_logo_url"
+    | "event_public_brand_about_url"
+    | "event_public_brand_privacy_url"
+    | "event_public_brand_contact_url"
+    | "event_public_organizer_name"
+    | "event_public_organizer_description"
+    | "event_public_organizer_logo_url"
+    | "event_public_organizer_website_url"
+    | "event_public_organizer_facebook_url"
+    | "event_public_organizer_line_url"
+    | "event_public_organizer_contact_text"
+    | "event_public_sponsors_json"
+    | "event_public_sections_json"
+    | "event_public_speakers_json"
     | "confirmation_email_enabled"
     | "confirmation_email_subject"
     | "email_template_registration_confirmation_subject"
@@ -2222,6 +2272,22 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_contact_line_url",
   "event_public_contact_phone",
   "event_public_contact_hours",
+  "event_public_brand_mode",
+  "event_public_brand_label",
+  "event_public_brand_logo_url",
+  "event_public_brand_about_url",
+  "event_public_brand_privacy_url",
+  "event_public_brand_contact_url",
+  "event_public_organizer_name",
+  "event_public_organizer_description",
+  "event_public_organizer_logo_url",
+  "event_public_organizer_website_url",
+  "event_public_organizer_facebook_url",
+  "event_public_organizer_line_url",
+  "event_public_organizer_contact_text",
+  "event_public_sponsors_json",
+  "event_public_sections_json",
+  "event_public_speakers_json",
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 const EVENT_CONTEXT_SETTINGS_KEYS = ["context"] as const satisfies ReadonlyArray<keyof Settings>;
@@ -2439,6 +2505,70 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_contact_hours === "string"
         ? data.event_public_contact_hours
         : INITIAL_SETTINGS.event_public_contact_hours,
+    event_public_brand_mode:
+      typeof data.event_public_brand_mode === "string"
+        ? resolvePublicBrandMode(data.event_public_brand_mode)
+        : INITIAL_SETTINGS.event_public_brand_mode,
+    event_public_brand_label:
+      typeof data.event_public_brand_label === "string" && data.event_public_brand_label.trim()
+        ? data.event_public_brand_label
+        : INITIAL_SETTINGS.event_public_brand_label,
+    event_public_brand_logo_url:
+      typeof data.event_public_brand_logo_url === "string"
+        ? data.event_public_brand_logo_url
+        : INITIAL_SETTINGS.event_public_brand_logo_url,
+    event_public_brand_about_url:
+      typeof data.event_public_brand_about_url === "string"
+        ? data.event_public_brand_about_url
+        : INITIAL_SETTINGS.event_public_brand_about_url,
+    event_public_brand_privacy_url:
+      typeof data.event_public_brand_privacy_url === "string"
+        ? data.event_public_brand_privacy_url
+        : INITIAL_SETTINGS.event_public_brand_privacy_url,
+    event_public_brand_contact_url:
+      typeof data.event_public_brand_contact_url === "string"
+        ? data.event_public_brand_contact_url
+        : INITIAL_SETTINGS.event_public_brand_contact_url,
+    event_public_organizer_name:
+      typeof data.event_public_organizer_name === "string"
+        ? data.event_public_organizer_name
+        : INITIAL_SETTINGS.event_public_organizer_name,
+    event_public_organizer_description:
+      typeof data.event_public_organizer_description === "string"
+        ? data.event_public_organizer_description
+        : INITIAL_SETTINGS.event_public_organizer_description,
+    event_public_organizer_logo_url:
+      typeof data.event_public_organizer_logo_url === "string"
+        ? data.event_public_organizer_logo_url
+        : INITIAL_SETTINGS.event_public_organizer_logo_url,
+    event_public_organizer_website_url:
+      typeof data.event_public_organizer_website_url === "string"
+        ? data.event_public_organizer_website_url
+        : INITIAL_SETTINGS.event_public_organizer_website_url,
+    event_public_organizer_facebook_url:
+      typeof data.event_public_organizer_facebook_url === "string"
+        ? data.event_public_organizer_facebook_url
+        : INITIAL_SETTINGS.event_public_organizer_facebook_url,
+    event_public_organizer_line_url:
+      typeof data.event_public_organizer_line_url === "string"
+        ? data.event_public_organizer_line_url
+        : INITIAL_SETTINGS.event_public_organizer_line_url,
+    event_public_organizer_contact_text:
+      typeof data.event_public_organizer_contact_text === "string"
+        ? data.event_public_organizer_contact_text
+        : INITIAL_SETTINGS.event_public_organizer_contact_text,
+    event_public_sponsors_json:
+      typeof data.event_public_sponsors_json === "string"
+        ? serializePublicSponsorEntries(parsePublicSponsorEntries(data.event_public_sponsors_json))
+        : INITIAL_SETTINGS.event_public_sponsors_json,
+    event_public_sections_json:
+      typeof data.event_public_sections_json === "string"
+        ? serializePublicEventSections(parsePublicEventSections(data.event_public_sections_json))
+        : INITIAL_SETTINGS.event_public_sections_json,
+    event_public_speakers_json:
+      typeof data.event_public_speakers_json === "string"
+        ? serializePublicSpeakerEntries(parsePublicSpeakerEntries(data.event_public_speakers_json))
+        : INITIAL_SETTINGS.event_public_speakers_json,
     confirmation_email_enabled:
       typeof data.confirmation_email_enabled === "string" && data.confirmation_email_enabled.trim()
         ? data.confirmation_email_enabled.trim()
@@ -5699,6 +5829,10 @@ export default function App() {
   const normalizeSettingsForSave = (source: Settings): Settings => ({
     ...source,
     event_public_slug: sanitizeEnglishSlugInput(source.event_public_slug),
+    event_public_brand_mode: resolvePublicBrandMode(source.event_public_brand_mode),
+    event_public_sponsors_json: serializePublicSponsorEntries(parsePublicSponsorEntries(source.event_public_sponsors_json)),
+    event_public_sections_json: serializePublicEventSections(parsePublicEventSections(source.event_public_sections_json)),
+    event_public_speakers_json: serializePublicSpeakerEntries(parsePublicSpeakerEntries(source.event_public_speakers_json)),
     event_date: normalizeDateTimeLocalValue(source.event_date),
     event_end_date: normalizeDateTimeLocalValue(source.event_end_date),
     reg_start: normalizeDateTimeLocalValue(source.reg_start),
@@ -6065,12 +6199,75 @@ export default function App() {
       "event_public_contact_line_url",
       "event_public_contact_phone",
       "event_public_contact_hours",
+      "event_public_brand_mode",
+      "event_public_brand_label",
+      "event_public_brand_logo_url",
+      "event_public_brand_about_url",
+      "event_public_brand_privacy_url",
+      "event_public_brand_contact_url",
+      "event_public_organizer_name",
+      "event_public_organizer_description",
+      "event_public_organizer_logo_url",
+      "event_public_organizer_website_url",
+      "event_public_organizer_facebook_url",
+      "event_public_organizer_line_url",
+      "event_public_organizer_contact_text",
+      "event_public_sponsors_json",
+      "event_public_sections_json",
+      "event_public_speakers_json",
     ], "Public page settings saved", nextSettings);
 
     if (saved) {
       await fetchEvents();
     }
     return saved;
+  };
+
+  const handlePublicEventMediaUpload = async (
+    file: File,
+    kind: "speaker_photo" | "sponsor_logo",
+  ): Promise<string | null> => {
+    if (!file || !selectedEventId) return null;
+
+    const mediaLabel = kind === "speaker_photo" ? "Speaker photo" : "Sponsor logo";
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    if (!allowedTypes.has(file.type)) {
+      setSettingsMessage(`${mediaLabel} must be PNG, JPG, or WebP`);
+      return null;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setSettingsMessage(`${mediaLabel} must be 4 MB or smaller`);
+      return null;
+    }
+
+    setSettingsMessage("");
+    try {
+      const params = new URLSearchParams({ event_id: selectedEventId, kind });
+      const res = await apiFetch(`/api/public-page/media-upload?${params.toString()}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type,
+          "x-upload-filename": encodeURIComponent(file.name),
+        },
+        body: await file.arrayBuffer(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || `Failed to upload ${mediaLabel.toLowerCase()}`);
+      }
+
+      const assetUrl = String((data as { asset_url?: string }).asset_url || "").trim();
+      if (!assetUrl) {
+        throw new Error("Image upload did not return a file URL");
+      }
+
+      setSettingsMessage(`${mediaLabel} uploaded`);
+      window.setTimeout(() => setSettingsMessage(""), 2500);
+      return assetUrl;
+    } catch (err) {
+      setSettingsMessage(err instanceof Error ? err.message : `Failed to upload ${mediaLabel.toLowerCase()}`);
+      return null;
+    }
   };
 
   const handlePublicPosterFileUpload = async (file: File | null) => {
@@ -9273,6 +9470,7 @@ export default function App() {
               eventPublicDirty={eventPublicDirty}
               saveEventPublicPage={saveEventPublicPage}
               publicPosterFileInputRef={publicPosterFileInputRef}
+              handlePublicEventMediaUpload={handlePublicEventMediaUpload}
               handlePublicPosterFileUpload={handlePublicPosterFileUpload}
               publicPosterUploading={publicPosterUploading}
               publicPagePosterUrl={publicPagePosterUrl}
@@ -9293,6 +9491,7 @@ export default function App() {
               publicPageSummary={publicPageSummary}
               attendeeLocationLabel={attendeeLocationLabel}
               initialSettings={{
+                event_public_brand_label: INITIAL_SETTINGS.event_public_brand_label,
                 event_public_cta_label: INITIAL_SETTINGS.event_public_cta_label,
                 event_public_privacy_label: INITIAL_SETTINGS.event_public_privacy_label,
                 event_public_privacy_text: INITIAL_SETTINGS.event_public_privacy_text,

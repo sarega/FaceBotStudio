@@ -87,6 +87,8 @@ import {
 import { DEFAULT_EVENT_ID, EVENT_SETTING_KEYS, GLOBAL_SETTING_KEYS } from "./backend/db/defaultSettings";
 import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
+import { parsePublicSponsorEntries, resolvePublicBrandMode } from "./src/lib/publicEventPageBranding";
+import { parsePublicEventSections, parsePublicSpeakerEntries } from "./src/lib/publicEventPageLayout";
 
 dotenv.config();
 
@@ -2647,6 +2649,7 @@ function normalizePublicSlug(rawValue: unknown) {
 
 const DEFAULT_PUBLIC_UPLOADS_ROOT_DIR = path.join(__dirname, "public", "uploads");
 const PUBLIC_POSTER_MAX_BYTES = 2 * 1024 * 1024;
+const PUBLIC_EVENT_MEDIA_MAX_BYTES = 4 * 1024 * 1024;
 const ADMIN_AGENT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const INBOUND_CHANNEL_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const ADMIN_AGENT_OPENROUTER_HISTORY_IMAGE_BUDGET = 3;
@@ -2661,7 +2664,7 @@ function resolvePublicUploadsRootDir() {
     String(process.env.PUBLIC_UPLOADS_DIR || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR).trim() || DEFAULT_PUBLIC_UPLOADS_ROOT_DIR,
   );
   const ensureWritableRoot = (rootDir: string) => {
-    for (const dirName of ["event-posters", "admin-agent-images", "channel-images"]) {
+    for (const dirName of ["event-posters", "event-public-assets", "admin-agent-images", "channel-images"]) {
       mkdirSync(path.join(rootDir, dirName), { recursive: true });
     }
     return rootDir;
@@ -2683,6 +2686,7 @@ function resolvePublicUploadsRootDir() {
 
 const PUBLIC_UPLOADS_ROOT_DIR = resolvePublicUploadsRootDir();
 const PUBLIC_POSTER_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "event-posters");
+const PUBLIC_EVENT_MEDIA_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "event-public-assets");
 const ADMIN_AGENT_IMAGE_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "admin-agent-images");
 const CHANNEL_IMAGE_UPLOAD_DIR = path.join(PUBLIC_UPLOADS_ROOT_DIR, "channel-images");
 
@@ -2701,6 +2705,10 @@ function getImageExtensionFromMimeType(mimeType: string) {
 
 function buildPublicPosterRelativeUrl(fileName: string) {
   return `/uploads/event-posters/${fileName}`;
+}
+
+function buildPublicEventMediaRelativeUrl(fileName: string) {
+  return `/uploads/event-public-assets/${fileName}`;
 }
 
 function buildAdminAgentImageRelativeUrl(fileName: string) {
@@ -3465,8 +3473,12 @@ async function buildPublicEventPagePayload(
   if (!event) return null;
 
   const capacity = await getEventCapacitySnapshot(event.id, settings);
+  const eventState = getEventState(settings);
   const location = buildEventLocationSummaryFromSettings(settings);
   const summary = resolvePublicSummary(settings.event_public_summary, settings.event_description);
+  const sponsorEntries = parsePublicSponsorEntries(settings.event_public_sponsors_json);
+  const speakerEntries = parsePublicSpeakerEntries(settings.event_public_speakers_json);
+  const sectionEntries = parsePublicEventSections(settings.event_public_sections_json);
   const publicSlug = resolveEnglishPublicSlug({
     customSlug: settings.event_public_slug,
     eventName: String(settings.event_name || event.name || ""),
@@ -3527,6 +3539,43 @@ async function buildPublicEventPagePayload(
       line_url: String(settings.event_public_contact_line_url || "").trim(),
       phone: String(settings.event_public_contact_phone || "").trim(),
       hours: String(settings.event_public_contact_hours || "").trim(),
+    },
+    brand: {
+      mode: resolvePublicBrandMode(settings.event_public_brand_mode),
+      label: String(settings.event_public_brand_label || "").trim() || "Meetrix",
+      logo_url: String(settings.event_public_brand_logo_url || "").trim(),
+      about_url: String(settings.event_public_brand_about_url || "").trim(),
+      privacy_url: String(settings.event_public_brand_privacy_url || "").trim(),
+      contact_url: String(settings.event_public_brand_contact_url || "").trim(),
+    },
+    organizer: {
+      name: String(settings.event_public_organizer_name || "").trim(),
+      description: String(settings.event_public_organizer_description || "").trim(),
+      logo_url: String(settings.event_public_organizer_logo_url || "").trim(),
+      website_url: String(settings.event_public_organizer_website_url || "").trim(),
+      facebook_url: String(settings.event_public_organizer_facebook_url || "").trim(),
+      line_url: String(settings.event_public_organizer_line_url || "").trim(),
+      contact_text: String(settings.event_public_organizer_contact_text || "").trim(),
+    },
+    sponsors: {
+      entries: sponsorEntries,
+    },
+    sections: sectionEntries,
+    countdown: {
+      target_iso: eventState.eventDate ? eventState.eventDate.toISOString() : "",
+      date_label: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
+      timezone: normalizeTimeZone(settings.event_timezone),
+      state:
+        eventState.eventLifecycle === "upcoming"
+          ? "upcoming"
+          : eventState.eventLifecycle === "ongoing"
+          ? "ongoing"
+          : eventState.eventLifecycle === "past"
+          ? "past"
+          : "unscheduled",
+    },
+    speakers: {
+      entries: speakerEntries,
     },
     support: {
       bot_enabled: isTruthySetting(settings.event_public_bot_enabled ?? "1"),
@@ -12497,6 +12546,87 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to upload public poster image:", error);
       return res.status(500).json({ error: "Failed to upload poster image" });
+    }
+    },
+  );
+
+  app.post(
+    "/api/public-page/media-upload",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: PUBLIC_EVENT_MEDIA_MAX_BYTES }),
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      const extension = getImageExtensionFromMimeType(contentType);
+      if (!extension) {
+        return res.status(400).json({ error: "Image must be PNG, JPG, or WebP" });
+      }
+
+      const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return res.status(400).json({ error: "Image file is required" });
+      }
+      if (fileBuffer.length > PUBLIC_EVENT_MEDIA_MAX_BYTES) {
+        return res.status(400).json({ error: "Image must be 4 MB or smaller" });
+      }
+
+      const event = await appDb.getEventById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+
+      const allowedKinds = new Set(["speaker_photo", "sponsor_logo", "organizer_logo", "brand_logo", "gallery_image"]);
+      const requestedKind = normalizeOptionalText(req.query.kind).toLowerCase();
+      const kind = allowedKinds.has(requestedKind) ? requestedKind : "asset";
+
+      const rawFileNameHeader = Array.isArray(req.headers["x-upload-filename"])
+        ? req.headers["x-upload-filename"][0]
+        : req.headers["x-upload-filename"];
+      let decodedFileName = "";
+      if (normalizeOptionalText(rawFileNameHeader)) {
+        try {
+          decodedFileName = decodeURIComponent(String(rawFileNameHeader || ""));
+        } catch {
+          decodedFileName = String(rawFileNameHeader || "");
+        }
+      }
+
+      mkdirSync(PUBLIC_EVENT_MEDIA_UPLOAD_DIR, { recursive: true });
+      const safeNameBase = path.basename(decodedFileName || kind).replace(/\.[^.]+$/, "");
+      const normalizedNameBase = safeNameBase
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60)
+        || kind;
+      const nextFileName = `${eventId}-${kind}-${Date.now().toString(36)}-${normalizedNameBase}.${extension}`;
+      const nextAbsolutePath = path.join(PUBLIC_EVENT_MEDIA_UPLOAD_DIR, nextFileName);
+      const nextRelativeUrl = buildPublicEventMediaRelativeUrl(nextFileName);
+      const nextPublicUrl = buildAbsoluteAppAssetUrl(nextRelativeUrl);
+
+      writeFileSync(nextAbsolutePath, fileBuffer);
+
+      await recordAudit(req, "public.media_uploaded", "settings", eventId, {
+        event_id: eventId,
+        kind,
+        asset_url: nextRelativeUrl,
+        public_asset_url: nextPublicUrl || null,
+        content_type: contentType,
+        size_bytes: fileBuffer.length,
+      });
+
+      return res.status(201).json({
+        status: "ok",
+        kind,
+        asset_url: nextRelativeUrl,
+        absolute_asset_url: nextPublicUrl,
+        size_bytes: fileBuffer.length,
+      });
+    } catch (error) {
+      console.error("Failed to upload public page image asset:", error);
+      const message = error instanceof Error ? error.message : "Failed to upload image";
+      return res.status(/PNG|JPG|WebP|4 MB|required/i.test(message) ? 400 : 500).json({ error: message });
     }
     },
   );

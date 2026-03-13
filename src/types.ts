@@ -1,4 +1,6 @@
 import type { EmailTemplateKind } from "./lib/emailTemplateCatalog";
+import type { PublicBrandMode, PublicSponsorEntry } from "./lib/publicEventPageBranding";
+import type { PublicEventSectionConfig, PublicSpeakerEntry } from "./lib/publicEventPageLayout";
 
 export interface ImageAttachment {
   id?: string;
@@ -312,6 +314,22 @@ export interface Settings {
   event_public_contact_line_url: string;
   event_public_contact_phone: string;
   event_public_contact_hours: string;
+  event_public_brand_mode: string;
+  event_public_brand_label: string;
+  event_public_brand_logo_url: string;
+  event_public_brand_about_url: string;
+  event_public_brand_privacy_url: string;
+  event_public_brand_contact_url: string;
+  event_public_organizer_name: string;
+  event_public_organizer_description: string;
+  event_public_organizer_logo_url: string;
+  event_public_organizer_website_url: string;
+  event_public_organizer_facebook_url: string;
+  event_public_organizer_line_url: string;
+  event_public_organizer_contact_text: string;
+  event_public_sponsors_json: string;
+  event_public_sections_json: string;
+  event_public_speakers_json: string;
   confirmation_email_enabled: string;
   confirmation_email_subject: string;
   email_template_registration_confirmation_subject: string;
@@ -440,6 +458,36 @@ export interface PublicEventPageResponse {
     line_url: string;
     phone: string;
     hours: string;
+  };
+  brand: {
+    mode: PublicBrandMode;
+    label: string;
+    logo_url: string;
+    about_url: string;
+    privacy_url: string;
+    contact_url: string;
+  };
+  organizer: {
+    name: string;
+    description: string;
+    logo_url: string;
+    website_url: string;
+    facebook_url: string;
+    line_url: string;
+    contact_text: string;
+  };
+  sponsors: {
+    entries: PublicSponsorEntry[];
+  };
+  sections: PublicEventSectionConfig[];
+  countdown: {
+    target_iso: string;
+    date_label: string;
+    timezone: string;
+    state: "unscheduled" | "upcoming" | "ongoing" | "past";
+  };
+  speakers: {
+    entries: PublicSpeakerEntry[];
   };
   support: {
     bot_enabled: boolean;

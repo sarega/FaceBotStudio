@@ -12,6 +12,7 @@ import {
   Archive,
   ArchiveRestore,
   Bot,
+  Building2,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -20,17 +21,21 @@ import {
   Download,
   ExternalLink,
   Eye,
+  Handshake,
   Link2,
   Lock,
   MessageSquare,
+  Mic2,
   Phone,
   Plus,
   Power,
   QrCode,
   RefreshCw,
   Save,
+  Sparkles,
   Send,
   Trash2,
+  Upload,
 } from "lucide-react";
 
 import {
@@ -52,6 +57,22 @@ import {
   sanitizeEnglishSlugInput,
   truncatePublicSummary,
 } from "../../../lib/publicEventPage";
+import {
+  parsePublicSponsorEntries,
+  resolvePublicBrandMode,
+  serializePublicSponsorEntries,
+  type PublicSponsorEntry,
+} from "../../../lib/publicEventPageBranding";
+import {
+  PUBLIC_EVENT_SECTION_CATALOG,
+  parsePublicEventSections,
+  parsePublicSpeakerEntries,
+  serializePublicEventSections,
+  serializePublicSpeakerEntries,
+  type PublicEventSectionConfig,
+  type PublicEventSectionId,
+  type PublicSpeakerEntry,
+} from "../../../lib/publicEventPageLayout";
 import type {
   AdminEmailStatusResponse,
   EventRecord,
@@ -137,6 +158,7 @@ type EventWorkspaceScreenProps = {
   eventPublicDirty: boolean;
   saveEventPublicPage: () => unknown;
   publicPosterFileInputRef: RefObject<HTMLInputElement | null>;
+  handlePublicEventMediaUpload: (file: File, kind: "speaker_photo" | "sponsor_logo") => Promise<string | null>;
   handlePublicPosterFileUpload: (file: File | null) => unknown;
   publicPosterUploading: boolean;
   publicPagePosterUrl: string;
@@ -158,6 +180,7 @@ type EventWorkspaceScreenProps = {
   attendeeLocationLabel: string;
   initialSettings: Pick<
     Settings,
+    | "event_public_brand_label"
     | "event_public_cta_label"
     | "event_public_privacy_label"
     | "event_public_privacy_text"
@@ -169,6 +192,237 @@ type EventWorkspaceScreenProps = {
   publicContactPhoneHref: string;
   eventWorkspacePanel: ReactNode;
 };
+
+type PublicEventMediaUploadKind = "speaker_photo" | "sponsor_logo";
+
+type UploadableImageFieldProps = {
+  label: string;
+  value: string;
+  placeholder: string;
+  previewAlt: string;
+  uploading: boolean;
+  onChange: (value: string) => void;
+  onUploadFile: (file: File) => void;
+};
+
+function UploadableImageField({
+  label,
+  value,
+  placeholder,
+  previewAlt,
+  uploading,
+  onChange,
+  onUploadFile,
+}: UploadableImageFieldProps) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-bold uppercase text-slate-500">{label}</label>
+      <div className="space-y-3">
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder={placeholder}
+        />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <label
+            className={`inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 ${
+              uploading ? "cursor-wait opacity-70" : "cursor-pointer"
+            }`}
+          >
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="sr-only"
+              disabled={uploading}
+              onChange={(event) => {
+                const file = event.target.files?.[0] || null;
+                event.currentTarget.value = "";
+                if (file) {
+                  onUploadFile(file);
+                }
+              }}
+            />
+            {uploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+            {uploading ? "Uploading..." : "Upload Image"}
+          </label>
+
+          {value ? (
+            <ActionButton onClick={() => onChange("")} tone="neutral" className="px-3 text-xs">
+              Clear
+            </ActionButton>
+          ) : null}
+        </div>
+
+        {value ? (
+          <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 p-3">
+            <div className="flex h-24 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <img
+                key={value}
+                src={value}
+                alt={previewAlt}
+                className="h-full w-full object-contain"
+                loading="lazy"
+                onError={(event) => {
+                  event.currentTarget.style.display = "none";
+                }}
+              />
+            </div>
+            <p className="mt-2 truncate text-[11px] text-slate-500">{value}</p>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+type SponsorEditorRowProps = {
+  entry: PublicSponsorEntry;
+  index: number;
+  uploading: boolean;
+  onChange: (field: keyof PublicSponsorEntry, value: string) => void;
+  onUploadFile: (file: File) => void;
+  onRemove: () => void;
+};
+
+function SponsorEditorRow({ entry, index, uploading, onChange, onUploadFile, onRemove }: SponsorEditorRowProps) {
+  return (
+    <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">Sponsor {index + 1}</p>
+          <p className="mt-1 text-xs text-slate-500">Name or logo is enough to render a sponsor card on the public page.</p>
+        </div>
+        <ActionButton onClick={onRemove} tone="rose" className="px-3 text-xs">
+          <Trash2 className="h-3.5 w-3.5" />
+          Remove
+        </ActionButton>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Sponsor Name</label>
+          <input
+            value={entry.name}
+            onChange={(event) => onChange("name", event.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Brand A"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Tier</label>
+          <input
+            value={entry.tier}
+            onChange={(event) => onChange("tier", event.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="main, partner, community"
+          />
+        </div>
+
+        <UploadableImageField
+          label="Logo URL"
+          value={entry.logoUrl}
+          placeholder="/uploads/sponsors/brand-a.png"
+          previewAlt={`${entry.name || `Sponsor ${index + 1}`} logo`}
+          uploading={uploading}
+          onChange={(value) => onChange("logoUrl", value)}
+          onUploadFile={onUploadFile}
+        />
+
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Link URL</label>
+          <input
+            value={entry.linkUrl}
+            onChange={(event) => onChange("linkUrl", event.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="https://example.com"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type SpeakerEditorRowProps = {
+  entry: PublicSpeakerEntry;
+  index: number;
+  uploading: boolean;
+  onChange: (field: keyof PublicSpeakerEntry, value: string) => void;
+  onUploadFile: (file: File) => void;
+  onRemove: () => void;
+};
+
+function SpeakerEditorRow({ entry, index, uploading, onChange, onUploadFile, onRemove }: SpeakerEditorRowProps) {
+  return (
+    <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">Speaker {index + 1}</p>
+          <p className="mt-1 text-xs text-slate-500">A simple profile card with name, role, company, photo, and short bio.</p>
+        </div>
+        <ActionButton onClick={onRemove} tone="rose" className="px-3 text-xs">
+          <Trash2 className="h-3.5 w-3.5" />
+          Remove
+        </ActionButton>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Name</label>
+          <input
+            value={entry.name}
+            onChange={(event) => onChange("name", event.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Speaker name"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Role / Title</label>
+          <input
+            value={entry.title}
+            onChange={(event) => onChange("title", event.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="CEO, Keynote speaker"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Company / Organization</label>
+          <input
+            value={entry.company}
+            onChange={(event) => onChange("company", event.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Meetrix"
+          />
+        </div>
+
+        <UploadableImageField
+          label="Photo URL"
+          value={entry.photoUrl}
+          placeholder="/uploads/speakers/jane-doe.jpg"
+          previewAlt={entry.name || `Speaker ${index + 1}`}
+          uploading={uploading}
+          onChange={(value) => onChange("photoUrl", value)}
+          onUploadFile={onUploadFile}
+        />
+
+        <div className="md:col-span-2">
+          <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Bio</label>
+          <textarea
+            value={entry.bio}
+            onChange={(event) => onChange("bio", event.target.value)}
+            rows={4}
+            className="min-h-[7rem] w-full resize-y rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Short bio or why this speaker matters for the event."
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function EventWorkspaceScreen({
   eventWorkspaceView,
@@ -208,6 +462,7 @@ export function EventWorkspaceScreen({
   eventPublicDirty,
   saveEventPublicPage,
   publicPosterFileInputRef,
+  handlePublicEventMediaUpload,
   handlePublicPosterFileUpload,
   publicPosterUploading,
   publicPagePosterUrl,
@@ -235,6 +490,74 @@ export function EventWorkspaceScreen({
   eventWorkspacePanel,
 }: EventWorkspaceScreenProps) {
   const [mobileWorkspaceBrowserOpen, setMobileWorkspaceBrowserOpen] = useState(false);
+  const [publicMediaUploadKey, setPublicMediaUploadKey] = useState("");
+  const publicBrandMode = resolvePublicBrandMode(settings.event_public_brand_mode);
+  const publicBrandVisible = publicBrandMode !== "hidden";
+  const publicBrandLabel = settings.event_public_brand_label.trim() || initialSettings.event_public_brand_label;
+  const publicSectionEntries = parsePublicEventSections(settings.event_public_sections_json);
+  const publicSpeakerEntries = parsePublicSpeakerEntries(settings.event_public_speakers_json, { preserveEmpty: true });
+  const publicSponsorEntries = parsePublicSponsorEntries(settings.event_public_sponsors_json, { preserveEmpty: true });
+  const organizerVisible = Boolean(
+    settings.event_public_organizer_name.trim()
+    || settings.event_public_organizer_logo_url.trim()
+    || settings.event_public_organizer_description.trim()
+    || settings.event_public_organizer_contact_text.trim(),
+  );
+  const publicBrandModeLabel = publicBrandMode === "full" ? "Full" : publicBrandMode === "hidden" ? "Hidden" : "Subtle";
+  const activeMainSectionLabels = publicSectionEntries
+    .filter((section) => section.enabled)
+    .map((section) => PUBLIC_EVENT_SECTION_CATALOG.find((item) => item.id === section.id)?.label || section.id);
+
+  const updatePublicSponsorEntries = (updater: (entries: PublicSponsorEntry[]) => PublicSponsorEntry[]) => {
+    setSettings((current) => ({
+      ...current,
+      event_public_sponsors_json: serializePublicSponsorEntries(
+        updater(parsePublicSponsorEntries(current.event_public_sponsors_json, { preserveEmpty: true })),
+        { preserveEmpty: true },
+      ),
+    }));
+  };
+  const updatePublicSpeakerEntries = (updater: (entries: PublicSpeakerEntry[]) => PublicSpeakerEntry[]) => {
+    setSettings((current) => ({
+      ...current,
+      event_public_speakers_json: serializePublicSpeakerEntries(
+        updater(parsePublicSpeakerEntries(current.event_public_speakers_json, { preserveEmpty: true })),
+        { preserveEmpty: true },
+      ),
+    }));
+  };
+  const updatePublicSectionEntries = (updater: (entries: PublicEventSectionConfig[]) => PublicEventSectionConfig[]) => {
+    setSettings((current) => ({
+      ...current,
+      event_public_sections_json: serializePublicEventSections(
+        updater(parsePublicEventSections(current.event_public_sections_json)).map((entry, index) => ({
+          ...entry,
+          order: (index + 1) * 10,
+        })),
+      ),
+    }));
+  };
+  const uploadPublicEventMediaForField = async ({
+    file,
+    kind,
+    uploadKey,
+    applyUrl,
+  }: {
+    file: File;
+    kind: PublicEventMediaUploadKind;
+    uploadKey: string;
+    applyUrl: (url: string) => void;
+  }) => {
+    setPublicMediaUploadKey(uploadKey);
+    try {
+      const uploadedUrl = await handlePublicEventMediaUpload(file, kind);
+      if (uploadedUrl) {
+        applyUrl(uploadedUrl);
+      }
+    } finally {
+      setPublicMediaUploadKey((current) => (current === uploadKey ? "" : current));
+    }
+  };
 
   return (
     <div className="space-y-4 overflow-x-hidden">
@@ -765,17 +1088,21 @@ export function EventWorkspaceScreen({
                         {publicPageEnabled ? "enabled" : "draft"}
                       </StatusBadge>
                     </div>
-                    <StatusLine
-                      className="mt-1"
-                      items={[
-                        publicRegistrationEnabled ? "Inline registration on" : "Inline registration off",
-                        publicShowSeatAvailability ? "Seat counts on" : "Seat counts hidden",
-                        publicBotEnabled ? "Help chat on" : "Help chat off",
-                        publicPrivacyEnabled ? "Privacy note on" : "Privacy note off",
-                        publicContactEnabled ? "Contact options on" : "Contact options off",
-                        eventPublicDirty ? "Unsaved changes" : "All changes saved",
-                      ]}
-                    />
+                      <StatusLine
+                        className="mt-1"
+                        items={[
+                          publicRegistrationEnabled ? "Inline registration on" : "Inline registration off",
+                          publicShowSeatAvailability ? "Seat counts on" : "Seat counts hidden",
+                          publicBotEnabled ? "Help chat on" : "Help chat off",
+                          publicPrivacyEnabled ? "Privacy note on" : "Privacy note off",
+                          publicContactEnabled ? "Contact options on" : "Contact options off",
+                          publicBrandVisible ? `Brand ${publicBrandModeLabel.toLowerCase()}` : "Brand hidden",
+                          organizerVisible ? "Organizer info on" : "Organizer info off",
+                          publicSpeakerEntries.length > 0 ? `${publicSpeakerEntries.length} speakers` : "Speakers off",
+                          publicSponsorEntries.length > 0 ? `${publicSponsorEntries.length} sponsors` : "Sponsors off",
+                          eventPublicDirty ? "Unsaved changes" : "All changes saved",
+                        ]}
+                      />
                   </div>
                   <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
                     <ActionButton
@@ -907,6 +1234,87 @@ export function EventWorkspaceScreen({
                           />
                           Contact options
                         </label>
+                      </div>
+
+                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div>
+                            <h5 className="text-sm font-semibold text-slate-900">Page Sections</h5>
+                            <p className="mt-1 text-xs text-slate-500">Reorder and toggle the sections that appear in the main content column.</p>
+                          </div>
+                          <HelpPopover label="Open note for Page Sections">
+                            Hero, sticky brand pane, footer branding, and the registration sidebar stay fixed. Only the main reading column is reorderable here.
+                          </HelpPopover>
+                        </div>
+
+                        <div className="space-y-3">
+                          {publicSectionEntries.map((section, index) => {
+                            const meta = PUBLIC_EVENT_SECTION_CATALOG.find((item) => item.id === section.id);
+                            return (
+                              <div
+                                key={section.id}
+                                className="flex flex-col gap-3 rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-semibold text-slate-900">{meta?.label || section.id}</p>
+                                    <StatusBadge tone={section.enabled ? "emerald" : "neutral"}>
+                                      {section.enabled ? "shown" : "hidden"}
+                                    </StatusBadge>
+                                  </div>
+                                  <p className="mt-1 text-xs text-slate-500">{meta?.description || "Section"}</p>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                                    <input
+                                      type="checkbox"
+                                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                      checked={section.enabled}
+                                      onChange={(event) =>
+                                        updatePublicSectionEntries((entries) =>
+                                          entries.map((current) =>
+                                            current.id === section.id ? { ...current, enabled: event.target.checked } : current,
+                                          ),
+                                        )}
+                                    />
+                                    Enabled
+                                  </label>
+                                  <ActionButton
+                                    onClick={() =>
+                                      updatePublicSectionEntries((entries) => {
+                                        const next = [...entries];
+                                        if (index === 0) return next;
+                                        [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                                        return next;
+                                      })}
+                                    disabled={index === 0}
+                                    tone="neutral"
+                                    className="px-3 text-xs"
+                                  >
+                                    <ChevronUp className="h-3.5 w-3.5" />
+                                    Up
+                                  </ActionButton>
+                                  <ActionButton
+                                    onClick={() =>
+                                      updatePublicSectionEntries((entries) => {
+                                        const next = [...entries];
+                                        if (index >= next.length - 1) return next;
+                                        [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                                        return next;
+                                      })}
+                                    disabled={index >= publicSectionEntries.length - 1}
+                                    tone="neutral"
+                                    className="px-3 text-xs"
+                                  >
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                    Down
+                                  </ActionButton>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
 
                       <div className="md:col-span-2 border-t border-slate-200 pt-4">
@@ -1217,6 +1625,347 @@ export function EventWorkspaceScreen({
                       <div className="md:col-span-2 border-t border-slate-200 pt-4">
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
+                            <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                              <Sparkles className="h-4 w-4 text-blue-600" />
+                              Platform Branding
+                            </h5>
+                            <p className="mt-1 text-xs text-slate-500">Sticky header pane plus lightweight footer attribution.</p>
+                          </div>
+                          <HelpPopover label="Open note for Platform Branding">
+                            This branding layer should stay persistent enough to build platform recall, but always remain secondary to the event identity and registration CTA.
+                          </HelpPopover>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Brand Mode</label>
+                            <select
+                              value={publicBrandMode}
+                              onChange={(event) => setSettings({ ...settings, event_public_brand_mode: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="hidden">Hidden</option>
+                              <option value="subtle">Subtle</option>
+                              <option value="full">Full</option>
+                            </select>
+                            <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                              {publicBrandMode === "full"
+                                ? "Shows logo/label plus optional footer and utility links."
+                                : publicBrandMode === "hidden"
+                                ? "Removes the sticky brand pane and footer attribution."
+                                : "Shows a compact sticky pane and quiet footer mention."}
+                            </p>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Brand Label</label>
+                            <input
+                              value={settings.event_public_brand_label}
+                              onChange={(event) => setSettings({ ...settings, event_public_brand_label: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder={initialSettings.event_public_brand_label}
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Brand Logo URL</label>
+                            <input
+                              value={settings.event_public_brand_logo_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_brand_logo_url: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="/uploads/brands/meetrix-wordmark.png"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">About URL</label>
+                            <input
+                              value={settings.event_public_brand_about_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_brand_about_url: event.target.value })}
+                              disabled={publicBrandMode !== "full"}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              placeholder="https://meetrix.io/about"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Privacy URL</label>
+                            <input
+                              value={settings.event_public_brand_privacy_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_brand_privacy_url: event.target.value })}
+                              disabled={publicBrandMode !== "full"}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              placeholder="https://meetrix.io/privacy"
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Contact URL</label>
+                            <input
+                              value={settings.event_public_brand_contact_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_brand_contact_url: event.target.value })}
+                              disabled={publicBrandMode !== "full"}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              placeholder="https://meetrix.io/contact"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div>
+                            <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                              <Building2 className="h-4 w-4 text-blue-600" />
+                              Organizer Info
+                            </h5>
+                            <p className="mt-1 text-xs text-slate-500">Optional profile card rendered in the main content column.</p>
+                          </div>
+                          <HelpPopover label="Open note for Organizer Info">
+                            Keep organizer content concise. This block should support trust and identity without turning the page into a full company profile.
+                          </HelpPopover>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer Name</label>
+                            <input
+                              value={settings.event_public_organizer_name}
+                              onChange={(event) => setSettings({ ...settings, event_public_organizer_name: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Meetrix Events"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer Logo URL</label>
+                            <input
+                              value={settings.event_public_organizer_logo_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_organizer_logo_url: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="/uploads/organizers/meetrix-logo.png"
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer Description</label>
+                            <textarea
+                              value={settings.event_public_organizer_description}
+                              onChange={(event) => setSettings({ ...settings, event_public_organizer_description: event.target.value })}
+                              rows={4}
+                              className="min-h-[7rem] w-full resize-y rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Short organizer profile, mission, or event context."
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Website URL</label>
+                            <input
+                              value={settings.event_public_organizer_website_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_organizer_website_url: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="https://example.com"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Facebook URL</label>
+                            <input
+                              value={settings.event_public_organizer_facebook_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_organizer_facebook_url: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="https://facebook.com/yourpage"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">LINE URL</label>
+                            <input
+                              value={settings.event_public_organizer_line_url}
+                              onChange={(event) => setSettings({ ...settings, event_public_organizer_line_url: event.target.value })}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="https://lin.ee/youraccount"
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Contact Text</label>
+                            <textarea
+                              value={settings.event_public_organizer_contact_text}
+                              onChange={(event) => setSettings({ ...settings, event_public_organizer_contact_text: event.target.value })}
+                              rows={3}
+                              className="min-h-[5.5rem] w-full resize-y rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Support email, contact person, or lightweight organizer note."
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div>
+                            <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                              <Mic2 className="h-4 w-4 text-blue-600" />
+                              Speakers
+                            </h5>
+                            <p className="mt-1 text-xs text-slate-500">Structured speaker cards for the public page.</p>
+                          </div>
+                          <HelpPopover label="Open note for Speakers">
+                            Keep speaker cards concise. This first phase is card-based only, not a full agenda or track system.
+                          </HelpPopover>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {publicSpeakerEntries.length > 0
+                                  ? `${publicSpeakerEntries.length} speaker${publicSpeakerEntries.length === 1 ? "" : "s"} ready`
+                                  : "No speakers added yet"}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                Speaker cards appear only when the Speakers section is enabled in Page Sections.
+                              </p>
+                            </div>
+                            <ActionButton
+                              onClick={() =>
+                                updatePublicSpeakerEntries((entries) => [
+                                  ...entries,
+                                  { name: "", title: "", company: "", photoUrl: "", bio: "" },
+                                ])}
+                              tone="blue"
+                              className="px-3 text-xs"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Add Speaker
+                            </ActionButton>
+                          </div>
+
+                          {publicSpeakerEntries.length > 0 ? (
+                            <div className="space-y-3">
+                              {publicSpeakerEntries.map((entry, index) => (
+                                <SpeakerEditorRow
+                                  key={`speaker:${index}`}
+                                  entry={entry}
+                                  index={index}
+                                  uploading={publicMediaUploadKey === `speaker:${index}`}
+                                  onChange={(field, value) =>
+                                    updatePublicSpeakerEntries((entries) =>
+                                      entries.map((current, currentIndex) =>
+                                        currentIndex === index ? { ...current, [field]: value } : current,
+                                      ),
+                                    )}
+                                  onUploadFile={(file) =>
+                                    void uploadPublicEventMediaForField({
+                                      file,
+                                      kind: "speaker_photo",
+                                      uploadKey: `speaker:${index}`,
+                                      applyUrl: (uploadedUrl) =>
+                                        updatePublicSpeakerEntries((entries) =>
+                                          entries.map((current, currentIndex) =>
+                                            currentIndex === index ? { ...current, photoUrl: uploadedUrl } : current,
+                                          ),
+                                        ),
+                                    })}
+                                  onRemove={() =>
+                                    updatePublicSpeakerEntries((entries) =>
+                                      entries.filter((_, currentIndex) => currentIndex !== index),
+                                    )}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
+                              Add speaker rows to render profile cards in the main content column.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div>
+                            <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                              <Handshake className="h-4 w-4 text-blue-600" />
+                              Sponsors & Partners
+                            </h5>
+                            <p className="mt-1 text-xs text-slate-500">Logo grid data stored in event settings but edited as structured rows here.</p>
+                          </div>
+                          <HelpPopover label="Open note for Sponsors and Partners">
+                            Sponsor cards should stay logo-first and clean. This is not a gallery treatment, so keep copy short and prefer contain-safe logos.
+                          </HelpPopover>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-slate-200 bg-slate-50 px-4 py-4">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {publicSponsorEntries.length > 0
+                                  ? `${publicSponsorEntries.length} sponsor${publicSponsorEntries.length === 1 ? "" : "s"} ready`
+                                  : "No sponsors added yet"}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                Leave tier blank for a simple logo grid. Use tier values when you want grouped sections such as main or partner.
+                              </p>
+                            </div>
+                            <ActionButton
+                              onClick={() =>
+                                updatePublicSponsorEntries((entries) => [
+                                  ...entries,
+                                  { name: "", tier: "", logoUrl: "", linkUrl: "" },
+                                ])}
+                              tone="blue"
+                              className="px-3 text-xs"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Add Sponsor
+                            </ActionButton>
+                          </div>
+
+                          {publicSponsorEntries.length > 0 ? (
+                            <div className="space-y-3">
+                              {publicSponsorEntries.map((entry, index) => (
+                                <SponsorEditorRow
+                                  key={`sponsor:${index}`}
+                                  entry={entry}
+                                  index={index}
+                                  uploading={publicMediaUploadKey === `sponsor:${index}`}
+                                  onChange={(field, value) =>
+                                    updatePublicSponsorEntries((entries) =>
+                                      entries.map((current, currentIndex) =>
+                                        currentIndex === index ? { ...current, [field]: value } : current,
+                                      ),
+                                    )}
+                                  onUploadFile={(file) =>
+                                    void uploadPublicEventMediaForField({
+                                      file,
+                                      kind: "sponsor_logo",
+                                      uploadKey: `sponsor:${index}`,
+                                      applyUrl: (uploadedUrl) =>
+                                        updatePublicSponsorEntries((entries) =>
+                                          entries.map((current, currentIndex) =>
+                                            currentIndex === index ? { ...current, logoUrl: uploadedUrl } : current,
+                                          ),
+                                        ),
+                                    })}
+                                  onRemove={() =>
+                                    updatePublicSponsorEntries((entries) =>
+                                      entries.filter((_, currentIndex) => currentIndex !== index),
+                                    )}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-500">
+                              Add sponsor rows to render a logo grid or tiered sponsor blocks on the public page.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div>
                             <h5 className="text-sm font-semibold text-slate-900">Help & Contact</h5>
                             <p className="mt-1 text-xs text-slate-500">Fallback human support links and hours.</p>
                           </div>
@@ -1312,6 +2061,41 @@ export function EventWorkspaceScreen({
                                 </StatusBadge>
                               )}
                             </div>
+
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Main Column Order</p>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {activeMainSectionLabels.map((label) => (
+                                  <span
+                                    key={label}
+                                    className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
+                                  >
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+
+                            {publicBrandVisible && (
+                              <div className="rounded-[1.5rem] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.08),_transparent_55%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] px-4 py-4 shadow-sm">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700">Sticky brand pane</p>
+                                <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-900">
+                                      {publicBrandMode === "full"
+                                        ? publicBrandLabel
+                                        : `Event page by ${publicBrandLabel}`}
+                                    </p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                      {publicBrandMode === "full"
+                                        ? "Persistent platform identity with optional utility links."
+                                        : "Compact attribution that stays visible while attendees scroll."}
+                                    </p>
+                                  </div>
+                                  <StatusBadge tone="blue">{publicBrandModeLabel}</StatusBadge>
+                                </div>
+                              </div>
+                            )}
 
                             <div>
                               <h4 className="text-2xl font-bold tracking-tight text-slate-900">
@@ -1429,6 +2213,72 @@ export function EventWorkspaceScreen({
                                       Available: <span className="font-semibold text-slate-700">{settings.event_public_contact_hours.trim()}</span>
                                     </p>
                                   )}
+                                </div>
+                              )}
+
+                              {organizerVisible && publicSectionEntries.some((section) => section.id === "organizer" && section.enabled) && (
+                                <div className="mt-4 border-t border-slate-200 pt-3">
+                                  <p className="text-sm font-semibold text-slate-900">Organizer Info</p>
+                                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                                    {settings.event_public_organizer_name.trim() || "Organizer name"}
+                                  </p>
+                                  {(settings.event_public_organizer_description.trim() || settings.event_public_organizer_contact_text.trim()) && (
+                                    <p className="mt-2 text-xs leading-5 text-slate-500">
+                                      {settings.event_public_organizer_description.trim() || settings.event_public_organizer_contact_text.trim()}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+
+                              {publicSectionEntries.some((section) => section.id === "countdown" && section.enabled) && (
+                                <div className="mt-4 border-t border-slate-200 pt-3">
+                                  <p className="text-sm font-semibold text-slate-900">Countdown</p>
+                                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                                    Countdown to {timingInfo.startLabel} in {timingInfo.timeZone}
+                                  </p>
+                                </div>
+                              )}
+
+                              {publicSpeakerEntries.length > 0 && publicSectionEntries.some((section) => section.id === "speakers" && section.enabled) && (
+                                <div className="mt-4 border-t border-slate-200 pt-3">
+                                  <p className="text-sm font-semibold text-slate-900">Speakers</p>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {publicSpeakerEntries.map((entry, index) => (
+                                      <span
+                                        key={`${entry.name}:${entry.photoUrl}:${index}`}
+                                        className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
+                                      >
+                                        {entry.name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {publicSponsorEntries.length > 0 && publicSectionEntries.some((section) => section.id === "sponsors" && section.enabled) && (
+                                <div className="mt-4 border-t border-slate-200 pt-3">
+                                  <p className="text-sm font-semibold text-slate-900">Sponsors & Partners</p>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {publicSponsorEntries.map((entry, index) => (
+                                      <span
+                                        key={`${entry.name}:${entry.logoUrl}:${index}`}
+                                        className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
+                                      >
+                                        {entry.name || `Sponsor ${index + 1}`}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {publicBrandVisible && (
+                                <div className="mt-4 border-t border-slate-200 pt-3">
+                                  <p className="text-sm font-semibold text-slate-900">Footer Branding</p>
+                                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                                    {publicBrandMode === "full"
+                                      ? `${publicBrandLabel} with footer utility links`
+                                      : `Event page and registration by ${publicBrandLabel}`}
+                                  </p>
                                 </div>
                               )}
                             </div>
