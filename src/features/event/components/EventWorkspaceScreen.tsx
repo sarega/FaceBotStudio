@@ -510,7 +510,6 @@ export function EventWorkspaceScreen({
   const activeMainSectionLabels = publicSectionEntries
     .filter((section) => section.enabled)
     .map((section) => PUBLIC_EVENT_SECTION_CATALOG.find((item) => item.id === section.id)?.label || section.id);
-  const desktopPublicWorkspaceLayout = eventWorkspaceView === "public";
 
   const updatePublicSponsorEntries = (updater: (entries: PublicSponsorEntry[]) => PublicSponsorEntry[]) => {
     setSettings((current) => ({
@@ -564,17 +563,9 @@ export function EventWorkspaceScreen({
   };
 
   return (
-    <div
-      className={`space-y-4 overflow-x-hidden ${
-        desktopPublicWorkspaceLayout ? "xl:max-h-[calc(100dvh-10rem)] xl:min-h-0 xl:overflow-hidden" : ""
-      }`}
-    >
-      <div className={`grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start ${desktopPublicWorkspaceLayout ? "xl:h-full" : ""}`}>
-        <div
-          className={`min-w-0 space-y-4 xl:col-span-7 xl:self-start ${
-            desktopPublicWorkspaceLayout ? "xl:min-h-0 xl:overflow-y-auto xl:pr-1" : ""
-          }`}
-        >
+    <div className="space-y-4 overflow-x-hidden">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start">
+        <div className="min-w-0 space-y-4 xl:col-span-7 xl:self-start">
           {eventWorkspaceView === "setup" ? (
             <>
               <div className="surface-panel rounded-2xl p-4 sm:p-5">
@@ -2339,7 +2330,7 @@ export function EventWorkspaceScreen({
           )}
         </div>
 
-        <div className={`hidden min-w-0 space-y-3 xl:col-span-5 xl:self-start xl:block ${desktopPublicWorkspaceLayout ? "xl:min-h-0" : ""}`}>
+        <div className="hidden min-w-0 space-y-3 xl:col-span-5 xl:self-start xl:block">
           {eventWorkspacePanel}
         </div>
       </div>
