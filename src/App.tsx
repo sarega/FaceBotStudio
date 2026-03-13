@@ -1,4 +1,4 @@
-import { useDeferredValue, useState, useEffect, useRef, type ButtonHTMLAttributes, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useDeferredValue, useState, useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import QRCode from "qrcode";
@@ -37,7 +37,6 @@ import {
   Plus,
   Trash2,
   ChevronDown,
-  MoreHorizontal,
   CircleHelp,
   Eye,
   LayoutDashboard,
@@ -50,13 +49,44 @@ import {
   X,
 } from "lucide-react";
 import { getAdminAgentResponse, getChatResponse, type ChatPart } from "./services/gemini";
+import { AppOverlays } from "./components/overlays/AppOverlays";
 import { ChatBubble } from "./components/ChatBubble";
 import { EmailHtmlEditor } from "./components/EmailHtmlEditor";
 import { Ticket } from "./components/Ticket";
+import { AdminWorkspaceFrame } from "./components/layout/AdminWorkspaceFrame";
+import { AdminWorkspaceHeader } from "./components/layout/AdminWorkspaceHeader";
+import { AdminWorkspaceSidebar } from "./components/layout/AdminWorkspaceSidebar";
+import { WorkspaceInsightsDock } from "./components/layout/WorkspaceInsightsDock";
+import {
+  ActionButton,
+  AdminAgentDashboardMeter,
+  AdminAgentDashboardMiniStat,
+  ChannelPlatformLogo,
+  CollapseIconButton,
+  CompactStatRow,
+  CopyField,
+  HelpPopover,
+  InlineActionsMenu,
+  InlineWarning,
+  InspectorSection,
+  MenuActionItem,
+  MenuActionLink,
+  PageBanner,
+  PublicContactActionLink,
+  SelectionMarker,
+  StatusBadge,
+  StatusLine,
+} from "./components/shared/AppUi";
 import { LoadingScreen } from "./components/shared/LoadingScreen";
 import { AuthScreen } from "./features/auth/components/AuthScreen";
 import { CheckinAccessRoute } from "./features/checkin/components/CheckinAccessRoute";
+import { CheckinScreen } from "./features/checkin/components/CheckinScreen";
+import { EventWorkspacePanel } from "./features/event-workspace/components/EventWorkspacePanel";
+import { PublicInboxScreen } from "./features/inbox/components/PublicInboxScreen";
+import { LogsScreen } from "./features/logs/components/LogsScreen";
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
+import { RegistrationsScreen } from "./features/registrations/components/RegistrationsScreen";
+import { TeamAccessPanel } from "./features/team/components/TeamAccessPanel";
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
@@ -1913,872 +1943,6 @@ function getChannelTokenStatusMeta(channel: ChannelAccountRecord): { label: stri
   };
 }
 
-function ChannelPlatformLogo({
-  platform,
-  className = "h-10 w-10 rounded-2xl",
-}: {
-  platform: ChannelPlatform;
-  className?: string;
-}) {
-  const baseClass = `inline-flex shrink-0 items-center justify-center border border-white/35 text-white shadow-sm ${className}`.trim();
-  const iconClass = "h-6 w-6";
-
-  if (platform === "facebook") {
-    return (
-      <span
-        className={baseClass}
-        style={{ background: "linear-gradient(135deg, #0099FF 0%, #2563EB 100%)" }}
-        aria-hidden="true"
-      >
-        <svg viewBox="0 0 24 24" className={iconClass}>
-          <path
-            fill="rgba(255,255,255,0.98)"
-            d="M12 4.9c-4.35 0-7.9 3.18-7.9 7.1 0 2.2 1.1 4.14 2.84 5.45V20l2.62-1.45c.76.2 1.58.3 2.44.3 4.35 0 7.9-3.18 7.9-7.1S16.35 4.9 12 4.9Z"
-          />
-          <path
-            fill="#1D4ED8"
-            d="M7.5 13.9 10.84 10.33a.45.45 0 0 1 .58-.05l2.31 1.73 2.7-2.66c.2-.19.5.06.34.28l-3.34 3.57a.45.45 0 0 1-.58.05l-2.31-1.73-2.7 2.66c-.2.19-.5-.06-.34-.28Z"
-          />
-        </svg>
-      </span>
-    );
-  }
-
-  if (platform === "line_oa") {
-    return (
-      <span className={baseClass} style={{ backgroundColor: "#06C755" }} aria-hidden="true">
-        <svg viewBox="0 0 24 24" className={iconClass}>
-          <rect x="4" y="5" width="16" height="11" rx="5" fill="currentColor" />
-          <path d="M10 16h4l-2 2.6z" fill="currentColor" />
-          <text x="12" y="12.6" textAnchor="middle" fontSize="5.2" fontWeight="700" fill="#06C755" fontFamily="Arial, sans-serif">
-            LINE
-          </text>
-        </svg>
-      </span>
-    );
-  }
-
-  if (platform === "instagram") {
-    return (
-      <span
-        className={baseClass}
-        style={{ background: "linear-gradient(135deg, #F58529 0%, #DD2A7B 55%, #8134AF 100%)" }}
-        aria-hidden="true"
-      >
-        <svg viewBox="0 0 24 24" className={`${iconClass} fill-none stroke-current`}>
-          <rect x="5.25" y="5.25" width="13.5" height="13.5" rx="4" strokeWidth="1.8" />
-          <circle cx="12" cy="12" r="3.25" strokeWidth="1.8" />
-          <circle cx="16.55" cy="7.45" r="1" fill="currentColor" stroke="none" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (platform === "whatsapp") {
-    return (
-      <span className={baseClass} style={{ backgroundColor: "#25D366" }} aria-hidden="true">
-        <svg viewBox="0 0 24 24" className={`${iconClass} fill-none stroke-current`}>
-          <path d="M12 5.2a6.8 6.8 0 0 0-5.9 10.2L5.2 19l3.8-1a6.8 6.8 0 1 0 3-12.8Z" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M9.3 9.4c.2-.3.4-.4.6-.4h.5c.2 0 .4.1.5.4l.6 1.5c.1.3 0 .6-.2.8l-.5.5c.7 1.2 1.7 2.1 3 2.8l.5-.4c.2-.2.5-.2.8-.1l1.4.6c.3.1.4.3.4.5v.5c0 .3-.1.5-.4.6-.4.2-.9.4-1.4.3-3.3-.5-6.2-3.2-7-6.5-.1-.5 0-1 .2-1.5Z" fill="currentColor" stroke="none" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (platform === "telegram") {
-    return (
-      <span className={baseClass} style={{ backgroundColor: "#229ED9" }} aria-hidden="true">
-        <svg viewBox="0 0 24 24" className={iconClass}>
-          <path d="M18.8 6.2 5.9 11.2c-.9.4-.9 1.1-.2 1.3l3.3 1 1.3 4c.2.6.3.8.8.8.4 0 .6-.2.8-.4l1.8-1.7 3.7 2.8c.7.4 1.2.2 1.4-.7l2.2-10.3c.3-1-.3-1.5-1.2-1.1Z" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (platform === "web_chat") {
-    return (
-      <span className={baseClass} style={{ backgroundColor: "#475569" }} aria-hidden="true">
-        <svg viewBox="0 0 24 24" className={`${iconClass} fill-none stroke-current`}>
-          <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h5A2.5 2.5 0 0 1 15 7.5v3A2.5 2.5 0 0 1 12.5 13H10l-3 2v-2.3A2.5 2.5 0 0 1 5 10.5Z" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M12.5 10A2.5 2.5 0 0 1 15 7.5h1.5A2.5 2.5 0 0 1 19 10v2A2.5 2.5 0 0 1 16.5 14H15l-2 1.5V13.8" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </span>
-    );
-  }
-
-  return null;
-}
-
-function PublicContactActionLink({
-  href,
-  label,
-  kind,
-  compact = false,
-}: {
-  href: string;
-  label: string;
-  kind: "messenger" | "line" | "phone";
-  compact?: boolean;
-}) {
-  const iconClass = compact ? "h-3.5 w-3.5" : "h-4 w-4";
-  const baseClass = compact
-    ? "public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-    : "public-page-control inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600";
-
-  return (
-    <a href={href} target={kind === "phone" ? undefined : "_blank"} rel={kind === "phone" ? undefined : "noopener noreferrer"} className={baseClass}>
-      {kind === "messenger" ? (
-        <ChannelPlatformLogo platform="facebook" className="h-6 w-6 rounded-xl" />
-      ) : kind === "line" ? (
-        <ChannelPlatformLogo platform="line_oa" className="h-6 w-6 rounded-xl" />
-      ) : (
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-          <Phone className={iconClass} />
-        </span>
-      )}
-      {label}
-    </a>
-  );
-}
-
-const BADGE_BASE_CLASS =
-  "inline-flex max-w-full items-center justify-center rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] leading-tight text-center select-none";
-
-const BADGE_TONE_CLASSES: Record<BadgeTone, string> = {
-  neutral: "border-slate-200 bg-slate-100 text-slate-700",
-  blue: "border-blue-200 bg-blue-50 text-blue-700",
-  emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  amber: "border-amber-200 bg-amber-50 text-amber-700",
-  rose: "border-rose-200 bg-rose-50 text-rose-700",
-  violet: "border-violet-200 bg-violet-50 text-violet-700",
-};
-
-function StatusBadge({
-  tone = "neutral",
-  className = "",
-  children,
-}: {
-  tone?: BadgeTone;
-  className?: string;
-  children: ReactNode;
-}) {
-  return <span className={`${BADGE_BASE_CLASS} ${BADGE_TONE_CLASSES[tone]} ${className}`.trim()}>{children}</span>;
-}
-
-function SelectionMarker({ className = "" }: { className?: string }) {
-  return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-blue-700 ${className}`.trim()}>
-      <CheckCircle2 className="h-3.5 w-3.5" />
-      selected
-    </span>
-  );
-}
-
-const BANNER_TONE_CLASSES: Record<BannerTone, string> = {
-  neutral: "border-slate-200 bg-slate-50 text-slate-700",
-  blue: "border-blue-200 bg-blue-50 text-blue-800",
-  emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  amber: "border-amber-200 bg-amber-50 text-amber-800",
-  rose: "border-rose-200 bg-rose-50 text-rose-800",
-};
-
-function PageBanner({
-  tone = "neutral",
-  icon,
-  children,
-  className = "",
-}: {
-  tone?: BannerTone;
-  icon?: ReactNode;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={`rounded-xl border px-3 py-2 text-xs ${BANNER_TONE_CLASSES[tone]} ${className}`.trim()}>
-      <div className="flex items-start gap-2">
-        {icon ? <span className="mt-0.5 shrink-0">{icon}</span> : null}
-        <p className="leading-relaxed">{children}</p>
-      </div>
-    </div>
-  );
-}
-
-function StatusLine({
-  items,
-  className = "",
-}: {
-  items: Array<ReactNode | null | undefined | false>;
-  className?: string;
-}) {
-  const filtered = items.filter(Boolean) as ReactNode[];
-  if (filtered.length === 0) return null;
-  return (
-    <p className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-600 ${className}`.trim()}>
-      {filtered.map((item, index) => (
-        <span key={index} className="inline-flex items-center gap-1">
-          {index > 0 && <span className="text-slate-300">·</span>}
-          {item}
-        </span>
-      ))}
-    </p>
-  );
-}
-
-function SelectionCard({
-  selected,
-  searchFocused = false,
-  className = "",
-  children,
-}: {
-  selected: boolean;
-  searchFocused?: boolean;
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      className={`${selected ? "border-blue-200 bg-blue-50 shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-slate-100"} ${
-        searchFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""
-      } ${className}`.trim()}
-    >
-      {children}
-    </div>
-  );
-}
-
-function MetaRow({
-  items,
-  className = "",
-}: {
-  items: Array<ReactNode | null | undefined | false>;
-  className?: string;
-}) {
-  const filtered = items.filter(Boolean) as ReactNode[];
-  if (filtered.length === 0) return null;
-  return (
-    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 ${className}`.trim()}>
-      {filtered.map((item, index) => (
-        <span key={index} className="inline-flex items-center gap-2">
-          {index > 0 && <span className="text-slate-300">•</span>}
-          {item}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function CompactStatRow({
-  stats,
-  className = "",
-}: {
-  stats: Array<{ label: string; value: string | number; tone?: BannerTone }>;
-  className?: string;
-}) {
-  return (
-    <div className={`flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 ${className}`.trim()}>
-      {stats.map((stat) => {
-        const toneClasses =
-          stat.tone === "emerald"
-            ? "text-emerald-700"
-            : stat.tone === "amber"
-            ? "text-amber-700"
-            : stat.tone === "blue"
-            ? "text-blue-700"
-            : "text-slate-700";
-        return (
-          <div key={stat.label} className="inline-flex items-center gap-1.5">
-            <span className={`text-sm font-semibold ${toneClasses}`}>{stat.value}</span>
-            <span className="text-[11px] text-slate-500">{stat.label}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function AdminAgentDashboardMiniStat({
-  label,
-  value,
-  tone = "neutral",
-}: {
-  label: string;
-  value: string | number;
-  tone?: BadgeTone;
-}) {
-  const toneClasses =
-    tone === "emerald"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-      : tone === "amber"
-      ? "border-amber-200 bg-amber-50 text-amber-900"
-      : tone === "blue"
-      ? "border-blue-200 bg-blue-50 text-blue-900"
-      : tone === "violet"
-      ? "border-violet-200 bg-violet-50 text-violet-900"
-      : "border-slate-300 bg-white text-slate-900";
-
-  return (
-    <div className={`rounded-2xl border px-3 py-2 ${toneClasses}`.trim()}>
-      <div className="text-base font-semibold leading-none">{value}</div>
-      <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-600">{label}</div>
-    </div>
-  );
-}
-
-function AdminAgentDashboardMeter({
-  label,
-  totalLabel,
-  segments,
-  className = "",
-}: {
-  label: string;
-  totalLabel: string;
-  segments: Array<{ label: string; value: number; tone: "emerald" | "amber" | "blue" | "violet" | "slate" }>;
-  className?: string;
-}) {
-  const total = segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0);
-  const toneClassMap: Record<"emerald" | "amber" | "blue" | "violet" | "slate", { bar: string; dot: string; text: string }> = {
-    emerald: {
-      bar: "bg-emerald-500",
-      dot: "bg-emerald-500",
-      text: "text-emerald-800",
-    },
-    amber: {
-      bar: "bg-amber-400",
-      dot: "bg-amber-400",
-      text: "text-amber-800",
-    },
-    blue: {
-      bar: "bg-blue-500",
-      dot: "bg-blue-500",
-      text: "text-blue-800",
-    },
-    violet: {
-      bar: "bg-violet-500",
-      dot: "bg-violet-500",
-      text: "text-violet-800",
-    },
-    slate: {
-      bar: "bg-slate-500",
-      dot: "bg-slate-500",
-      text: "text-slate-800",
-    },
-  };
-
-  return (
-    <div className={`rounded-2xl border border-slate-300 bg-white px-3 py-2.5 ${className}`.trim()}>
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-700">{label}</p>
-        <p className="text-xs font-semibold text-slate-900">{totalLabel}</p>
-      </div>
-      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-200">
-        <div className="flex h-full w-full overflow-hidden rounded-full">
-          {total > 0 ? (
-            segments.filter((segment) => segment.value > 0).map((segment) => (
-              <div
-                key={segment.label}
-                className={toneClassMap[segment.tone].bar}
-                style={{ width: `${(segment.value / total) * 100}%` }}
-                title={`${segment.label}: ${segment.value}`}
-              />
-            ))
-          ) : (
-            <div className="h-full w-full bg-slate-300" />
-          )}
-        </div>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-        {segments.map((segment) => (
-          <div key={segment.label} className="inline-flex items-center gap-1.5 text-[11px] text-slate-700">
-            <span className={`h-2 w-2 rounded-full ${toneClassMap[segment.tone].dot}`} />
-            <span className={`font-semibold ${toneClassMap[segment.tone].text}`}>{segment.value}</span>
-            <span>{segment.label}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function InlineWarning({
-  tone = "amber",
-  children,
-  className = "",
-}: {
-  tone?: BannerTone;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <PageBanner
-      tone={tone}
-      icon={tone === "rose" ? <AlertCircle className="h-4 w-4" /> : <CircleHelp className="h-4 w-4" />}
-      className={className}
-    >
-      {children}
-    </PageBanner>
-  );
-}
-
-function InspectorSection({
-  title,
-  subtitle,
-  actions,
-  children,
-  className = "",
-}: {
-  title: string;
-  subtitle?: ReactNode;
-  actions?: ReactNode;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <section className={`rounded-2xl border border-slate-200 bg-slate-50 p-4 ${className}`.trim()}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
-          {subtitle ? <p className="mt-1 text-xs text-slate-500">{subtitle}</p> : null}
-        </div>
-        {actions}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-const ACTION_BUTTON_BASE_CLASS =
-  "inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50";
-
-const ACTION_BUTTON_TONE_CLASSES: Record<ActionTone, { idle: string; active: string }> = {
-  neutral: {
-    idle: "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50",
-    active: "border-slate-900 bg-slate-900 text-white",
-  },
-  blue: {
-    idle: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
-    active: "border-blue-600 bg-blue-600 text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)]",
-  },
-  emerald: {
-    idle: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
-    active: "border-emerald-600 bg-emerald-600 text-white",
-  },
-  amber: {
-    idle: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
-    active: "border-amber-600 bg-amber-600 text-white",
-  },
-  rose: {
-    idle: "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100",
-    active: "border-rose-600 bg-rose-600 text-white",
-  },
-  violet: {
-    idle: "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100",
-    active: "border-violet-600 bg-violet-600 text-white",
-  },
-};
-
-function ActionButton({
-  tone = "neutral",
-  active = false,
-  className = "",
-  children,
-  type,
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  tone?: ActionTone;
-  active?: boolean;
-  className?: string;
-  children: ReactNode;
-}) {
-  const toneClasses = active ? ACTION_BUTTON_TONE_CLASSES[tone].active : ACTION_BUTTON_TONE_CLASSES[tone].idle;
-  return (
-    <button
-      {...props}
-      type={type || "button"}
-      className={`${ACTION_BUTTON_BASE_CLASS} ${toneClasses} ${className}`.trim()}
-    >
-      {children}
-    </button>
-  );
-}
-
-function CollapseIconButton({
-  collapsed,
-  onClick,
-  label = "section",
-  tone = "neutral",
-  className = "",
-}: {
-  collapsed: boolean;
-  onClick: () => void;
-  label?: string;
-  tone?: ActionTone;
-  className?: string;
-}) {
-  const action = collapsed ? "Expand" : "Collapse";
-  return (
-    <ActionButton
-      onClick={onClick}
-      aria-label={`${action} ${label}`}
-      title={`${action} ${label}`}
-      tone={tone}
-      className={`h-8 w-8 min-h-0 rounded-lg p-0 text-lg font-black leading-none ${className}`.trim()}
-    >
-      <span aria-hidden="true" className="font-mono">{collapsed ? "+" : "-"}</span>
-    </ActionButton>
-  );
-}
-
-function HelpPopover({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const [panelOffset, setPanelOffset] = useState(0);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!popoverRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      setPanelOffset(0);
-      return;
-    }
-
-    const updatePosition = () => {
-      const panel = panelRef.current;
-      if (!panel) return;
-      const margin = 16;
-      const rect = panel.getBoundingClientRect();
-      let nextOffset = 0;
-
-      if (rect.left < margin) {
-        nextOffset += margin - rect.left;
-      }
-      if (rect.right > window.innerWidth - margin) {
-        nextOffset -= rect.right - (window.innerWidth - margin);
-      }
-
-      setPanelOffset(nextOffset);
-    };
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    return () => {
-      window.removeEventListener("resize", updatePosition);
-    };
-  }, [open]);
-
-  return (
-    <div className="relative shrink-0" ref={popoverRef}>
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={label}
-      >
-        <CircleHelp className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <div
-          ref={panelRef}
-          className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl"
-          style={panelOffset ? { transform: `translateX(${panelOffset}px)` } : undefined}
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function InlineActionsMenu({
-  label,
-  tone = "neutral",
-  children,
-  className = "",
-  iconOnly = false,
-}: {
-  label: string;
-  tone?: ActionTone;
-  children: ReactNode;
-  className?: string;
-  iconOnly?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div className={`relative shrink-0 ${className}`.trim()} ref={menuRef}>
-      <ActionButton
-        onClick={() => setOpen((current) => !current)}
-        tone={tone}
-        className={
-          iconOnly
-            ? "h-9 w-9 min-h-0 rounded-lg p-0"
-            : `min-w-[3.75rem] px-3 text-sm ${className.includes("w-full") ? "w-full justify-center" : ""}`.trim()
-        }
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-label={label}
-        title={label}
-      >
-        {iconOnly ? (
-          <>
-            <MoreHorizontal className="h-4 w-4" />
-            <span className="sr-only">{label}</span>
-          </>
-        ) : (
-          <>
-            <span className="truncate">{label}</span>
-            <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
-          </>
-        )}
-      </ActionButton>
-      {open && (
-        <div
-          className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(16rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-          onClick={(event) => {
-            const target = event.target as HTMLElement | null;
-            if (target?.closest('[role="menuitem"]')) {
-              setOpen(false);
-            }
-          }}
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MenuActionItem({
-  tone = "neutral",
-  className = "",
-  children,
-  type,
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  tone?: ActionTone;
-  className?: string;
-  children: ReactNode;
-}) {
-  const textClasses: Record<ActionTone, string> = {
-    neutral: "text-slate-600 hover:bg-slate-50",
-    blue: "text-blue-700 hover:bg-blue-50",
-    emerald: "text-emerald-700 hover:bg-emerald-50",
-    amber: "text-amber-700 hover:bg-amber-50",
-    rose: "text-rose-700 hover:bg-rose-50",
-    violet: "text-violet-700 hover:bg-violet-50",
-  };
-
-  return (
-    <button
-      {...props}
-      type={type || "button"}
-      role="menuitem"
-      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${textClasses[tone]} ${className}`.trim()}
-    >
-      {children}
-    </button>
-  );
-}
-
-function MenuActionLink({
-  tone = "neutral",
-  className = "",
-  children,
-  ...props
-}: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
-  tone?: ActionTone;
-  className?: string;
-  children: ReactNode;
-}) {
-  const textClasses: Record<ActionTone, string> = {
-    neutral: "text-slate-600 hover:bg-slate-50",
-    blue: "text-blue-700 hover:bg-blue-50",
-    emerald: "text-emerald-700 hover:bg-emerald-50",
-    amber: "text-amber-700 hover:bg-amber-50",
-    rose: "text-rose-700 hover:bg-rose-50",
-    violet: "text-violet-700 hover:bg-violet-50",
-  };
-
-  return (
-    <a
-      {...props}
-      role="menuitem"
-      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors ${textClasses[tone]} ${className}`.trim()}
-    >
-      {children}
-    </a>
-  );
-}
-
-function CopyField({
-  label,
-  value,
-  onCopy,
-  help,
-  copied = false,
-}: {
-  label: string;
-  value: string;
-  onCopy: () => void;
-  help?: ReactNode;
-  copied?: boolean;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <label className="block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">{label}</label>
-        {help ? (
-          <HelpPopover label={`Open setup note for ${label}`}>{help}</HelpPopover>
-        ) : null}
-      </div>
-      <div className="flex items-stretch gap-2">
-        <input
-          readOnly
-          value={value}
-          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-mono outline-none"
-        />
-        <button
-          onClick={onCopy}
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
-          aria-label={`Copy ${label}`}
-        >
-          {copied ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Copy className="w-5 h-5 text-slate-400" />}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function EventWorkspaceRow({
-  event,
-  selected,
-  searchFocused,
-  onSelect,
-}: {
-  event: EventRecord;
-  selected: boolean;
-  searchFocused: boolean;
-  onSelect: () => void;
-}) {
-  const lastUpdatedLabel = formatEventWorkspaceDateLabel(event.updated_at || event.created_at);
-  const showAvailabilityBadge =
-    event.registration_availability
-    && event.registration_availability !== "open"
-    && event.effective_status !== "closed"
-    && event.effective_status !== "cancelled"
-    && event.effective_status !== "archived";
-
-  return (
-    <button
-      id={getSearchTargetDomId("event", event.id)}
-      onClick={onSelect}
-      className="w-full overflow-hidden rounded-2xl text-left"
-    >
-      <SelectionCard selected={selected} searchFocused={searchFocused} className="rounded-2xl border px-3 py-3 transition-colors sm:px-4">
-        <div className="grid min-h-[5.75rem] grid-cols-[4.5rem_minmax(0,1fr)] gap-3 sm:grid-cols-[5rem_minmax(0,1fr)_auto] sm:items-start">
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-            {event.poster_url ? (
-              <img
-                src={event.poster_url}
-                alt={`${event.name} poster`}
-                className="h-[5.75rem] w-full object-cover sm:h-24"
-                loading="lazy"
-              />
-            ) : (
-              <div className="flex h-[5.75rem] w-full flex-col items-center justify-center gap-1 bg-gradient-to-br from-slate-100 via-white to-slate-200 text-slate-400 sm:h-24">
-                <CalendarRange className="h-4 w-4" />
-                <span className="text-[9px] font-semibold uppercase tracking-[0.16em]">No Poster</span>
-              </div>
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-start justify-between gap-2 sm:hidden">
-              <StatusBadge tone={getEventStatusTone(event.effective_status)}>
-                {getEventStatusLabel(event.effective_status)}
-              </StatusBadge>
-              {selected && <SelectionMarker />}
-            </div>
-            <p className="mt-2 line-clamp-2 text-sm font-semibold leading-snug text-slate-900 sm:mt-0">{event.name}</p>
-            <MetaRow
-              className="mt-1"
-              items={[
-                <span className="font-mono">{event.slug}</span>,
-                <span>Updated {lastUpdatedLabel}</span>,
-              ]}
-            />
-            <StatusLine
-              className="mt-1"
-              items={[
-                showAvailabilityBadge ? <>Registration {getRegistrationAvailabilityLabel(event.registration_availability)}</> : null,
-                event.is_default ? "Default workspace" : null,
-              ]}
-            />
-          </div>
-          <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex sm:justify-end sm:pl-2">
-            <StatusBadge tone={getEventStatusTone(event.effective_status)}>
-              {getEventStatusLabel(event.effective_status)}
-            </StatusBadge>
-            {selected && <SelectionMarker />}
-          </div>
-        </div>
-      </SelectionCard>
-    </button>
-  );
-}
-
 const RECOMMENDED_ADMIN_AGENT_PROMPT = [
   "You are an internal Admin Operations Agent for FB Bot Studio.",
   "Your user is an admin/operator, not an attendee.",
@@ -3733,6 +2897,8 @@ export default function App() {
   const [agentWorkspaceView, setAgentWorkspaceView] = useState<AgentWorkspaceView>("console");
   const [agentWorkspaceMenuOpen, setAgentWorkspaceMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [knowledgeActionsOpen, setKnowledgeActionsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [hoverDropdownEnabled, setHoverDropdownEnabled] = useState(false);
@@ -3949,6 +3115,7 @@ export default function App() {
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
   const isOperationsTab = activeTab === "registrations" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
+  const effectiveSidebarCollapsed = sidebarCollapsed;
   const primaryTabs = [
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
     ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: "Mail" }] : []),
@@ -5552,6 +4719,7 @@ export default function App() {
     clearMenuCloseTimer(setupMenuCloseTimerRef);
     clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
     setUserMenuOpen(false);
+    setMobileSidebarOpen(false);
     setKnowledgeActionsOpen(false);
     setGlobalSearchOpen(false);
     setHelpOpen(false);
@@ -6752,6 +5920,27 @@ export default function App() {
         clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
       },
     });
+  };
+
+  const handleToggleSidebarCollapsed = () => {
+    setEventWorkspaceMenuOpen(false);
+    setOperationsMenuOpen(false);
+    setSetupMenuOpen(false);
+    setAgentWorkspaceMenuOpen(false);
+    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
+    clearMenuCloseTimer(operationsMenuCloseTimerRef);
+    clearMenuCloseTimer(setupMenuCloseTimerRef);
+    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
+    setUserMenuOpen(false);
+    setSidebarCollapsed((current) => !current);
+  };
+
+  const handleToggleMobileSidebar = () => {
+    setMobileSidebarOpen((current) => !current);
+  };
+
+  const handleCloseMobileSidebar = () => {
+    setMobileSidebarOpen(false);
   };
 
   const handleSelectEvent = (nextEventId: string) => {
@@ -9393,171 +8582,31 @@ export default function App() {
     || setupWebhookItems[0]
     || webhookConfigItems[0];
   const teamAccessPanel = (role === "owner" || role === "admin") ? (
-    <div className="space-y-4">
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Shield className="w-5 h-5 text-blue-600" />
-              Team Access
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">Session-based admin access with roles stored in the database.</p>
-            <p className="mt-2 text-xs text-amber-700">
-              Delete removes the account permanently, revokes active sessions, and cannot be undone.
-            </p>
-          </div>
-          <button
-            onClick={fetchTeamUsers}
-            disabled={teamLoading}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white transition-colors hover:bg-slate-50 disabled:opacity-50"
-            title="Refresh users"
-          >
-            <RefreshCw className={`w-4 h-4 text-slate-500 ${teamLoading ? "animate-spin" : ""}`} />
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.92fr)]">
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-slate-900">Current Members</p>
-              <p className="text-xs text-slate-500">Manage active accounts, roles, and emergency access changes.</p>
-            </div>
-            <span className="text-xs font-medium text-slate-500">{teamUsers.length} members</span>
-          </div>
-          <div className="space-y-3">
-            {teamUsers.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                No users loaded yet.
-              </div>
-            ) : (
-              teamUsers.map((user) => (
-                <div key={user.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2.5">
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900">{user.display_name}</p>
-                      <p className="mt-1 text-xs text-slate-500">{user.username}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                      <StatusLine
-                        items={[
-                          user.is_active ? "active" : "disabled",
-                          user.role,
-                        ]}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-                    <div>
-                      {canManageTargetRole(user) ? (
-                        <select
-                          value={user.role}
-                          onChange={(e) => handleUserRoleChange(user.id, e.target.value as UserRole)}
-                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          disabled={teamLoading}
-                        >
-                          {MANAGEABLE_ROLES.filter((roleOption) => authUser?.role === "owner" || (roleOption !== "owner" && roleOption !== "admin")).map((roleOption) => (
-                            <option key={roleOption} value={roleOption}>
-                              {roleOption}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-slate-400">
-                          Role change is restricted for this account.
-                        </div>
-                      )}
-                    </div>
-                    {(canManageTargetAccess(user) || canDeleteTeamUser(user)) && (
-                      <div className="flex flex-wrap gap-2 lg:justify-end">
-                        <ActionButton
-                          onClick={() => handleUserAccessToggle(user.id, !user.is_active)}
-                          disabled={teamLoading}
-                          tone={user.is_active ? "rose" : "emerald"}
-                          className="text-sm"
-                        >
-                          {user.is_active ? "Remove Access" : "Restore Access"}
-                        </ActionButton>
-                        {canDeleteTeamUser(user) && (
-                          <ActionButton
-                            onClick={() => void handleDeleteUser(user)}
-                            disabled={teamLoading}
-                            tone="rose"
-                            className="text-sm"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                            Delete Member
-                          </ActionButton>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {canManageUsers && (
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-            <div className="flex items-center gap-2">
-              <UserPlus className="w-4 h-4 text-blue-600" />
-              <p className="text-sm font-semibold text-slate-900">Add Team Member</p>
-            </div>
-            <p className="mt-1 text-xs text-slate-500">Create a new admin workspace account with a role and temporary password.</p>
-            <div className="mt-3 space-y-2.5">
-              <input
-                value={newUserDisplayName}
-                onChange={(e) => setNewUserDisplayName(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Display name"
-              />
-              <input
-                value={newUserUsername}
-                onChange={(e) => setNewUserUsername(e.target.value.toLowerCase())}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="username"
-              />
-              <input
-                type="password"
-                value={newUserPassword}
-                onChange={(e) => setNewUserPassword(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Temporary password"
-              />
-              <select
-                value={newUserRole}
-                onChange={(e) => setNewUserRole(e.target.value as UserRole)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {MANAGEABLE_ROLES.filter((roleOption) => roleOption !== "owner" && (role !== "admin" || roleOption !== "admin")).map((roleOption) => (
-                  <option key={roleOption} value={roleOption}>
-                    {roleOption}
-                  </option>
-                ))}
-              </select>
-              <ActionButton
-                onClick={handleCreateUser}
-                disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8}
-                tone="blue"
-                active
-                className="w-full text-sm"
-              >
-                <UserPlus className="w-4 h-4" />
-                Create User
-              </ActionButton>
-            </div>
-            {teamMessage && (
-              <p className={`mt-4 text-xs ${teamMessage.toLowerCase().includes("failed") || teamMessage.toLowerCase().includes("error") || teamMessage.toLowerCase().includes("exists") ? "text-rose-600" : "text-emerald-600"}`}>
-                {teamMessage}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    <TeamAccessPanel
+      role={role}
+      authUser={authUser}
+      teamLoading={teamLoading}
+      teamUsers={teamUsers}
+      teamMessage={teamMessage}
+      canManageUsers={canManageUsers}
+      manageableRoles={MANAGEABLE_ROLES}
+      newUserDisplayName={newUserDisplayName}
+      onNewUserDisplayNameChange={setNewUserDisplayName}
+      newUserUsername={newUserUsername}
+      onNewUserUsernameChange={setNewUserUsername}
+      newUserPassword={newUserPassword}
+      onNewUserPasswordChange={setNewUserPassword}
+      newUserRole={newUserRole}
+      onNewUserRoleChange={setNewUserRole}
+      canManageTargetRole={canManageTargetRole}
+      canManageTargetAccess={canManageTargetAccess}
+      canDeleteTeamUser={canDeleteTeamUser}
+      onRefresh={fetchTeamUsers}
+      onUserRoleChange={handleUserRoleChange}
+      onUserAccessToggle={handleUserAccessToggle}
+      onDeleteUser={handleDeleteUser}
+      onCreateUser={handleCreateUser}
+    />
   ) : null;
 
   const logStatusMessages = [manualOverrideMessage, logRegistrationMessage].filter(Boolean);
@@ -10073,494 +9122,109 @@ export default function App() {
   }
 
   return (
-    <div
-      className={`app-shell bg-slate-50 text-slate-900 font-sans ${
-        isChatConsoleTab ? "flex h-dvh flex-col overflow-hidden" : "min-h-dvh"
-      }`}
-    >
-      <header className={`app-header-surface sticky top-0 z-20 border-b border-slate-200 bg-white backdrop-blur ${
-        isAgentMobileFocusMode ? "hidden lg:block" : ""
-      }`}>
-        <div className="max-w-7xl mx-auto px-3 py-2 sm:px-4 lg:px-6">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)_minmax(0,1fr)] lg:items-center">
-            <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-blue-600 shadow-[0_10px_24px_rgba(37,99,235,0.2)] sm:h-10 sm:w-10">
-                <Bot className="h-5 w-5 text-white" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="truncate text-[1.05rem] font-bold tracking-tight sm:text-2xl">FB Bot Studio</h1>
-                  {selectedEvent && (
-                    <>
-                      <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)} className="inline-flex">
-                        {getEventStatusLabel(selectedEvent.effective_status)}
-                      </StatusBadge>
-                      {selectedEvent.registration_availability === "full" && (
-                        <StatusBadge tone="rose" className="inline-flex">full</StatusBadge>
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="col-start-2 row-start-1 relative justify-self-end self-start lg:col-start-3" ref={userMenuRef}>
-              <button
-                onClick={() => setUserMenuOpen((open) => !open)}
-                className="inline-flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:px-3"
-                aria-expanded={userMenuOpen}
-                aria-haspopup="menu"
-              >
-                <div className="hidden text-right sm:block">
-                  <p className="text-sm font-semibold leading-none">{authUser?.display_name || authUser?.username}</p>
-                  <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
-                </div>
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-                  <User className="h-4 w-4" />
-                </span>
-                <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />
-              </button>
-              {userMenuOpen && (
-                <div className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-1.5rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                    <p className="truncate text-sm font-semibold text-slate-900">{authUser?.display_name || authUser?.username}</p>
-                    <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
-                  </div>
-                  <div className="mt-3">
-                    <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
-                      <MonitorCog className="h-3.5 w-3.5" />
-                      Theme
-                    </div>
-                    <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
-                      {([
-                        { id: "light", label: "Light" },
-                        { id: "dark", label: "Dark" },
-                        { id: "system", label: "System" },
-                      ] as Array<{ id: ThemeMode; label: string }>).map((mode) => (
-                        <button
-                          key={mode.id}
-                          onClick={() => {
-                            setThemeMode(mode.id);
-                            setUserMenuOpen(false);
-                          }}
-                          className={`rounded-lg px-2 py-2 text-xs font-semibold transition-colors ${
-                            themeMode === mode.id
-                              ? "bg-white text-blue-600 shadow-sm"
-                              : "text-slate-600 hover:bg-slate-200"
-                          }`}
-                        >
-                          {mode.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleLogout}
-                    className="mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                    role="menuitem"
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Logout
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="col-span-2 row-start-2 lg:col-span-1 lg:col-start-2 lg:row-start-1 lg:flex lg:justify-center">
-              <label htmlFor="event-selector" className="sr-only">
-                Workspace switcher
-              </label>
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-1.5 lg:w-[min(32rem,100%)]">
-                <CalendarRange className="h-4 w-4 shrink-0 text-slate-400" />
-                <select
-                  id="event-selector"
-                  value={selectedEventAvailableInSelector ? selectedEventId : ""}
-                  onChange={(e) => {
-                    if (!handleSelectEvent(e.target.value)) {
-                      e.currentTarget.value = selectedEventId;
-                    }
-                  }}
-                  disabled={!selectorEvents.length || eventLoading}
-                  className="min-w-0 w-full truncate bg-transparent text-sm font-medium outline-none disabled:opacity-60"
-                >
-                  <option value="" disabled>
-                    {selectorPlaceholderLabel}
-                  </option>
-                  {selectorEvents.map((event) => (
-                    <option key={event.id} value={event.id}>
-                      {event.name} ({getEventStatusLabel(event.effective_status)}{event.registration_availability && event.registration_availability !== "open" ? ` • ${getRegistrationAvailabilityLabel(event.registration_availability)}` : ""})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-1.5 flex items-center gap-2">
-            <div className="app-toolbar-surface grid flex-1 grid-flow-col auto-cols-fr gap-1 rounded-xl bg-slate-100 p-1 sm:flex sm:flex-wrap sm:gap-1 sm:rounded-2xl">
-              {primaryTabs.map((tab) => {
-                if (tab.id === "event") {
-                  return (
-                    <div
-                      key={tab.id}
-                      className="relative min-w-0"
-                      ref={eventWorkspaceMenuRef}
-                      onMouseEnter={() => {
-                        if (!hoverDropdownEnabled) return;
-                        clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
-                        setEventWorkspaceMenuOpen(true);
-                        clearMenuCloseTimer(setupMenuCloseTimerRef);
-                        setSetupMenuOpen(false);
-                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                        setOperationsMenuOpen(false);
-                        clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-                        setAgentWorkspaceMenuOpen(false);
-                      }}
-                      onMouseLeave={() => {
-                        scheduleEventWorkspaceMenuClose();
-                      }}
-                    >
-                      <button
-                        onClick={() => {
-                          setAgentWorkspaceMenuOpen(false);
-                          if (hoverDropdownEnabled) {
-                            setEventWorkspaceMenuOpen(true);
-                            return;
-                          }
-                          setEventWorkspaceMenuOpen((open) => !open);
-                        }}
-                        className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                          activeTab === "event" || eventWorkspaceMenuOpen
-                            ? "bg-white text-blue-600 shadow-sm"
-                            : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                        }`}
-                        aria-expanded={eventWorkspaceMenuOpen}
-                        aria-haspopup="menu"
-                        aria-current={activeTab === "event" ? "page" : undefined}
-                      >
-                        <selectedEventWorkspaceTab.icon className="h-4 w-4 shrink-0" />
-                        <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
-                        {eventWorkspaceDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
-                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${eventWorkspaceMenuOpen ? "rotate-180" : ""}`} />
-                      </button>
-                      {eventWorkspaceMenuOpen && (
-                        <div
-                          className="app-overlay-surface absolute left-0 top-full z-30 mt-2 w-max min-w-[13rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-                          onMouseEnter={() => {
-                            if (!hoverDropdownEnabled) return;
-                            clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
-                          }}
-                          onMouseLeave={() => {
-                            scheduleEventWorkspaceMenuClose();
-                          }}
-                        >
-                          {eventWorkspaceTabs.map((eventViewTab) => (
-                            <button
-                              key={eventViewTab.id}
-                              onClick={() => {
-                                handleOpenEventWorkspaceView(eventViewTab.id);
-                              }}
-                              className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
-                                activeTab === "event" && eventWorkspaceView === eventViewTab.id
-                                  ? "bg-blue-50 text-blue-700"
-                                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                              }`}
-                              role="menuitem"
-                            >
-                              <eventViewTab.icon className="h-4 w-4" />
-                              <span className="font-medium">{eventViewTab.label}</span>
-                              {eventViewTab.id === "setup" && eventSetupDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
-                              {eventViewTab.id === "public" && eventPublicDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
-
-                if (tab.id === "agent") {
-                  return (
-                    <div
-                      key={tab.id}
-                      className="relative min-w-0"
-                      ref={agentWorkspaceMenuRef}
-                      onMouseEnter={() => {
-                        if (!hoverDropdownEnabled) return;
-                        clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-                        setAgentWorkspaceMenuOpen(true);
-                        clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
-                        setEventWorkspaceMenuOpen(false);
-                        clearMenuCloseTimer(setupMenuCloseTimerRef);
-                        setSetupMenuOpen(false);
-                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                        setOperationsMenuOpen(false);
-                      }}
-                      onMouseLeave={() => {
-                        scheduleAgentWorkspaceMenuClose();
-                      }}
-                    >
-                      <button
-                        onClick={() => {
-                          setEventWorkspaceMenuOpen(false);
-                          if (hoverDropdownEnabled) {
-                            setAgentWorkspaceMenuOpen(true);
-                            return;
-                          }
-                          setAgentWorkspaceMenuOpen((open) => !open);
-                        }}
-                        className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                          activeTab === "agent" || agentWorkspaceMenuOpen
-                            ? "bg-white text-blue-600 shadow-sm"
-                            : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                        }`}
-                        aria-expanded={agentWorkspaceMenuOpen}
-                        aria-haspopup="menu"
-                        aria-current={activeTab === "agent" ? "page" : undefined}
-                      >
-                        <tab.icon className="h-4 w-4 shrink-0" />
-                        <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
-                        {agentSettingsDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
-                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${agentWorkspaceMenuOpen ? "rotate-180" : ""}`} />
-                      </button>
-                      {agentWorkspaceMenuOpen && (
-                        <div
-                          className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[13rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-                          onMouseEnter={() => {
-                            if (!hoverDropdownEnabled) return;
-                            clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-                          }}
-                          onMouseLeave={() => {
-                            scheduleAgentWorkspaceMenuClose();
-                          }}
-                        >
-                          {agentWorkspaceTabs.map((agentViewTab) => (
-                            <button
-                              key={agentViewTab.id}
-                              onClick={() => {
-                                if (!handleNavigateToTab("agent")) return;
-                                setAgentWorkspaceView(agentViewTab.id);
-                                setAgentWorkspaceMenuOpen(false);
-                                clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-                                if (agentViewTab.id === "console") {
-                                  forceScrollAdminAgentToBottom();
-                                }
-                              }}
-                              className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
-                                activeTab === "agent" && agentWorkspaceView === agentViewTab.id
-                                  ? "bg-blue-50 text-blue-700"
-                                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                              }`}
-                              role="menuitem"
-                            >
-                              <agentViewTab.icon className="h-4 w-4" />
-                              <span className="font-medium">{agentViewTab.label}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
-
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => handleNavigateToTab(tab.id)}
-                    className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                      activeTab === tab.id
-                        ? "bg-white text-blue-600 shadow-sm"
-                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                    }`}
-                    aria-current={activeTab === tab.id ? "page" : undefined}
-                  >
-                    <tab.icon className="h-4 w-4 shrink-0" />
-                    <span className="sr-only sm:not-sr-only sm:truncate">{tab.label}</span>
-                    {(tab.id === "mail" && eventMailDirty) && (
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
-                    )}
-                    {(tab.id === "design" && eventContextDirty) && (
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />
-                    )}
-                  </button>
-                );
-              })}
-              {operationsTabs.length > 0 && (
-                <div
-                  className="relative min-w-0"
-                  ref={operationsMenuRef}
-                  onMouseEnter={() => {
-                    if (!hoverDropdownEnabled) return;
-                    clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                    setOperationsMenuOpen(true);
-                    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
-                    setEventWorkspaceMenuOpen(false);
-                    clearMenuCloseTimer(setupMenuCloseTimerRef);
-                    setSetupMenuOpen(false);
-                    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-                    setAgentWorkspaceMenuOpen(false);
-                  }}
-                  onMouseLeave={() => {
-                    scheduleOperationsMenuClose();
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      setEventWorkspaceMenuOpen(false);
-                      setAgentWorkspaceMenuOpen(false);
-                      if (hoverDropdownEnabled) {
-                        setOperationsMenuOpen(true);
-                        return;
-                      }
-                      setOperationsMenuOpen((open) => !open);
-                    }}
-                    className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                      isOperationsTab || operationsMenuOpen
-                        ? "bg-white text-blue-600 shadow-sm"
-                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                    }`}
-                    aria-expanded={operationsMenuOpen}
-                    aria-haspopup="menu"
-                  >
-                    <Users className="h-4 w-4 shrink-0" />
-                    <span className="sr-only sm:not-sr-only sm:truncate">Operations</span>
-                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
-                  </button>
-                  {operationsMenuOpen && (
-                    <div
-                      className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-                      onMouseEnter={() => {
-                        if (!hoverDropdownEnabled) return;
-                        clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                      }}
-                      onMouseLeave={() => {
-                        scheduleOperationsMenuClose();
-                      }}
-                    >
-                      {operationsTabs.map((tab) => (
-                        <button
-                          key={tab.id}
-                          onClick={() => {
-                            handleNavigateToTab(tab.id);
-                          }}
-                          className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
-                            activeTab === tab.id
-                              ? "bg-blue-50 text-blue-700"
-                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                          }`}
-                          role="menuitem"
-                        >
-                          <tab.icon className="h-4 w-4" />
-                          <span className="font-medium">{tab.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              {setupTabs.length > 0 && selectedSetupTab && (
-                <div
-                  className="relative min-w-0"
-                  ref={setupMenuRef}
-                  onMouseEnter={() => {
-                    if (!hoverDropdownEnabled) return;
-                    clearMenuCloseTimer(setupMenuCloseTimerRef);
-                    setSetupMenuOpen(true);
-                    clearMenuCloseTimer(eventWorkspaceMenuCloseTimerRef);
-                    setEventWorkspaceMenuOpen(false);
-                    clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                    setOperationsMenuOpen(false);
-                    clearMenuCloseTimer(agentWorkspaceMenuCloseTimerRef);
-                    setAgentWorkspaceMenuOpen(false);
-                  }}
-                  onMouseLeave={() => {
-                    scheduleSetupMenuClose();
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      setEventWorkspaceMenuOpen(false);
-                      setAgentWorkspaceMenuOpen(false);
-                      if (hoverDropdownEnabled) {
-                        setSetupMenuOpen(true);
-                        return;
-                      }
-                      setSetupMenuOpen((open) => !open);
-                    }}
-                    className={`flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                      isSetupTab || setupMenuOpen
-                        ? "bg-white text-blue-600 shadow-sm"
-                        : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                    }`}
-                    aria-expanded={setupMenuOpen}
-                    aria-haspopup="menu"
-                  >
-                    <selectedSetupTab.icon className="h-4 w-4 shrink-0" />
-                    <span className="sr-only sm:not-sr-only sm:truncate">Setup</span>
-                    {workspaceSetupDirty && <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400" aria-hidden />}
-                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
-                  </button>
-                  {setupMenuOpen && (
-                    <div
-                      className="app-overlay-surface absolute right-0 top-full z-30 mt-2 w-max min-w-[11.5rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-                      onMouseEnter={() => {
-                        if (!hoverDropdownEnabled) return;
-                        clearMenuCloseTimer(setupMenuCloseTimerRef);
-                      }}
-                      onMouseLeave={() => {
-                        scheduleSetupMenuClose();
-                      }}
-                    >
-                      {setupTabs.map((tab) => (
-                        <button
-                          key={tab.id}
-                          onClick={() => {
-                            handleNavigateToTab(tab.id);
-                          }}
-                          className={`flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors focus-visible:bg-slate-100 focus-visible:text-slate-900 ${
-                            activeTab === tab.id
-                              ? "bg-blue-50 text-blue-700"
-                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                          }`}
-                          role="menuitem"
-                        >
-                          <tab.icon className="h-4 w-4" />
-                          <span className="font-medium">{tab.label}</span>
-                          {tab.id === "settings" && workspaceSetupDirty && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              <button
-                onClick={() => setGlobalSearchOpen(true)}
-                className={`flex min-h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-semibold transition-all sm:min-h-9 sm:rounded-xl sm:px-2.5 ${
-                  globalSearchOpen
-                    ? "bg-white text-blue-600 shadow-sm"
-                    : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                }`}
-                aria-label="Open global search"
-              >
-                <Search className="h-4 w-4 shrink-0" />
-                <span className="sr-only sm:not-sr-only sm:truncate">Search</span>
-                <span className="hidden rounded-lg bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 lg:inline-flex">
-                  {searchShortcutLabel}
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main
-        className={
-          isChatConsoleTab
-            ? isAgentMobileFocusMode
-              ? "max-w-7xl mx-auto flex-1 min-h-0 overflow-hidden px-0 py-0 lg:px-6 lg:py-5"
-              : "max-w-7xl mx-auto flex-1 min-h-0 overflow-hidden px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-5"
-            : `max-w-7xl mx-auto px-3 py-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4 lg:px-6 lg:py-5 ${canEditSettings ? "lg:pb-28" : ""}`
-        }
+    <>
+      <AdminWorkspaceFrame
+        isChatConsoleTab={isChatConsoleTab}
+        isAgentMobileFocusMode={isAgentMobileFocusMode}
+        canEditSettings={canEditSettings}
+        header={(
+          <AdminWorkspaceHeader
+            isAgentMobileFocusMode={isAgentMobileFocusMode}
+            sidebarCollapsed={effectiveSidebarCollapsed}
+            onToggleSidebarCollapsed={handleToggleSidebarCollapsed}
+            mobileSidebarOpen={mobileSidebarOpen}
+            onToggleMobileSidebar={handleToggleMobileSidebar}
+            selectedEvent={selectedEvent}
+            getEventStatusTone={getEventStatusTone}
+            getEventStatusLabel={getEventStatusLabel}
+            getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+            selectedEventAvailableInSelector={selectedEventAvailableInSelector}
+            selectedEventId={selectedEventId}
+            selectorEvents={selectorEvents}
+            selectorPlaceholderLabel={selectorPlaceholderLabel}
+            eventLoading={eventLoading}
+            onSelectEvent={handleSelectEvent}
+            searchShortcutLabel={searchShortcutLabel}
+            globalSearchOpen={globalSearchOpen}
+            setGlobalSearchOpen={setGlobalSearchOpen}
+          />
+        )}
+        sidebar={(
+          <AdminWorkspaceSidebar
+            isAgentMobileFocusMode={isAgentMobileFocusMode}
+            collapsed={effectiveSidebarCollapsed}
+            mobileOpen={mobileSidebarOpen}
+            onCloseMobileSidebar={handleCloseMobileSidebar}
+            userMenuRef={userMenuRef}
+            userMenuOpen={userMenuOpen}
+            setUserMenuOpen={setUserMenuOpen}
+            authUser={authUser}
+            themeMode={themeMode}
+            setThemeMode={setThemeMode}
+            onLogout={handleLogout}
+            selectedEvent={selectedEvent}
+            getEventStatusTone={getEventStatusTone}
+            getEventStatusLabel={getEventStatusLabel}
+            getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+            primaryTabs={primaryTabs}
+            activeTab={activeTab}
+            hoverDropdownEnabled={hoverDropdownEnabled}
+            eventWorkspaceTabs={eventWorkspaceTabs}
+            selectedEventWorkspaceTab={selectedEventWorkspaceTab}
+            eventWorkspaceView={eventWorkspaceView}
+            eventWorkspaceMenuRef={eventWorkspaceMenuRef}
+            eventWorkspaceMenuOpen={eventWorkspaceMenuOpen}
+            setEventWorkspaceMenuOpen={setEventWorkspaceMenuOpen}
+            eventWorkspaceDirty={eventWorkspaceDirty}
+            eventSetupDirty={eventSetupDirty}
+            eventPublicDirty={eventPublicDirty}
+            setupMenuRef={setupMenuRef}
+            setupMenuOpen={setupMenuOpen}
+            setSetupMenuOpen={setSetupMenuOpen}
+            selectedSetupTab={selectedSetupTab}
+            setupTabs={setupTabs}
+            isSetupTab={isSetupTab}
+            workspaceSetupDirty={workspaceSetupDirty}
+            operationsMenuRef={operationsMenuRef}
+            operationsMenuOpen={operationsMenuOpen}
+            setOperationsMenuOpen={setOperationsMenuOpen}
+            operationsTabs={operationsTabs}
+            isOperationsTab={isOperationsTab}
+            agentWorkspaceMenuRef={agentWorkspaceMenuRef}
+            agentWorkspaceMenuOpen={agentWorkspaceMenuOpen}
+            setAgentWorkspaceMenuOpen={setAgentWorkspaceMenuOpen}
+            agentWorkspaceTabs={agentWorkspaceTabs}
+            agentWorkspaceView={agentWorkspaceView}
+            setAgentWorkspaceView={setAgentWorkspaceView}
+            agentSettingsDirty={agentSettingsDirty}
+            eventMailDirty={eventMailDirty}
+            eventContextDirty={eventContextDirty}
+            eventWorkspaceMenuCloseTimerRef={eventWorkspaceMenuCloseTimerRef}
+            setupMenuCloseTimerRef={setupMenuCloseTimerRef}
+            operationsMenuCloseTimerRef={operationsMenuCloseTimerRef}
+            agentWorkspaceMenuCloseTimerRef={agentWorkspaceMenuCloseTimerRef}
+            clearMenuCloseTimer={clearMenuCloseTimer}
+            scheduleEventWorkspaceMenuClose={scheduleEventWorkspaceMenuClose}
+            scheduleSetupMenuClose={scheduleSetupMenuClose}
+            scheduleOperationsMenuClose={scheduleOperationsMenuClose}
+            scheduleAgentWorkspaceMenuClose={scheduleAgentWorkspaceMenuClose}
+            onNavigateToTab={handleNavigateToTab}
+            onOpenEventWorkspaceView={handleOpenEventWorkspaceView}
+            onForceScrollAdminAgentToBottom={forceScrollAdminAgentToBottom}
+          />
+        )}
+        dock={(
+          <WorkspaceInsightsDock
+            visible={canEditSettings && !isChatConsoleTab}
+            open={insightsPanelOpen}
+            onToggle={() => setInsightsPanelOpen((open) => !open)}
+            selectedEventStatusLabel={selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No selected event"}
+            hasAnyUnsavedSettings={hasAnyUnsavedSettings}
+            activeLlmModel={activeLlmModel}
+            eventTokens={formatCompactNumber(selectedEventUsage?.total_tokens || 0)}
+            totalCost={formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0)}
+          />
+        )}
       >
         <AnimatePresence mode="wait">
           {activeTab === "event" && (
@@ -11751,280 +10415,51 @@ export default function App() {
                 </div>
 
                 <div className="space-y-3 xl:col-span-5 xl:self-start">
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${
-                    isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)
-                      ? "p-3 sm:p-3"
-                      : "flex flex-col space-y-4 p-4 sm:p-5 xl:h-[calc(100dvh-10rem)] xl:min-h-[42rem]"
-                  }`}>
-                    <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "items-center" : "items-start"}`}>
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <CalendarRange className="w-5 h-5 text-blue-600" />
-                          Event Workspace
-                        </h3>
-                        <p className="text-sm text-slate-500">Create, switch, and manage the lifecycle of event workspaces.</p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <ActionButton
-                          onClick={() => setEventCreateOpen((current) => !current)}
-                          tone="blue"
-                          active={eventCreateOpen}
-                          className="text-sm shadow-[0_10px_24px_rgba(37,99,235,0.12)]"
-                        >
-                          <Plus className="h-4 w-4" />
-                          {eventCreateOpen ? "Close" : "New Event"}
-                        </ActionButton>
-                        <button
-                          onClick={() => void Promise.all([fetchEvents(), fetchChannels()])}
-                          disabled={eventLoading}
-                          className="p-2 hover:bg-slate-100 rounded-xl transition-colors disabled:opacity-50"
-                          title="Refresh events"
-                        >
-                          <RefreshCw className={`w-4 h-4 text-slate-500 ${eventLoading ? "animate-spin" : ""}`} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {eventCreateOpen && (
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
-                        <div className="flex flex-col gap-2 sm:flex-row">
-                          <input
-                            value={newEventName}
-                            onChange={(e) => setNewEventName(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="New event name"
-                          />
-                          <ActionButton
-                            onClick={() => void handleCreateEvent()}
-                            disabled={!newEventName.trim() || eventLoading}
-                            tone="blue"
-                            active
-                            className="w-full text-sm sm:w-auto"
-                          >
-                            Create Event
-                          </ActionButton>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "space-y-3" : "space-y-3 xl:flex-shrink-0"}>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        <div className="relative min-w-0 flex-1">
-                          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                          <input
-                            value={eventListQuery}
-                            onChange={(e) => setEventListQuery(e.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Search events by name, slug, or status"
-                          />
-                          {eventListQuery && (
-                            <button
-                              onClick={() => setEventListQuery("")}
-                              className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                              aria-label="Clear event search"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                        <div className="sm:w-56">
-                          <select
-                            value={eventWorkspaceSort}
-                            onChange={(e) => setEventWorkspaceSort(e.target.value as EventWorkspaceSort)}
-                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            aria-label="Sort events"
-                          >
-                            <option value="event_start_desc">Event Start</option>
-                            <option value="name_asc">Alphabetical</option>
-                            <option value="modified_desc">Modified Time</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        {eventWorkspaceFilterOptions.map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            onClick={() => setEventWorkspaceFilter(option.id)}
-                            className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                              eventWorkspaceFilter === option.id
-                                ? "border-slate-900 bg-slate-900 text-white"
-                                : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
-                            }`}
-                          >
-                            <span>{option.label}</span>
-                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
-                              eventWorkspaceFilter === option.id ? "bg-white/15 text-white" : "bg-white text-slate-500"
-                            }`}>
-                              {option.count}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                        <span>{filteredEventWorkspaceEvents.length} matching events</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{eventWorkspaceCounts.active + eventWorkspaceCounts.pending} active queue</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{eventWorkspaceCounts.inactive} inactive</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{eventWorkspaceCounts.archived} archived</span>
-                        <span className="text-slate-300">•</span>
-                        <span>{eventWorkspaceCounts.closed + eventWorkspaceCounts.cancelled} in history</span>
-                      </div>
-                    </div>
-
-                    <div className={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) ? "space-y-5" : "min-h-0 flex-1 space-y-5 overflow-y-auto pr-1"}>
-                      {filteredEventWorkspaceEvents.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                          {deferredEventListQuery
-                            ? "No events match this search."
-                            : eventWorkspaceFilter === "all"
-                            ? "No event workspaces yet."
-                            : "No events for this lifecycle yet."}
-                        </div>
-                      ) : (
-                        <>
-                          {filteredWorkingEvents.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-semibold text-slate-700">{liveWorkspaceHeading}</p>
-                                <span className="text-xs font-medium text-slate-500">{filteredWorkingEvents.length} events</span>
-                              </div>
-                              <div className="space-y-2">
-                                {filteredWorkingEvents.map((event) => (
-                                  <EventWorkspaceRow
-                                    key={event.id}
-                                    event={event}
-                                    selected={selectedEventId === event.id}
-                                    searchFocused={isSearchFocused("event", event.id)}
-                                    onSelect={() => handleSelectEvent(event.id)}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {filteredInactiveEvents.length > 0 && (
-                            <div className="space-y-2 border-t border-slate-100 pt-5">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-semibold text-slate-700">{inactiveWorkspaceHeading}</p>
-                                <span className="text-xs font-medium text-slate-500">{filteredInactiveEvents.length} events</span>
-                              </div>
-                              <div className="space-y-2">
-                                {filteredInactiveEvents.map((event) => (
-                                  <EventWorkspaceRow
-                                    key={event.id}
-                                    event={event}
-                                    selected={selectedEventId === event.id}
-                                    searchFocused={isSearchFocused("event", event.id)}
-                                    onSelect={() => handleSelectEvent(event.id)}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {filteredArchivedEvents.length > 0 && (
-                            <div className="space-y-2 border-t border-slate-100 pt-5">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-semibold text-slate-700">{archivedWorkspaceHeading}</p>
-                                <span className="text-xs font-medium text-slate-500">{filteredArchivedEvents.length} events</span>
-                              </div>
-                              <div className="space-y-2">
-                                {filteredArchivedEvents.map((event) => (
-                                  <EventWorkspaceRow
-                                    key={event.id}
-                                    event={event}
-                                    selected={selectedEventId === event.id}
-                                    searchFocused={isSearchFocused("event", event.id)}
-                                    onSelect={() => handleSelectEvent(event.id)}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {recentHistoricalEvents.length > 0 && (
-                            <div className="space-y-2 border-t border-slate-100 pt-5">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-semibold text-slate-700">{historyWorkspaceHeading}</p>
-                                <span className="text-xs font-medium text-slate-500">{recentHistoricalEvents.length} events</span>
-                              </div>
-                              <div className="space-y-2">
-                                {recentHistoricalEvents.map((event) => (
-                                  <EventWorkspaceRow
-                                    key={event.id}
-                                    event={event}
-                                    selected={selectedEventId === event.id}
-                                    searchFocused={isSearchFocused("event", event.id)}
-                                    onSelect={() => handleSelectEvent(event.id)}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {historyEventGroups.length > 0 && (
-                            <div className="space-y-2 border-t border-slate-100 pt-5">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-semibold text-slate-700">History by Month</p>
-                                <span className="text-xs font-medium text-slate-500">{historyEventGroups.length} groups</span>
-                              </div>
-                              <div className="space-y-2">
-                                {historyEventGroups.map((group) => {
-                                  const open = Boolean(deferredEventListQuery) || eventHistoryOpenKeys.includes(group.key);
-                                  return (
-                                    <div key={group.key} className="rounded-2xl border border-slate-200 bg-slate-50">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setEventHistoryOpenKeys((current) =>
-                                            current.includes(group.key)
-                                              ? current.filter((item) => item !== group.key)
-                                              : [...current, group.key],
-                                          )
-                                        }
-                                        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-                                      >
-                                        <div>
-                                          <p className="text-sm font-semibold text-slate-700">{group.label}</p>
-                                          <p className="text-xs text-slate-500">{group.events.length} events</p>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-xs font-medium text-slate-500">{group.events.length} events</span>
-                                          {!deferredEventListQuery && (
-                                            <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} />
-                                          )}
-                                        </div>
-                                      </button>
-                                      {open && (
-                                        <div className="space-y-2 border-t border-slate-200 p-2">
-                                          {group.events.map((event) => (
-                                            <EventWorkspaceRow
-                                              key={event.id}
-                                              event={event}
-                                              selected={selectedEventId === event.id}
-                                              searchFocused={isSearchFocused("event", event.id)}
-                                              onSelect={() => handleSelectEvent(event.id)}
-                                            />
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-
-                  </div>
-
+                  <EventWorkspacePanel
+                    collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+                    eventCreateOpen={eventCreateOpen}
+                    onToggleEventCreate={() => setEventCreateOpen((current) => !current)}
+                    onRefresh={() => Promise.all([fetchEvents(), fetchChannels()])}
+                    eventLoading={eventLoading}
+                    newEventName={newEventName}
+                    onNewEventNameChange={setNewEventName}
+                    onCreateEvent={handleCreateEvent}
+                    eventListQuery={eventListQuery}
+                    onEventListQueryChange={setEventListQuery}
+                    eventWorkspaceSort={eventWorkspaceSort}
+                    onEventWorkspaceSortChange={setEventWorkspaceSort}
+                    eventWorkspaceFilterOptions={eventWorkspaceFilterOptions}
+                    eventWorkspaceFilter={eventWorkspaceFilter}
+                    onEventWorkspaceFilterChange={setEventWorkspaceFilter}
+                    filteredEventWorkspaceEvents={filteredEventWorkspaceEvents}
+                    eventWorkspaceCounts={eventWorkspaceCounts}
+                    deferredEventListQuery={deferredEventListQuery}
+                    filteredWorkingEvents={filteredWorkingEvents}
+                    filteredInactiveEvents={filteredInactiveEvents}
+                    filteredArchivedEvents={filteredArchivedEvents}
+                    recentHistoricalEvents={recentHistoricalEvents}
+                    historyEventGroups={historyEventGroups}
+                    liveWorkspaceHeading={liveWorkspaceHeading}
+                    inactiveWorkspaceHeading={inactiveWorkspaceHeading}
+                    archivedWorkspaceHeading={archivedWorkspaceHeading}
+                    historyWorkspaceHeading={historyWorkspaceHeading}
+                    selectedEventId={selectedEventId}
+                    isSearchFocused={(id) => isSearchFocused("event", id)}
+                    onSelectEvent={handleSelectEvent}
+                    eventHistoryOpenKeys={eventHistoryOpenKeys}
+                    onToggleEventHistoryGroup={(key) =>
+                      setEventHistoryOpenKeys((current) =>
+                        current.includes(key)
+                          ? current.filter((item) => item !== key)
+                          : [...current, key],
+                      )
+                    }
+                    getSearchTargetDomId={(id) => getSearchTargetDomId("event", id)}
+                    formatEventWorkspaceDateLabel={formatEventWorkspaceDateLabel}
+                    getEventStatusTone={getEventStatusTone}
+                    getEventStatusLabel={getEventStatusLabel}
+                    getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+                  />
                 </div>
               </div>
             </motion.div>
@@ -14511,359 +12946,52 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)]">
-                <div className="space-y-4">
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="flex flex-col gap-2 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <h2 className="text-base font-semibold">Registered Attendees</h2>
-                        <StatusLine
-                          className="mt-0.5"
-                          items={[
-                            `${filteredRegistrations.length} results`,
-                            registrationAvailability.label,
-                          ]}
-                        />
-                        <p className="text-xs text-slate-500">
-                          {registrationCapacity.limit === null
-                            ? `${activeAttendeeCount} active attendees. Search fast, then progressively load more rows when this event gets large.`
-                            : registrationCapacity.remaining === 0
-                            ? `Capacity is full. ${activeAttendeeCount} of ${registrationCapacity.limit} seats are occupied, so new registrations are blocked.`
-                            : `${activeAttendeeCount} of ${registrationCapacity.limit} seats filled. ${registrationCapacity.remaining} seats remaining before registration closes for capacity.`}
-                        </p>
-                      </div>
-                      <InlineActionsMenu label="Actions" tone="neutral">
-                        <MenuActionLink
-                          href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}
-                          tone="neutral"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          <span className="font-medium">Export CSV</span>
-                        </MenuActionLink>
-                      </InlineActionsMenu>
-                    </div>
-                    <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <input
-                          value={registrationListQuery}
-                          onChange={(e) => setRegistrationListQuery(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Search by name, registration ID, phone, or email"
-                        />
-                        {registrationListQuery && (
-                          <button
-                            onClick={() => setRegistrationListQuery("")}
-                            className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                            aria-label="Clear registration search"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div className="max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden">
-                      {filteredRegistrations.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                          {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
-                        </div>
-                      ) : (
-                        visibleRegistrations.map((reg) => (
-                          <button
-                            key={reg.id}
-                            id={getSearchTargetDomId("registration", reg.id)}
-                            onClick={() => setSelectedRegistrationId(reg.id)}
-                            className={`w-full rounded-2xl border px-3 py-2.5 text-left transition-colors ${
-                              selectedRegistrationId === reg.id
-                                ? "border-blue-200 bg-blue-50"
-                                : "border-slate-200 bg-white hover:bg-slate-50"
-                            } ${isSearchFocused("registration", reg.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
-                                <p className="mt-0.5 font-mono text-[11px] font-bold text-blue-600">{reg.id}</p>
-                                <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                                  {reg.phone || reg.email || "No contact info"}
-                                </p>
-                              </div>
-                              <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                                <StatusBadge tone={getRegistrationStatusTone(reg.status)}>{reg.status}</StatusBadge>
-                                {selectedRegistrationId === reg.id && <SelectionMarker />}
-                              </div>
-                            </div>
-                            <p className="mt-1 text-[10px] text-slate-500">{new Date(reg.timestamp).toLocaleString()}</p>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                    <div className="hidden max-h-[38rem] overflow-auto md:block">
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
-                          <tr>
-                            <th className="px-4 py-2.5">ID</th>
-                            <th className="px-4 py-2.5">Name</th>
-                            <th className="px-4 py-2.5">Contact</th>
-                            <th className="px-4 py-2.5">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {filteredRegistrations.length === 0 ? (
-                            <tr>
-                                <td colSpan={4} className="px-4 py-10 text-center text-slate-400 italic">
-                                  {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
-                                </td>
-                              </tr>
-                          ) : (
-                            visibleRegistrations.map((reg) => (
-                              <tr
-                                key={reg.id}
-                                id={getSearchTargetDomId("registration", reg.id)}
-                                onClick={() => setSelectedRegistrationId(reg.id)}
-                                className={`registration-row hover:bg-slate-50 transition-colors cursor-pointer ${
-                                  selectedRegistrationId === reg.id ? "registration-row-selected bg-blue-50" : ""
-                                } ${
-                                  isSearchFocused("registration", reg.id) ? "bg-blue-50" : ""
-                                }`}
-                              >
-                                <td className="px-4 py-2.5 font-mono text-[11px] font-bold text-blue-600">
-                                  {reg.id}
-                                </td>
-                                <td className="px-4 py-2.5">
-                                  <p className="text-sm font-medium">{reg.first_name} {reg.last_name}</p>
-                                  <p className="text-[10px] text-slate-400">{new Date(reg.timestamp).toLocaleString()}</p>
-                                </td>
-                                <td className="px-4 py-2.5">
-                                  <p className="text-[11px]">{reg.phone}</p>
-                                  <p className="text-[10px] text-slate-400">{reg.email}</p>
-                                </td>
-                                <td className="px-4 py-2.5">
-                                  <StatusBadge tone={getRegistrationStatusTone(reg.status)}>
-                                    {reg.status}
-                                  </StatusBadge>
-                                  {selectedRegistrationId === reg.id && (
-                                    <p className="mt-1 text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Selected</p>
-                                  )}
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="flex flex-col gap-2 border-t border-slate-100 px-3 py-2.5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-4">
-                      <p>
-                        Showing {visibleRegistrations.length} of {filteredRegistrations.length} attendees
-                      </p>
-                      {hasMoreRegistrations && (
-                        <ActionButton
-                          onClick={() => setRegistrationVisibleCount((count) => count + 120)}
-                          tone="neutral"
-                          className="w-full text-sm sm:w-auto"
-                        >
-                          Load 120 More
-                        </ActionButton>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-sm font-semibold flex items-center gap-2">
-                          <Activity className="w-4 h-4 text-blue-600" />
-                          Event Stats
-                        </h3>
-                        <p className="hidden text-xs text-slate-500 sm:block">Glanceable live totals for this event.</p>
-                      </div>
-                      <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
-                    </div>
-                    <div className="space-y-2.5">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Seat Capacity</p>
-                            <p className="mt-1 text-2xl font-bold text-slate-900">
-                              {registrationCapacity.limit === null ? activeAttendeeCount : `${activeAttendeeCount}/${registrationCapacity.limit}`}
-                            </p>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {registrationCapacity.limit === null
-                                ? "No hard capacity limit is configured for this event."
-                                : registrationCapacity.remaining === 0
-                                ? "No seats remaining. Registration now stops at capacity."
-                                : `${registrationCapacity.remaining} seats remain before registration auto-closes for capacity.`}
-                            </p>
-                          </div>
-                          {registrationCapacity.limit !== null && (
-                            <div className="text-right">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Filled</p>
-                              <p className="mt-1 text-lg font-bold text-slate-900">{registrationCapacity.fillPercent}%</p>
-                            </div>
-                          )}
-                        </div>
-                        {registrationCapacity.limit !== null && (
-                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
-                            <div
-                              className={`h-full rounded-full transition-[width] ${
-                                registrationCapacity.isFull ? "bg-rose-500" : "bg-blue-600"
-                              }`}
-                              style={{ width: `${registrationCapacity.fillPercent}%` }}
-                            />
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total</p>
-                          <p className="mt-1 text-base font-bold text-slate-900">{registrations.length}</p>
-                        </div>
-                        <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Registered</p>
-                          <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
-                        </div>
-                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">Checked</p>
-                          <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Cancelled</p>
-                          <p className="mt-1 text-base font-bold text-slate-700">{cancelledCount}</p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-                        <div>
-                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Check-in Rate</p>
-                          <p className="mt-1 text-xs text-slate-500">{registrationAvailability.helper}</p>
-                        </div>
-                        <p className="text-lg font-bold text-violet-700">{checkInRate}%</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <h3 className="text-base font-semibold">Selected Ticket</h3>
-                        <p className="text-xs text-slate-500">Click a registration row to preview, download, and edit status.</p>
-                      </div>
-                      {selectedRegistration && (
-                        <StatusBadge tone={getRegistrationStatusTone(selectedRegistration.status)}>
-                          {selectedRegistration.status}
-                        </StatusBadge>
-                      )}
-                    </div>
-
-                    {!selectedRegistration ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                        No attendee selected yet.
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="max-h-[23rem] overflow-auto rounded-2xl bg-slate-50 p-1.5">
-                          <Ticket
-                            registrationId={selectedRegistration.id}
-                            firstName={selectedRegistration.first_name}
-                            lastName={selectedRegistration.last_name}
-                            phone={selectedRegistration.phone}
-                            email={selectedRegistration.email}
-                            timestamp={selectedRegistration.timestamp}
-                            eventName={settings.event_name}
-                            eventLocation={attendeeLocationLabel}
-                            eventDateLabel={timingInfo.eventDateLabel}
-                            eventMapUrl={resolvedEventMapUrl}
-                          />
-                        </div>
-
-                        <div className="flex flex-wrap gap-1.5">
-                          <a
-                            href={selectedTicketPngUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={`${ACTION_BUTTON_BASE_CLASS} ${ACTION_BUTTON_TONE_CLASSES.blue.active} min-w-0 flex-1 text-sm sm:flex-none`}
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                            Open PNG Ticket
-                          </a>
-                          <InlineActionsMenu label="Ticket Actions" tone="neutral">
-                            <MenuActionLink
-                              href={selectedTicketPngUrl}
-                              download={`${selectedRegistration.id}.png`}
-                              tone="neutral"
-                            >
-                              <Download className="h-3.5 w-3.5" />
-                              <span className="font-medium">Download PNG</span>
-                            </MenuActionLink>
-                            <MenuActionLink
-                              href={selectedTicketSvgUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              tone="blue"
-                              className="mt-1"
-                            >
-                              <QrCode className="h-3.5 w-3.5" />
-                              <span className="font-medium">Open SVG Preview</span>
-                            </MenuActionLink>
-                            {canChangeRegistrationStatus && (
-                              <MenuActionItem
-                                onClick={() => void deleteRegistration(selectedRegistration.id)}
-                                disabled={deleteRegistrationLoading}
-                                tone="rose"
-                                className="mt-1"
-                              >
-                                {deleteRegistrationLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                                <span className="font-medium">Delete Registration</span>
-                              </MenuActionItem>
-                            )}
-                          </InlineActionsMenu>
-                        </div>
-
-                        {canChangeRegistrationStatus && (
-                        <div className="border-t border-slate-100 pt-3">
-                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Admin Status Override</p>
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            {(["registered", "checked-in", "cancelled"] as RegistrationStatus[]).map((statusOption) => {
-                              const active = selectedRegistration.status === statusOption;
-                              return (
-                                <ActionButton
-                                  key={statusOption}
-                                  onClick={() => updateRegistrationStatus(selectedRegistration.id, statusOption)}
-                                  disabled={statusUpdateLoading}
-                                  tone={
-                                    statusOption === "checked-in"
-                                      ? "emerald"
-                                      : statusOption === "cancelled"
-                                      ? "neutral"
-                                      : "blue"
-                                  }
-                                  active={active}
-                                  className="w-full text-sm"
-                                >
-                                  {statusOption === "registered"
-                                    ? "Mark Registered"
-                                    : statusOption === "checked-in"
-                                    ? "Mark Checked In"
-                                    : "Mark Cancelled"}
-                                </ActionButton>
-                              );
-                            })}
-                          </div>
-                          {statusUpdateMessage && (
-                            <p className={`mt-2 text-xs ${statusUpdateMessage.toLowerCase().includes("failed") || statusUpdateMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                              {statusUpdateMessage}
-                            </p>
-                          )}
-                        </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                </div>
-              </div>
+              <RegistrationsScreen
+                filteredRegistrations={filteredRegistrations}
+                registrationAvailability={registrationAvailability}
+                registrationCapacity={registrationCapacity}
+                activeAttendeeCount={activeAttendeeCount}
+                selectedEventId={selectedEventId}
+                registrationListQuery={registrationListQuery}
+                onRegistrationListQueryChange={setRegistrationListQuery}
+                deferredRegistrationListQuery={deferredRegistrationListQuery}
+                visibleRegistrations={visibleRegistrations}
+                selectedRegistrationId={selectedRegistrationId}
+                onSelectRegistration={setSelectedRegistrationId}
+                getSearchTargetDomId={getSearchTargetDomId}
+                isSearchFocused={isSearchFocused}
+                getRegistrationStatusTone={getRegistrationStatusTone}
+                hasMoreRegistrations={hasMoreRegistrations}
+                onLoadMoreRegistrations={() => setRegistrationVisibleCount((count) => count + 120)}
+                registrationsCount={registrations.length}
+                registeredCount={registeredCount}
+                checkedInCount={checkedInCount}
+                cancelledCount={cancelledCount}
+                checkInRate={checkInRate}
+                selectedRegistration={selectedRegistration}
+                selectedTicketPreview={selectedRegistration ? (
+                  <Ticket
+                    registrationId={selectedRegistration.id}
+                    firstName={selectedRegistration.first_name}
+                    lastName={selectedRegistration.last_name}
+                    phone={selectedRegistration.phone}
+                    email={selectedRegistration.email}
+                    timestamp={selectedRegistration.timestamp}
+                    eventName={settings.event_name}
+                    eventLocation={attendeeLocationLabel}
+                    eventDateLabel={timingInfo.eventDateLabel}
+                    eventMapUrl={resolvedEventMapUrl}
+                  />
+                ) : null}
+                selectedTicketPngUrl={selectedTicketPngUrl}
+                selectedTicketSvgUrl={selectedTicketSvgUrl}
+                canChangeRegistrationStatus={canChangeRegistrationStatus}
+                onDeleteRegistration={deleteRegistration}
+                deleteRegistrationLoading={deleteRegistrationLoading}
+                onUpdateRegistrationStatus={updateRegistrationStatus}
+                statusUpdateLoading={statusUpdateLoading}
+                statusUpdateMessage={statusUpdateMessage}
+              />
             </motion.div>
           )}
           {activeTab === "checkin" && (
@@ -14874,325 +13002,58 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-4"
             >
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
-                <div className="space-y-4">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                    <div className="mb-4 flex items-start justify-between gap-3">
-                      <div>
-                        <h2 className="text-xl font-semibold flex items-center gap-2">
-                          <QrCode className="w-5 h-5 text-blue-600" />
-                          Check-in Mode
-                        </h2>
-                        <p className="text-sm text-slate-500">
-                          Mobile-first check-in flow for staff at the door. Use manual ID entry or scan a QR code.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mb-4">
-                      <PageBanner
-                        tone={toBannerTone(checkinOperatorGuard.tone)}
-                        icon={<QrCode className="h-4 w-4" />}
-                      >
-                        Door mode active · {selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No event selected"}
-                        {selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
-                          ? ` · ${getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}`
-                          : ""}
-                        {selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
-                          ? " · Existing attendees can still check in"
-                          : ""}
-                      </PageBanner>
-                    </div>
-
-                    <CompactStatRow
-                      stats={[
-                        { label: "Registered", value: registeredCount, tone: "blue" },
-                        { label: "Cancelled", value: cancelledCount, tone: "neutral" },
-                        { label: "Checked in", value: checkedInCount, tone: "emerald" },
-                        { label: "Check-in rate", value: `${checkInRate}%`, tone: "neutral" },
-                      ]}
-                    />
-                  </div>
-
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-3 mb-4">
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Camera className="w-5 h-5 text-blue-600" />
-                          QR Scanner
-                        </h3>
-                        <p className="text-sm text-slate-500">
-                          Open the camera and scan attendee QR codes continuously.
-                        </p>
-                      </div>
-                      <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2">
-                        <ActionButton
-                          onClick={startQrScanner}
-                          disabled={!canUseQrScanner || scannerActive || scannerStarting}
-                          tone="blue"
-                          active
-                          className="w-full text-sm"
-                        >
-                          {scannerStarting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                          Start Camera
-                        </ActionButton>
-                        <ActionButton
-                          onClick={stopQrScanner}
-                          disabled={!scannerActive && !scannerStarting}
-                          tone="neutral"
-                          className="w-full text-sm"
-                        >
-                          <Square className="w-4 h-4" />
-                          Stop
-                        </ActionButton>
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 overflow-hidden bg-slate-950">
-                      <div className="aspect-video relative">
-                        <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" muted playsInline />
-                        {!scannerActive && !scannerStarting && (
-                          <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-300 gap-3 p-6 text-center">
-                            <Camera className="w-10 h-10 opacity-70" />
-                            <p className="text-sm max-w-sm">
-                              {canUseQrScanner
-                                ? "Tap Start Camera to request permission and begin scanning."
-                                : "This browser does not support camera access. Use manual check-in instead."}
-                            </p>
-                          </div>
-                        )}
-                        {scannerStarting && (
-                          <div className="absolute inset-0 flex items-center justify-center text-white">
-                            <RefreshCw className="w-6 h-6 animate-spin" />
-                          </div>
-                        )}
-                        {scannerActive && (
-                          <div className="absolute inset-x-8 top-1/2 -translate-y-1/2 h-32 border-2 border-blue-300/90 rounded-3xl shadow-[0_0_0_9999px_rgba(15,23,42,0.28)] pointer-events-none" />
-                        )}
-                      </div>
-                    </div>
-
-                    {lastScannedValue && (
-                      <p className="mt-3 text-xs text-slate-500 break-all">
-                        Last scan: <span className="font-mono">{lastScannedValue}</span>
-                      </p>
-                    )}
-                    {scannerError && <p className="mt-2 text-xs text-rose-600">{scannerError}</p>}
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                    <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                      <Search className="w-5 h-5 text-blue-600" />
-                      Manual Check-in
-                    </h3>
-                    <p className="text-sm text-slate-500 mb-4">
-                      Enter the registration ID manually if the QR code cannot be scanned.
-                    </p>
-                    <div className="space-y-4">
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                        <input
-                          type="text"
-                          value={searchId}
-                          onChange={(e) => setSearchId(e.target.value.toUpperCase())}
-                          onKeyDown={(e) => e.key === "Enter" && handleCheckin()}
-                          placeholder="REG-XXXXXX"
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-3 text-base font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <ActionButton
-                        onClick={handleCheckin}
-                        disabled={!searchId || checkinStatus === "loading"}
-                        tone={checkinStatus === "success" ? "emerald" : checkinStatus === "error" ? "rose" : "blue"}
-                        active
-                        className="w-full text-sm"
-                      >
-                        {checkinStatus === "loading" && <RefreshCw className="w-4 h-4 animate-spin" />}
-                        {checkinStatus === "success" && <CheckCircle2 className="w-4 h-4" />}
-                        {checkinStatus === "error" && <AlertCircle className="w-4 h-4" />}
-                        {checkinStatus === "success" ? "Checked In!" : checkinStatus === "error" ? "Check-in Failed" : "Check In Attendee"}
-                      </ActionButton>
-                      {checkinStatus === "error" && checkinErrorMessage && (
-                        <p className="text-xs text-rose-600">{checkinErrorMessage}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <div>
-                        <h3 className="text-lg font-semibold">Latest Result</h3>
-                        <StatusLine
-                          className="mt-1"
-                          items={[
-                            latestResultLabel,
-                            latestCheckinRegistration ? `ID ${latestCheckinRegistration.id}` : null,
-                          ]}
-                        />
-                      </div>
-                    </div>
-
-                    {!latestCheckinRegistration ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-sm text-slate-400">
-                        No attendee checked in yet in this session.
-                      </div>
-                    ) : (
-                      <div className={`rounded-2xl border p-4 space-y-3 ${latestResultToneClass}`}>
-                        <div>
-                          <p className="text-lg font-semibold text-slate-900">
-                            {latestCheckinRegistration.first_name} {latestCheckinRegistration.last_name}
-                          </p>
-                          <p className="text-xs font-mono text-blue-600">{latestCheckinRegistration.id}</p>
-                        </div>
-                        <div className="grid grid-cols-1 gap-2 text-sm">
-                          <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Phone</p>
-                            <p className="text-slate-700">{latestCheckinRegistration.phone || "-"}</p>
-                          </div>
-                          <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Email</p>
-                            <p className="text-slate-700 break-all">{latestCheckinRegistration.email || "-"}</p>
-                          </div>
-                        </div>
-                        {!checkinAccessMode && (
-                          <ActionButton
-                            onClick={() => handleNavigateToTab("registrations")}
-                            tone="neutral"
-                            className="w-full text-sm"
-                          >
-                            Open Full Registration Record
-                          </ActionButton>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {canManageCheckinAccess && (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Shield className="w-5 h-5 text-blue-600" />
-                          Check-in Access
-                        </h3>
-                        <p className="text-sm text-slate-500">
-                          Generate a mobile-friendly check-in link for staff without giving them full admin access.
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-[1fr_8rem] gap-3">
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Session Label</label>
-                          <input
-                            type="text"
-                            value={checkinSessionLabel}
-                            onChange={(e) => setCheckinSessionLabel(e.target.value)}
-                            placeholder="Front Desk A"
-                            className="w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Hours</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={168}
-                            value={checkinSessionHours}
-                            onChange={(e) => setCheckinSessionHours(e.target.value)}
-                            className="w-full rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          />
-                        </div>
-                      </div>
-                      <ActionButton
-                        onClick={handleCreateCheckinSession}
-                        disabled={checkinSessionCreating || !selectedEventId || selectedEventCheckinLocked}
-                        tone="blue"
-                        active
-                        className="w-full text-sm sm:w-auto"
-                      >
-                        {checkinSessionCreating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
-                        Generate Check-in Link
-                      </ActionButton>
-
-                      {checkinSessionMessage && (
-                        <p className={`text-xs ${checkinSessionMessage.toLowerCase().includes("failed") || checkinSessionMessage.toLowerCase().includes("required") ? "text-rose-600" : "text-emerald-600"}`}>
-                          {checkinSessionMessage}
-                        </p>
-                      )}
-
-                      {checkinSessionReveal && (
-                        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 space-y-3">
-                          <p className="text-xs font-bold uppercase tracking-wider text-blue-700">New check-in link</p>
-                          <CopyField
-                            label="Access URL"
-                            value={checkinSessionReveal.url}
-                            onCopy={() => copyToClipboard(checkinSessionReveal.url)}
-                            copied={copied}
-                            help="The raw token is shown once. Share this URL only with staff who need scanner-only access."
-                          />
-                        </div>
-                      )}
-
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Active and recent check-in links</p>
-                          <button
-                            onClick={() => void fetchCheckinSessions(selectedEventId)}
-                            className="p-2 rounded-lg hover:bg-slate-100 transition-colors"
-                          >
-                            <RefreshCw className={`w-4 h-4 text-slate-400 ${checkinSessionsLoading ? "animate-spin" : ""}`} />
-                          </button>
-                        </div>
-                        {checkinSessions.length === 0 ? (
-                          <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                            No check-in links created for this event yet.
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {checkinSessions.map((session) => (
-                              <div key={session.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 space-y-2.5">
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-slate-900 truncate">{session.label}</p>
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                                    <StatusBadge tone={getCheckinSessionTone(session)}>
-                                      {session.revoked_at ? "revoked" : session.is_active ? "active" : "expired"}
-                                    </StatusBadge>
-                                    {!session.revoked_at && (
-                                      <InlineActionsMenu label="Manage Access" tone="neutral">
-                                        <MenuActionItem
-                                          onClick={() => void handleRevokeCheckinSession(session.id)}
-                                          disabled={checkinSessionRevokingId === session.id}
-                                          tone="rose"
-                                        >
-                                          {checkinSessionRevokingId === session.id ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                                          <span className="font-medium">Revoke Link</span>
-                                        </MenuActionItem>
-                                      </InlineActionsMenu>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Expires</p>
-                                    <p className="mt-1 text-[11px] text-slate-700">{new Date(session.expires_at).toLocaleString()}</p>
-                                  </div>
-                                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Last Used</p>
-                                    <p className="mt-1 text-[11px] text-slate-700">{session.last_used_at ? new Date(session.last_used_at).toLocaleString() : "never"}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <CheckinScreen
+                selectedEvent={selectedEvent}
+                getEventStatusLabel={getEventStatusLabel}
+                getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+                checkinOperatorGuardTone={toBannerTone(checkinOperatorGuard.tone)}
+                registeredCount={registeredCount}
+                cancelledCount={cancelledCount}
+                checkedInCount={checkedInCount}
+                checkInRate={checkInRate}
+                canUseQrScanner={canUseQrScanner}
+                scannerActive={scannerActive}
+                scannerStarting={scannerStarting}
+                startQrScanner={startQrScanner}
+                stopQrScanner={stopQrScanner}
+                videoRef={videoRef}
+                lastScannedValue={lastScannedValue}
+                scannerError={scannerError}
+                searchId={searchId}
+                onSearchIdChange={setSearchId}
+                onSearchIdKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void handleCheckin();
+                  }
+                }}
+                onManualCheckin={handleCheckin}
+                checkinStatus={checkinStatus}
+                checkinErrorMessage={checkinErrorMessage}
+                latestResultLabel={latestResultLabel}
+                latestCheckinRegistration={latestCheckinRegistration}
+                latestResultToneClass={latestResultToneClass}
+                checkinAccessMode={checkinAccessMode}
+                onOpenRegistrations={() => handleNavigateToTab("registrations")}
+                canManageCheckinAccess={canManageCheckinAccess}
+                checkinSessionLabel={checkinSessionLabel}
+                onCheckinSessionLabelChange={setCheckinSessionLabel}
+                checkinSessionHours={checkinSessionHours}
+                onCheckinSessionHoursChange={setCheckinSessionHours}
+                onCreateCheckinSession={handleCreateCheckinSession}
+                checkinSessionCreating={checkinSessionCreating}
+                selectedEventId={selectedEventId}
+                selectedEventCheckinLocked={selectedEventCheckinLocked}
+                checkinSessionMessage={checkinSessionMessage}
+                checkinSessionReveal={checkinSessionReveal}
+                onCopyCheckinSessionUrl={() => copyToClipboard(checkinSessionReveal?.url || "")}
+                copied={copied}
+                checkinSessions={checkinSessions}
+                onRefreshCheckinSessions={() => fetchCheckinSessions(selectedEventId)}
+                checkinSessionsLoading={checkinSessionsLoading}
+                getCheckinSessionTone={getCheckinSessionTone}
+                onRevokeCheckinSession={handleRevokeCheckinSession}
+                checkinSessionRevokingId={checkinSessionRevokingId}
+              />
             </motion.div>
           )}
           {activeTab === "inbox" && (
@@ -15203,320 +13064,43 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="border-b border-slate-100 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-lg font-semibold">Public Inbox</h2>
-                        <StatusBadge tone={publicInboxCounts.attention > 0 ? "rose" : "neutral"}>
-                          {publicInboxCounts.attention > 0 ? `${publicInboxCounts.attention} need attention` : "No attention queue"}
-                        </StatusBadge>
-                      </div>
-                      <StatusLine
-                        className="mt-1"
-                        items={[
-                          `${publicInboxCounts.all} conversation${publicInboxCounts.all === 1 ? "" : "s"}`,
-                          deferredPublicInboxQuery ? `${filteredPublicInboxConversations.length} match` : null,
-                          selectedEvent ? selectedEvent.name : null,
-                        ]}
-                      />
-                      <p className="mt-1 text-xs text-slate-500">
-                        Human handoff requests and bot failures from the public event page land here first.
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => void fetchPublicInboxConversations(selectedEventId)}
-                      className="rounded-lg p-2 transition-colors hover:bg-slate-100"
-                      aria-label="Refresh public inbox"
-                    >
-                      <RefreshCw className={`h-4 w-4 text-slate-400 ${publicInboxLoading ? "animate-spin" : ""}`} />
-                    </button>
-                  </div>
-
-                  <div className="mt-3 flex flex-col gap-3">
-                    <div className="relative min-w-0">
-                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={publicInboxSearchQuery}
-                        onChange={(event) => setPublicInboxSearchQuery(event.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Search by attendee, sender ID, registration ID, contact, or last message"
-                      />
-                      {publicInboxSearchQuery && (
-                        <button
-                          onClick={() => setPublicInboxSearchQuery("")}
-                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                          aria-label="Clear inbox search"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {([
-                        { id: "all", label: "All", count: publicInboxCounts.all },
-                        { id: "attention", label: "Attention", count: publicInboxCounts.attention },
-                        { id: "open", label: "Open", count: publicInboxCounts.open },
-                        { id: "waiting-admin", label: "Waiting Admin", count: publicInboxCounts["waiting-admin"] },
-                        { id: "waiting-user", label: "Waiting User", count: publicInboxCounts["waiting-user"] },
-                        { id: "resolved", label: "Resolved", count: publicInboxCounts.resolved },
-                      ] as Array<{ id: "all" | "attention" | PublicInboxConversationStatus; label: string; count: number }>).map((filter) => {
-                        const isActive = publicInboxStatusFilter === filter.id;
-                        return (
-                          <button
-                            key={filter.id}
-                            onClick={() => setPublicInboxStatusFilter(filter.id)}
-                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                              isActive
-                                ? "border-blue-200 bg-blue-50 text-blue-700"
-                                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                            }`}
-                          >
-                            <span>{filter.label}</span>
-                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${isActive ? "bg-white/80 text-blue-700" : "bg-slate-100 text-slate-500"}`}>
-                              {filter.count}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {publicInboxMessage && (
-                      <p className={`text-xs ${
-                        publicInboxMessage.toLowerCase().includes("failed") || publicInboxMessage.toLowerCase().includes("error")
-                          ? "text-rose-600"
-                          : "text-emerald-600"
-                      }`}>
-                        {publicInboxMessage}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid min-h-[34rem] grid-cols-1 xl:grid-cols-[minmax(0,0.85fr)_minmax(22rem,1.15fr)]">
-                  <div className="border-b border-slate-100 xl:border-b-0 xl:border-r xl:border-slate-100">
-                    {publicInboxLoading && publicInboxConversations.length === 0 ? (
-                      <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
-                        Loading public inbox conversations...
-                      </div>
-                    ) : filteredPublicInboxConversations.length === 0 ? (
-                      <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
-                        {deferredPublicInboxQuery || publicInboxStatusFilter !== "all"
-                          ? "No public page conversations match this filter."
-                          : "No public page conversations yet."}
-                      </div>
-                    ) : (
-                      <div className="max-h-[34rem] overflow-y-auto">
-                        {filteredPublicInboxConversations.map((conversation) => {
-                          const isSelected = selectedPublicInboxSenderId === conversation.sender_id;
-                          const attentionReasonLabel = getPublicInboxAttentionReasonLabel(conversation.attention_reason);
-                          return (
-                            <button
-                              key={conversation.sender_id}
-                              onClick={() => setSelectedPublicInboxSenderId(conversation.sender_id)}
-                              className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-slate-100 px-4 py-3 text-left transition-colors ${
-                                isSelected ? "bg-blue-50" : "hover:bg-slate-50"
-                              }`}
-                            >
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-sm font-semibold text-slate-900">{conversation.participant_label}</p>
-                                  <StatusBadge tone={getPublicInboxStatusTone(conversation.status)}>
-                                    {getPublicInboxStatusLabel(conversation.status)}
-                                  </StatusBadge>
-                                  {conversation.needs_attention && <SelectionMarker className="text-rose-700" />}
-                                </div>
-                                <p className="mt-1 truncate font-mono text-[10px] text-blue-600">{conversation.sender_id}</p>
-                                <p className="log-list-preview-2 mt-1 text-[13px] leading-5 text-slate-700">
-                                  {conversation.last_message_text || "(no message body)"}
-                                </p>
-                                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-500">
-                                  <span>{conversation.last_message_type === "incoming" ? "visitor" : "bot"} · {conversation.message_count} msg</span>
-                                  {conversation.registration_id && <span>{conversation.registration_id}</span>}
-                                  {attentionReasonLabel && <span>{attentionReasonLabel}</span>}
-                                </div>
-                              </div>
-                              <p className="shrink-0 whitespace-nowrap pl-2 text-[10px] text-slate-500">
-                                {conversation.last_message_at ? new Date(conversation.last_message_at).toLocaleString() : "-"}
-                              </p>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="min-w-0 bg-slate-50">
-                    {!activePublicInboxConversation ? (
-                      <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm text-slate-400">
-                        Select a public page conversation to inspect the thread and update follow-up status.
-                      </div>
-                    ) : (
-                      <div className="flex h-full min-h-[34rem] flex-col">
-                        <div className="border-b border-slate-100 bg-white px-4 py-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <h3 className="text-base font-semibold text-slate-900">{activePublicInboxConversation.participant_label}</h3>
-                                <StatusBadge tone={getPublicInboxStatusTone(activePublicInboxConversation.status)}>
-                                  {getPublicInboxStatusLabel(activePublicInboxConversation.status)}
-                                </StatusBadge>
-                                {activePublicInboxConversation.needs_attention && (
-                                  <StatusBadge tone="rose">
-                                    {getPublicInboxAttentionReasonLabel(activePublicInboxConversation.attention_reason) || "Needs attention"}
-                                  </StatusBadge>
-                                )}
-                              </div>
-                              <p className="mt-1 break-all font-mono text-[11px] text-blue-600">{activePublicInboxConversation.sender_id}</p>
-                              <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">
-                                {activePublicInboxConversation.sender_phone && <span>{activePublicInboxConversation.sender_phone}</span>}
-                                {activePublicInboxConversation.sender_email && <span>{activePublicInboxConversation.sender_email}</span>}
-                                {activePublicInboxConversation.registration_id && <span>{activePublicInboxConversation.registration_id}</span>}
-                                {activePublicInboxConversation.public_slug && <span>/events/{activePublicInboxConversation.public_slug}</span>}
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                onClick={() => void fetchPublicInboxConversation(activePublicInboxConversation.sender_id, selectedEventId)}
-                                className="rounded-lg p-2 transition-colors hover:bg-slate-100"
-                                aria-label="Refresh conversation"
-                              >
-                                <RefreshCw className={`h-4 w-4 text-slate-400 ${publicInboxConversationLoading ? "animate-spin" : ""}`} />
-                              </button>
-                              {activePublicInboxConversation.public_slug && (
-                                <a
-                                  href={`/events/${encodeURIComponent(activePublicInboxConversation.public_slug)}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex min-h-8 items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
-                                >
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                  Open Page
-                                </a>
-                              )}
-                              {canManageRegistrations && activePublicInboxConversation.registration_id && (
-                                <ActionButton
-                                  tone="neutral"
-                                  className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
-                                  onClick={() => {
-                                    setSelectedRegistrationId(activePublicInboxConversation.registration_id || "");
-                                    handleNavigateToTab("registrations");
-                                  }}
-                                >
-                                  <Users className="h-3.5 w-3.5" />
-                                  Open Registration
-                                </ActionButton>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {(["open", "waiting-admin", "waiting-user", "resolved"] as PublicInboxConversationStatus[]).map((status) => (
-                              <ActionButton
-                                key={status}
-                                tone={activePublicInboxConversation.status === status ? getPublicInboxStatusTone(status) : "neutral"}
-                                className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
-                                disabled={!canChangeRegistrationStatus || publicInboxStatusUpdating || activePublicInboxConversation.status === status}
-                                onClick={() => void updatePublicInboxConversationStatus(status)}
-                              >
-                                {getPublicInboxStatusLabel(status)}
-                              </ActionButton>
-                            ))}
-                          </div>
-                          {!canChangeRegistrationStatus && (
-                            <p className="mt-2 text-[11px] text-slate-500">
-                              Viewer mode can inspect threads but cannot update conversation status.
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="grid gap-3 border-b border-slate-100 bg-white px-4 py-3 md:grid-cols-3">
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Last Incoming</p>
-                            <p className="mt-1 text-[11px] text-slate-700">
-                              {activePublicInboxConversation.last_incoming_at ? new Date(activePublicInboxConversation.last_incoming_at).toLocaleString() : "None yet"}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Last Outgoing</p>
-                            <p className="mt-1 text-[11px] text-slate-700">
-                              {activePublicInboxConversation.last_outgoing_at ? new Date(activePublicInboxConversation.last_outgoing_at).toLocaleString() : "None yet"}
-                            </p>
-                          </div>
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Messages</p>
-                            <p className="mt-1 text-[11px] text-slate-700">
-                              {activePublicInboxConversation.message_count} total in this public thread
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="chat-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
-                          {publicInboxConversationLoading && publicInboxConversationMessages.length === 0 ? (
-                            <div className="flex h-full items-center justify-center py-12 text-center text-sm text-slate-400">
-                              Loading conversation history...
-                            </div>
-                          ) : publicInboxConversationMessages.length === 0 ? (
-                            <div className="flex h-full items-center justify-center py-12 text-center text-sm text-slate-400">
-                              No messages in this conversation yet.
-                            </div>
-                          ) : (
-                            publicInboxConversationMessages.map((message) => (
-                              <ChatBubble
-                                key={`${message.id || message.timestamp}-${message.type}`}
-                                text={message.text}
-                                attachments={message.attachments}
-                                type={message.type}
-                                timestamp={message.timestamp}
-                              />
-                            ))
-                          )}
-                        </div>
-
-                        <form className="border-t border-slate-100 bg-white px-4 py-4" onSubmit={handlePublicInboxReplySubmit}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">Reply to Public Page</p>
-                              <p className="mt-1 text-xs leading-5 text-slate-500">
-                                This reply appears in the attendee's public event chat when they reopen or keep the page open.
-                              </p>
-                            </div>
-                            <StatusBadge tone="neutral">Web chat</StatusBadge>
-                          </div>
-                          <div className="mt-3 flex flex-col gap-3">
-                            <textarea
-                              value={publicInboxReplyText}
-                              onChange={(event) => setPublicInboxReplyText(event.target.value)}
-                              rows={3}
-                              placeholder="Type a reply for the attendee"
-                              disabled={!canSendManualOverride || publicInboxReplySending}
-                              className="min-h-[7rem] w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                              style={{ fontFamily: "var(--font-edit)" }}
-                            />
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              {!canSendManualOverride && (
-                                <p className="text-xs text-slate-500">
-                                  Viewer mode can inspect messages but cannot send replies.
-                                </p>
-                              )}
-                              <button
-                                type="submit"
-                                disabled={!canSendManualOverride || publicInboxReplySending || !publicInboxReplyText.trim()}
-                                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {publicInboxReplySending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                                Send Reply
-                              </button>
-                            </div>
-                          </div>
-                        </form>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <PublicInboxScreen
+                counts={publicInboxCounts}
+                totalConversationCount={publicInboxConversations.length}
+                deferredQuery={deferredPublicInboxQuery}
+                filteredConversations={filteredPublicInboxConversations}
+                selectedEventName={selectedEvent ? selectedEvent.name : null}
+                loading={publicInboxLoading}
+                selectedEventId={selectedEventId}
+                onRefreshConversations={() => fetchPublicInboxConversations(selectedEventId)}
+                searchQuery={publicInboxSearchQuery}
+                onSearchQueryChange={setPublicInboxSearchQuery}
+                statusFilter={publicInboxStatusFilter}
+                onStatusFilterChange={setPublicInboxStatusFilter}
+                message={publicInboxMessage}
+                selectedSenderId={selectedPublicInboxSenderId}
+                onSelectConversation={setSelectedPublicInboxSenderId}
+                getAttentionReasonLabel={getPublicInboxAttentionReasonLabel}
+                getStatusTone={getPublicInboxStatusTone}
+                getStatusLabel={getPublicInboxStatusLabel}
+                activeConversation={activePublicInboxConversation}
+                conversationLoading={publicInboxConversationLoading}
+                onRefreshConversation={fetchPublicInboxConversation}
+                canManageRegistrations={canManageRegistrations}
+                onOpenRegistration={(registrationId) => {
+                  setSelectedRegistrationId(registrationId);
+                  handleNavigateToTab("registrations");
+                }}
+                canChangeConversationStatus={canChangeRegistrationStatus}
+                statusUpdating={publicInboxStatusUpdating}
+                onUpdateConversationStatus={updatePublicInboxConversationStatus}
+                conversationMessages={publicInboxConversationMessages}
+                replyText={publicInboxReplyText}
+                onReplyTextChange={setPublicInboxReplyText}
+                canSendManualOverride={canSendManualOverride}
+                replySending={publicInboxReplySending}
+                onReplySubmit={handlePublicInboxReplySubmit}
+              />
             </motion.div>
           )}
           {activeTab === "logs" && (
@@ -15527,303 +13111,32 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                <div className="border-b border-slate-100 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-lg font-semibold">Live Webhook Logs</h2>
-                        {selectedEvent && (
-                          <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                            {getEventStatusLabel(selectedEvent.effective_status)}
-                          </StatusBadge>
-                        )}
-                      </div>
-                      <StatusLine
-                        className="mt-1"
-                        items={[
-                          `${messages.length}${logsHasMore ? "+" : ""} items`,
-                          deferredLogListQuery ? `${filteredMessages.length} match` : null,
-                          logsHasMore ? "older logs available" : null,
-                        ]}
-                      />
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {selectedEvent && (
-                        <>
-                          <HelpPopover label="Open reply guard details">
-                            {eventOperatorGuard.body}
-                          </HelpPopover>
-                        </>
-                      )}
-                      <button
-                        onClick={() => void handleLoadOlderLogs()}
-                        disabled={!logsHasMore || logsLoadingMore || messages.length === 0}
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {logsLoadingMore ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                        Older
-                      </button>
-                      <button onClick={() => void fetchMessages(selectedEventId)} className="rounded-lg p-2 transition-colors hover:bg-slate-100">
-                        <RefreshCw className="h-4 w-4 text-slate-400" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-center">
-                    <div className="relative min-w-0 flex-1">
-                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={logListQuery}
-                        onChange={(e) => setLogListQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Search logs by sender, message, type, or trace detail"
-                      />
-                      {logListQuery && (
-                        <button
-                          onClick={() => setLogListQuery("")}
-                          className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                          aria-label="Clear log search"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                      {selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open" && (
-                        <span>Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</span>
-                      )}
-                      <span>full message opens on the right</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-2 p-3 md:hidden">
-                  {filteredMessages.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                      {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
-                    </div>
-                  ) : (
-                    filteredMessages.map((msg) => {
-                      const lineTrace = parseLineTraceMessage(msg.text);
-                      const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
-                      const isSelected = selectedLogMessageId === msg.id;
-                      const directionMeta = getLogDirectionMeta(msg.type);
-                      return (
-                        <div key={msg.id} id={getSearchTargetDomId("log", String(msg.id))}>
-                          <button
-                            onClick={() => setSelectedLogMessageId(msg.id)}
-                            className={`w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left transition-colors ${
-                              isSelected
-                                ? "border-blue-200 bg-blue-50"
-                                : isSearchFocused("log", String(msg.id))
-                                ? "bg-blue-50"
-                                : "hover:bg-slate-50"
-                            } ${isSearchFocused("log", String(msg.id)) ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
-                          >
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${directionMeta.className}`}>
-                                {directionMeta.icon}
-                                {directionMeta.label}
-                              </span>
-                              {msg.platform && <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">{msg.platform}</span>}
-                              {lineTrace && (
-                                <span className="text-[11px] text-amber-700">
-                                  Trace {formatTraceStatusLabel(lineTrace.status)}
-                                </span>
-                              )}
-                              {auditMarker && (
-                                <span className="text-[11px] text-slate-600">
-                                  {auditMarker.actor} · {auditMarker.label}
-                                </span>
-                              )}
-                              {isSelected && <SelectionMarker />}
-                            </div>
-                            <div className="mt-1.5 flex items-start justify-between gap-2">
-                              <p className="chat-selectable log-list-preview-2 min-w-0 text-sm leading-5 text-slate-700">
-                                {getLogMessageDisplayText(msg)}
-                              </p>
-                              <p className="shrink-0 text-[10px] text-slate-500">
-                                {new Date(msg.timestamp).toLocaleString()}
-                              </p>
-                            </div>
-                            <p className="mt-1 truncate font-mono text-[10px] text-blue-600">{msg.sender_id}</p>
-                            {(msg.sender_name || msg.registration_id) && (
-                              <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                                {msg.sender_name || "-"}{msg.registration_id ? ` • ${msg.registration_id}` : ""}
-                              </p>
-                            )}
-                          </button>
-                          {isSelected && (
-                            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                              <p className="text-[11px] text-slate-600">
-                                {directionMeta.label} via {msg.platform || "unknown"} · {new Date(msg.timestamp).toLocaleString()}
-                              </p>
-                              <p className="chat-selectable mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-700">
-                                {lineTrace
-                                  ? lineTrace.detail || formatTraceStatusLabel(lineTrace.status)
-                                  : auditMarker
-                                  ? auditMarker.marker === "manual-reply"
-                                    ? auditMarker.detail
-                                    : auditMarker.summary
-                                  : msg.text}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-                <div className="hidden overflow-x-auto md:block xl:hidden">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
-                      <tr>
-                        <th className="px-6 py-3">Timestamp</th>
-                        <th className="px-6 py-3">Sender ID</th>
-                        <th className="px-6 py-3">Message</th>
-                        <th className="px-6 py-3">Type</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {filteredMessages.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">
-                            {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredMessages.map((msg) => {
-                          const lineTrace = parseLineTraceMessage(msg.text);
-                          const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
-                          return (
-                            <tr
-                              key={msg.id}
-                              id={getSearchTargetDomId("log", String(msg.id))}
-                              onClick={() => setSelectedLogMessageId(msg.id)}
-                              className={`cursor-pointer transition-colors hover:bg-slate-50 ${
-                                isSearchFocused("log", String(msg.id)) ? "bg-blue-50" : ""
-                              }`}
-                            >
-                              <td className="px-6 py-4 whitespace-nowrap text-slate-500">
-                                {new Date(msg.timestamp).toLocaleString()}
-                              </td>
-                              <td className="px-6 py-4">
-                                <p className="font-mono text-xs text-blue-600">{msg.sender_id}</p>
-                                {(msg.sender_name || msg.registration_id) && (
-                                  <p className="mt-0.5 text-[11px] text-slate-500">
-                                    {msg.sender_name || "-"}{msg.registration_id ? ` • ${msg.registration_id}` : ""}
-                                  </p>
-                                )}
-                              </td>
-                              <td className="px-6 py-4 max-w-md">
-                                {lineTrace ? (
-                                  <div className="space-y-1">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">LINE</span>
-                                      <span className="text-[11px] text-amber-700">Delivery Trace</span>
-                                      <span className="text-[11px] font-semibold text-slate-600">
-                                        {formatTraceStatusLabel(lineTrace.status)}
-                                      </span>
-                                    </div>
-                                    <p className="chat-selectable text-sm text-slate-700 break-words">
-                                      {lineTrace.detail || "-"}
-                                    </p>
-                                  </div>
-                                ) : auditMarker ? (
-                                  <div className="space-y-1">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <span className="text-[11px] font-semibold text-slate-600">{auditMarker.actor}</span>
-                                      <span className="text-[11px] text-slate-500">{auditMarker.label}</span>
-                                    </div>
-                                    <p className="chat-selectable text-sm text-slate-700 break-words">
-                                      {auditMarker.marker === "manual-reply" ? auditMarker.detail : auditMarker.summary}
-                                    </p>
-                                  </div>
-                                ) : (
-                                  <span className="chat-selectable truncate block">{msg.text}</span>
-                                )}
-                              </td>
-                              <td className="px-6 py-4">
-                                <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                                  <span className={`inline-flex items-center gap-1 font-semibold ${getLogDirectionMeta(msg.type).className}`}>
-                                    {getLogDirectionMeta(msg.type).icon}
-                                    {getLogDirectionMeta(msg.type).label}
-                                  </span>
-                                  {msg.platform && <span className="font-medium uppercase tracking-[0.08em] text-slate-500">{msg.platform}</span>}
-                                  {lineTrace && <span className="text-amber-700">Trace</span>}
-                                  {auditMarker && <span className="text-slate-600">{auditMarker.label}</span>}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="hidden border-t border-slate-100 bg-slate-50 md:block xl:hidden">
-                  {logInspectorPanel}
-                </div>
-                <div className="hidden xl:grid xl:min-h-[34rem] xl:grid-cols-[minmax(0,1.25fr)_minmax(22rem,0.75fr)]">
-                  <div className="min-w-0 border-r border-slate-100">
-                    {filteredMessages.length === 0 ? (
-                      <div className="flex h-full items-center justify-center px-6 py-16 text-center text-sm text-slate-400">
-                        {deferredLogListQuery ? "No logs match this search." : "No messages received yet."}
-                      </div>
-                    ) : (
-                      <div className="max-h-[34rem] overflow-y-auto">
-                        {filteredMessages.map((msg) => {
-                          const lineTrace = parseLineTraceMessage(msg.text);
-                          const auditMarker = lineTrace ? null : parseInternalLogMarker(msg.text);
-                          const isSelected = selectedLogMessageId === msg.id;
-                          const directionMeta = getLogDirectionMeta(msg.type);
-                          return (
-                            <button
-                              key={msg.id}
-                              id={getSearchTargetDomId("log", String(msg.id))}
-                              onClick={() => setSelectedLogMessageId(msg.id)}
-                              className={`grid min-h-[5.1rem] w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2 overflow-hidden border-b border-slate-100 px-4 py-2.5 text-left transition-colors ${
-                                isSelected
-                                  ? "bg-blue-50"
-                                  : isSearchFocused("log", String(msg.id))
-                                  ? "bg-blue-50"
-                                  : "hover:bg-slate-50"
-                              }`}
-                            >
-                              <div className="min-w-0">
-                                <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-                                  <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${directionMeta.className}`}>
-                                    {directionMeta.icon}
-                                    {directionMeta.label}
-                                  </span>
-                                  {msg.platform && <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-slate-500">{msg.platform}</span>}
-                                  {lineTrace && <span className="text-[10px] text-amber-700">Trace</span>}
-                                  {auditMarker && <span className="text-[10px] text-slate-600">{auditMarker.actor}</span>}
-                                  <p className="min-w-0 truncate text-[10px] font-mono text-blue-600">{msg.sender_id}</p>
-                                </div>
-                                {(msg.sender_name || msg.registration_id) && (
-                                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                                    {msg.sender_name || "-"}{msg.registration_id ? ` • ${msg.registration_id}` : ""}
-                                  </p>
-                                )}
-                                <p className="chat-selectable log-list-preview-2 mt-1 text-[13px] leading-5 text-slate-700">
-                                  {getLogMessageDisplayText(msg)}
-                                </p>
-                              </div>
-                              <p className="shrink-0 whitespace-nowrap pl-2 text-[10px] text-slate-500">
-                                {new Date(msg.timestamp).toLocaleString()}
-                              </p>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="log-inspector-surface min-w-0">
-                    {logInspectorPanel}
-                  </div>
-                </div>
-              </div>
+              <LogsScreen
+                selectedEvent={selectedEvent}
+                getEventStatusTone={getEventStatusTone}
+                getEventStatusLabel={getEventStatusLabel}
+                messages={messages}
+                logsHasMore={logsHasMore}
+                deferredLogListQuery={deferredLogListQuery}
+                filteredMessages={filteredMessages}
+                eventOperatorGuardBody={eventOperatorGuard.body}
+                onLoadOlderLogs={handleLoadOlderLogs}
+                logsLoadingMore={logsLoadingMore}
+                onRefreshMessages={() => fetchMessages(selectedEventId)}
+                logListQuery={logListQuery}
+                onLogListQueryChange={setLogListQuery}
+                getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+                parseLineTraceMessage={parseLineTraceMessage}
+                parseInternalLogMarker={parseInternalLogMarker}
+                getLogDirectionMeta={getLogDirectionMeta}
+                formatTraceStatusLabel={formatTraceStatusLabel}
+                getLogMessageDisplayText={getLogMessageDisplayText}
+                selectedLogMessageId={selectedLogMessageId}
+                onSelectLogMessage={setSelectedLogMessageId}
+                getSearchTargetDomId={getSearchTargetDomId}
+                isSearchFocused={isSearchFocused}
+                logInspectorPanel={logInspectorPanel}
+              />
             </motion.div>
           )}
 
@@ -16473,584 +13786,71 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
-      </main>
+      </AdminWorkspaceFrame>
 
-      <AnimatePresence>
-        {dirtyNavigationDialog.open && (
-          <>
-            <motion.div
-              className="fixed inset-0 z-40 bg-slate-950/30 backdrop-blur-[2px]"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={closeDirtyNavigationDialog}
-            />
-            <motion.div
-              className="app-overlay-surface fixed inset-x-3 top-1/2 z-50 mx-auto w-[min(32rem,calc(100vw-1.5rem))] -translate-y-1/2 rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.22)]"
-              initial={{ opacity: 0, y: 16, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 12, scale: 0.98 }}
-              transition={{ duration: 0.18 }}
-            >
-              <div className="border-b border-slate-100 px-5 py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-amber-600">Unsaved Changes</p>
-                    <h2 className="mt-1 text-lg font-semibold text-slate-900">Save before you {dirtyNavigationTargetLabel}?</h2>
-                    <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                      You have unsaved changes in {dirtyNavigationSectionLabels.join(", ")}. You can save first, leave without saving, or stay here.
-                    </p>
-                  </div>
-                  <button
-                    onClick={closeDirtyNavigationDialog}
-                    disabled={dirtyNavigationDialog.saving}
-                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label="Close unsaved changes dialog"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-3 px-5 py-4">
-                <div className="flex flex-wrap gap-2">
-                  {dirtyNavigationSectionLabels.map((label) => (
-                    <span
-                      key={label}
-                      className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800"
-                    >
-                      {label}
-                    </span>
-                  ))}
-                </div>
-                {dirtyNavigationDialog.error && (
-                  <InlineWarning tone="rose">
-                    {dirtyNavigationDialog.error}
-                  </InlineWarning>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 px-5 py-4">
-                <ActionButton
-                  onClick={closeDirtyNavigationDialog}
-                  tone="neutral"
-                  disabled={dirtyNavigationDialog.saving}
-                >
-                  Stay Here
-                </ActionButton>
-                <ActionButton
-                  onClick={handleDirtyNavigationLeaveWithoutSaving}
-                  tone="rose"
-                  disabled={dirtyNavigationDialog.saving}
-                >
-                  Leave Without Saving
-                </ActionButton>
-                <ActionButton
-                  onClick={() => void handleDirtyNavigationSaveAndLeave()}
-                  tone="blue"
-                  active
-                  disabled={dirtyNavigationDialog.saving}
-                >
-                  {dirtyNavigationDialog.saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  Save & Leave
-                </ActionButton>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {channelConfigDialogOpen && (
-          <>
-            <motion.div
-              className="fixed inset-0 z-30 bg-slate-950/25 backdrop-blur-[2px]"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={closeChannelConfigDialog}
-            />
-            <motion.aside
-              className="app-overlay-surface fixed inset-y-0 right-0 z-40 flex w-[min(34rem,100vw)] flex-col border-l border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)]"
-              initial={{ opacity: 0, x: 28 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 24 }}
-              transition={{ duration: 0.18 }}
-            >
-              <div className="border-b border-slate-100 px-4 py-4 sm:px-5">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Channel Config</p>
-                    <h3 className="mt-1 text-lg font-semibold text-slate-900">
-                      {editingChannelKey ? "Update Channel Connection" : "Create Channel Connection"}
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Save platform credentials once at workspace level. Event assignment is managed separately from the connection itself.
-                    </p>
-                  </div>
-                  <button
-                    onClick={closeChannelConfigDialog}
-                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
-                    aria-label="Close channel configuration"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-              <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-5">
-                <select
-                  value={newChannelPlatform}
-                  onChange={(e) => {
-                    const platform = e.target.value as ChannelPlatform;
-                    setNewChannelPlatform(platform);
-                    setNewChannelConfig({});
-                    if (platform === "line_oa") {
-                      setNewPageId("");
-                    }
-                  }}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
-                >
-                  <option value="facebook">Facebook</option>
-                  <option value="line_oa">LINE OA</option>
-                  <option value="instagram">Instagram</option>
-                  <option value="whatsapp">WhatsApp</option>
-                  <option value="telegram">Telegram</option>
-                  <option value="web_chat">Web Chat</option>
-                </select>
-                {selectedChannelPlatformDefinition && (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600 space-y-2">
-                    <div className="flex items-start gap-3">
-                      <ChannelPlatformLogo platform={selectedChannelPlatformDefinition.id} className="h-10 w-10 rounded-2xl" />
-                      <div className="min-w-0">
-                        <p className="font-semibold text-slate-800">{selectedChannelPlatformDefinition.label}</p>
-                        <p>{selectedChannelPlatformDefinition.description}</p>
-                      </div>
-                    </div>
-                    <div className="space-y-1 text-xs text-slate-500">
-                      {selectedChannelPlatformDefinition.notes.map((note) => (
-                        <p key={`${selectedChannelPlatformDefinition.id}:${note}`}>{note}</p>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                  {editingChannel
-                    ? editingChannel.event_id
-                      ? <>Current assignment: <span className="font-semibold text-slate-800">{eventNameById.get(editingChannel.event_id) || editingChannel.event_id}</span>. Use Assign/Remove actions in Organization Setup to change routing.</>
-                      : "Current assignment: unassigned. Use Assign to Selected Event when you want this connection to route into the active event."
-                    : <>New connections are assigned to <span className="font-semibold text-slate-800">{selectedEvent?.name || "the selected event"}</span> as soon as you save them.</>}
-                </div>
-                <input
-                  value={newPageName}
-                  onChange={(e) => setNewPageName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Channel display name"
-                />
-                <input
-                  value={newPageId}
-                  onChange={(e) => setNewPageId(e.target.value)}
-                  disabled={lineChannelIdAutoResolved}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
-                  placeholder={selectedChannelPlatformDefinition?.external_id_placeholder || "Channel external ID"}
-                />
-                {lineChannelIdAutoResolved && (
-                  <p className="text-xs text-slate-500">
-                    LINE Bot User ID (`U...`) is resolved automatically from the saved access token when you save this channel.
-                  </p>
-                )}
-                {selectedChannelPlatformDefinition && (
-                  <div className="flex justify-end">
-                    <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.external_id_label}`}>
-                      {selectedChannelPlatformDefinition.external_id_label}
-                    </HelpPopover>
-                  </div>
-                )}
-                {selectedChannelPlatformDefinition?.access_token_label && (
-                  <>
-                    <input
-                      value={newPageAccessToken}
-                      onChange={(e) => setNewPageAccessToken(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder={selectedChannelPlatformDefinition.access_token_label || "Channel access token"}
-                    />
-                    {selectedChannelPlatformDefinition.access_token_help && (
-                      <div className="flex justify-end">
-                        <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.access_token_label}`}>
-                          {selectedChannelPlatformDefinition.access_token_help}
-                        </HelpPopover>
-                      </div>
-                    )}
-                  </>
-                )}
-                {selectedChannelPlatformDefinition?.config_fields.map((field) => (
-                  <div key={`${newChannelPlatform}:${field.key}`} className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
-                        {field.label}
-                        {field.required ? " Required" : ""}
-                      </p>
-                      {field.help ? (
-                        <HelpPopover label={`Open note for ${field.label}`}>
-                          {field.help}
-                        </HelpPopover>
-                      ) : null}
-                    </div>
-                    <input
-                      value={newChannelConfig[field.key] || ""}
-                      onChange={(e) => setNewChannelConfig((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                      type={field.secret ? "password" : "text"}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder={field.placeholder || field.label}
-                    />
-                  </div>
-                ))}
-                {channelFormMissingRequirements.length > 0 && (
-                  <p className="text-xs text-amber-700">
-                    Missing before save: {channelFormMissingRequirements.join(", ")}
-                  </p>
-                )}
-                <p className="text-xs text-slate-500">
-                  Facebook, LINE OA, Instagram, WhatsApp, Telegram, and Web Chat are wired into live message handling right now.
-                </p>
-              </div>
-              <div className="border-t border-slate-100 bg-white px-4 py-4 sm:px-5">
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <ActionButton
-                    onClick={closeChannelConfigDialog}
-                    tone="neutral"
-                  >
-                    Cancel
-                  </ActionButton>
-                  <ActionButton
-                    onClick={async () => {
-                      const saved = await handleSaveChannel();
-                      if (saved) {
-                        closeChannelConfigDialog();
-                      }
-                    }}
-                    disabled={
-                      !selectedEventId
-                      || (!lineChannelIdAutoResolved && !newPageId.trim())
-                      || eventLoading
-                      || (!editingChannelKey && selectedEventChannelWritesLocked)
-                      || channelFormMissingRequirements.length > 0
-                    }
-                    tone="blue"
-                    active
-                    className="px-3"
-                  >
-                    {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    {editingChannelKey ? "Save Connection" : "Create + Assign"}
-                  </ActionButton>
-                </div>
-              </div>
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
-
-      {canEditSettings && !isChatConsoleTab && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 hidden lg:block">
-          <div className="mx-auto flex max-w-7xl justify-start px-6">
-            <div className="pointer-events-auto flex items-end gap-2">
-              {insightsPanelOpen && (
-                <div className="app-floating-status w-[min(30rem,calc(100vw-10rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.12)] backdrop-blur">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Workspace Insights</p>
-                  <StatusLine
-                    className="mt-1"
-                    items={[
-                      selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : "No selected event",
-                      hasAnyUnsavedSettings ? "Unsaved changes" : "Saved",
-                      <>Model {activeLlmModel}</>,
-                    ]}
-                  />
-                  <CompactStatRow
-                    className="mt-2"
-                    stats={[
-                      { label: "Event tokens", value: formatCompactNumber(selectedEventUsage?.total_tokens || 0), tone: "blue" },
-                      { label: "Total cost", value: formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0), tone: "neutral" },
-                    ]}
-                  />
-                </div>
-              )}
-              <ActionButton
-                onClick={() => setInsightsPanelOpen((open) => !open)}
-                tone={insightsPanelOpen ? "blue" : "neutral"}
-                className="h-11 rounded-2xl px-3 text-sm"
-              >
-                <Activity className="h-4 w-4" />
-                {insightsPanelOpen ? "Hide Insights" : "Insights"}
-              </ActionButton>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <AnimatePresence>
-        {globalSearchOpen && (
-          <motion.div
-            className="fixed inset-0 z-30 bg-slate-950/25 backdrop-blur-[2px]"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setGlobalSearchOpen(false)}
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {globalSearchOpen && (
-          <motion.aside
-            className="app-overlay-surface fixed inset-x-3 top-[calc(0.75rem+env(safe-area-inset-top))] z-40 max-h-[min(80dvh,42rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(42rem,calc(100vw-3rem))]"
-            initial={{ opacity: 0, y: -12, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -10, scale: 0.98 }}
-            transition={{ duration: 0.18 }}
-          >
-            <div className="border-b border-slate-100 px-5 py-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Global Search</p>
-                  <div className="relative mt-3">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                      ref={globalSearchInputRef}
-                      value={globalSearchQuery}
-                      onChange={(e) => setGlobalSearchQuery(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Search events, channels, attendees, documents, or logs"
-                    />
-                    {globalSearchQuery && (
-                      <button
-                        onClick={() => setGlobalSearchQuery("")}
-                        className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                        aria-label="Clear global search"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  <p className="mt-2 text-[11px] text-slate-500">
-                    Events and channels search across the workspace. Attendees, documents, and logs follow the active event.
-                  </p>
-                </div>
-                <button
-                  onClick={() => setGlobalSearchOpen(false)}
-                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
-                  aria-label="Close global search"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-            <div className="max-h-[calc(min(80dvh,42rem)-7.5rem)] space-y-4 overflow-y-auto px-5 py-4">
-              {!deferredGlobalSearchQuery ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                  Start typing to search across events, current registrations, channels, documents, and logs.
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Events</p>
-                      <StatusBadge tone="neutral">{globalEventResults.length}</StatusBadge>
-                    </div>
-                    {globalEventResults.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No event matches.</div>
-                    ) : (
-                      globalEventResults.map((event) => (
-                        <button
-                          key={event.id}
-                          onClick={() => handleGlobalSearchSelect("event", event.id)}
-                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">{event.name}</p>
-                            <p className="mt-1 truncate text-xs text-slate-500">{event.slug}</p>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                            {event.registration_availability && event.registration_availability !== "open" && event.effective_status !== "closed" && event.effective_status !== "cancelled" && event.effective_status !== "archived" && (
-                              <StatusBadge tone={getRegistrationAvailabilityTone(event.registration_availability)}>
-                                {getRegistrationAvailabilityLabel(event.registration_availability)}
-                              </StatusBadge>
-                            )}
-                            <StatusBadge tone={getEventStatusTone(event.effective_status)}>
-                              {getEventStatusLabel(event.effective_status)}
-                            </StatusBadge>
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Registrations</p>
-                      <StatusBadge tone="neutral">{globalRegistrationResults.length}</StatusBadge>
-                    </div>
-                    {globalRegistrationResults.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No attendee matches in the current event.</div>
-                    ) : (
-                      globalRegistrationResults.map((reg) => (
-                        <button
-                          key={reg.id}
-                          onClick={() => handleGlobalSearchSelect("registration", reg.id)}
-                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">{reg.first_name} {reg.last_name}</p>
-                            <p className="mt-1 truncate font-mono text-xs text-blue-600">{reg.id}</p>
-                          </div>
-                          <StatusBadge tone={getRegistrationStatusTone(reg.status)}>{reg.status}</StatusBadge>
-                        </button>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Channels</p>
-                      <StatusBadge tone="neutral">{globalChannelResults.length}</StatusBadge>
-                    </div>
-                    {globalChannelResults.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No channel matches.</div>
-                    ) : (
-                      globalChannelResults.map((channel) => (
-                        <button
-                          key={channel.id}
-                          onClick={() => handleGlobalSearchSelect("channel", channel.id)}
-                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">{channel.display_name}</p>
-                            <p className="mt-1 truncate text-xs text-slate-500">{channel.platform_label || channel.platform} • {channel.external_id}</p>
-                          </div>
-                          <StatusBadge tone={channel.is_active ? "emerald" : "neutral"}>{channel.is_active ? "active" : "inactive"}</StatusBadge>
-                        </button>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Documents</p>
-                      <StatusBadge tone="neutral">{globalDocumentResults.length}</StatusBadge>
-                    </div>
-                    {globalDocumentResults.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No document matches in this workspace.</div>
-                    ) : (
-                      globalDocumentResults.map((document) => (
-                        <button
-                          key={document.id}
-                          onClick={() => handleGlobalSearchSelect("document", document.id)}
-                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">{document.title}</p>
-                            <p className="mt-1 truncate text-xs text-slate-500">{document.source_type} • {document.chunk_count || 0} chunks</p>
-                          </div>
-                          <StatusBadge tone={document.is_active ? "emerald" : "neutral"}>{document.is_active ? "active" : "disabled"}</StatusBadge>
-                        </button>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Logs</p>
-                      <StatusBadge tone="neutral">{globalLogResults.length}</StatusBadge>
-                    </div>
-                    {globalLogResults.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 px-4 py-3 text-xs text-slate-400">No log matches in this workspace.</div>
-                    ) : (
-                      globalLogResults.map((message) => (
-                        <button
-                          key={message.id}
-                          onClick={() => handleGlobalSearchSelect("log", String(message.id))}
-                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">{message.type === "incoming" ? "Incoming Message" : "Outgoing Message"}</p>
-                            <p className="mt-1 truncate text-xs text-slate-500">{message.sender_id}</p>
-                          </div>
-                          <StatusBadge tone={message.type === "incoming" ? "emerald" : "blue"}>{message.type}</StatusBadge>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
-
-      {helpContent && !isChatConsoleTab && (
-        <>
-          <AnimatePresence>
-            {helpOpen && (
-              <motion.div
-                className="fixed inset-0 z-30 bg-slate-950/20 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setHelpOpen(false)}
-              />
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {helpOpen && (
-              <motion.aside
-                className="app-overlay-surface fixed inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 max-h-[min(70dvh,34rem)] overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.2)] sm:inset-x-auto sm:right-6 sm:w-[min(30rem,calc(100vw-3rem))]"
-                initial={{ opacity: 0, y: 20, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 16, scale: 0.98 }}
-                transition={{ duration: 0.18 }}
-              >
-                <div className="border-b border-slate-100 px-5 py-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-600">Help Overlay</p>
-                      <h2 className="mt-1 text-lg font-semibold text-slate-900">{helpContent.title}</h2>
-                      <p className="mt-2 text-sm leading-relaxed text-slate-600">{helpContent.summary}</p>
-                    </div>
-                    <button
-                      onClick={() => setHelpOpen(false)}
-                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
-                      aria-label="Close help"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-                <div className="max-h-[calc(min(70dvh,34rem)-9rem)] space-y-3 overflow-y-auto px-5 py-4">
-                  {helpContent.points.map((point) => (
-                    <div key={point.label} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <p className="text-sm font-semibold text-slate-900">{point.label}</p>
-                      <p className="mt-1 text-sm leading-relaxed text-slate-600">{point.body}</p>
-                    </div>
-                  ))}
-                </div>
-              </motion.aside>
-            )}
-          </AnimatePresence>
-
-          {!channelConfigDialogOpen && (
-            <button
-              onClick={() => setHelpOpen((open) => !open)}
-              className={`fixed bottom-[calc(0.9rem+env(safe-area-inset-bottom))] right-3 z-40 inline-flex h-12 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold shadow-lg transition-all sm:right-6 ${
-                helpOpen
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-blue-200 bg-white text-blue-700 hover:border-blue-300 hover:bg-blue-50"
-              }`}
-              aria-expanded={helpOpen}
-              aria-label={helpOpen ? "Close help overlay" : "Open contextual help"}
-            >
-              {helpOpen ? <X className="h-4 w-4" /> : <CircleHelp className="h-4 w-4" />}
-              <span className="hidden sm:inline">{helpOpen ? "Close Help" : "Help"}</span>
-            </button>
-          )}
-        </>
-      )}
-    </div>
+      <AppOverlays
+        dirtyNavigationDialog={dirtyNavigationDialog}
+        dirtyNavigationTargetLabel={dirtyNavigationTargetLabel}
+        dirtyNavigationSectionLabels={dirtyNavigationSectionLabels}
+        onCloseDirtyNavigationDialog={closeDirtyNavigationDialog}
+        onLeaveDirtyNavigationWithoutSaving={handleDirtyNavigationLeaveWithoutSaving}
+        onSaveDirtyNavigationAndLeave={handleDirtyNavigationSaveAndLeave}
+        channelConfigDialogOpen={channelConfigDialogOpen}
+        editingChannelKey={editingChannelKey}
+        newChannelPlatform={newChannelPlatform}
+        onNewChannelPlatformChange={(platform) => {
+          setNewChannelPlatform(platform);
+          setNewChannelConfig({});
+          if (platform === "line_oa") {
+            setNewPageId("");
+          }
+        }}
+        selectedChannelPlatformDefinition={selectedChannelPlatformDefinition}
+        editingChannel={editingChannel}
+        eventNameById={eventNameById}
+        selectedEventName={selectedEvent?.name || ""}
+        onCloseChannelConfigDialog={closeChannelConfigDialog}
+        newPageName={newPageName}
+        onNewPageNameChange={setNewPageName}
+        newPageId={newPageId}
+        onNewPageIdChange={setNewPageId}
+        lineChannelIdAutoResolved={lineChannelIdAutoResolved}
+        newPageAccessToken={newPageAccessToken}
+        onNewPageAccessTokenChange={setNewPageAccessToken}
+        newChannelConfig={newChannelConfig}
+        onNewChannelConfigFieldChange={(key, value) => setNewChannelConfig((prev) => ({ ...prev, [key]: value }))}
+        channelFormMissingRequirements={channelFormMissingRequirements}
+        selectedEventId={selectedEventId}
+        eventLoading={eventLoading}
+        selectedEventChannelWritesLocked={selectedEventChannelWritesLocked}
+        onSaveChannelAndClose={async () => {
+          const saved = await handleSaveChannel();
+          if (saved) {
+            closeChannelConfigDialog();
+          }
+        }}
+        globalSearchOpen={globalSearchOpen}
+        globalSearchInputRef={globalSearchInputRef}
+        globalSearchQuery={globalSearchQuery}
+        onGlobalSearchQueryChange={setGlobalSearchQuery}
+        deferredGlobalSearchQuery={deferredGlobalSearchQuery}
+        globalEventResults={globalEventResults}
+        globalRegistrationResults={globalRegistrationResults}
+        globalChannelResults={globalChannelResults}
+        globalDocumentResults={globalDocumentResults}
+        globalLogResults={globalLogResults}
+        onGlobalSearchClose={() => setGlobalSearchOpen(false)}
+        onGlobalSearchSelect={handleGlobalSearchSelect}
+        getRegistrationAvailabilityTone={getRegistrationAvailabilityTone}
+        getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+        getEventStatusTone={getEventStatusTone}
+        getEventStatusLabel={getEventStatusLabel}
+        getRegistrationStatusTone={getRegistrationStatusTone}
+        helpContent={helpContent}
+        helpOpen={helpOpen}
+        onHelpOpenChange={setHelpOpen}
+        isChatConsoleTab={isChatConsoleTab}
+      />
+    </>
   );
 }
