@@ -46,9 +46,9 @@ export function PlatformBrandPane({ brand }: PlatformBrandPaneProps) {
   const contactHref = normalizeExternalHref(brand.contact_url);
 
   return (
-    <div className="border-b border-slate-200 bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/75">
+    <div className="public-page-brand-pane border-b border-slate-200 bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/75">
       <div className="mx-auto max-w-6xl px-4 py-2 sm:px-6 lg:px-8">
-        <div className="flex flex-col gap-2 rounded-[1.25rem] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.08),_transparent_55%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] px-3.5 py-2.5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="public-page-brand-card flex flex-col gap-2 rounded-[1.25rem] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.08),_transparent_55%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] px-3.5 py-2.5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-2.5">
             <BrandMark label={label} logoUrl={brand.logo_url} />
             <div className="min-w-0">
@@ -71,7 +71,7 @@ export function PlatformBrandPane({ brand }: PlatformBrandPaneProps) {
                   href={aboutHref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                  className="public-page-brand-link public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                 >
                   <Info className="h-3.5 w-3.5" />
                   About
@@ -82,7 +82,7 @@ export function PlatformBrandPane({ brand }: PlatformBrandPaneProps) {
                   href={privacyHref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                  className="public-page-brand-link public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                 >
                   <Shield className="h-3.5 w-3.5" />
                   Privacy
@@ -93,7 +93,7 @@ export function PlatformBrandPane({ brand }: PlatformBrandPaneProps) {
                   href={contactHref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
+                  className="public-page-brand-link public-page-control inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
                 >
                   <Phone className="h-3.5 w-3.5" />
                   Contact

@@ -22,7 +22,7 @@ export function PlatformFooter({ brand }: PlatformFooterProps) {
   const contactHref = normalizeExternalHref(brand.contact_url);
 
   return (
-    <footer className="border-t border-slate-200 bg-white/80">
+    <footer className="public-page-footer border-t border-slate-200 bg-white/80">
       <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-6 text-sm sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
         <div>
           <p className="font-semibold text-slate-900">

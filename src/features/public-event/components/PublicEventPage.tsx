@@ -335,28 +335,34 @@ export function PublicEventPage({
           )}
         </AnimatePresence>
 
-        <div className="border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/90">
-          <div className={`mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 ${headerCondensed ? "py-2" : "py-3"} transition-[padding] duration-200`}>
-            <div className="min-w-0">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-slate-900">{publicEventName}</p>
-                {!headerCondensed && (
-                  <p className="truncate text-xs text-slate-500">{publicLocationLabel}</p>
-                )}
+        <AnimatePresence initial={false}>
+          {page && headerCondensed && (
+            <motion.div
+              key="event-header-bar"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="overflow-hidden"
+            >
+              <div className="public-page-event-header border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/90">
+                <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2 sm:px-6 lg:px-8">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{publicEventName}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <StatusBadge tone={eventStatusTone}>
+                      {eventStatusLabel}
+                    </StatusBadge>
+                    <StatusBadge tone={availabilityTone}>
+                      {availabilityLabel}
+                    </StatusBadge>
+                  </div>
+                </div>
               </div>
-            </div>
-            {page && (
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <StatusBadge tone={eventStatusTone}>
-                  {eventStatusLabel}
-                </StatusBadge>
-                <StatusBadge tone={availabilityTone}>
-                  {availabilityLabel}
-                </StatusBadge>
-              </div>
-            )}
-          </div>
-        </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-5">
