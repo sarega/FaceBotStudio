@@ -79,13 +79,20 @@ import {
 } from "./components/shared/AppUi";
 import { LoadingScreen } from "./components/shared/LoadingScreen";
 import { AuthScreen } from "./features/auth/components/AuthScreen";
+import { AgentConsoleScreen } from "./features/agent/components/AgentConsoleScreen";
+import { AgentSetupScreen } from "./features/agent/components/AgentSetupScreen";
 import { CheckinAccessRoute } from "./features/checkin/components/CheckinAccessRoute";
 import { CheckinScreen } from "./features/checkin/components/CheckinScreen";
+import { ContextScreen } from "./features/context/components/ContextScreen";
+import { EventWorkspaceScreen } from "./features/event/components/EventWorkspaceScreen";
 import { EventWorkspacePanel } from "./features/event-workspace/components/EventWorkspacePanel";
+import { EventMailScreen } from "./features/mail/components/EventMailScreen";
 import { PublicInboxScreen } from "./features/inbox/components/PublicInboxScreen";
 import { LogsScreen } from "./features/logs/components/LogsScreen";
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { RegistrationsScreen } from "./features/registrations/components/RegistrationsScreen";
+import { SettingsScreen } from "./features/settings/components/SettingsScreen";
+import { TestConsoleScreen } from "./features/test/components/TestConsoleScreen";
 import { TeamAccessPanel } from "./features/team/components/TeamAccessPanel";
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
@@ -485,202 +492,202 @@ const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
   {
     id: "image-replace-poster",
     label: "Replace Current Poster",
-    command: "แทนที่ poster ปัจจุบันของ event นี้ด้วยรูปที่แนบมา และอัปเดต event_public_poster_url ให้ใช้รูปนี้ทันที",
-    note: "แทนที่โปสเตอร์ปัจจุบันของ event ที่เลือกอยู่",
-    keywords: ["image", "poster", "replace", "current", "cover", "แทนที่โปสเตอร์"],
+    command: "Replace the current poster for this event with the attached image and update event_public_poster_url to use it immediately.",
+    note: "Swap the poster for the currently selected event.",
+    keywords: ["image", "poster", "replace", "current", "cover"],
     autoSendWithPendingImages: true,
   },
   {
     id: "image-extract-details",
     label: "Extract Poster Details Only",
-    command: "อ่านข้อความและรายละเอียดจาก poster ที่แนบมา แล้วสรุปเป็น draft ของชื่ออีเวนต์ วันเวลา สถานที่ ห้อง และคำอธิบายสั้นๆ โดยยังไม่ต้องสร้าง event หรืออัปเดตข้อมูลใดๆ",
-    note: "ดึงข้อมูลจาก poster อย่างเดียว ยังไม่สร้างหรือแก้ event",
-    keywords: ["image", "poster", "extract", "details", "ocr", "summary", "ดึงข้อมูลจากโปสเตอร์"],
+    command: "Read the attached poster and summarize a draft event title, date, time, venue, room, and short description without creating or updating any event yet.",
+    note: "Extract poster information only. Do not create or edit an event.",
+    keywords: ["image", "poster", "extract", "details", "ocr", "summary"],
     autoSendWithPendingImages: true,
   },
   {
     id: "image-use-as-poster",
     label: "Use Attached Image as Poster",
-    command: "ใช้รูปที่แนบมาล่าสุดเป็น poster ของ event นี้ และอัปเดต event_public_poster_url ให้เลย",
-    note: "ใช้รูปที่แนบมาเป็นโปสเตอร์ของ event ปัจจุบันทันที",
-    keywords: ["image", "poster", "cover", "attached", "โปสเตอร์", "รูป"],
+    command: "Use the most recently attached image as the poster for this event and update event_public_poster_url right away.",
+    note: "Apply the attached image as the current event poster immediately.",
+    keywords: ["image", "poster", "cover", "attached"],
     autoSendWithPendingImages: true,
   },
   {
     id: "image-create-event",
     label: "Create Event From Poster",
-    command: "สร้าง event ใหม่จากรูป poster ที่แนบมา ดึงชื่ออีเวนต์ วันเวลา สถานที่ และรายละเอียดที่อ่านได้จากภาพ แล้วตั้งรูปนี้เป็น poster ของ event ใหม่ ถ้าข้อมูลหลักอ่านไม่ชัดให้ถามฉันสั้นๆ",
-    note: "ให้ agent อ่านข้อมูลจาก poster แล้วสร้าง event draft ให้อัตโนมัติ",
-    keywords: ["image", "poster", "create", "event", "extract", "ocr", "สร้างงานจากรูป"],
+    command: "Create a new event draft from the attached poster. Extract the event name, date, time, venue, and readable details from the image, then use that image as the poster. If key details are unclear, ask me a short follow-up question.",
+    note: "Have the agent read the poster and create an event draft automatically.",
+    keywords: ["image", "poster", "create", "event", "extract", "ocr"],
     autoSendWithPendingImages: true,
   },
   {
     id: "list-events",
     label: "List All Events",
     command: "list events",
-    note: "ลิสต์ event ทั้งหมดจาก DB ตาม policy ที่เปิดไว้",
-    keywords: ["event", "list", "all", "workspace", "ทั้งหมด"],
+    note: "List every event available under the current policy scope.",
+    keywords: ["event", "list", "all", "workspace"],
   },
   {
     id: "list-events-operational",
     label: "List Operational Events",
     command: "list events type:operational",
-    note: "ดูเฉพาะ active, pending, inactive",
+    note: "Show only active, pending, and inactive events.",
     keywords: ["event", "operational", "active", "pending", "inactive", "workspace"],
   },
   {
     id: "list-events-pending",
     label: "List Pending Events",
     command: "list events status:pending",
-    note: "ดูเฉพาะงานที่ยังไม่เริ่ม",
-    keywords: ["event", "pending", "upcoming", "รอดำเนินการ"],
+    note: "Show only events that have not started yet.",
+    keywords: ["event", "pending", "upcoming"],
   },
   {
     id: "list-events-history",
     label: "List History Events",
     command: "list events type:history",
-    note: "ดู closed, cancelled, archived",
-    keywords: ["event", "history", "closed", "cancelled", "archived", "ย้อนหลัง"],
+    note: "Show closed, cancelled, and archived events.",
+    keywords: ["event", "history", "closed", "cancelled", "archived"],
   },
   {
     id: "find-event",
     label: "Find Event",
-    command: 'find_event query="โปรแกรมสหจะโยคะ 5 สัปดาห์"',
-    note: "ค้นหาอีเวนต์จากชื่อบางส่วน",
-    keywords: ["event", "find", "search", "อีเวนต์", "ค้นหา"],
+    command: 'find_event query="Clearing Day 2"',
+    note: "Search for an event by part of its name.",
+    keywords: ["event", "find", "search"],
   },
   {
     id: "event-overview",
     label: "Event Overview",
     command: "get_event_overview",
-    note: "ดูสรุปสถานะงาน เวลา สถานที่ กติกา และยอดลงทะเบียน",
-    keywords: ["overview", "status", "summary", "สรุป", "สถานะงาน"],
+    note: "Review event status, schedule, venue, rules, and registration totals.",
+    keywords: ["overview", "status", "summary"],
   },
   {
     id: "search-system",
     label: "Search System",
-    command: 'search_system query="สุขุมวิท"',
-    note: "ค้นหาทั้งระบบทุกอีเวนต์",
-    keywords: ["global", "search", "cross", "ระบบ", "ค้นทั้งระบบ"],
+    command: 'search_system query="Sukhumvit"',
+    note: "Search across the full system and all events.",
+    keywords: ["global", "search", "cross", "system"],
   },
   {
     id: "list-registrations",
     label: "List Registrations",
     command: "list_registrations limit=50",
-    note: "ดึงรายชื่อผู้ลงทะเบียนล่าสุดตาม event ปัจจุบัน",
-    keywords: ["registration", "list", "attendees", "รายชื่อ", "ลงทะเบียน"],
+    note: "List the latest registrations for the current event.",
+    keywords: ["registration", "list", "attendees"],
   },
   {
     id: "list-registrations-offset",
     label: "List More (Offset)",
     command: "list_registrations limit=50 offset=50",
-    note: "ดึงรายการถัดไปจากชุดก่อนหน้า",
-    keywords: ["offset", "pagination", "more", "ต่อ", "ถัดไป"],
+    note: "Load the next page of registrations from the prior result set.",
+    keywords: ["offset", "pagination", "more"],
   },
   {
     id: "count-registrations",
     label: "Count Registrations",
     command: "count_registrations",
-    note: "นับจำนวนผู้ลงทะเบียนรวมและแยกสถานะ",
-    keywords: ["count", "totals", "นับ", "จำนวน"],
+    note: "Count registrations in total and by status.",
+    keywords: ["count", "totals"],
   },
   {
     id: "find-registration-name",
     label: "Find By Name",
-    command: 'find_registration full_name="ชื่อ นามสกุล"',
-    note: "ค้นหาผู้ลงทะเบียนจากชื่อ-นามสกุล",
-    keywords: ["find", "name", "registration", "ค้นหา", "ชื่อ"],
+    command: 'find_registration full_name="John Smith"',
+    note: "Find a registration by attendee full name.",
+    keywords: ["find", "name", "registration"],
   },
   {
     id: "find-registration-id",
     label: "Find By Registration ID",
     command: "find_registration registration_id=REG-XXXXXX",
-    note: "ค้นหาจากเลขทะเบียน",
-    keywords: ["reg", "id", "lookup", "เลขทะเบียน"],
+    note: "Find a registration by registration ID.",
+    keywords: ["reg", "id", "lookup"],
   },
   {
     id: "create-registration",
     label: "Create Registration",
-    command: 'create_registration first_name="สมชาย" last_name="ใจดี" phone="0890000000" email="somchai@example.com"',
-    note: "ลงทะเบียนผู้เข้าร่วมใหม่",
-    keywords: ["create", "register", "ลงทะเบียน", "new attendee"],
+    command: 'create_registration first_name="John" last_name="Smith" phone="0890000000" email="john@example.com"',
+    note: "Create a new attendee registration.",
+    keywords: ["create", "register", "new attendee"],
   },
   {
     id: "set-registration-status",
     label: "Set Registration Status",
     command: "set_registration_status registration_id=REG-XXXXXX status=checked-in",
-    note: "เปลี่ยนสถานะผู้ลงทะเบียน",
-    keywords: ["status", "checkin", "cancel", "สถานะ"],
+    note: "Change the status of a registration.",
+    keywords: ["status", "checkin", "cancel"],
   },
   {
     id: "timeline",
     label: "Registration Timeline",
     command: "get_registration_timeline registration_id=REG-XXXXXX",
-    note: "ดูประวัติแชทของผู้ลงทะเบียนคนนั้น",
-    keywords: ["timeline", "history", "chat", "ประวัติ"],
+    note: "View the registration's chat and action history.",
+    keywords: ["timeline", "history", "chat"],
   },
   {
     id: "view-ticket",
     label: "View Ticket (Admin)",
     command: "view_ticket registration_id=REG-XXXXXX",
-    note: "ดูตั๋วสำหรับแอดมิน โดยไม่ส่งไปหา user",
-    keywords: ["ticket", "preview", "admin", "ดูตั๋ว"],
+    note: "Preview a ticket for admin use without sending it to the user.",
+    keywords: ["ticket", "preview", "admin"],
   },
   {
     id: "resend-ticket",
     label: "Resend Ticket To User",
     command: "resend_ticket registration_id=REG-XXXXXX sender_id=USER_SENDER_ID",
-    note: "ส่งตั๋วไปยัง user channel เดิม",
-    keywords: ["ticket", "resend", "send user", "ส่งตั๋ว"],
+    note: "Resend the ticket through the user's original channel.",
+    keywords: ["ticket", "resend", "send user"],
   },
   {
     id: "resend-email",
     label: "Resend Email",
     command: "resend_email registration_id=REG-XXXXXX",
-    note: "ส่งอีเมลยืนยันซ้ำ",
-    keywords: ["email", "resend", "ส่งเมล"],
+    note: "Resend the confirmation email.",
+    keywords: ["email", "resend"],
   },
   {
     id: "export-csv",
     label: "Export CSV",
     command: "export_registrations_csv",
-    note: "ส่งไฟล์ CSV รายชื่อทั้งหมด",
-    keywords: ["csv", "export", "excel", "ไฟล์"],
+    note: "Export the full registration list as CSV.",
+    keywords: ["csv", "export", "excel", "file"],
   },
   {
     id: "send-message",
     label: "Send Message To Sender",
-    command: 'send_message_to_sender sender_id=USER_SENDER_ID message="ข้อความที่ต้องการส่ง"',
-    note: "ส่งข้อความ manual ไปยัง user",
-    keywords: ["message", "sender", "manual", "ส่งข้อความ"],
+    command: 'send_message_to_sender sender_id=USER_SENDER_ID message="Your ticket has been resent."',
+    note: "Send a manual message to the user.",
+    keywords: ["message", "sender", "manual"],
   },
   {
     id: "retry-bot",
     label: "Retry Bot",
     command: "retry_bot sender_id=USER_SENDER_ID",
-    note: "กระตุ้นบอทให้ตอบต่อใน thread เดิม",
-    keywords: ["retry", "stuck", "resume", "ค้าง"],
+    note: "Resume the bot in the existing thread.",
+    keywords: ["retry", "stuck", "resume"],
   },
   {
     id: "update-event-status",
     label: "Update Event Status",
     command: "update_event_status status=active",
-    note: "เปลี่ยนสถานะงาน เช่น active/inactive/pending/cancelled",
+    note: "Change the event status, for example active, inactive, pending, or cancelled.",
     keywords: ["event", "status", "active", "inactive"],
   },
   {
     id: "update-event-context",
     label: "Update Event Context",
-    command: 'update_event_context mode=replace context="รายละเอียดใหม่..."',
-    note: "อัปเดตข้อความ context ของงาน",
-    keywords: ["context", "update", "event", "รายละเอียด"],
+    command: 'update_event_context mode=replace context="Updated event details..."',
+    note: "Update the event context text.",
+    keywords: ["context", "update", "event", "details"],
   },
   {
     id: "event-override",
     label: "Cross-Event Scope",
     command: "/event evt_xxx get_event_overview",
-    note: "สั่งงานข้าม event แบบระบุ event id",
-    keywords: ["event", "override", "scope", "ข้ามงาน"],
+    note: "Run a command against a different event by specifying its event ID.",
+    keywords: ["event", "override", "scope", "cross-event"],
   },
 ];
 const ADMIN_AGENT_CONSOLE_QUICK_TEMPLATE_IDS = [
@@ -9228,3714 +9235,361 @@ export default function App() {
       >
         <AnimatePresence mode="wait">
           {activeTab === "event" && (
-            <motion.div
-              key="event"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-4"
-            >
-              <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-                <div className="space-y-4 xl:col-span-7">
-                  {eventWorkspaceView === "setup" ? (
-                    <>
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold flex items-center gap-2">
-                            <Bot className="w-5 h-5 text-blue-600" />
-                            Event Information
-                          </h3>
-                          {selectedEvent && (
-                            <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                              {getEventStatusLabel(selectedEvent.effective_status)}
-                            </StatusBadge>
-                          )}
-                        </div>
-                        <StatusLine
-                          className="mt-1"
-                          items={[
-                            selectedEvent ? <>Mode {getEventStatusLabel(selectedEvent.status)}</> : null,
-                            selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
-                              ? <>Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</>
-                              : "Registration open",
-                            eventSetupDirty ? "Unsaved changes" : "All changes saved",
-                          ]}
-                        />
-                      </div>
-                      <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
-                        <ActionButton
-                          onClick={() => void saveEventDetails()}
-                          disabled={saving}
-                          tone="blue"
-                          active
-                          className="w-full text-sm sm:w-auto sm:shrink-0"
-                        >
-                          {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                          Save Event Setup
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => void handleUpdateEvent({ status: eventStatusToggle.nextStatus })}
-                          disabled={eventStatusToggle.disabled}
-                          tone={eventStatusToggle.tone}
-                          active={eventStatusToggle.nextStatus === "active"}
-                          className="w-full text-sm sm:w-auto sm:shrink-0"
-                        >
-                          {eventLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : eventStatusToggle.nextStatus === "active" ? <Power className="w-4 h-4" /> : <Activity className="w-4 h-4" />}
-                          {eventStatusToggle.label}
-                        </ActionButton>
-                        {selectedEvent && (
-                          <InlineActionsMenu label="Event Actions" tone="neutral">
-                            <MenuActionItem
-                              onClick={() => void handleCloneEvent()}
-                              disabled={!selectedEvent || eventLoading}
-                              tone="neutral"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                              <span className="font-medium">Clone Event</span>
-                            </MenuActionItem>
-                            {!selectedEvent.is_default && selectedEvent.status !== "inactive" && selectedEvent.status !== "archived" && (
-                              <MenuActionItem
-                                onClick={() => void handleUpdateEvent({ status: "inactive" })}
-                                disabled={!selectedEvent || eventLoading}
-                                tone="neutral"
-                                className="mt-1"
-                              >
-                                <Power className="h-3.5 w-3.5" />
-                                <span className="font-medium">Set Inactive</span>
-                              </MenuActionItem>
-                            )}
-                            {!selectedEvent.is_default && selectedEvent.status !== "archived" && (
-                              <MenuActionItem
-                                onClick={() => void handleUpdateEvent({ status: "archived" })}
-                                disabled={!selectedEvent || eventLoading}
-                                tone="neutral"
-                                className="mt-1"
-                              >
-                                <Archive className="h-3.5 w-3.5" />
-                                <span className="font-medium">Archive Event</span>
-                              </MenuActionItem>
-                            )}
-                            {!selectedEvent.is_default && selectedEvent.status === "archived" && (
-                              <MenuActionItem
-                                onClick={() => void handleUpdateEvent({ status: "inactive" })}
-                                disabled={!selectedEvent || eventLoading}
-                                tone="neutral"
-                                className="mt-1"
-                              >
-                                <ArchiveRestore className="h-3.5 w-3.5" />
-                                <span className="font-medium">Restore Archived</span>
-                              </MenuActionItem>
-                            )}
-                            {!selectedEvent.is_default && selectedEvent.status === "archived" && (
-                              <MenuActionItem
-                                onClick={() => void handleDeleteEvent()}
-                                disabled={!selectedEvent || eventLoading}
-                                tone="rose"
-                                className="mt-1"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                <span className="font-medium">Delete Event</span>
-                              </MenuActionItem>
-                            )}
-                            {!selectedEvent.is_default && selectedEvent.status !== "cancelled" && selectedEvent.status !== "archived" && (
-                              <MenuActionItem
-                                onClick={() => void handleUpdateEvent({ status: "cancelled" })}
-                                disabled={!selectedEvent || eventLoading}
-                                tone="rose"
-                                className="mt-1"
-                              >
-                                <AlertCircle className="h-3.5 w-3.5" />
-                                <span className="font-medium">Cancel Event</span>
-                              </MenuActionItem>
-                            )}
-                          </InlineActionsMenu>
-                        )}
-                      </div>
-                    </div>
-
-                    {selectedEvent?.effective_status === "closed" && (
-                      <PageBanner tone="amber" icon={<AlertCircle className="h-4 w-4" />} className="mb-4">
-                        Registration closed automatically when the event window ended at {timingInfo.eventCloseLabel}. Current system time is {timingInfo.nowLabel}.
-                      </PageBanner>
-                    )}
-                    {selectedEvent
-                      && selectedEvent.effective_status !== "closed"
-                      && selectedEvent.effective_status !== "cancelled"
-                      && selectedEvent.effective_status !== "archived"
-                      && selectedEvent.registration_availability
-                      && selectedEvent.registration_availability !== "open" && (
-                        <PageBanner tone="amber" icon={<AlertCircle className="h-4 w-4" />} className="mb-4">
-                          Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability).toLowerCase()}. Existing attendees can still check in.
-                        </PageBanner>
-                      )}
-
-                    {(eventMessage || settingsMessage) && (
-                      <div className="mb-4 space-y-1">
-                        {eventMessage && (
-                          <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                            {eventMessage}
-                          </p>
-                        )}
-                        {settingsMessage && (
-                          <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                            {settingsMessage}
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Name</label>
-                        <input
-                          value={settings.event_name}
-                          onChange={(e) => setSettings({ ...settings, event_name: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. AI Innovation Summit 2026"
-                        />
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                          <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Starts</label>
-                            <input
-                              type="datetime-local"
-                              value={settings.event_date}
-                              onChange={(e) => handleEventDateChange(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Event Ends (Optional)</label>
-                            <input
-                              type="datetime-local"
-                              value={settings.event_end_date}
-                              onChange={(e) => setSettings({ ...settings, event_end_date: e.target.value })}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                          </div>
-                        </div>
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          Event Ends auto-fills to 2 hours later after you set Event Starts. Adjust it if the session runs longer.
-                        </p>
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label>
-                        <textarea
-                          value={settings.event_description}
-                          onChange={(e) => setSettings({ ...settings, event_description: e.target.value })}
-                          rows={6}
-                          className="w-full min-h-[9rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
-                          placeholder="What is this event about?"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Time Zone</label>
-                        <input
-                          value={settings.event_timezone}
-                          onChange={(e) => setSettings({ ...settings, event_timezone: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="e.g. Asia/Bangkok"
-                        />
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="mb-4 flex flex-col gap-1">
-                            <h4 className="text-sm font-semibold text-slate-900">Location Details</h4>
-                            <p className="text-xs text-slate-500">
-                              Separate venue, room, and address so tickets, email, and attendee previews stay consistent.
-                            </p>
-                          </div>
-
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <div>
-                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Venue Name</label>
-                              <input
-                                value={settings.event_venue_name}
-                                onChange={(e) => setSettings({ ...settings, event_venue_name: e.target.value })}
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="e.g. Dhakbwan Resort"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Room / Floor / Hall</label>
-                              <input
-                                value={settings.event_room_detail}
-                                onChange={(e) => setSettings({ ...settings, event_room_detail: e.target.value })}
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="e.g. ห้องภิรัชญ์การ"
-                              />
-                            </div>
-
-                            <div className="md:col-span-2">
-                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Address / Location</label>
-                              <input
-                                value={settings.event_location}
-                                onChange={(e) => setSettings({ ...settings, event_location: e.target.value })}
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="e.g. Tech Plaza, Bangkok"
-                              />
-                            </div>
-
-                            <div className="md:col-span-2">
-                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Google Maps URL</label>
-                              <input
-                                value={settings.event_map_url}
-                                onChange={(e) => setSettings({ ...settings, event_map_url: e.target.value })}
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="https://maps.app.goo.gl/..."
-                              />
-                              <p className="mt-1 text-[11px] text-slate-500">
-                                Leave blank to auto-generate a Google Maps search link from Venue Name and Address.
-                              </p>
-                            </div>
-
-                            <div className="md:col-span-2">
-                              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Travel Instructions</label>
-                              <textarea
-                                value={settings.event_travel}
-                                onChange={(e) => setSettings({ ...settings, event_travel: e.target.value })}
-                                rows={4}
-                                className="w-full min-h-[6.5rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
-                                placeholder="How to get there?"
-                              />
-                            </div>
-
-                            <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
-                              <div className="mb-3 flex items-center justify-between gap-3">
-                                <div>
-                                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Attendee Preview</p>
-                                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                                    {eventLocationSummary.title || eventLocationSummary.address || "Location details will appear here"}
-                                  </p>
-                                  {eventLocationSummary.title && eventLocationSummary.addressLine && (
-                                    <p className="mt-1 text-xs text-slate-500">{eventLocationSummary.addressLine}</p>
-                                  )}
-                                </div>
-                                {resolvedEventMapUrl && (
-                                  <a
-                                    href={resolvedEventMapUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-blue-200 hover:text-blue-600"
-                                  >
-                                    <Link2 className="h-3.5 w-3.5" />
-                                    {eventMapIsGenerated ? "Generated Map" : "Map Link"}
-                                  </a>
-                                )}
-                              </div>
-
-                              <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
-                                {eventMapEmbedUrl ? (
-                                  <iframe
-                                    title="Event location map preview"
-                                    src={eventMapEmbedUrl}
-                                    className="h-80 w-full border-0"
-                                    loading="lazy"
-                                    referrerPolicy="no-referrer-when-downgrade"
-                                    allowFullScreen
-                                  />
-                                ) : (
-                                  <div className="flex h-80 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-slate-500">
-                                    <Link2 className="h-5 w-5 text-slate-400" />
-                                    <p>Add Venue Name and Address to preview a map here.</p>
-                                  </div>
-                                )}
-                              </div>
-
-                              {eventLocationSummary.travelInfo && (
-                                <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3">
-                                  <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Travel Info</p>
-                                  <p className="mt-1 whitespace-pre-line text-sm leading-6 text-slate-600">{eventLocationSummary.travelInfo}</p>
-                                </div>
-                              )}
-
-                              {resolvedEventMapUrl && (
-                                <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                                  <span className="font-semibold text-slate-700">
-                                    {eventMapIsGenerated ? "Auto-generated map link:" : "Saved map link:"}
-                                  </span>{" "}
-                                  <a
-                                    href={resolvedEventMapUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="break-all text-blue-600 hover:text-blue-700"
-                                  >
-                                    {resolvedEventMapUrl}
-                                  </a>
-                                </div>
-                              )}
-                              {eventMapIsGenerated && (
-                                <p className="mt-2 text-[11px] text-slate-500">
-                                  The preview and outgoing map links currently use a Google Maps search built from your venue and address.
-                                </p>
-                              )}
-                              {!resolvedEventMapUrl && (
-                                <p className="mt-2 text-[11px] text-slate-500">
-                                  Add a venue and address, or paste a Google Maps URL, to enable map preview and outbound map sharing.
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="flex items-start justify-between gap-3 sm:block">
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Activity className="w-5 h-5 text-blue-600" />
-                          Registration Rules
-                        </h3>
-                        <StatusLine
-                          className="mt-1"
-                          items={[
-                            <>Window {timingInfo.registrationLabel}</>,
-                            registrationCapacity.limit === null ? "Unlimited capacity" : `Capacity ${activeAttendeeCount}/${registrationCapacity.limit}`,
-                            settings.reg_unique_name !== "0" ? "Duplicate guard on" : "Duplicate guard off",
-                          ]}
-                        />
-                        <div className="sm:hidden">
-                          <HelpPopover label="Open note for Registration Rules">
-                            Registration availability depends on the event time zone, the open and close range, and the event window. If you add an optional end time, the event closes only after that end time.
-                          </HelpPopover>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="hidden sm:block">
-                          <HelpPopover label="Open note for Registration Rules">
-                            Registration availability depends on the event time zone, the open and close range, and the event window. If you add an optional end time, the event closes only after that end time.
-                          </HelpPopover>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Max Capacity</label>
-                        <input
-                          type="number"
-                          value={settings.reg_limit}
-                          onChange={(e) => setSettings({ ...settings, reg_limit: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Open Date</label>
-                        <input
-                          type="datetime-local"
-                          value={settings.reg_start}
-                          onChange={(e) => setSettings({ ...settings, reg_start: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Close Date</label>
-                        <input
-                          type="datetime-local"
-                          value={settings.reg_end}
-                          onChange={(e) => setSettings({ ...settings, reg_end: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
-                      <CircleHelp className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-                      <span>
-                        Auto-suggested to 17:00 on the day before the event so registration does not stay open into the event itself.
-                      </span>
-                    </div>
-                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">Duplicate Name Guard</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Block repeated registrations with the same first and last name in this event. Phone and email can still repeat.
-                          </p>
-                        </div>
-                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            checked={settings.reg_unique_name !== "0"}
-                            onChange={(e) =>
-                              setSettings({
-                                ...settings,
-                                reg_unique_name: e.target.checked ? "1" : "0",
-                              })
-                            }
-                          />
-                          One ticket per full name
-                        </label>
-                      </div>
-                    </div>
-                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Current Time</p>
-                        <p className="mt-1 text-xs text-slate-700">{timingInfo.nowLabel}</p>
-                        <p className="mt-1 text-[11px] text-slate-500">{timingInfo.timeZone}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Event Window</p>
-                        <p className="mt-1 text-xs text-slate-700">{timingInfo.eventDateLabel}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration Opens</p>
-                        <p className="mt-1 text-xs text-slate-700">{timingInfo.startLabel}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration Closes</p>
-                        <p className="mt-1 text-xs text-slate-700">{timingInfo.endLabel}</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">Transactional Mail</p>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Registration confirmation, ticket delivery, and future event-update templates now live in the dedicated Mail workspace.
-                          </p>
-                        </div>
-                        <ActionButton
-                          onClick={() => handleNavigateToTab("mail")}
-                          tone="neutral"
-                          className="px-3 text-xs"
-                        >
-                          <Send className="h-3.5 w-3.5" />
-                          Open Mail Workspace
-                        </ActionButton>
-                      </div>
-                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration Email</p>
-                          <p className="mt-1 text-xs text-slate-700">{settings.confirmation_email_enabled === "1" ? "Enabled" : "Disabled"}</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Config Readiness</p>
-                          <p className="mt-1 text-xs text-slate-700">{emailReadinessLabel}</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
-                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
-                        </div>
-                      </div>
-                    </div>
-                    {timingInfo.registrationStatus === "invalid" && (
-                      <InlineWarning tone="rose" className="mt-3">
-                        Close Date is earlier than Open Date. Fix the range first; otherwise registration will stay unavailable.
-                      </InlineWarning>
-                    )}
-                    {timingInfo.eventScheduleStatus === "invalid" && (
-                      <InlineWarning tone="rose" className="mt-3">
-                        Event end time is earlier than Event start time. Fix the event window first so the schedule is clear across chat, tickets, and email.
-                      </InlineWarning>
-                    )}
-                    {registrationCapacity.isFull && (
-                      <InlineWarning tone="amber" className="mt-3">
-                        Capacity is full. New registrations are blocked until you increase the limit or cancel an attendee.
-                      </InlineWarning>
-                    )}
-                  </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="text-lg font-semibold flex items-center gap-2">
-                                <Eye className="w-5 h-5 text-blue-600" />
-                                Public Event Page
-                              </h3>
-                              <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
-                                {publicPageEnabled ? "enabled" : "draft"}
-                              </StatusBadge>
-                            </div>
-                            <StatusLine
-                              className="mt-1"
-                              items={[
-                                publicRegistrationEnabled ? "Inline registration on" : "Inline registration off",
-                                publicShowSeatAvailability ? "Seat counts on" : "Seat counts hidden",
-                                publicBotEnabled ? "Help chat on" : "Help chat off",
-                                publicPrivacyEnabled ? "Privacy note on" : "Privacy note off",
-                                publicContactEnabled ? "Contact options on" : "Contact options off",
-                                eventPublicDirty ? "Unsaved changes" : "All changes saved",
-                              ]}
-                            />
-                          </div>
-                          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
-                            <ActionButton
-                              onClick={() => void saveEventPublicPage()}
-                              disabled={saving}
-                              tone="blue"
-                              active
-                              className="w-full text-sm sm:w-auto sm:shrink-0"
-                            >
-                              {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                              Save Public Page
-                            </ActionButton>
-                          </div>
-                        </div>
-
-                        {(eventMessage || settingsMessage) && (
-                          <div className="mb-4 space-y-1">
-                            {eventMessage && (
-                              <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                                {eventMessage}
-                              </p>
-                            )}
-                            {settingsMessage && (
-                              <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                                {settingsMessage}
-                              </p>
-                            )}
-                          </div>
-                        )}
-
-                        <PageBanner tone="blue" icon={<CircleHelp className="h-4 w-4" />} className="mb-4">
-                          Public route is now live at your event slug. Attendees stay on one page for poster, event facts, registration, ticket delivery, privacy info, and fallback contact options.
-                        </PageBanner>
-
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <div className="mb-4 flex flex-col gap-1">
-                              <h4 className="text-sm font-semibold text-slate-900">Page Controls</h4>
-                              <p className="text-xs text-slate-500">
-                                Stage the public-facing experience separately from internal event operations.
-                              </p>
-                            </div>
-
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                              <div className="md:col-span-2 flex flex-wrap gap-2">
-                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    checked={publicPageEnabled}
-                                    onChange={(e) =>
-                                      setSettings({
-                                        ...settings,
-                                        event_public_page_enabled: e.target.checked ? "1" : "0",
-                                      })
-                                    }
-                                  />
-                                  Public page enabled
-                                </label>
-                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    checked={publicRegistrationEnabled}
-                                    onChange={(e) =>
-                                      setSettings({
-                                        ...settings,
-                                        event_public_registration_enabled: e.target.checked ? "1" : "0",
-                                      })
-                                    }
-                                  />
-                                  Inline registration
-                                </label>
-                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    checked={publicShowSeatAvailability}
-                                    onChange={(e) =>
-                                      setSettings({
-                                        ...settings,
-                                        event_public_show_seat_availability: e.target.checked ? "1" : "0",
-                                      })
-                                    }
-                                  />
-                                  Show seat counts
-                                </label>
-                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    checked={publicBotEnabled}
-                                    onChange={(e) =>
-                                      setSettings({
-                                        ...settings,
-                                        event_public_bot_enabled: e.target.checked ? "1" : "0",
-                                      })
-                                    }
-                                  />
-                                  Bot help
-                                </label>
-                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    checked={publicPrivacyEnabled}
-                                    onChange={(e) =>
-                                      setSettings({
-                                        ...settings,
-                                        event_public_privacy_enabled: e.target.checked ? "1" : "0",
-                                      })
-                                    }
-                                  />
-                                  Privacy note
-                                </label>
-                                <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    checked={publicContactEnabled}
-                                    onChange={(e) =>
-                                      setSettings({
-                                        ...settings,
-                                        event_public_contact_enabled: e.target.checked ? "1" : "0",
-                                      })
-                                    }
-                                  />
-                                  Contact options
-                                </label>
-                              </div>
-
-                              <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
-                                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_15rem]">
-                                  <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Poster Image URL</label>
-                                    <div className="flex flex-col gap-2 sm:flex-row">
-                                      <input
-                                        value={settings.event_public_poster_url}
-                                        onChange={(e) => setSettings({ ...settings, event_public_poster_url: e.target.value })}
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                        placeholder="/uploads/event-posters/... or https://.../event-poster.jpg"
-                                      />
-                                      <input
-                                        ref={publicPosterFileInputRef}
-                                        type="file"
-                                        accept="image/png,image/jpeg,image/webp"
-                                        className="hidden"
-                                        onChange={(event) => void handlePublicPosterFileUpload(event.target.files?.[0] || null)}
-                                      />
-                                      <ActionButton
-                                        onClick={() => publicPosterFileInputRef.current?.click()}
-                                        disabled={publicPosterUploading}
-                                        tone="blue"
-                                        className="shrink-0 px-3 text-xs"
-                                      >
-                                        {publicPosterUploading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                                        Upload Poster
-                                      </ActionButton>
-                                    </div>
-                                    <p className="mt-1 text-[11px] text-slate-500">
-                                      Upload PNG, JPG, or WebP up to 2 MB, or paste a hosted image URL manually.
-                                    </p>
-                                  </div>
-
-                                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                                    {publicPagePosterUrl ? (
-                                      <img
-                                        src={publicPagePosterUrl}
-                                        alt={settings.event_name || selectedEvent?.name || "Event poster"}
-                                        className="aspect-[800/1132] w-full object-cover"
-                                      />
-                                    ) : (
-                                      <div className="flex aspect-[800/1132] w-full flex-col items-center justify-center gap-3 px-4 text-center text-slate-400">
-                                        <Eye className="h-7 w-7" />
-                                        <div>
-                                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Poster Preview</p>
-                                          <p className="mt-1 text-[11px] text-slate-500">Recommended size 800 x 1132 px</p>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Public Slug</label>
-                                <input
-                                  value={settings.event_public_slug}
-                                  onChange={(e) => setSettings({ ...settings, event_public_slug: sanitizeEnglishSlugInput(e.target.value) })}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  placeholder={resolvedPublicPageSlug || "event-page"}
-                                />
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <ActionButton
-                                    onClick={() =>
-                                      setSettings({
-                                        ...settings,
-                                        event_public_slug: resolveEnglishPublicSlug({
-                                          eventName: settings.event_name || selectedEvent?.name || "",
-                                          eventSlug: selectedEvent?.slug || "",
-                                          eventId: selectedEvent?.id || selectedEventId,
-                                        }),
-                                      })
-                                    }
-                                    tone="neutral"
-                                    className="px-3 text-xs"
-                                  >
-                                    Generate English Slug
-                                  </ActionButton>
-                                  <span className="text-[11px] text-slate-500">Target route: <span className="font-mono text-slate-700">{publicPagePreviewPath}</span></span>
-                                </div>
-                                <p className="mt-1 text-[11px] text-slate-500">
-                                  Lowercase English letters, numbers, and hyphens only. Slug is auto-shortened for cleaner URLs.
-                                </p>
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Primary CTA Label</label>
-                                <input
-                                  value={settings.event_public_cta_label}
-                                  onChange={(e) => setSettings({ ...settings, event_public_cta_label: e.target.value })}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                  placeholder="Register Now"
-                                />
-                              </div>
-
-                              <div className="md:col-span-2">
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Public Summary</label>
-                                <textarea
-                                  value={settings.event_public_summary}
-                                  onChange={(e) => setSettings({ ...settings, event_public_summary: truncatePublicSummary(e.target.value) })}
-                                  rows={4}
-                                  className="w-full min-h-[7rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
-                                  placeholder="Leave blank to auto-generate a short public summary from the event description."
-                                />
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <ActionButton
-                                    onClick={() => setSettings({ ...settings, event_public_summary: publicPageAutoSummary })}
-                                    disabled={!publicPageAutoSummary}
-                                    tone="neutral"
-                                    className="px-3 text-xs"
-                                  >
-                                    Use Auto Summary
-                                  </ActionButton>
-                                  <ActionButton
-                                    onClick={() => setSettings({ ...settings, event_public_summary: "" })}
-                                    disabled={!settings.event_public_summary.trim()}
-                                    tone="neutral"
-                                    className="px-3 text-xs"
-                                  >
-                                    Clear Override
-                                  </ActionButton>
-                                  <span className="text-[11px] text-slate-500">
-                                    {settings.event_public_summary.trim()
-                                      ? `${publicPageSummaryCharCount}/${PUBLIC_SUMMARY_MAX_CHARS} characters in custom summary`
-                                      : `Auto summary stays within ${PUBLIC_SUMMARY_MAX_CHARS} characters`}
-                                  </span>
-                                </div>
-                                <p className="mt-1 text-[11px] text-slate-500">
-                                  Auto preview: <span className="text-slate-700">{publicPageAutoSummary || "Add an event description first."}</span>
-                                </p>
-                              </div>
-
-                              <div className="md:col-span-2">
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Success Message</label>
-                                <textarea
-                                  value={settings.event_public_success_message}
-                                  onChange={(e) => setSettings({ ...settings, event_public_success_message: e.target.value })}
-                                  rows={3}
-                                  className="w-full min-h-[5.5rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y"
-                                  placeholder="Registration complete. Save your ticket image to your phone now."
-                                />
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ticket Recovery Mode</label>
-                                <select
-                                  value={settings.event_public_ticket_recovery_mode}
-                                  onChange={(e) => setSettings({ ...settings, event_public_ticket_recovery_mode: e.target.value })}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                                >
-                                  <option value="shared_contact">Shared Contact (free/community events)</option>
-                                  <option value="verified_contact">Verified Recovery (paid events, future OTP/reference flow)</option>
-                                </select>
-                                <p className="mt-1 text-[11px] leading-5 text-slate-500">
-                                  {publicTicketRecoveryMode === "verified_contact"
-                                    ? "Use this to prepare paid events. Online ticket recovery will not auto-release a ticket until OTP or order-reference verification is added."
-                                    : "Best for free events where families may share one phone or email. If multiple attendees use the same contact, the page will ask for the attendee name next."}
-                                </p>
-                              </div>
-
-                              <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Privacy Label</label>
-                                <input
-                                  value={settings.event_public_privacy_label}
-                                  onChange={(e) => setSettings({ ...settings, event_public_privacy_label: e.target.value })}
-                                  disabled={!publicPrivacyEnabled}
-                                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                  placeholder="Privacy"
-                                />
-                              </div>
-
-                              <div className="md:col-span-2">
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Privacy Notice Text</label>
-                                <textarea
-                                  value={settings.event_public_privacy_text}
-                                  onChange={(e) => setSettings({ ...settings, event_public_privacy_text: e.target.value })}
-                                  disabled={!publicPrivacyEnabled}
-                                  rows={4}
-                                  className="w-full min-h-[7rem] p-4 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm resize-y disabled:cursor-not-allowed disabled:opacity-60"
-                                  placeholder="Explain how attendee data is used, retained, and deleted on request."
-                                />
-                              </div>
-
-                              <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
-                                <div className="mb-4">
-                                  <h5 className="text-sm font-semibold text-slate-900">Help & Contact</h5>
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    Offer fallback ways to reach a human if the attendee does not want to use the web chat or needs direct support.
-                                  </p>
-                                </div>
-
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                  <div className="md:col-span-2">
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Contact Intro</label>
-                                    <textarea
-                                      value={settings.event_public_contact_intro}
-                                      onChange={(e) => setSettings({ ...settings, event_public_contact_intro: e.target.value })}
-                                      disabled={!publicContactEnabled}
-                                      rows={3}
-                                      className="w-full min-h-[5.5rem] rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                      placeholder="Need help from our team? Use one of these contact options."
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Messenger URL</label>
-                                    <input
-                                      value={settings.event_public_contact_messenger_url}
-                                      onChange={(e) => setSettings({ ...settings, event_public_contact_messenger_url: e.target.value })}
-                                      disabled={!publicContactEnabled}
-                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                      placeholder="https://m.me/yourpage"
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">LINE URL</label>
-                                    <input
-                                      value={settings.event_public_contact_line_url}
-                                      onChange={(e) => setSettings({ ...settings, event_public_contact_line_url: e.target.value })}
-                                      disabled={!publicContactEnabled}
-                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                      placeholder="https://lin.ee/youraccount"
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Phone</label>
-                                    <input
-                                      value={settings.event_public_contact_phone}
-                                      onChange={(e) => setSettings({ ...settings, event_public_contact_phone: e.target.value })}
-                                      disabled={!publicContactEnabled}
-                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                      placeholder="+66 8x xxx xxxx"
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Support Hours</label>
-                                    <input
-                                      value={settings.event_public_contact_hours}
-                                      onChange={(e) => setSettings({ ...settings, event_public_contact_hours: e.target.value })}
-                                      disabled={!publicContactEnabled}
-                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                      placeholder="Mon-Sat, 09:00-18:00"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <h3 className="text-lg font-semibold flex items-center gap-2">
-                              <ExternalLink className="w-5 h-5 text-blue-600" />
-                              Public Page Preview
-                            </h3>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Preview the live one-page attendee flow exactly as the public route will render it.
-                            </p>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600">
-                              Live URL: <span className="font-mono text-slate-700">{publicPagePreviewPath}</span>
-                            </div>
-                            {publicPageEnabled ? (
-                              <a
-                                href={publicPagePreviewPath}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-200 hover:text-blue-600"
-                              >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                                Open Public Page
-                              </a>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-400">
-                                Enable public page to publish
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
-                          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-                            <div className="flex items-start gap-3">
-                              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm">
-                                <QrCode className="h-5 w-5" />
-                              </span>
-                              <div className="min-w-0">
-                                <h4 className="text-sm font-semibold text-slate-900">Public Link & QR</h4>
-                                <p className="mt-1 text-xs leading-5 text-slate-500">
-                                  Download a clean QR asset for posters, handouts, or venue signage. SVG is best for print.
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Full Public URL</p>
-                              <p className="mt-2 break-all font-mono text-xs leading-6 text-slate-700">{publicPageAbsoluteUrl}</p>
-                            </div>
-
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              <ActionButton
-                                onClick={() => void copyPublicPageUrlToClipboard()}
-                                tone="neutral"
-                                className="px-3 text-xs"
-                              >
-                                {publicPageLinkCopied ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                                {publicPageLinkCopied ? "Copied" : "Copy Full URL"}
-                              </ActionButton>
-                              <ActionButton
-                                onClick={handleDownloadPublicPageQrPng}
-                                disabled={!publicPageQrDataUrl}
-                                tone="blue"
-                                className="px-3 text-xs"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                                Download PNG
-                              </ActionButton>
-                              <ActionButton
-                                onClick={handleDownloadPublicPageQrSvg}
-                                disabled={!publicPageQrSvgMarkup}
-                                tone="neutral"
-                                className="px-3 text-xs"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                                Download SVG
-                              </ActionButton>
-                              {publicPageEnabled && (
-                                <ActionButton
-                                  onClick={() => window.open(publicPagePreviewPath, "_blank", "noopener,noreferrer")}
-                                  tone="neutral"
-                                  className="px-3 text-xs"
-                                >
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                  Open Page
-                                </ActionButton>
-                              )}
-                            </div>
-
-                            {!publicPageEnabled && (
-                              <p className="mt-3 text-[11px] leading-5 text-amber-700">
-                                QR can be prepared now, but the public page must be enabled before attendees can open it successfully.
-                              </p>
-                            )}
-                            {publicPageQrError && (
-                              <p className="mt-3 text-[11px] leading-5 text-rose-600">
-                                {publicPageQrError}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">QR Preview</p>
-                            <div className="mt-3 overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white p-4 shadow-sm">
-                              {publicPageQrDataUrl ? (
-                                <img
-                                  src={publicPageQrDataUrl}
-                                  alt={`QR code for ${publicPageAbsoluteUrl}`}
-                                  className="mx-auto w-full max-w-[14rem]"
-                                />
-                              ) : (
-                                <div className="flex aspect-square w-full items-center justify-center rounded-[1.25rem] bg-slate-50 text-slate-400">
-                                  <RefreshCw className="h-6 w-6 animate-spin" />
-                                </div>
-                              )}
-                            </div>
-                            <p className="mt-3 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                              Scan to register
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-4 sm:p-5">
-                          <div className="space-y-4">
-                            <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
-                                  {publicPageEnabled ? "Public page enabled" : "Draft mode"}
-                                </StatusBadge>
-                                {selectedEvent?.registration_availability && (
-                                  <StatusBadge tone={selectedEvent.registration_availability === "open" ? "blue" : "amber"}>
-                                    {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                                  </StatusBadge>
-                                )}
-                                {publicPagePosterUrl && (
-                                  <StatusBadge tone="blue">
-                                    Poster ready
-                                  </StatusBadge>
-                                )}
-                              </div>
-                              <div>
-                                <h4 className="text-2xl font-bold tracking-tight text-slate-900">
-                                  {settings.event_name || selectedEvent?.name || "Event title"}
-                                </h4>
-                                <p className="mt-2 text-sm leading-6 text-slate-600">
-                                  {publicPageSummary || "Public summary will appear here. Keep it short, easy to scan, and non-technical for attendees."}
-                                </p>
-                                <p className="mt-2 text-[11px] text-slate-500">
-                                  This is a compact setup preview. For the real attendee-facing layout, use <span className="font-semibold text-slate-700">Open Public Page</span>.
-                                </p>
-                              </div>
-                              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Date & Time</p>
-                                  <p className="mt-1 text-sm text-slate-800">{timingInfo.eventDateLabel}</p>
-                                </div>
-                                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Location</p>
-                                  <p className="mt-1 text-sm text-slate-800">{attendeeLocationLabel || "Venue details"}</p>
-                                </div>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm">
-                                  {settings.event_public_cta_label.trim() || INITIAL_SETTINGS.event_public_cta_label}
-                                </span>
-                                {publicPrivacyEnabled && (
-                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                    <Lock className="mr-1.5 h-3.5 w-3.5" />
-                                    {settings.event_public_privacy_label.trim() || INITIAL_SETTINGS.event_public_privacy_label}
-                                  </span>
-                                )}
-                                {publicBotEnabled && (
-                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                    <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-                                    Ask for help
-                                  </span>
-                                )}
-                                {publicContactEnabled && publicContactHasContent && (
-                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                    <Phone className="mr-1.5 h-3.5 w-3.5" />
-                                    Contact fallback
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                                <div className="flex items-center justify-between gap-3">
-                                  <div>
-                                    <p className="text-sm font-semibold text-slate-900">Inline Registration</p>
-                                    <p className="mt-1 text-xs text-slate-500">
-                                      One short form, ticket returned immediately on the same page, email optional as backup.
-                                    </p>
-                                  </div>
-                                  <StatusBadge tone={publicRegistrationEnabled ? "emerald" : "neutral"}>
-                                    {publicRegistrationEnabled ? "enabled" : "hidden"}
-                                  </StatusBadge>
-                                </div>
-                                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">First name</div>
-                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">Last name</div>
-                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">Phone</div>
-                                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">Email</div>
-                                </div>
-                                <div className="mt-4 rounded-2xl border border-dashed border-blue-200 bg-blue-50 px-4 py-4">
-                                  <p className="text-sm font-semibold text-blue-900">Success state</p>
-                                  <p className="mt-1 text-sm leading-6 text-blue-800">
-                                    {settings.event_public_success_message.trim() || INITIAL_SETTINGS.event_public_success_message}
-                                  </p>
-                                </div>
-                                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                                  <p className="text-sm font-semibold text-slate-900">Ticket recovery</p>
-                                  <p className="mt-1 text-xs leading-5 text-slate-600">
-                                    {publicTicketRecoveryMode === "verified_contact"
-                                      ? "Verified recovery mode. Paid events can plug OTP or order-reference verification into this slot later."
-                                      : "Shared-contact mode. If one phone or email is used for multiple attendees, the public page will ask for the attendee name before releasing a ticket."}
-                                  </p>
-                                </div>
-                                {publicPrivacyEnabled && (
-                                  <p className="mt-4 text-xs leading-5 text-slate-500">
-                                    <span className="font-semibold text-slate-700">{settings.event_public_privacy_label.trim() || INITIAL_SETTINGS.event_public_privacy_label}:</span>{" "}
-                                    {settings.event_public_privacy_text.trim() || INITIAL_SETTINGS.event_public_privacy_text}
-                                  </p>
-                                )}
-                                {publicContactEnabled && publicContactHasContent && (
-                                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                                    <p className="text-sm font-semibold text-slate-900">Help & Contact</p>
-                                    <p className="mt-1 text-xs leading-5 text-slate-500">
-                                      {publicContactIntro}
-                                    </p>
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                      {publicContactMessengerHref && (
-                                        <PublicContactActionLink href={publicContactMessengerHref} label="Messenger" kind="messenger" compact />
-                                      )}
-                                      {publicContactLineHref && (
-                                        <PublicContactActionLink href={publicContactLineHref} label="LINE" kind="line" compact />
-                                      )}
-                                      {publicContactPhoneHref && (
-                                        <PublicContactActionLink href={publicContactPhoneHref} label={settings.event_public_contact_phone.trim() || "Call"} kind="phone" compact />
-                                      )}
-                                    </div>
-                                    {settings.event_public_contact_hours.trim() && (
-                                      <p className="mt-3 text-xs text-slate-500">
-                                        Available: <span className="font-semibold text-slate-700">{settings.event_public_contact_hours.trim()}</span>
-                                      </p>
-                                    )}
-                                  </div>
-                                )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="space-y-3 xl:col-span-5 xl:self-start">
-                  <EventWorkspacePanel
-                    collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
-                    eventCreateOpen={eventCreateOpen}
-                    onToggleEventCreate={() => setEventCreateOpen((current) => !current)}
-                    onRefresh={() => Promise.all([fetchEvents(), fetchChannels()])}
-                    eventLoading={eventLoading}
-                    newEventName={newEventName}
-                    onNewEventNameChange={setNewEventName}
-                    onCreateEvent={handleCreateEvent}
-                    eventListQuery={eventListQuery}
-                    onEventListQueryChange={setEventListQuery}
-                    eventWorkspaceSort={eventWorkspaceSort}
-                    onEventWorkspaceSortChange={setEventWorkspaceSort}
-                    eventWorkspaceFilterOptions={eventWorkspaceFilterOptions}
-                    eventWorkspaceFilter={eventWorkspaceFilter}
-                    onEventWorkspaceFilterChange={setEventWorkspaceFilter}
-                    filteredEventWorkspaceEvents={filteredEventWorkspaceEvents}
-                    eventWorkspaceCounts={eventWorkspaceCounts}
-                    deferredEventListQuery={deferredEventListQuery}
-                    filteredWorkingEvents={filteredWorkingEvents}
-                    filteredInactiveEvents={filteredInactiveEvents}
-                    filteredArchivedEvents={filteredArchivedEvents}
-                    recentHistoricalEvents={recentHistoricalEvents}
-                    historyEventGroups={historyEventGroups}
-                    liveWorkspaceHeading={liveWorkspaceHeading}
-                    inactiveWorkspaceHeading={inactiveWorkspaceHeading}
-                    archivedWorkspaceHeading={archivedWorkspaceHeading}
-                    historyWorkspaceHeading={historyWorkspaceHeading}
-                    selectedEventId={selectedEventId}
-                    isSearchFocused={(id) => isSearchFocused("event", id)}
-                    onSelectEvent={handleSelectEvent}
-                    eventHistoryOpenKeys={eventHistoryOpenKeys}
-                    onToggleEventHistoryGroup={(key) =>
-                      setEventHistoryOpenKeys((current) =>
-                        current.includes(key)
-                          ? current.filter((item) => item !== key)
-                          : [...current, key],
-                      )
-                    }
-                    getSearchTargetDomId={(id) => getSearchTargetDomId("event", id)}
-                    formatEventWorkspaceDateLabel={formatEventWorkspaceDateLabel}
-                    getEventStatusTone={getEventStatusTone}
-                    getEventStatusLabel={getEventStatusLabel}
-                    getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
-                  />
-                </div>
-              </div>
-            </motion.div>
+            <EventWorkspaceScreen
+              eventWorkspaceView={eventWorkspaceView}
+              selectedEvent={selectedEvent}
+              getEventStatusTone={getEventStatusTone}
+              getEventStatusLabel={getEventStatusLabel}
+              getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+              eventSetupDirty={eventSetupDirty}
+              saveEventDetails={saveEventDetails}
+              saving={saving}
+              handleUpdateEvent={handleUpdateEvent}
+              eventStatusToggle={eventStatusToggle}
+              eventLoading={eventLoading}
+              handleCloneEvent={handleCloneEvent}
+              handleDeleteEvent={handleDeleteEvent}
+              timingInfo={timingInfo}
+              eventMessage={eventMessage}
+              settingsMessage={settingsMessage}
+              settings={settings}
+              setSettings={setSettings}
+              handleEventDateChange={handleEventDateChange}
+              eventLocationSummary={eventLocationSummary}
+              resolvedEventMapUrl={resolvedEventMapUrl}
+              eventMapIsGenerated={eventMapIsGenerated}
+              eventMapEmbedUrl={eventMapEmbedUrl}
+              registrationCapacity={registrationCapacity}
+              activeAttendeeCount={activeAttendeeCount}
+              handleNavigateToTab={handleNavigateToTab}
+              emailReadinessLabel={emailReadinessLabel}
+              emailStatus={emailStatus}
+              publicPageEnabled={publicPageEnabled}
+              publicRegistrationEnabled={publicRegistrationEnabled}
+              publicShowSeatAvailability={publicShowSeatAvailability}
+              publicBotEnabled={publicBotEnabled}
+              publicPrivacyEnabled={publicPrivacyEnabled}
+              publicContactEnabled={publicContactEnabled}
+              eventPublicDirty={eventPublicDirty}
+              saveEventPublicPage={saveEventPublicPage}
+              publicPosterFileInputRef={publicPosterFileInputRef}
+              handlePublicPosterFileUpload={handlePublicPosterFileUpload}
+              publicPosterUploading={publicPosterUploading}
+              publicPagePosterUrl={publicPagePosterUrl}
+              selectedEventId={selectedEventId}
+              publicPagePreviewPath={publicPagePreviewPath}
+              publicPageAutoSummary={publicPageAutoSummary}
+              publicPageSummaryCharCount={publicPageSummaryCharCount}
+              publicTicketRecoveryMode={publicTicketRecoveryMode}
+              publicContactHasContent={publicContactHasContent}
+              publicPageAbsoluteUrl={publicPageAbsoluteUrl}
+              copyPublicPageUrlToClipboard={copyPublicPageUrlToClipboard}
+              publicPageLinkCopied={publicPageLinkCopied}
+              handleDownloadPublicPageQrPng={handleDownloadPublicPageQrPng}
+              publicPageQrDataUrl={publicPageQrDataUrl}
+              handleDownloadPublicPageQrSvg={handleDownloadPublicPageQrSvg}
+              publicPageQrSvgMarkup={publicPageQrSvgMarkup}
+              publicPageQrError={publicPageQrError}
+              publicPageSummary={publicPageSummary}
+              attendeeLocationLabel={attendeeLocationLabel}
+              initialSettings={{
+                event_public_cta_label: INITIAL_SETTINGS.event_public_cta_label,
+                event_public_privacy_label: INITIAL_SETTINGS.event_public_privacy_label,
+                event_public_privacy_text: INITIAL_SETTINGS.event_public_privacy_text,
+                event_public_success_message: INITIAL_SETTINGS.event_public_success_message,
+              }}
+              publicContactIntro={publicContactIntro}
+              publicContactMessengerHref={publicContactMessengerHref}
+              publicContactLineHref={publicContactLineHref}
+              publicContactPhoneHref={publicContactPhoneHref}
+              eventWorkspacePanel={(
+                <EventWorkspacePanel
+                  collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+                  eventCreateOpen={eventCreateOpen}
+                  onToggleEventCreate={() => setEventCreateOpen((current) => !current)}
+                  onRefresh={() => Promise.all([fetchEvents(), fetchChannels()])}
+                  eventLoading={eventLoading}
+                  newEventName={newEventName}
+                  onNewEventNameChange={setNewEventName}
+                  onCreateEvent={handleCreateEvent}
+                  eventListQuery={eventListQuery}
+                  onEventListQueryChange={setEventListQuery}
+                  eventWorkspaceSort={eventWorkspaceSort}
+                  onEventWorkspaceSortChange={setEventWorkspaceSort}
+                  eventWorkspaceFilterOptions={eventWorkspaceFilterOptions}
+                  eventWorkspaceFilter={eventWorkspaceFilter}
+                  onEventWorkspaceFilterChange={setEventWorkspaceFilter}
+                  filteredEventWorkspaceEvents={filteredEventWorkspaceEvents}
+                  eventWorkspaceCounts={eventWorkspaceCounts}
+                  deferredEventListQuery={deferredEventListQuery}
+                  filteredWorkingEvents={filteredWorkingEvents}
+                  filteredInactiveEvents={filteredInactiveEvents}
+                  filteredArchivedEvents={filteredArchivedEvents}
+                  recentHistoricalEvents={recentHistoricalEvents}
+                  historyEventGroups={historyEventGroups}
+                  liveWorkspaceHeading={liveWorkspaceHeading}
+                  inactiveWorkspaceHeading={inactiveWorkspaceHeading}
+                  archivedWorkspaceHeading={archivedWorkspaceHeading}
+                  historyWorkspaceHeading={historyWorkspaceHeading}
+                  selectedEventId={selectedEventId}
+                  isSearchFocused={(id) => isSearchFocused("event", id)}
+                  onSelectEvent={handleSelectEvent}
+                  eventHistoryOpenKeys={eventHistoryOpenKeys}
+                  onToggleEventHistoryGroup={(key) =>
+                    setEventHistoryOpenKeys((current) =>
+                      current.includes(key)
+                        ? current.filter((item) => item !== key)
+                        : [...current, key],
+                    )
+                  }
+                  getSearchTargetDomId={(id) => getSearchTargetDomId("event", id)}
+                  formatEventWorkspaceDateLabel={formatEventWorkspaceDateLabel}
+                  getEventStatusTone={getEventStatusTone}
+                  getEventStatusLabel={getEventStatusLabel}
+                  getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+                />
+              )}
+            />
           )}
 
           {activeTab === "mail" && (
-            <motion.div
-              key="mail"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-4"
-            >
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Send className="w-5 h-5 text-blue-600" />
-                        Event Mail
-                      </h3>
-                      <HelpPopover label="Open note for Event Mail">
-                        Sender identity comes from Railway environment variables. This workspace manages per-event transactional templates, readiness checks, and test sends.
-                      </HelpPopover>
-                      <StatusBadge tone={settings.confirmation_email_enabled === "1" ? "emerald" : "neutral"}>
-                        {settings.confirmation_email_enabled === "1" ? "registration email on" : "registration email off"}
-                      </StatusBadge>
-                      <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
-                    </div>
-                    <StatusLine
-                      className="mt-1"
-                      items={[
-                        emailStatus?.provider ? <>Provider {emailStatus.provider}</> : "Provider resend",
-                        eventMailDirty ? "Unsaved changes" : "All changes saved",
-                      ]}
-                    />
-                  </div>
-                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
-                    <ActionButton
-                      onClick={() => void saveEventMailSettings()}
-                      disabled={saving}
-                      tone="blue"
-                      active
-                      className="w-full text-sm sm:w-auto sm:shrink-0"
-                    >
-                      {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                      Save Mail
-                    </ActionButton>
-                  </div>
-                </div>
-
-                {(eventMessage || settingsMessage) && (
-                  <div className="mb-4 space-y-1">
-                    {eventMessage && (
-                      <p className={`text-xs ${eventMessage.toLowerCase().includes("failed") || eventMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {eventMessage}
-                      </p>
-                    )}
-                    {settingsMessage && (
-                      <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                        {settingsMessage}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[360px_minmax(0,1fr)]">
-                  <div className="space-y-4">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-semibold text-slate-900">Delivery Controls</p>
-                            <HelpPopover label="Open note for Delivery Controls">
-                              Sender, reply-to, provider, and app URL come from environment config. This card only controls per-event delivery behavior and status checks.
-                            </HelpPopover>
-                            <StatusBadge tone={emailReadinessTone}>{emailReadinessLabel}</StatusBadge>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void fetchEmailStatus(selectedEventId)}
-                          disabled={!selectedEventId || emailStatusLoading}
-                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {emailStatusLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                          Refresh
-                        </button>
-                      </div>
-                      <label className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                          checked={settings.confirmation_email_enabled === "1"}
-                          onChange={(e) =>
-                            setSettings({
-                              ...settings,
-                              confirmation_email_enabled: e.target.checked ? "1" : "0",
-                            })
-                          }
-                        />
-                        Enable registration confirmation email
-                      </label>
-                      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-1">
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Sender</p>
-                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.fromAddress || "Not set"}</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Reply-To</p>
-                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.replyToAddress || "Not set"}</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Provider</p>
-                          <p className="mt-1 text-xs text-slate-700">{emailStatus?.provider || "resend"}</p>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">App URL</p>
-                          <p className="mt-1 break-all text-xs text-slate-700">{emailStatus?.appUrl || "Not set"}</p>
-                        </div>
-                      </div>
-                      {emailStatus?.errorMessage && (
-                        <p className="mt-3 text-xs text-rose-600">{emailStatus.errorMessage}</p>
-                      )}
-                      {emailStatus?.missingFields?.length ? (
-                        <p className="mt-2 text-[11px] text-amber-700">
-                          Missing: {emailStatus.missingFields.join(", ")}
-                        </p>
-                      ) : null}
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-900">Send Test Email</p>
-                        <HelpPopover label="Open note for Send Test Email">
-                          Sends the currently selected mail type with the selected event&apos;s sample data and current sender configuration.
-                        </HelpPopover>
-                      </div>
-                      <div className="mt-4 flex flex-col gap-3">
-                        <div>
-                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Destination</label>
-                          <input
-                            type="email"
-                            value={emailTestAddress}
-                            onChange={(e) => setEmailTestAddress(e.target.value)}
-                            placeholder="you@example.com"
-                            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleSendTestEmail()}
-                          disabled={!selectedEventId || !emailTestAddress.trim() || emailTestSending}
-                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {emailTestSending ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                          Send {emailTemplateDefinition.label} Test
-                        </button>
-                      </div>
-                      {emailTestMessage && (
-                        <p className={`mt-3 text-xs ${emailTestMessage.toLowerCase().includes("failed") || emailTestMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-600"}`}>
-                          {emailTestMessage}
-                        </p>
-                      )}
-                      {emailStatus?.lastTestResult && (
-                        <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-600">
-                          <p className="font-semibold text-slate-800">Last test result</p>
-                          <p className="mt-1">{EMAIL_TEMPLATE_DEFAULTS[emailStatus.lastTestResult.kind].label}</p>
-                          <p className="mt-1 break-all">
-                            {emailStatus.lastTestResult.success ? "Sent" : "Failed"} to {emailStatus.lastTestResult.to}
-                          </p>
-                          <p className="mt-1">
-                            {new Date(emailStatus.lastTestResult.attemptedAt).toLocaleString()}
-                          </p>
-                          {emailStatus.lastTestResult.error && (
-                            <p className="mt-1 text-rose-600">{emailStatus.lastTestResult.error}</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-900">Mail Types</p>
-                        <HelpPopover label="Open note for Mail Types">
-                          <div className="space-y-2">
-                            {EMAIL_TEMPLATE_KIND_OPTIONS.map((option) => (
-                              <p key={option.kind}>
-                                <span className="font-semibold text-slate-800">{option.label}</span>
-                                <span className="block">{option.description}</span>
-                              </p>
-                            ))}
-                            <p>Default uses the built-in template. Custom means this event has its own saved subject, HTML, or text.</p>
-                          </div>
-                        </HelpPopover>
-                        <StatusBadge tone={emailTemplateDirty ? "amber" : "neutral"}>
-                          {emailTemplateDirty ? "Template edits pending" : "Templates saved"}
-                        </StatusBadge>
-                      </div>
-                      <div className="mt-4 space-y-2">
-                        {EMAIL_TEMPLATE_KIND_OPTIONS.map((option) => {
-                          const selected = option.kind === selectedEmailTemplateKind;
-                          const dirty = isEmailTemplateKindDirty(option.kind);
-                          const custom = hasCustomEmailTemplateOverride(settings, option.kind);
-                          return (
-                            <button
-                              key={option.kind}
-                              type="button"
-                              onClick={() => setSelectedEmailTemplateKind(option.kind)}
-                              className={`flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition ${
-                                selected
-                                  ? "border-blue-200 bg-blue-50"
-                                  : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-                              }`}
-                            >
-                              <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${selected ? "bg-blue-500" : dirty ? "bg-amber-400" : "bg-slate-200"}`} aria-hidden />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className={`text-sm font-semibold ${selected ? "text-blue-700" : "text-slate-900"}`}>{option.label}</p>
-                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                                    custom
-                                      ? "bg-blue-100 text-blue-700"
-                                      : "bg-slate-100 text-slate-600"
-                                  }`}>
-                                    {custom ? "custom" : "default"}
-                                  </span>
-                                  {dirty && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-700">edited</span>}
-                                </div>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-semibold text-slate-900">{emailTemplateDefinition.label} Template</p>
-                            <HelpPopover label={`Open note for ${emailTemplateDefinition.label} template`}>
-                              <p>{emailTemplateDefinition.description}</p>
-                              <p className="mt-2 font-semibold text-slate-800">Supported tokens</p>
-                              <p className="mt-1 break-words">{emailTemplateDefinition.supportedTokens.map((token) => `{{${token}}}`).join(", ")}</p>
-                              <p className="mt-2">Default uses the built-in template until this event saves its own subject, HTML, or text.</p>
-                            </HelpPopover>
-                            <StatusBadge tone={selectedEmailTemplateDirty ? "amber" : "neutral"}>
-                              {selectedEmailTemplateDirty ? "Unsaved" : "Saved"}
-                            </StatusBadge>
-                            <StatusBadge tone={selectedEmailTemplateIsCustom ? "blue" : "neutral"}>
-                              {selectedEmailTemplateIsCustom ? "custom" : "default"}
-                            </StatusBadge>
-                          </div>
-                        </div>
-                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:justify-end">
-                          <ActionButton
-                            onClick={() => setSettings(resetEmailTemplateToDefault(settings, selectedEmailTemplateKind))}
-                            disabled={!selectedEmailTemplateIsCustom}
-                            tone="neutral"
-                            className="w-full text-sm sm:w-auto"
-                          >
-                            Reset to Default
-                          </ActionButton>
-                        </div>
-                      </div>
-                      <div className="mt-4 space-y-4">
-                        <div>
-                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Subject</label>
-                          <input
-                            value={selectedEmailTemplateSubject}
-                            onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "subject", e.target.value))}
-                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          />
-                        </div>
-                        <EmailHtmlEditor
-                          value={selectedEmailTemplateHtml}
-                          renderedPreviewHtml={renderedEmailPreviewHtml}
-                          supportedTokens={emailTemplateDefinition.supportedTokens}
-                          onChange={(nextHtml) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "html", nextHtml))}
-                        />
-                        <div>
-                          <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-1">Plain Text Body</label>
-                          <textarea
-                            value={selectedEmailTemplateText}
-                            onChange={(e) => setSettings(updateEmailTemplateValue(settings, selectedEmailTemplateKind, "text", e.target.value))}
-                            rows={10}
-                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Subject</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">{renderedEmailPreviewSubject}</p>
-                      <p className="mt-4 text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Text Preview</p>
-                      <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">{renderedEmailPreviewText}</pre>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
+            <EventMailScreen
+              settings={settings}
+              onSettingsChange={setSettings}
+              emailReadinessTone={emailReadinessTone}
+              emailReadinessLabel={emailReadinessLabel}
+              emailStatus={emailStatus}
+              emailStatusLoading={emailStatusLoading}
+              eventMailDirty={eventMailDirty}
+              onSaveEventMailSettings={saveEventMailSettings}
+              saving={saving}
+              eventMessage={eventMessage}
+              settingsMessage={settingsMessage}
+              onFetchEmailStatus={fetchEmailStatus}
+              selectedEventId={selectedEventId}
+              emailTestAddress={emailTestAddress}
+              onEmailTestAddressChange={setEmailTestAddress}
+              onSendTestEmail={handleSendTestEmail}
+              emailTestSending={emailTestSending}
+              emailTestMessage={emailTestMessage}
+              emailTemplateDefinition={emailTemplateDefinition}
+              emailTemplateDirty={emailTemplateDirty}
+              selectedEmailTemplateKind={selectedEmailTemplateKind}
+              onSelectedEmailTemplateKindChange={setSelectedEmailTemplateKind}
+              isEmailTemplateKindDirty={isEmailTemplateKindDirty}
+              hasCustomEmailTemplateOverride={hasCustomEmailTemplateOverride}
+              selectedEmailTemplateDirty={selectedEmailTemplateDirty}
+              selectedEmailTemplateIsCustom={selectedEmailTemplateIsCustom}
+              resetEmailTemplateToDefault={resetEmailTemplateToDefault}
+              selectedEmailTemplateSubject={selectedEmailTemplateSubject}
+              selectedEmailTemplateHtml={selectedEmailTemplateHtml}
+              selectedEmailTemplateText={selectedEmailTemplateText}
+              renderedEmailPreviewHtml={renderedEmailPreviewHtml}
+              renderedEmailPreviewSubject={renderedEmailPreviewSubject}
+              renderedEmailPreviewText={renderedEmailPreviewText}
+              updateEmailTemplateValue={updateEmailTemplateValue}
+            />
           )}
 
           {activeTab === "design" && (
-            <motion.div
-              key="design"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-3"
-            >
-              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-semibold">Context</h2>
-                  {selectedEvent && (
-                    <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                      {getEventStatusLabel(selectedEvent.effective_status)}
-                    </StatusBadge>
-                  )}
-                </div>
-                <StatusLine
-                  className="mt-1"
-                  items={[
-                    "Context note",
-                    "Knowledge base",
-                    "Retrieval tools",
-                    eventContextDirty ? "Unsaved changes" : "Saved",
-                  ]}
-                />
-              </div>
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-12">
-                <div className="space-y-3 xl:col-span-7">
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "mb-0" : "mb-3"} space-y-2`}>
-                      <div className={`flex flex-col gap-2 lg:flex-row lg:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) ? "lg:items-center" : "lg:items-start"}`}>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h2 className="text-lg font-semibold">Event Context</h2>
-                            {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
-                              <HelpPopover label="Open note for Event Context">
-                                Per-event FAQ, source text, and response guidance for the selected workspace.
-                              </HelpPopover>
-                            )}
-                          </div>
-                          <StatusLine items={[eventContextDirty ? "Unsaved changes" : "All changes saved"]} />
-                        </div>
-                        <div className="flex w-full items-stretch gap-2 sm:w-auto lg:justify-end">
-                          {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
-                            <>
-                              <ActionButton
-                                onClick={() => void saveEventContext()}
-                                disabled={saving || !canManageKnowledge}
-                                tone="blue"
-                                active
-                                className="min-w-0 flex-1 text-sm sm:flex-none"
-                              >
-                                {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                Save Event Context
-                              </ActionButton>
-                              <div className="relative shrink-0" ref={knowledgeActionsRef}>
-                                <ActionButton
-                                  onClick={() => setKnowledgeActionsOpen((open) => !open)}
-                                  disabled={knowledgeResetting || saving || !selectedEventId || !canManageKnowledge}
-                                  tone="rose"
-                                  className="min-h-full min-w-[3rem] px-3 text-sm"
-                                  aria-expanded={knowledgeActionsOpen}
-                                  aria-haspopup="menu"
-                                >
-                                  {knowledgeResetting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
-                                  <span className="sr-only sm:not-sr-only">Danger</span>
-                                  <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${knowledgeActionsOpen ? "rotate-180" : ""}`} />
-                                </ActionButton>
-                                {knowledgeActionsOpen && (
-                                  <div className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                                    <button
-                                      onClick={() => {
-                                        setKnowledgeActionsOpen(false);
-                                        void handleResetEventKnowledge(false);
-                                      }}
-                                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-amber-700 transition-colors hover:bg-amber-50"
-                                      role="menuitem"
-                                    >
-                                      <AlertCircle className="h-4 w-4 shrink-0" />
-                                      <span className="font-medium">Clear Knowledge Docs</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setKnowledgeActionsOpen(false);
-                                        void handleResetEventKnowledge(true);
-                                      }}
-                                      className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-rose-700 transition-colors hover:bg-rose-50"
-                                      role="menuitem"
-                                    >
-                                      <AlertCircle className="h-4 w-4 shrink-0" />
-                                      <span className="font-medium">Reset All Knowledge</span>
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            </>
-                          )}
-                          <CollapseIconButton
-                            collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
-                            onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent) && (
-                      <>
-                        <textarea
-                          rows={10}
-                          value={settings.context}
-                          onChange={(e) => setSettings({ ...settings, context: e.target.value })}
-                          className="w-full min-h-[16rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-y"
-                          placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
-                        />
-                        {settingsMessage && (
-                          <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                            {settingsMessage}
-                          </p>
-                        )}
-                      </>
-                    )}
-                  </div>
-
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "mb-0" : "mb-3"} flex flex-col gap-2 sm:flex-row sm:justify-between ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) ? "sm:items-center" : "sm:items-start"}`}>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-semibold">Knowledge Documents</h3>
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
-                          <HelpPopover label="Open note for Knowledge Documents">
-                            Attach reusable notes, FAQ fragments, policy text, URLs, or import text-based files into the selected event.
-                          </HelpPopover>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
-                          <>
-                            <input
-                              ref={documentFileInputRef}
-                              type="file"
-                              accept=".txt,.md,.markdown,.csv,.json,.html,.htm,.xml,text/plain,text/markdown,text/csv,application/json,application/xml,text/html"
-                              className="hidden"
-                              onChange={(e) => void handleImportDocumentFile(e.target.files?.[0] || null)}
-                            />
-                            <ActionButton
-                              onClick={() => documentFileInputRef.current?.click()}
-                              disabled={documentsLoading}
-                              tone="neutral"
-                              className="text-sm"
-                            >
-                              Import File
-                            </ActionButton>
-                            {editingDocumentId && (
-                              <ActionButton
-                                onClick={resetDocumentForm}
-                                tone="neutral"
-                                className="text-sm"
-                              >
-                                Cancel Edit
-                              </ActionButton>
-                            )}
-                          </>
-                        )}
-                        <CollapseIconButton
-                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments)}
-                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments)}
-                        />
-                      </div>
-                    </div>
-
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments) && (
-                      <>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Title</label>
-                            <input
-                              value={documentTitle}
-                              onChange={(e) => setDocumentTitle(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="e.g. Venue parking rules"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source Type</label>
-                            <select
-                              value={documentSourceType}
-                              onChange={(e) => setDocumentSourceType(e.target.value as "note" | "document" | "url")}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            >
-                              <option value="note">Note</option>
-                              <option value="document">Document</option>
-                              <option value="url">URL</option>
-                            </select>
-                          </div>
-                          <div className="md:col-span-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Source URL (Optional)</label>
-                            <input
-                              value={documentSourceUrl}
-                              onChange={(e) => setDocumentSourceUrl(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="https://example.com/reference"
-                            />
-                          </div>
-                          <div className="md:col-span-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Document Content</label>
-                            <textarea
-                              rows={7}
-                              value={documentContent}
-                              onChange={(e) => setDocumentContent(e.target.value)}
-                              className="w-full min-h-[11rem] p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm resize-y"
-                              placeholder="Paste FAQ answers, rules, agenda details, speaker notes, or any event-specific reference content here."
-                            />
-                          </div>
-                        </div>
-
-                        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                          <ActionButton
-                            onClick={() => void handleSaveDocument()}
-                            disabled={!selectedEventId || documentsLoading || !documentTitle.trim() || !documentContent.trim()}
-                            tone="blue"
-                            active
-                            className="w-full text-sm sm:w-auto"
-                          >
-                            {documentsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                            {editingDocumentId ? "Update Document" : "Save Document"}
-                          </ActionButton>
-                          <p className="text-xs text-slate-500">
-                            Imported text is chunked after save so the same document store stays clean and reusable.
-                          </p>
-                        </div>
-
-                        {documentsMessage && (
-                          <p className={`mt-3 text-xs ${documentsMessage.toLowerCase().includes("failed") || documentsMessage.toLowerCase().includes("error") || documentsMessage.toLowerCase().includes("required") ? "text-rose-600" : "text-emerald-600"}`}>
-                            {documentsMessage}
-                          </p>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-3 xl:col-span-5">
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "mb-0 items-center" : "mb-2.5 items-start"} flex justify-between gap-2`}>
-                      <button
-                        type="button"
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
-                        className="min-w-0 flex-1 text-left"
-                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) ? "Expand" : "Collapse"} Attached Documents`}
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold">Attached Documents</h3>
-                          <span className="text-xs font-medium text-slate-500">{filteredDocuments.length}</span>
-                        </div>
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
-                          <p className="mt-1 text-xs text-slate-500">Only active documents are used during retrieval.</p>
-                        )}
-                      </button>
-                      <div className="flex items-center gap-2">
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
-                          <HelpPopover label="Open note for Attached Documents">
-                            Only active documents are used during retrieval.
-                          </HelpPopover>
-                        )}
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
-                          <button
-                            onClick={() => void fetchDocuments(selectedEventId)}
-                            disabled={documentsLoading || !selectedEventId}
-                            className="rounded-xl p-2 transition-colors hover:bg-slate-100 disabled:opacity-50"
-                            title="Refresh documents"
-                          >
-                            <RefreshCw className={`w-4 h-4 text-slate-500 ${documentsLoading ? "animate-spin" : ""}`} />
-                          </button>
-                        )}
-                        <CollapseIconButton
-                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
-                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
-                        />
-                      </div>
-                    </div>
-
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments) && (
-                      <>
-                        <div className="mb-3 relative">
-                          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                          <input
-                            value={documentListQuery}
-                            onChange={(e) => setDocumentListQuery(e.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Search documents by title, content, source, or status"
-                          />
-                          {documentListQuery && (
-                            <button
-                              onClick={() => setDocumentListQuery("")}
-                              className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                              aria-label="Clear document search"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="space-y-3">
-                          {filteredDocuments.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
-                              {deferredDocumentListQuery ? "No documents match this search." : "No documents attached to this event yet."}
-                            </div>
-                          )}
-                          {filteredDocuments.map((document) => {
-                            const documentCollapsed = isContextDocumentCollapsed(document.id);
-                            return (
-                              <div
-                                key={document.id}
-                                id={getSearchTargetDomId("document", document.id)}
-                                className={`rounded-2xl border p-4 ${
-                                  documentCollapsed ? "space-y-0" : "space-y-3"
-                                } ${
-                                  selectedDocumentForChunksId === document.id
-                                    ? "border-blue-200 bg-blue-50"
-                                    : "border-slate-200 bg-slate-50"
-                                } ${
-                                  isSearchFocused("document", document.id) ? "ring-2 ring-blue-200 ring-offset-2" : ""
-                                }`}
-                              >
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                  <div className="min-w-0">
-                                    <p className="font-semibold text-slate-900 truncate">{document.title}</p>
-                                    <StatusLine
-                                      className="mt-2"
-                                      items={[
-                                        document.source_type,
-                                        `${document.chunk_count || 0} chunks`,
-                                        document.is_active ? "Active" : "Inactive",
-                                        `Embed ${document.embedding_status || "pending"}`,
-                                      ]}
-                                    />
-                                    {selectedDocumentForChunksId === document.id && <SelectionMarker className="mt-1" />}
-                                  </div>
-                                  <CollapseIconButton
-                                    collapsed={documentCollapsed}
-                                    onClick={() => toggleContextDocumentCollapsed(document.id)}
-                                    label="document"
-                                    className="self-start"
-                                  />
-                                </div>
-                                {!documentCollapsed && (
-                                  <>
-                                    <p className="text-sm text-slate-600 whitespace-pre-wrap">
-                                      {document.content.length > 180 ? `${document.content.slice(0, 180)}...` : document.content}
-                                    </p>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <ActionButton
-                                        onClick={() => loadDocumentIntoForm(document)}
-                                        tone="neutral"
-                                        className="px-3"
-                                      >
-                                        <PencilLine className="h-3.5 w-3.5" />
-                                        Edit
-                                      </ActionButton>
-                                      <InlineActionsMenu
-                                        label="Actions"
-                                        tone={document.is_active ? "amber" : "neutral"}
-                                      >
-                                        <MenuActionItem
-                                          onClick={() => selectDocumentForChunks(document.id)}
-                                          tone={selectedDocumentForChunksId === document.id ? "blue" : "neutral"}
-                                        >
-                                          <Eye className="h-3.5 w-3.5" />
-                                          <span className="font-medium">
-                                            {selectedDocumentForChunksId === document.id ? "Viewing Chunks" : "View Chunks"}
-                                          </span>
-                                        </MenuActionItem>
-                                        {document.source_url && (
-                                          <MenuActionLink
-                                            href={document.source_url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            tone="neutral"
-                                            className="mt-1"
-                                          >
-                                            <ExternalLink className="h-3.5 w-3.5" />
-                                            <span className="font-medium">Open Source URL</span>
-                                          </MenuActionLink>
-                                        )}
-                                        <MenuActionItem
-                                          onClick={() => void handleDocumentStatusToggle(document.id, document.is_active)}
-                                          disabled={documentsLoading}
-                                          tone={document.is_active ? "amber" : "emerald"}
-                                          className="mt-1"
-                                        >
-                                          <Power className="h-3.5 w-3.5" />
-                                          <span className="font-medium">
-                                            {document.is_active ? "Disable Document" : "Enable Document"}
-                                          </span>
-                                        </MenuActionItem>
-                                      </InlineActionsMenu>
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "mb-0" : "mb-2"} flex items-center justify-between gap-2`}>
-                      <button
-                        type="button"
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
-                        className="min-w-0 flex-1 text-left"
-                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) ? "Expand" : "Collapse"} Chunk Inspector`}
-                      >
-                        <h3 className="font-semibold text-slate-900">Chunk Inspector</h3>
-                      </button>
-                      <div className="flex items-center gap-2">
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && (
-                          <HelpPopover label="Open note for Chunk Inspector">
-                            Preview the exact chunks available for retrieval from the selected document.
-                          </HelpPopover>
-                        )}
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && selectedDocumentForChunks && (
-                          <button
-                            onClick={() => void fetchDocumentChunks(selectedDocumentForChunks.id, selectedEventId)}
-                            disabled={documentChunksLoading}
-                            className="rounded-xl p-2 transition-colors hover:bg-slate-200 disabled:opacity-50"
-                            title="Refresh chunks"
-                          >
-                            <RefreshCw className={`w-4 h-4 text-slate-500 ${documentChunksLoading ? "animate-spin" : ""}`} />
-                          </button>
-                        )}
-                        <CollapseIconButton
-                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
-                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
-                        />
-                      </div>
-                    </div>
-
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector) && (
-                      <>
-                        {!selectedDocumentForChunks ? (
-                          <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-500">
-                            Select a document to inspect its chunks.
-                          </div>
-                        ) : (
-                          <div className="space-y-2.5">
-                            <div className="rounded-xl border border-slate-200 bg-white p-3">
-                              <p className="font-semibold text-slate-900">{selectedDocumentForChunks.title}</p>
-                              <StatusLine
-                                className="mt-2"
-                                items={[
-                                  selectedDocumentForChunks.source_type,
-                                  `${selectedDocumentForChunks.chunk_count || 0} chunks`,
-                                  selectedDocumentForChunks.is_active ? "active" : "inactive",
-                                  `embed ${selectedDocumentForChunks.embedding_status || "pending"}`,
-                                ]}
-                              />
-                            </div>
-
-                            <div className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
-                              {documentChunksLoading && (
-                                <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-500">
-                                  Loading chunks...
-                                </div>
-                              )}
-                              {!documentChunksLoading && documentChunks.length === 0 && (
-                                <div className="rounded-xl border border-dashed border-slate-200 bg-white p-3 text-xs text-slate-500">
-                                  No chunks generated for this document yet.
-                                </div>
-                              )}
-                              {!documentChunksLoading && documentChunks.map((chunk) => (
-                                <div key={chunk.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                                  <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                                    Chunk {chunk.chunk_index + 1}
-                                  </p>
-                                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{chunk.content}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                  </div>
-
-                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "mb-0" : "mb-2"} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between`}>
-                      <button
-                        type="button"
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
-                        className="min-w-0 flex-1 text-left"
-                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) ? "Expand" : "Collapse"} Embedding Preview`}
-                      >
-                        <h3 className="font-semibold text-slate-900">Embedding Preview</h3>
-                      </button>
-                      <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) && (
-                          <HelpPopover label="Open note for Embedding Preview">
-                            Vector-ready metadata and hook payload for the selected document.
-                          </HelpPopover>
-                        )}
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) && selectedDocumentForChunks && (
-                          <div className="flex w-full items-center gap-2 sm:w-auto">
-                            <ActionButton
-                              onClick={() => void handleEnqueueEmbedding(selectedDocumentForChunks.id, selectedEventId)}
-                              disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
-                              tone="neutral"
-                              active
-                              className="min-w-0 flex-1 text-sm sm:flex-none"
-                            >
-                              {(embeddingPreviewLoading || embeddingEnqueueLoading) ? (
-                                <RefreshCw className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <Save className="w-4 h-4" />
-                              )}
-                              Queue Embedding
-                            </ActionButton>
-                            <button
-                              onClick={() => void fetchEmbeddingPreview(selectedDocumentForChunks.id, selectedEventId)}
-                              disabled={embeddingPreviewLoading || embeddingEnqueueLoading}
-                              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl p-2 transition-colors hover:bg-slate-200 disabled:opacity-50"
-                              title="Refresh embedding preview"
-                            >
-                              <RefreshCw className={`w-4 h-4 text-slate-500 ${embeddingPreviewLoading ? "animate-spin" : ""}`} />
-                            </button>
-                          </div>
-                        )}
-                        <CollapseIconButton
-                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
-                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
-                        />
-                      </div>
-                    </div>
-
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview) && (
-                      <>
-                        {!selectedDocumentForChunks ? (
-                          <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-500">
-                            Select a document to inspect its vector-ready metadata.
-                          </div>
-                        ) : (
-                          <div className="min-w-0 space-y-3">
-                            <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs leading-relaxed text-blue-800">
-                              หลังจาก queue สำเร็จ worker จะสร้าง embeddings และเก็บ vectors ไว้ในระบบนี้ก่อน ทำให้ retrieval ใช้ cosine similarity
-                              ร่วมกับ keyword ranking ได้จริง ส่วน
-                              {" "}
-                              <span className="font-semibold">Queue Embedding</span>
-                              {" "}
-                              ยังสามารถส่ง payload ไปที่
-                              {" "}
-                              <span className="font-mono">EMBEDDING_HOOK_URL</span>
-                              {" "}
-                              เพิ่มเติมได้ถ้าต้องการ sync ออกระบบภายนอก
-                            </div>
-
-                            <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
-                              <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-3">
-                                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Document Embedding State</p>
-                                <div className="space-y-2 text-sm">
-                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                    <span className="text-slate-600">Embedding model</span>
-                                    <span className="self-start text-xs font-medium text-slate-700 sm:self-auto">
-                                      {embeddingPreview?.embedding_model || "text-embedding-3-small"}
-                                    </span>
-                                  </div>
-                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                    <span className="text-slate-600">Document status</span>
-                                    <span className="self-start text-xs font-medium text-slate-700 sm:self-auto">
-                                      {embeddingPreview?.document.embedding_status || selectedDocumentForChunks.embedding_status || "pending"}
-                                    </span>
-                                  </div>
-                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                    <span className="text-slate-600">Document content hash</span>
-                                    <span className="w-full min-w-0 break-all text-left text-xs font-mono text-slate-500 sm:max-w-[14rem] sm:text-right">
-                                      {embeddingPreview?.document.content_hash || selectedDocumentForChunks.content_hash || "-"}
-                                    </span>
-                                  </div>
-                                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-                                    <span className="text-slate-600">Chunk count</span>
-                                    <span className="self-start text-xs font-medium text-slate-700 sm:self-auto">
-                                      {embeddingPreview?.chunks.length ?? selectedDocumentForChunks.chunk_count ?? 0}
-                                    </span>
-                                  </div>
-                                </div>
-                                {embeddingPreviewMessage && (
-                                  <p className={`mt-3 text-xs ${embeddingPreviewMessage.toLowerCase().includes("failed") || embeddingPreviewMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-500"}`}>
-                                    {embeddingPreviewMessage}
-                                  </p>
-                                )}
-                              </div>
-
-                              <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-3">
-                                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Chunk Metadata</p>
-                                <div className="max-h-[14rem] space-y-2 overflow-y-auto overflow-x-hidden pr-1">
-                                  {embeddingPreviewLoading && (
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                                      Loading embedding preview...
-                                    </div>
-                                  )}
-                                  {!embeddingPreviewLoading && !embeddingPreview?.chunks.length && (
-                                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                                      No chunks available for embedding yet.
-                                    </div>
-                                  )}
-                                  {!embeddingPreviewLoading && embeddingPreview?.chunks.map((chunk) => (
-                                    <div key={chunk.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                                      <StatusLine
-                                        className="mb-2"
-                                        items={[
-                                          <>chunk {chunk.chunk_index + 1}</>,
-                                          `${chunk.char_count || chunk.content.length} chars`,
-                                          `~${chunk.token_estimate || 0} tokens`,
-                                          chunk.embedding_status || "pending",
-                                        ]}
-                                      />
-                                      <p className="break-all text-xs font-mono text-slate-500">{chunk.content_hash || "-"}</p>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-3">
-                              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Embedding Hook Payload</p>
-                              <div className="max-h-[22rem] overflow-y-auto overflow-x-hidden rounded-xl border border-slate-200 bg-slate-50 p-3">
-                                <pre className="whitespace-pre-wrap break-all text-xs font-mono text-slate-700">
-                                  {embeddingPreview ? JSON.stringify(embeddingPreview.payload, null, 2) : "Select a document to preview the embedding payload."}
-                                </pre>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-
-                  <div className={`rounded-2xl border border-slate-200 bg-slate-50 text-sm text-slate-600 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "mb-0" : "mb-2"} flex items-center justify-between gap-2`}>
-                      <button
-                        type="button"
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
-                        className="min-w-0 flex-1 text-left"
-                        aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) ? "Expand" : "Collapse"} Retrieval Debug`}
-                      >
-                        <h3 className="font-semibold text-slate-900">Retrieval Debug</h3>
-                      </button>
-                      <div className="flex items-center gap-2">
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) && (
-                          <HelpPopover label="Open note for Retrieval Debug">
-                            Inspect which event chunks this workspace would send into the prompt for a specific question.
-                          </HelpPopover>
-                        )}
-                        <CollapseIconButton
-                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
-                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
-                        />
-                      </div>
-                    </div>
-
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug) && (
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr,0.9fr]">
-                          <div className="rounded-xl border border-slate-200 bg-white p-3">
-                            <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                              Test Query
-                            </label>
-                            <textarea
-                              value={retrievalQuery}
-                              onChange={(e) => setRetrievalQuery(e.target.value)}
-                              rows={2}
-                              placeholder="Example: งานนี้จัดที่ไหน เดินทางยังไง และเปิดลงทะเบียนถึงวันไหน"
-                              className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                            <div className="mt-3 flex items-center gap-2">
-                              <ActionButton
-                                onClick={() => void fetchRetrievalDebug()}
-                                disabled={!selectedEventId || retrievalLoading || !retrievalQuery.trim()}
-                                tone="neutral"
-                                active
-                                className="text-sm"
-                              >
-                                {retrievalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                                Analyze Retrieval
-                              </ActionButton>
-                              {retrievalDebug && (
-                                <span className="text-xs text-slate-500">
-                                  Event-scoped results for <span className="font-semibold text-slate-700">{selectedEvent?.name || "selected event"}</span>
-                                </span>
-                              )}
-                            </div>
-                            {retrievalMessage && (
-                              <p className={`mt-3 text-xs ${retrievalMessage.toLowerCase().includes("failed") || retrievalMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-amber-700"}`}>
-                                {retrievalMessage}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="rounded-xl border border-slate-200 bg-white p-3">
-                            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                              Prompt Layers
-                            </p>
-                            <div className="space-y-2 text-sm">
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-slate-600">Retrieval mode</span>
-                                <span className="text-xs font-medium text-slate-700">
-                                  {retrievalDebug?.layers.retrieval_mode || "lexical"}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-slate-600">Global system prompt</span>
-                                <span className="text-xs font-medium text-slate-700">
-                                  {retrievalDebug?.layers.global_system_prompt_present ? `${retrievalDebug.layers.global_system_prompt_chars} chars` : "empty"}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-slate-600">Event context</span>
-                                <span className="text-xs font-medium text-slate-700">
-                                  {retrievalDebug?.layers.event_context_present ? `${retrievalDebug.layers.event_context_chars} chars` : "empty"}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-slate-600">Active documents</span>
-                                <span className="text-xs font-medium text-slate-700">
-                                  {retrievalDebug?.layers.active_document_count ?? documents.filter((document) => document.is_active).length}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-slate-600">Active chunks</span>
-                                <span className="text-xs font-medium text-slate-700">
-                                  {retrievalDebug?.layers.active_chunk_count ?? documentChunks.length}
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-slate-600">Vector-ready chunks</span>
-                                <span className="text-xs font-medium text-slate-700">
-                                  {retrievalDebug?.layers.vector_ready_chunk_count ?? 0}
-                                </span>
-                              </div>
-                              {retrievalDebug?.layers.query_embedding_model && (
-                                <div className="flex items-center justify-between gap-3">
-                                  <span className="text-slate-600">Query embedding model</span>
-                                  <span className="text-xs font-medium text-slate-700">
-                                    {retrievalDebug.layers.query_embedding_model}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {retrievalDebug && (
-                          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr,0.9fr]">
-                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                              <div className="mb-3 flex items-center justify-between gap-3">
-                                <div>
-                                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Matched Chunks</p>
-                                  <p className="text-xs text-slate-500">Top ranked event chunks for this query.</p>
-                                </div>
-                                <span className="text-xs font-medium text-slate-700">
-                                  {retrievalDebug.matches.length} matches
-                                </span>
-                              </div>
-
-                              <div className="max-h-[26rem] space-y-3 overflow-y-auto pr-1">
-                                {retrievalDebug.matches.length === 0 && (
-                                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
-                                    No ranked chunks for this query. The bot will answer from global rules and event context only.
-                                  </div>
-                                )}
-                                {retrievalDebug.matches.map((match) => (
-                                  <div key={`${match.document_id}:${match.chunk_index}:${match.rank}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                    <StatusLine
-                                      className="mb-3"
-                                      items={[
-                                        <>#{match.rank}</>,
-                                        `score ${match.score.toFixed(2)}`,
-                                        match.strategy || null,
-                                        typeof match.vector_score === "number" ? `vector ${match.vector_score.toFixed(2)}` : null,
-                                        typeof match.lexical_score === "number" ? `lexical ${match.lexical_score}` : null,
-                                        match.source_type,
-                                        `chunk ${match.chunk_index + 1}`,
-                                      ]}
-                                    />
-                                    <p className="font-semibold text-slate-900">{match.document_title}</p>
-                                    {match.source_url && (
-                                      <a
-                                        href={match.source_url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="mt-1 inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700"
-                                      >
-                                        <ExternalLink className="w-3 h-3" />
-                                        Open source URL
-                                      </a>
-                                    )}
-                                    <p className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">{match.chunk_content}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                                Injected Knowledge Context
-                              </p>
-                              <div className="max-h-[26rem] overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <pre className="whitespace-pre-wrap text-xs font-mono text-slate-700">
-                                  {retrievalDebug.composed_knowledge_context || "No knowledge context was composed for this query."}
-                                </pre>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "p-2.5 sm:p-3" : "p-3 sm:p-4"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) ? "mb-0 items-center" : "mb-3 items-start"} flex flex-col gap-2 sm:flex-row sm:justify-between`}>
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Activity className="w-5 h-5 text-blue-600" />
-                          LLM Usage
-                        </h3>
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) && (
-                          <p className="text-sm text-slate-500">Track token burn and estimated spend per event before turning this into credits.</p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) && (
-                          <button
-                            onClick={() => void fetchLlmUsageSummary(selectedEventId)}
-                            disabled={llmUsageLoading}
-                            className="inline-flex h-10 items-center justify-center rounded-2xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
-                            title="Refresh LLM usage"
-                          >
-                            <RefreshCw className={`h-4 w-4 ${llmUsageLoading ? "animate-spin" : ""}`} />
-                          </button>
-                        )}
-                        <CollapseIconButton
-                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage)}
-                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage)}
-                          label="LLM usage"
-                        />
-                      </div>
-                    </div>
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage) && (
-                      <>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-4">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Gateway</p>
-                        <p className="mt-1 break-words text-sm font-semibold leading-snug text-slate-900">OpenRouter API</p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Central billing point for all event chats.</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Active Model</p>
-                        <p className="mt-1 break-all text-sm font-semibold leading-snug text-slate-900">{activeLlmModel}</p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">Current workspace resolves to this model.</p>
-                      </div>
-                      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-blue-600">Selected Event</p>
-                        <p className="mt-1 text-sm font-semibold leading-snug text-blue-900">
-                          {formatCompactNumber(selectedEventUsage?.total_tokens || 0)} tokens
-                        </p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-blue-700">
-                          {formatUsdCost(selectedEventUsage?.estimated_cost_usd || 0)} across {formatCompactNumber(selectedEventUsage?.request_count || 0)} requests
-                        </p>
-                      </div>
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-600">All Workspaces</p>
-                        <p className="mt-1 text-sm font-semibold leading-snug text-emerald-900">
-                          {formatCompactNumber(overallLlmUsage?.total_tokens || 0)} tokens
-                        </p>
-                        <p className="mt-1 text-[11px] leading-relaxed text-emerald-700">
-                          {formatUsdCost(overallLlmUsage?.estimated_cost_usd || 0)} across {formatCompactNumber(overallLlmUsage?.request_count || 0)} requests
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Top Models In Event</p>
-                          <span className="text-xs font-medium text-slate-500">{llmUsageSummary?.selected_event_models.length || 0}</span>
-                        </div>
-                        <div className="mt-3 space-y-2">
-                          {(llmUsageSummary?.selected_event_models.length || 0) === 0 ? (
-                            <p className="text-xs text-slate-500">No usage captured for this event yet.</p>
-                          ) : (
-                            llmUsageSummary?.selected_event_models.map((item) => (
-                              <div key={`event-model-${item.provider}-${item.model}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-medium text-slate-900">{item.model}</p>
-                                  <p className="text-[11px] text-slate-500">{formatCompactNumber(item.request_count)} requests</p>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-xs font-semibold text-slate-900">{formatCompactNumber(item.total_tokens)} tk</p>
-                                  <p className="text-[11px] text-slate-500">{formatUsdCost(item.estimated_cost_usd)}</p>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">Top Models Overall</p>
-                          <span className="text-xs font-medium text-slate-500">{llmUsageSummary?.overall_models.length || 0}</span>
-                        </div>
-                        <div className="mt-3 space-y-2">
-                          {(llmUsageSummary?.overall_models.length || 0) === 0 ? (
-                            <p className="text-xs text-slate-500">No global usage captured yet.</p>
-                          ) : (
-                            llmUsageSummary?.overall_models.map((item) => (
-                              <div key={`all-model-${item.provider}-${item.model}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-medium text-slate-900">{item.model}</p>
-                                  <p className="text-[11px] text-slate-500">{formatCompactNumber(item.request_count)} requests</p>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-xs font-semibold text-slate-900">{formatCompactNumber(item.total_tokens)} tk</p>
-                                  <p className="text-[11px] text-slate-500">{formatUsdCost(item.estimated_cost_usd)}</p>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {llmUsageError && <p className="mt-3 text-xs text-rose-600">{llmUsageError}</p>}
-                    {!llmUsageError && (
-                      <p className="mt-3 text-xs text-slate-500">
-                        Usage is captured from the OpenRouter response payload at request time, so this can become the ledger for credit deduction later.
-                      </p>
-                    )}
-                      </>
-                    )}
-                  </div>
-
-                </div>
-              </div>
-            </motion.div>
+            <ContextScreen
+              selectedEvent={selectedEvent}
+              getEventStatusTone={getEventStatusTone}
+              getEventStatusLabel={getEventStatusLabel}
+              eventContextDirty={eventContextDirty}
+              eventCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
+              onToggleEventCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
+              onSaveEventContext={saveEventContext}
+              saving={saving}
+              canManageKnowledge={canManageKnowledge}
+              knowledgeActionsRef={knowledgeActionsRef}
+              knowledgeActionsOpen={knowledgeActionsOpen}
+              onKnowledgeActionsOpenChange={setKnowledgeActionsOpen}
+              knowledgeResetting={knowledgeResetting}
+              selectedEventId={selectedEventId}
+              onResetEventKnowledge={handleResetEventKnowledge}
+              settings={settings}
+              onSettingsChange={setSettings}
+              settingsMessage={settingsMessage}
+              knowledgeDocumentsCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments)}
+              onToggleKnowledgeDocumentsCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextKnowledgeDocuments)}
+              documentFileInputRef={documentFileInputRef}
+              onImportDocumentFile={handleImportDocumentFile}
+              documentsLoading={documentsLoading}
+              editingDocumentId={editingDocumentId}
+              onResetDocumentForm={resetDocumentForm}
+              documentTitle={documentTitle}
+              onDocumentTitleChange={setDocumentTitle}
+              documentSourceType={documentSourceType}
+              onDocumentSourceTypeChange={setDocumentSourceType}
+              documentSourceUrl={documentSourceUrl}
+              onDocumentSourceUrlChange={setDocumentSourceUrl}
+              documentContent={documentContent}
+              onDocumentContentChange={setDocumentContent}
+              onSaveDocument={handleSaveDocument}
+              documentsMessage={documentsMessage}
+              attachedDocumentsCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
+              onToggleAttachedDocumentsCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextAttachedDocuments)}
+              filteredDocuments={filteredDocuments}
+              deferredDocumentListQuery={deferredDocumentListQuery}
+              documentListQuery={documentListQuery}
+              onDocumentListQueryChange={setDocumentListQuery}
+              onRefreshDocuments={fetchDocuments}
+              isContextDocumentCollapsed={isContextDocumentCollapsed}
+              onToggleContextDocumentCollapsed={toggleContextDocumentCollapsed}
+              selectedDocumentForChunksId={selectedDocumentForChunksId}
+              onSelectDocumentForChunks={selectDocumentForChunks}
+              getSearchTargetDomId={getSearchTargetDomId}
+              isSearchFocused={isSearchFocused}
+              onLoadDocumentIntoForm={loadDocumentIntoForm}
+              onDocumentStatusToggle={handleDocumentStatusToggle}
+              chunkInspectorCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
+              onToggleChunkInspectorCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextChunkInspector)}
+              selectedDocumentForChunks={selectedDocumentForChunks}
+              onFetchDocumentChunks={fetchDocumentChunks}
+              documentChunksLoading={documentChunksLoading}
+              documentChunks={documentChunks}
+              embeddingPreviewCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
+              onToggleEmbeddingPreviewCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEmbeddingPreview)}
+              embeddingPreviewLoading={embeddingPreviewLoading}
+              embeddingEnqueueLoading={embeddingEnqueueLoading}
+              onEnqueueEmbedding={handleEnqueueEmbedding}
+              onFetchEmbeddingPreview={fetchEmbeddingPreview}
+              embeddingPreview={embeddingPreview}
+              embeddingPreviewMessage={embeddingPreviewMessage}
+              retrievalDebugCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
+              onToggleRetrievalDebugCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextRetrievalDebug)}
+              retrievalQuery={retrievalQuery}
+              onRetrievalQueryChange={setRetrievalQuery}
+              retrievalLoading={retrievalLoading}
+              onFetchRetrievalDebug={fetchRetrievalDebug}
+              retrievalDebug={retrievalDebug}
+              retrievalMessage={retrievalMessage}
+              activeDocumentCount={documents.filter((document) => document.is_active).length}
+              llmUsageCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage)}
+              onToggleLlmUsageCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextLlmUsage)}
+              onFetchLlmUsageSummary={fetchLlmUsageSummary}
+              llmUsageLoading={llmUsageLoading}
+              activeLlmModel={activeLlmModel}
+              selectedEventUsage={selectedEventUsage}
+              overallLlmUsage={overallLlmUsage}
+              llmUsageSummary={llmUsageSummary}
+              llmUsageError={llmUsageError}
+              formatCompactNumber={formatCompactNumber}
+              formatUsdCost={formatUsdCost}
+            />
           )}
 
           {activeTab === "test" && (
-            <motion.div
-              key="test"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
-            >
-              <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100">
-                    <Bot className="h-5 w-5 text-blue-600" />
-                  </div>
-                    <div>
-                      <h3 className="font-semibold text-sm">Bot Simulator</h3>
-                      <StatusLine
-                        className="mt-0.5"
-                        items={[
-                          "Simulator active",
-                          `${testMessages.length} msgs`,
-                          eventOperatorGuard.label,
-                          selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
-                          selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
-                            ? getRegistrationAvailabilityLabel(selectedEvent.registration_availability)
-                            : null,
-                        ]}
-                      />
-                      <div className="mt-1">
-                        <HelpPopover label="Open note for Simulation Guard">
-                          {eventOperatorGuard.body}
-                        </HelpPopover>
-                      </div>
-                  </div>
-                </div>
-                <InlineActionsMenu label="Actions" tone="neutral">
-                  <MenuActionItem
-                    onClick={() => setTestMessages([])}
-                    disabled={testMessages.length === 0}
-                    tone="neutral"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <span className="font-medium">Clear Chat</span>
-                  </MenuActionItem>
-                </InlineActionsMenu>
-              </div>
-
-              <div className="chat-scroll chat-selectable flex-1 min-h-0 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
-                {testMessages.length === 0 && (
-                  <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
-                    <MessageSquare className="h-10 w-10" />
-                    <p className="text-sm max-w-xs">Start a conversation to test your bot's custom context.</p>
-                  </div>
-                )}
-                {testMessages.map((msg, i) => {
-                  const text = msg.parts.find((p) => p.text)?.text;
-                  const attachments = extractImageAttachmentsFromParts(msg.parts);
-                  const funcCall = msg.parts.find((p) => p.functionCall)?.functionCall;
-                  const funcResp = msg.parts.find((p) => p.functionResponse)?.functionResponse;
-
-                  if (funcCall) return null;
-                  if (funcResp) {
-                    const data = funcResp.response.content;
-                    const reg = registrations.find((r) => r.id === data.id);
-                    if (!reg) return null;
-                    return (
-                      <motion.div
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        key={i}
-                      >
-                        <Ticket
-                          registrationId={reg.id}
-                          firstName={reg.first_name}
-                          lastName={reg.last_name}
-                          phone={reg.phone}
-                          email={reg.email}
-                          timestamp={reg.timestamp}
-                          eventName={settings.event_name}
-                          eventLocation={attendeeLocationLabel}
-                          eventDateLabel={timingInfo.eventDateLabel}
-                          eventMapUrl={resolvedEventMapUrl}
-                        />
-                      </motion.div>
-                    );
-                  }
-
-                  return (
-                    <ChatBubble
-                      key={i}
-                      text={text || ""}
-                      attachments={attachments}
-                      type={msg.role === "user" ? "outgoing" : "incoming"}
-                      timestamp={msg.timestamp}
-                    />
-                  );
-                })}
-                {isTyping && (
-                  <div className="flex justify-start mb-4">
-                    <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-100 flex gap-1">
-                      <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
-                      <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.2s]" />
-                      <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.4s]" />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
-                <input
-                  ref={testImageInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  multiple
-                  className="hidden"
-                  onChange={handleTestImageSelection}
-                />
-                {(testPendingImages.length > 0 || testAttachmentError) && (
-                  <div className="mb-2 space-y-2">
-                    {testPendingImages.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {testPendingImages.map((attachment) => (
-                          <div
-                            key={attachment.id}
-                            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-2"
-                          >
-                            <img
-                              src={attachment.previewUrl}
-                              alt={attachment.file.name}
-                              className="h-10 w-10 rounded-xl object-cover"
-                            />
-                            <div className="min-w-0">
-                              <p className="max-w-28 truncate text-xs font-medium text-slate-800">{attachment.file.name}</p>
-                              <p className="text-[10px] text-slate-500">{Math.max(1, Math.round(attachment.file.size / 1024))} KB</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => removeTestPendingImage(attachment.id)}
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:text-slate-700"
-                              aria-label={`Remove ${attachment.file.name}`}
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ))}
-                        {testPendingImages.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={clearTestPendingImages}
-                            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-rose-300 hover:text-rose-700"
-                          >
-                            Clear Images
-                          </button>
-                        )}
-                      </div>
-                    )}
-                    {testAttachmentError && (
-                      <p className="text-xs text-rose-600">{testAttachmentError}</p>
-                    )}
-                  </div>
-                )}
-                <div className="flex gap-2 lg:pr-16">
-                  <ActionButton
-                    onClick={() => testImageInputRef.current?.click()}
-                    tone="neutral"
-                    className="px-2.5"
-                    disabled={isTyping || testPendingImages.length >= 4}
-                    aria-label="Attach image"
-                    title="Attach image"
-                  >
-                    <ImagePlus className="w-4 h-4" />
-                  </ActionButton>
-                  <input
-                    type="text"
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && void handleTestSend()}
-                    placeholder="Type a message..."
-                    className="flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <ActionButton
-                    onClick={() => void handleTestSend()}
-                    disabled={(!inputText.trim() && testPendingImages.length === 0) || isTyping}
-                    tone="blue"
-                    active
-                    className="px-3"
-                  >
-                    <Send className="w-5 h-5" />
-                  </ActionButton>
-                </div>
-              </div>
-            </motion.div>
+            <TestConsoleScreen
+              testMessages={testMessages}
+              eventOperatorGuard={eventOperatorGuard}
+              selectedEventStatusLabel={selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null}
+              selectedRegistrationAvailabilityLabel={
+                selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
+                  ? getRegistrationAvailabilityLabel(selectedEvent.registration_availability)
+                  : null
+              }
+              isTyping={isTyping}
+              extractImageAttachmentsFromParts={extractImageAttachmentsFromParts}
+              registrations={registrations}
+              eventName={settings.event_name}
+              attendeeLocationLabel={attendeeLocationLabel}
+              eventDateLabel={timingInfo.eventDateLabel}
+              resolvedEventMapUrl={resolvedEventMapUrl}
+              testImageInputRef={testImageInputRef}
+              onTestImageSelection={handleTestImageSelection}
+              testPendingImages={testPendingImages}
+              testAttachmentError={testAttachmentError}
+              onRemoveTestPendingImage={removeTestPendingImage}
+              onClearTestPendingImages={clearTestPendingImages}
+              inputText={inputText}
+              onInputTextChange={setInputText}
+              onTestSend={handleTestSend}
+              onClearMessages={() => setTestMessages([])}
+            />
           )}
 
           {activeTab === "agent" && (
-            <motion.div
-              key="agent"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className={agentWorkspaceView === "console" ? "h-full min-h-0" : "space-y-4"}
-            >
-              {agentWorkspaceView === "console" && (
-              <div className={`agent-console-shell flex h-full min-h-0 flex-col overflow-hidden bg-white ${
-                isAgentMobileFocusMode
-                  ? "rounded-none border-0 shadow-none sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-sm"
-                  : "rounded-2xl border border-slate-200 shadow-sm"
-              }`}>
-                <div className="agent-console-header border-b border-slate-100 bg-slate-50 px-3 py-2.5 sm:px-4 sm:py-3">
-                  <div className="flex min-w-0 items-start gap-2.5">
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 sm:h-9 sm:w-9">
-                      <MonitorCog className="h-4 w-4 text-violet-700 sm:h-5 sm:w-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <h3 className="truncate text-sm font-semibold">Admin Agent</h3>
-                          <HelpPopover label="Open note for Agent Guard">
-                            {adminAgentGuardBody}
-                          </HelpPopover>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setAdminAgentDashboardOpen((current) => !current)}
-                            className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border transition ${
-                              adminAgentDashboardOpen
-                                ? "border-violet-200 bg-violet-50 text-violet-700"
-                                : "border-slate-200 bg-white text-slate-500 hover:text-slate-700"
-                            }`}
-                            aria-label={adminAgentDashboardOpen ? "Hide dashboard" : "Show dashboard"}
-                            title={adminAgentDashboardOpen ? "Hide dashboard" : "Show dashboard"}
-                          >
-                            <LayoutDashboard className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void fetchAdminAgentDashboard(selectedEventId)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:text-slate-700"
-                            aria-label="Refresh agent dashboard"
-                            title="Refresh dashboard"
-                          >
-                            <RefreshCw className={`h-4 w-4 ${adminAgentDashboardLoading ? "animate-spin" : ""}`} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setAgentMobileFocusMode((current) => !current)}
-                            className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border transition lg:hidden ${
-                              agentMobileFocusMode
-                                ? "border-violet-200 bg-violet-50 text-violet-700"
-                                : "border-slate-200 bg-white text-slate-500 hover:text-slate-700"
-                            }`}
-                            aria-label={agentMobileFocusMode ? "Exit focus mode" : "Enter focus mode"}
-                            title={agentMobileFocusMode ? "Exit focus mode" : "Enter focus mode"}
-                          >
-                            {agentMobileFocusMode ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-                          </button>
-                          <InlineActionsMenu label="Agent actions" tone="neutral" iconOnly>
-                            <MenuActionItem
-                              onClick={() => void handleAdminAgentClearChat()}
-                              disabled={adminAgentMessages.length === 0}
-                              tone="neutral"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              <span className="font-medium">Clear Chat</span>
-                            </MenuActionItem>
-                          </InlineActionsMenu>
-                        </div>
-                      </div>
-                      <div className="mt-1.5 flex min-w-0 items-center gap-1.5 overflow-x-auto whitespace-nowrap pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                        <StatusLine
-                          items={[
-                            settings.admin_agent_enabled === "1" ? "enabled" : "disabled",
-                            `${activeAgentMessageCount} msgs`,
-                            adminAgentGuardLabel,
-                            selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
-                            agentMobileFocusMode ? "focus mode" : null,
-                          ]}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {adminAgentDashboardOpen && (
-                  <div className="border-b border-slate-200 bg-white px-3 py-2 sm:px-4 sm:py-2.5">
-                    <div className="agent-dashboard-surface rounded-2xl border border-slate-300 bg-slate-50/80 px-3 py-2.5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-700">Overview</p>
-                            {adminAgentDashboardLoading && (
-                              <span className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
-                                <RefreshCw className="h-2.5 w-2.5 animate-spin" />
-                                syncing
-                              </span>
-                            )}
-                          </div>
-                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-                            <p className="truncate text-sm font-semibold text-slate-950">
-                              {selectedEvent?.name || "No workspace selected"}
-                            </p>
-                            {selectedEvent && (
-                              <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                                {getEventStatusLabel(selectedEvent.effective_status)}
-                              </StatusBadge>
-                            )}
-                          </div>
-                          <StatusLine
-                            className="mt-1 text-slate-700"
-                            items={[
-                              selectedAdminAgentDashboardEvent
-                                ? `updated ${formatEventWorkspaceDateLabel(selectedAdminAgentDashboardEvent.updated_at)}`
-                                : null,
-                              `${adminAgentDashboard?.summary.total_events ?? 0} workspaces`,
-                              `${adminAgentDashboard?.summary.total_registrations ?? 0} registrations`,
-                            ]}
-                          />
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setAdminAgentDashboardOpen(false)}
-                            className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-violet-300 hover:text-violet-700"
-                          >
-                            Hide
-                          </button>
-                          {selectedEventId && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEventWorkspaceView("setup");
-                                setActiveTab("event");
-                              }}
-                              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-blue-300 hover:text-blue-700"
-                            >
-                              Workspace
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-2.5 space-y-2.5">
-                        {adminAgentDashboardError && (
-                          <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
-                            {adminAgentDashboardError}
-                          </div>
-                        )}
-
-                        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-                          <AdminAgentDashboardMiniStat
-                            label="events"
-                            value={adminAgentDashboard?.summary.total_events ?? "..."}
-                          />
-                          <AdminAgentDashboardMiniStat
-                            label="live"
-                            value={adminAgentDashboard?.summary.active_events ?? "..."}
-                            tone="emerald"
-                          />
-                          <AdminAgentDashboardMiniStat
-                            label="pending"
-                            value={adminAgentDashboard?.summary.pending_events ?? "..."}
-                            tone="amber"
-                          />
-                          <AdminAgentDashboardMiniStat
-                            label="current regs"
-                            value={adminAgentDashboard?.summary.selected_event_registrations ?? "..."}
-                            tone="blue"
-                          />
-                        </div>
-
-                        <AdminAgentDashboardMeter
-                          label="Workspace Status"
-                          totalLabel={`${adminAgentDashboard?.summary.total_events ?? 0} total`}
-                          segments={[
-                            { label: "live", value: adminAgentDashboard?.summary.active_events ?? 0, tone: "emerald" },
-                            { label: "pending", value: adminAgentDashboard?.summary.pending_events ?? 0, tone: "amber" },
-                            { label: "inactive", value: adminAgentDashboard?.summary.inactive_events ?? 0, tone: "slate" },
-                            { label: "history", value: adminAgentDashboard?.summary.history_events ?? 0, tone: "violet" },
-                          ]}
-                        />
-
-                        <div className="grid gap-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-                          <AdminAgentDashboardMeter
-                            label="Current Registrations"
-                            totalLabel={`${adminAgentDashboard?.summary.selected_event_registrations ?? 0} total`}
-                            segments={[
-                              { label: "registered", value: adminAgentDashboard?.summary.selected_event_registered ?? 0, tone: "blue" },
-                              { label: "checked-in", value: adminAgentDashboard?.summary.selected_event_checked_in ?? 0, tone: "emerald" },
-                              { label: "cancelled", value: adminAgentDashboard?.summary.selected_event_cancelled ?? 0, tone: "amber" },
-                            ]}
-                          />
-
-                          <div className="rounded-2xl border border-slate-300 bg-white px-3 py-2.5">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-700">Quick Actions</p>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={() => applyAdminAgentCommand("list events")}
-                                className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-violet-300 hover:text-violet-700"
-                              >
-                                List Events
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!selectedEventId) return;
-                                  applyAdminAgentCommand(`/event ${selectedEventId} get_event_overview`);
-                                }}
-                                disabled={!selectedEventId}
-                                className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-800 transition hover:border-violet-300 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                Event Overview
-                              </button>
-                            </div>
-                            <StatusLine
-                              className="mt-2 text-slate-700"
-                              items={[
-                                selectedAdminAgentDashboardEvent?.slug ? <span className="font-mono">{selectedAdminAgentDashboardEvent.slug}</span> : null,
-                                selectedAdminAgentDashboardEvent?.is_default ? "default workspace" : null,
-                              ]}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div ref={adminAgentScrollRef} className="agent-chat-canvas chat-scroll chat-selectable flex-1 min-h-0 space-y-2 overflow-y-auto bg-slate-50 p-3 sm:p-4">
-                  {adminAgentMessages.length === 0 && (
-                    <div className="flex h-full flex-col items-center justify-center space-y-4 text-center opacity-40">
-                      <MonitorCog className="h-10 w-10" />
-                      <div className="space-y-2">
-                        <p className="text-sm max-w-xs">
-                          สั่งงาน Agent เช่น สร้าง/อัปเดต event, ตั้ง status/context, จัดการ registration, ส่งข้อความถึง user, หรือค้นทั้งระบบตาม policy ที่เปิดไว้
-                        </p>
-                        <p className="text-xs">CLI shortcuts: <span className="font-medium">list events</span>, <span className="font-medium">list events status:pending</span>, <span className="font-medium">/event evt_xxx get_event_overview</span></p>
-                      </div>
-                    </div>
-                  )}
-                  {adminAgentMessages.map((msg, index) => (
-                    <div key={`${msg.timestamp}-${index}`} className="space-y-1">
-                      {msg.text.trim() && (
-                        <ChatBubble
-                          text={msg.text}
-                          type={msg.role === "user" ? "outgoing" : "incoming"}
-                          timestamp={msg.timestamp}
-                        />
-                      )}
-                      {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
-                        <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                          <div className={`flex max-w-[75%] flex-wrap gap-2 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                            {msg.attachments.map((attachment) => (
-                              <a
-                                key={attachment.id}
-                                href={attachment.absolute_url || attachment.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="agent-inline-asset inline-block overflow-hidden rounded-2xl border border-slate-200 bg-white p-1"
-                              >
-                                <img
-                                  src={attachment.absolute_url || attachment.url}
-                                  alt={attachment.name || "Attached image"}
-                                  className="h-24 w-24 rounded-xl object-cover sm:h-28 sm:w-28"
-                                  loading="lazy"
-                                />
-                              </a>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {msg.role === "agent" && (msg.ticketPngUrl || msg.ticketSvgUrl || msg.csvDownloadUrl) && (
-                        <div className="ml-2 space-y-2 pb-1">
-                          {msg.ticketPngUrl && (
-                            <a
-                              href={msg.ticketPngUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="agent-inline-asset inline-block rounded-xl border border-slate-200 bg-white p-1"
-                            >
-                              <img
-                                src={msg.ticketPngUrl}
-                                alt="Ticket preview"
-                                className="max-h-56 w-auto rounded-lg"
-                                loading="lazy"
-                              />
-                            </a>
-                          )}
-                          {!msg.ticketPngUrl && msg.ticketSvgUrl && (
-                            <a
-                              href={msg.ticketSvgUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="agent-inline-asset inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                            >
-                              Open ticket (SVG)
-                            </a>
-                          )}
-                          {msg.csvDownloadUrl && (
-                            <a
-                              href={msg.csvDownloadUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="agent-inline-asset inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                            >
-                              Download CSV
-                            </a>
-                          )}
-                        </div>
-                      )}
-                      {msg.role === "agent" && msg.actionName && (
-                        <StatusLine
-                          className="ml-2 pb-2"
-                          items={[
-                            formatAdminActionLabel(msg.actionName),
-                            msg.actionSource || "llm",
-                          ]}
-                        />
-                      )}
-                    </div>
-                  ))}
-
-                  {adminAgentTyping && (
-                    <div className="flex justify-start mb-4">
-                      <div className="agent-typing-bubble bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-slate-100 flex gap-1">
-                        <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" />
-                        <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.2s]" />
-                        <div className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.4s]" />
-                      </div>
-                    </div>
-                  )}
-                  <div ref={adminAgentBottomRef} className="h-px w-full" aria-hidden />
-                </div>
-
-                <div className="agent-chat-composer border-t border-slate-100 p-2.5 sm:p-3 lg:px-5 lg:pb-6 lg:pt-3">
-                  <div ref={adminCommandPaletteRef} className="relative">
-                    <AnimatePresence>
-                      {adminCommandPaletteOpen && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: 6 }}
-                          className="agent-command-palette absolute bottom-[calc(100%+0.6rem)] left-0 right-0 z-30 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
-                        >
-                          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2">
-                            <Search className="h-3.5 w-3.5 text-slate-400" />
-                            <input
-                              ref={adminCommandPaletteSearchInputRef}
-                              type="text"
-                              value={adminCommandPaletteQuery}
-                              onChange={(event) => setAdminCommandPaletteQuery(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  const firstTemplate = filteredAdminCommandTemplates[0];
-                                  if (firstTemplate) {
-                                    handleApplyAdminCommandTemplate(firstTemplate);
-                                  }
-                                } else if (event.key === "Escape") {
-                                  event.preventDefault();
-                                  closeAdminCommandPalette();
-                                  adminAgentInputRef.current?.focus();
-                                }
-                              }}
-                              placeholder="Search command..."
-                              className="flex-1 border-none bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
-                            />
-                            {adminCommandPaletteQuery && (
-                              <button
-                                type="button"
-                                onClick={() => setAdminCommandPaletteQuery("")}
-                                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:text-slate-700"
-                                aria-label="Clear command search"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                          </div>
-                          <div className="mt-2 max-h-72 space-y-1 overflow-y-auto pr-1">
-                            {filteredAdminCommandTemplates.slice(0, 12).map((template) => (
-                              <button
-                                key={template.id}
-                                type="button"
-                                onClick={() => handleApplyAdminCommandTemplate(template)}
-                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-violet-300 hover:bg-violet-50"
-                              >
-                                <div className="flex items-center justify-between gap-3">
-                                  <span className="text-sm font-semibold text-slate-800">{template.label}</span>
-                                  <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                                    {template.id}
-                                  </span>
-                                </div>
-                                <p className="mt-0.5 text-xs text-slate-500">{template.note}</p>
-                                <code className="mt-1.5 block rounded-lg bg-slate-100 px-2 py-1 text-[11px] text-slate-700">
-                                  {template.command}
-                                </code>
-                              </button>
-                            ))}
-                            {filteredAdminCommandTemplates.length === 0 && (
-                              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
-                                No command found. Try keyword like `registration`, `event`, `ticket`, or `search`.
-                              </div>
-                            )}
-                          </div>
-                          <p className="mt-2 px-1 text-[11px] text-slate-500">
-                            Shortcut: <span className="font-semibold">Ctrl/Cmd + Shift + P</span>
-                          </p>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    <input
-                      ref={adminAgentImageInputRef}
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      multiple
-                      className="hidden"
-                      onChange={handleAdminAgentImageSelection}
-                    />
-
-                    {(adminAgentPendingImages.length > 0 || adminAgentAttachmentError) && (
-                      <div className="mb-2 space-y-2">
-                        {adminAgentPendingImages.length > 0 && (
-                          <div className="space-y-2">
-                            <div className="flex flex-wrap gap-2">
-                              {adminAgentPendingImages.map((attachment) => (
-                                <div
-                                  key={attachment.id}
-                                  className="agent-inline-asset flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-2 py-2"
-                                >
-                                  <img
-                                    src={attachment.previewUrl}
-                                    alt={attachment.file.name}
-                                    className="h-10 w-10 rounded-xl object-cover"
-                                  />
-                                  <div className="min-w-0">
-                                    <p className="max-w-28 truncate text-xs font-medium text-slate-800">{attachment.file.name}</p>
-                                    <p className="text-[10px] text-slate-500">{Math.max(1, Math.round(attachment.file.size / 1024))} KB</p>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeAdminAgentPendingImage(attachment.id)}
-                                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:text-slate-700"
-                                    aria-label={`Remove ${attachment.file.name}`}
-                                  >
-                                    <X className="h-3.5 w-3.5" />
-                                  </button>
-                                </div>
-                              ))}
-                              {adminAgentPendingImages.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={clearAdminAgentPendingImages}
-                                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-rose-300 hover:text-rose-700"
-                                >
-                                  Clear Images
-                                </button>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              {adminAgentImageQuickTemplates.map((template) => (
-                                <button
-                                  key={template.id}
-                                  type="button"
-                                  onClick={() => handleApplyAdminCommandTemplate(template)}
-                                  className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-[11px] font-medium text-violet-700 transition hover:border-violet-300 hover:bg-violet-100"
-                                >
-                                  {template.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        {adminAgentAttachmentError && (
-                          <p className="text-xs text-rose-600">{adminAgentAttachmentError}</p>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="flex gap-2 lg:pr-16">
-                      <ActionButton
-                        onClick={handleToggleAdminCommandPalette}
-                        tone="neutral"
-                        className="px-2.5"
-                        aria-label={adminCommandPaletteOpen ? "Close command palette" : "Open command palette"}
-                        title="Command Palette (Ctrl/Cmd + Shift + P)"
-                      >
-                        <Code className="h-4 w-4" />
-                      </ActionButton>
-                      <ActionButton
-                        onClick={() => adminAgentImageInputRef.current?.click()}
-                        tone="neutral"
-                        className="px-2.5"
-                        disabled={adminAgentTyping || adminAgentPendingImages.length >= 4}
-                        aria-label="Attach image"
-                        title="Attach image"
-                      >
-                        <ImagePlus className="h-4 w-4" />
-                      </ActionButton>
-                      <input
-                        ref={adminAgentInputRef}
-                        type="text"
-                        value={adminAgentInputText}
-                        onChange={(e) => setAdminAgentInputText(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            handleAdminAgentSend();
-                          }
-                        }}
-                        placeholder="สั่งงาน Admin Agent หรือพิมพ์ CLI เช่น list events status:pending"
-                        className="agent-command-input flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
-                      />
-                      <ActionButton
-                        onClick={() => {
-                          void handleAdminAgentSend();
-                        }}
-                        disabled={(!adminAgentInputText.trim() && adminAgentPendingImages.length === 0) || adminAgentTyping || settings.admin_agent_enabled !== "1"}
-                        tone="violet"
-                        active
-                        className="px-3"
-                      >
-                        <Send className="w-5 h-5" />
-                      </ActionButton>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {adminAgentConsoleQuickTemplates.map((template) => (
-                        <button
-                          key={template.id}
-                          type="button"
-                          onClick={() => handleApplyAdminCommandTemplate(template)}
-                          className="agent-preset-chip rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 transition hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 sm:px-3 sm:py-1.5 sm:text-xs"
-                        >
-                          {template.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              )}
-
-              {agentWorkspaceView !== "console" && (
-              <div className="space-y-4 xl:max-w-4xl">
-                <div className="flex items-center justify-end">
-                  <ActionButton
-                    onClick={() => void saveAgentSettings()}
-                    disabled={saving || !canEditSettings}
-                    tone="violet"
-                    active
-                    className="whitespace-nowrap px-3 text-sm"
-                  >
-                    {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    Save Agent Setup
-                  </ActionButton>
-                </div>
-                {agentWorkspaceView === "setup" && (
-                <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "p-3" : "space-y-4 p-4"}`}>
-                  <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "items-center" : "items-start"}`}>
-                    <button
-                      type="button"
-                      onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
-                      className="min-w-0 flex-1 text-left"
-                      aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) ? "Expand" : "Collapse"} Agent Runtime`}
-                    >
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Bot className="w-5 h-5 text-violet-600" />
-                        Agent Runtime
-                      </h3>
-                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) && (
-                        <p className="text-sm text-slate-500">
-                          Separate prompt/model and routing for Admin Agent, independent from event chat bot setup.
-                        </p>
-                      )}
-                    </button>
-                    <CollapseIconButton
-                      collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
-                      onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
-                      label="Agent Runtime"
-                    />
-                  </div>
-
-                  {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime) && (
-                  <>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <label className="flex items-start gap-3 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={settings.admin_agent_enabled === "1"}
-                        onChange={(e) => setSettings({ ...settings, admin_agent_enabled: e.target.checked ? "1" : "0" })}
-                        disabled={!canEditSettings}
-                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                      />
-                      <span>
-                        <span className="font-semibold text-slate-800">Enable Admin Agent</span>
-                        <span className="mt-0.5 block text-xs text-slate-500">Controls both in-app Agent console and external Agent endpoints.</span>
-                      </span>
-                    </label>
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <label className="block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Agent System Prompt (Admin)</label>
-                      <ActionButton
-                        onClick={() => setSettings({ ...settings, admin_agent_system_prompt: RECOMMENDED_ADMIN_AGENT_PROMPT })}
-                        disabled={!canEditSettings}
-                        tone="neutral"
-                        className="min-h-0 px-2 py-1 text-[11px]"
-                      >
-                        Use Recommended
-                      </ActionButton>
-                    </div>
-                    <textarea
-                      value={settings.admin_agent_system_prompt}
-                      onChange={(e) => setSettings({ ...settings, admin_agent_system_prompt: e.target.value })}
-                      disabled={!canEditSettings}
-                      className="w-full h-28 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-violet-500"
-                      placeholder="System prompt for internal admin operations (separate from attendee chat bot)"
-                    />
-                    <p className="mt-1 text-[11px] text-slate-500">Prompt นี้ใช้เฉพาะ Admin Agent และไม่กระทบ prompt ของ bot ที่คุยกับผู้ใช้งานภายนอก</p>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Agent Model Override</label>
-                      <input
-                        value={settings.admin_agent_model}
-                        onChange={(e) => setSettings({ ...settings, admin_agent_model: e.target.value })}
-                        disabled={!canEditSettings}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
-                        placeholder="Blank = use event/global model"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Default Event ID (External)</label>
-                      <div className="flex gap-2">
-                        <input
-                          value={settings.admin_agent_default_event_id}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_default_event_id: e.target.value })}
-                          disabled={!canEditSettings}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
-                          placeholder="evt_default"
-                        />
-                        <ActionButton
-                          onClick={() => setSettings({ ...settings, admin_agent_default_event_id: selectedEventId })}
-                          disabled={!canEditSettings || !selectedEventId}
-                          tone="neutral"
-                          className="shrink-0 px-2.5 text-[11px]"
-                        >
-                          Use Current
-                        </ActionButton>
-                      </div>
-                    </div>
-                  </div>
-
-                  <details className="rounded-xl border border-slate-200 bg-slate-50">
-                    <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-semibold text-slate-800">
-                      Advanced Action Policy
-                    </summary>
-                    <div className="space-y-2 border-t border-slate-200 px-3 py-3 text-sm">
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_read_event !== "0"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_read_event: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Event Read</span> <span className="text-xs text-slate-500">find_event, event overview</span></span>
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_manage_event_setup === "1"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_event_setup: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Event Setup Write</span> <span className="text-xs text-slate-500">create event + set detail/rules</span></span>
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_manage_event_status === "1"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_event_status: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Event Status Write</span> <span className="text-xs text-slate-500">set pending/active/inactive/cancelled/archived</span></span>
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_manage_event_context === "1"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_event_context: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Event Context Write</span> <span className="text-xs text-slate-500">update context knowledge</span></span>
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_read_registration !== "0"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_read_registration: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Registration Read</span> <span className="text-xs text-slate-500">find/list/count/timeline</span></span>
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_manage_registration !== "0"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_manage_registration: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Registration Write</span> <span className="text-xs text-slate-500">set status, resend ticket/email</span></span>
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_message_user !== "0"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_message_user: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Messaging Actions</span> <span className="text-xs text-slate-500">send message, retry bot</span></span>
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_policy_search_all_events !== "0"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_policy_search_all_events: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span><span className="font-medium">Search Whole System</span> <span className="text-xs text-slate-500">allow cross-event search/override</span></span>
-                      </label>
-                    </div>
-                  </details>
-
-                  <details className="rounded-xl border border-slate-200 bg-slate-50">
-                    <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-semibold text-slate-800">
-                      Notification Automation
-                    </summary>
-                    <div className="space-y-3 border-t border-slate-200 px-3 py-3 text-sm">
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_notification_enabled === "1"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_notification_enabled: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span>
-                          <span className="font-medium">Enable Auto Notifications</span>
-                          <span className="text-xs text-slate-500">Send registration activity and public chat attention alerts to admin automatically.</span>
-                        </span>
-                      </label>
-
-                      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <label className="flex items-start gap-2">
-                            <input
-                              type="checkbox"
-                              checked={desktopNotifyEnabled}
-                              onChange={(e) => setDesktopNotifyEnabled(e.target.checked)}
-                              disabled={!canEditSettings || !desktopNotificationSupported || settings.admin_agent_notification_enabled !== "1"}
-                              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                            />
-                            <span>
-                              <span className="font-medium">Desktop Notifications (This Browser)</span>
-                              <span className="text-xs text-slate-500">Show native browser notifications from registration changes and public chat attention signals.</span>
-                            </span>
-                          </label>
-                          <ActionButton
-                            onClick={() => void requestDesktopNotificationPermission()}
-                            disabled={!canEditSettings || !desktopNotificationSupported || desktopNotifyPermission === "granted"}
-                            tone="neutral"
-                            className="px-2.5 py-1.5 text-xs"
-                          >
-                            Request Permission
-                          </ActionButton>
-                        </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <StatusBadge
-                            tone={
-                              desktopNotifyPermission === "granted"
-                                ? "emerald"
-                                : desktopNotifyPermission === "denied"
-                                ? "rose"
-                                : "neutral"
-                            }
-                          >
-                            {desktopNotifyPermissionLabel}
-                          </StatusBadge>
-                          <span className="text-[11px] text-slate-500">Requires browser permission and an active web session.</span>
-                        </div>
-                      </div>
-
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_notification_on_registration_created !== "0"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_notification_on_registration_created: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1"}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span>
-                          <span className="font-medium">Notify On New Registration</span>
-                          <span className="text-xs text-slate-500">Trigger when a new attendee is created.</span>
-                        </span>
-                      </label>
-
-                      <label className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={settings.admin_agent_notification_on_registration_status_changed !== "0"}
-                          onChange={(e) => setSettings({ ...settings, admin_agent_notification_on_registration_status_changed: e.target.checked ? "1" : "0" })}
-                          disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1"}
-                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                        />
-                        <span>
-                          <span className="font-medium">Notify On Status Changes</span>
-                          <span className="text-xs text-slate-500">Trigger when status changes (registered/cancelled/checked-in).</span>
-                        </span>
-                      </label>
-
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Notification Scope</label>
-                          <select
-                            value={settings.admin_agent_notification_scope}
-                            onChange={(e) => setSettings({ ...settings, admin_agent_notification_scope: e.target.value === "event" ? "event" : "all" })}
-                            disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1"}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-violet-500"
-                          >
-                            <option value="all">All Events</option>
-                            <option value="event">One Event Only</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Target Event ID</label>
-                          <div className="flex gap-2">
-                            <input
-                              value={settings.admin_agent_notification_event_id}
-                              onChange={(e) => setSettings({ ...settings, admin_agent_notification_event_id: e.target.value })}
-                              disabled={!canEditSettings || settings.admin_agent_notification_enabled !== "1" || settings.admin_agent_notification_scope !== "event"}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500 disabled:bg-slate-100"
-                              placeholder="evt_default"
-                            />
-                            <ActionButton
-                              onClick={() => setSettings({ ...settings, admin_agent_notification_event_id: selectedEventId })}
-                              disabled={
-                                !canEditSettings
-                                || settings.admin_agent_notification_enabled !== "1"
-                                || settings.admin_agent_notification_scope !== "event"
-                                || !selectedEventId
-                              }
-                              tone="neutral"
-                              className="shrink-0 px-2.5 text-[11px]"
-                            >
-                              Use Current
-                            </ActionButton>
-                          </div>
-                        </div>
-                      </div>
-
-                      <p className="text-xs text-slate-500">
-                        Delivery channel uses Admin Agent Telegram Bot + Allowed Chat IDs. If Telegram access is disabled or no chat IDs are configured, notifications will be skipped.
-                      </p>
-                    </div>
-                  </details>
-                  </>
-                  )}
-
-                  {!canEditSettings && (
-                    <p className="text-xs text-amber-600">Only owner/admin can change Agent settings. Operator can still run commands.</p>
-                  )}
-                </div>
-                )}
-
-                {agentWorkspaceView === "setup" && (
-                <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "p-3" : "space-y-4 p-4"}`}>
-                  <div className={`flex justify-between gap-3 ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "items-center" : "items-start"}`}>
-                    <button
-                      type="button"
-                      onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
-                      className="min-w-0 flex-1 text-left"
-                      aria-label={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) ? "Expand" : "Collapse"} External Agent Channel`}
-                    >
-                      <h3 className="text-lg font-semibold flex items-center gap-2">
-                        <Link2 className="w-5 h-5 text-violet-600" />
-                        External Agent Channel (Telegram)
-                      </h3>
-                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) && (
-                        <p className="text-sm text-slate-500">
-                          Dedicated Telegram webhook for Admin Agent commands, separate from event chat channels.
-                        </p>
-                      )}
-                    </button>
-                    <div className="flex items-center gap-2">
-                      {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) && (
-                        <HelpPopover label="Open note for Admin Agent Telegram setup">
-                          <p className="font-semibold text-slate-700">Telegram setup (step by step)</p>
-                          <ol className="mt-2 list-decimal space-y-1 pl-4">
-                            <li>สร้าง bot ด้วย BotFather แล้วคัดลอก Bot Token</li>
-                            <li>เปิด Enable Telegram Access แล้วกด Save Agent Setup</li>
-                            <li>กด Copy setWebhook แล้วเปิด URL เพื่อตั้ง webhook</li>
-                            <li>เปิด Telegram แล้วส่ง <code>/myid</code> ไปหาบอทเพื่อดู <code>chat_id</code> (ตัวเลข)</li>
-                            <li>นำเลข <code>chat_id</code> ที่ได้ ไปใส่ใน Allowed Chat IDs (หนึ่งบรรทัดต่อหนึ่ง ID)</li>
-                          </ol>
-                          <p className="mt-2 text-[11px] text-slate-500">
-                            สำคัญ: Allowed Chat IDs ต้องใช้เลข chat_id ของผู้ใช้/กลุ่ม ไม่ใช่ชื่อบอทหรือ username เช่น <code>@fb_bot</code>
-                          </p>
-                          <p className="mt-2 text-[11px] text-slate-500">
-                            Webhook Secret Token เป็นตัวเลือกเสริมเพื่อเพิ่มความปลอดภัย ถ้าใช้ ให้ตั้งค่าเดียวกันทั้งในแอพและตอน setWebhook
-                          </p>
-                        </HelpPopover>
-                      )}
-                      <CollapseIconButton
-                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
-                        label="External Agent Channel"
-                      />
-                    </div>
-                  </div>
-
-                  {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel) && (
-                  <>
-                  <label className="flex items-start gap-3 text-sm rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={settings.admin_agent_telegram_enabled === "1"}
-                      onChange={(e) => setSettings({ ...settings, admin_agent_telegram_enabled: e.target.checked ? "1" : "0" })}
-                      disabled={!canEditSettings}
-                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                    />
-                    <span>
-                      <span className="font-semibold text-slate-800">Enable Telegram Access</span>
-                      <span className="mt-0.5 block text-xs text-slate-500">When enabled, incoming Telegram updates can run Admin Agent commands.</span>
-                    </span>
-                  </label>
-
-                  <div className="space-y-3">
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Telegram Bot Token</label>
-                      <input
-                        type="password"
-                        value={settings.admin_agent_telegram_bot_token}
-                        onChange={(e) => setSettings({ ...settings, admin_agent_telegram_bot_token: e.target.value })}
-                        disabled={!canEditSettings}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
-                        placeholder="123456:ABC..."
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Webhook Secret Token</label>
-                      <input
-                        type="password"
-                        value={settings.admin_agent_telegram_webhook_secret}
-                        onChange={(e) => setSettings({ ...settings, admin_agent_telegram_webhook_secret: e.target.value })}
-                        disabled={!canEditSettings}
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
-                        placeholder="Set same value in Telegram setWebhook secret_token"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Allowed Chat IDs</label>
-                      <textarea
-                        value={settings.admin_agent_telegram_allowed_chat_ids}
-                        onChange={(e) => setSettings({ ...settings, admin_agent_telegram_allowed_chat_ids: e.target.value })}
-                        disabled={!canEditSettings}
-                        className="w-full h-20 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-violet-500"
-                        placeholder="Numeric chat_id only, one per line (e.g. 123456789 or -100...). Leave blank = allow all."
-                      />
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        Use your own chat_id (not bot name/username). Send <code>/myid</code> to the bot to see it.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 space-y-2">
-                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Telegram Webhook URL</p>
-                    <code className="block break-all text-xs text-slate-700">{adminAgentTelegramWebhookUrl}</code>
-                    <div className="flex flex-wrap gap-2">
-                      <ActionButton
-                        onClick={() => copyToClipboard(adminAgentTelegramWebhookUrl)}
-                        tone="neutral"
-                        className="text-xs px-2.5 py-1.5 min-h-0"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        Copy URL
-                      </ActionButton>
-                      <ActionButton
-                        onClick={() => copyToClipboard(adminAgentTelegramSetWebhookUrl)}
-                        tone="neutral"
-                        disabled={!adminAgentTelegramSetWebhookUrl}
-                        className="text-xs px-2.5 py-1.5 min-h-0"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        Copy setWebhook
-                      </ActionButton>
-                    </div>
-                    {adminAgentTelegramSetWebhookUrl && (
-                      <code className="block break-all text-[11px] text-slate-500">{adminAgentTelegramSetWebhookUrl}</code>
-                    )}
-                  </div>
-                  </>
-                  )}
-
-                </div>
-                )}
-
-                {settingsMessage && (
-                  <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                    {settingsMessage}
-                  </p>
-                )}
-              </div>
-              )}
-            </motion.div>
+            agentWorkspaceView === "console" ? (
+              <AgentConsoleScreen
+                isAgentMobileFocusMode={isAgentMobileFocusMode}
+                adminAgentGuardBody={adminAgentGuardBody}
+                adminAgentGuardLabel={adminAgentGuardLabel}
+                adminAgentDashboardOpen={adminAgentDashboardOpen}
+                onAdminAgentDashboardOpenChange={setAdminAgentDashboardOpen}
+                onFetchAdminAgentDashboard={fetchAdminAgentDashboard}
+                selectedEventId={selectedEventId}
+                adminAgentDashboardLoading={adminAgentDashboardLoading}
+                agentMobileFocusMode={agentMobileFocusMode}
+                onAgentMobileFocusModeChange={setAgentMobileFocusMode}
+                onClearAdminAgentChat={handleAdminAgentClearChat}
+                settings={settings}
+                activeAgentMessageCount={activeAgentMessageCount}
+                selectedEvent={selectedEvent}
+                getEventStatusTone={getEventStatusTone}
+                getEventStatusLabel={getEventStatusLabel}
+                adminAgentDashboard={adminAgentDashboard}
+                selectedAdminAgentDashboardEvent={selectedAdminAgentDashboardEvent}
+                formatEventWorkspaceDateLabel={formatEventWorkspaceDateLabel}
+                adminAgentDashboardError={adminAgentDashboardError}
+                onOpenWorkspace={() => {
+                  setEventWorkspaceView("setup");
+                  setActiveTab("event");
+                }}
+                applyAdminAgentCommand={applyAdminAgentCommand}
+                adminAgentMessages={adminAgentMessages}
+                adminAgentTyping={adminAgentTyping}
+                adminAgentScrollRef={adminAgentScrollRef}
+                adminAgentBottomRef={adminAgentBottomRef}
+                formatAdminActionLabel={formatAdminActionLabel}
+                adminCommandPaletteRef={adminCommandPaletteRef}
+                adminCommandPaletteOpen={adminCommandPaletteOpen}
+                adminCommandPaletteQuery={adminCommandPaletteQuery}
+                onAdminCommandPaletteQueryChange={setAdminCommandPaletteQuery}
+                adminCommandPaletteSearchInputRef={adminCommandPaletteSearchInputRef}
+                filteredAdminCommandTemplates={filteredAdminCommandTemplates}
+                onApplyAdminCommandTemplate={handleApplyAdminCommandTemplate}
+                closeAdminCommandPalette={closeAdminCommandPalette}
+                adminAgentInputRef={adminAgentInputRef}
+                adminAgentImageInputRef={adminAgentImageInputRef}
+                onAdminAgentImageSelection={handleAdminAgentImageSelection}
+                adminAgentPendingImages={adminAgentPendingImages}
+                adminAgentAttachmentError={adminAgentAttachmentError}
+                onRemoveAdminAgentPendingImage={removeAdminAgentPendingImage}
+                onClearAdminAgentPendingImages={clearAdminAgentPendingImages}
+                adminAgentImageQuickTemplates={adminAgentImageQuickTemplates}
+                onToggleAdminCommandPalette={handleToggleAdminCommandPalette}
+                adminAgentInputText={adminAgentInputText}
+                onAdminAgentInputTextChange={setAdminAgentInputText}
+                onAdminAgentSend={handleAdminAgentSend}
+                adminAgentConsoleQuickTemplates={adminAgentConsoleQuickTemplates}
+              />
+            ) : (
+              <AgentSetupScreen
+                onSaveAgentSettings={saveAgentSettings}
+                saving={saving}
+                canEditSettings={canEditSettings}
+                settings={settings}
+                onSettingsChange={setSettings}
+                agentRuntimeCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
+                onToggleAgentRuntimeCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentRuntime)}
+                recommendedAdminAgentPrompt={RECOMMENDED_ADMIN_AGENT_PROMPT}
+                desktopNotifyEnabled={desktopNotifyEnabled}
+                onDesktopNotifyEnabledChange={setDesktopNotifyEnabled}
+                desktopNotificationSupported={desktopNotificationSupported}
+                desktopNotifyPermission={desktopNotifyPermission}
+                desktopNotifyPermissionLabel={desktopNotifyPermissionLabel}
+                onRequestDesktopNotificationPermission={requestDesktopNotificationPermission}
+                selectedEventId={selectedEventId}
+                agentExternalChannelCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
+                onToggleAgentExternalChannelCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.agentExternalChannel)}
+                adminAgentTelegramWebhookUrl={adminAgentTelegramWebhookUrl}
+                adminAgentTelegramSetWebhookUrl={adminAgentTelegramSetWebhookUrl}
+                onCopyToClipboard={copyToClipboard}
+                settingsMessage={settingsMessage}
+              />
+            )
           )}
 
           {activeTab === "registrations" && (
@@ -13141,638 +9795,57 @@ export default function App() {
           )}
 
           {activeTab === "settings" && (
-            <motion.div
-              key="settings"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-4"
-            >
-              <PageBanner tone="blue" icon={<SettingsIcon className="h-4 w-4" />}>
-                AI defaults and webhook settings apply organization-wide by default. Channel credentials are now managed as shared workspace connections, then assigned explicitly to the selected event when needed.
-              </PageBanner>
-              <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-                <div className="space-y-4 xl:col-span-8">
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
-                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Bot className="w-5 h-5 text-blue-600" />
-                          AI Defaults
-                        </h3>
-                        <p className="text-sm text-slate-500">Organization-wide prompt and baseline model, with an optional override for the selected event.</p>
-                        <StatusLine
-                          className="mt-1"
-                          items={[
-                            aiSettingsDirty ? "Unsaved changes" : "All changes saved",
-                            llmModelsLoading ? "Syncing model list" : null,
-                          ]}
-                        />
-                      </div>
-                      <ActionButton
-                        onClick={() => void saveAiSettings()}
-                        disabled={saving}
-                        tone="blue"
-                        active
-                        className="w-full text-sm sm:w-auto"
-                      >
-                        {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                        Save AI Policy
-                      </ActionButton>
-                    </div>
-                    <div className="space-y-4">
-                      <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Organization Defaults</p>
-                            <p className="mt-1 text-sm text-slate-500">Every event inherits these settings unless a specific override is enabled.</p>
-                          </div>
-                          <StatusLine items={["Applies to all events"]} />
-                        </div>
-
-                        <div>
-                          <div className="mb-1 flex items-center justify-between gap-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase">Organization System Prompt</label>
-                            <HelpPopover label="Open note for Organization System Prompt">
-                              Organization-wide tone, safety rules, and escalation behavior belong here. Event-specific content should stay in Context.
-                            </HelpPopover>
-                          </div>
-                          <textarea
-                            value={settings.global_system_prompt}
-                            onChange={(e) => setSettings({ ...settings, global_system_prompt: e.target.value })}
-                            className="w-full h-40 rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                            placeholder="Global operating rules for the bot across all events and channels."
-                          />
-                        </div>
-
-                        <div>
-                          <div className="mb-1 flex items-center justify-between gap-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase">Organization Default Model</label>
-                            <HelpPopover label="Open note for Organization Default Model">
-                              Keep one stable default model here unless an event has a real reason to override it.
-                            </HelpPopover>
-                          </div>
-                          <select
-                            value={settings.global_llm_model}
-                            onChange={(e) => setSettings({ ...settings, global_llm_model: e.target.value })}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview (recommended)</option>
-                            <option value="openrouter/auto">openrouter/auto</option>
-                            {llmModels.map((model) => (
-                              <option key={`global-${model.id}`} value={model.id}>
-                                {model.id}
-                                {model.context_length ? ` (${model.context_length.toLocaleString()} ctx)` : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Selected Event Override</p>
-                            <p className="mt-1 text-sm text-slate-500">
-                              {selectedEvent
-                                ? `${selectedEvent.name} can override the organization default model only when it truly needs different behavior.`
-                                : "Select an event to manage overrides."}
-                            </p>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <StatusBadge tone={settings.llm_model ? "amber" : "neutral"}>
-                              {settings.llm_model ? "Override active" : "Using org default"}
-                            </StatusBadge>
-                            {settings.llm_model && (
-                              <ActionButton
-                                onClick={() => setSettings({ ...settings, llm_model: "" })}
-                                tone="neutral"
-                                className="px-3 text-sm"
-                              >
-                                Reset to default
-                              </ActionButton>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                          <div>
-                            <div className="mb-1 flex items-center justify-between gap-2">
-                              <label className="block text-xs font-bold text-slate-500 uppercase">Preset Override Model</label>
-                              <HelpPopover label="Open note for Preset Override Model">
-                                Set an event override only when this workspace truly needs different model behavior than the organization default.
-                              </HelpPopover>
-                            </div>
-                            <select
-                              value={settings.llm_model}
-                              onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
-                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                            >
-                              <option value="">Use organization default model</option>
-                              <option value="google/gemini-3-flash-preview">google/gemini-3-flash-preview</option>
-                              <option value="openrouter/auto">openrouter/auto</option>
-                              {llmModels.map((model) => (
-                                <option key={`event-${model.id}`} value={model.id}>
-                                  {model.id}
-                                  {model.context_length ? ` (${model.context_length.toLocaleString()} ctx)` : ""}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <div className="mb-1 flex items-center justify-between gap-2">
-                              <label className="block text-xs font-bold text-slate-500 uppercase">Advanced: Custom Model ID</label>
-                              <HelpPopover label="Open note for Advanced Custom Model ID">
-                                Leave this blank to inherit the organization default. When filled, only the selected event uses this specific model ID.
-                              </HelpPopover>
-                            </div>
-                            <input
-                              value={settings.llm_model}
-                              onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
-                              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="Paste a specific event model ID if needed."
-                            />
-                          </div>
-                        </div>
-
-                        <p className="text-xs text-slate-500">
-                          This override is saved on the selected event only. Event-specific instructions still belong in Context or Event setup.
-                        </p>
-                      </div>
-
-                      {llmModelsError && (
-                        <p className="text-xs text-rose-600">{llmModelsError}</p>
-                      )}
-                      {settingsMessage && (
-                        <p className={`text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
-                          {settingsMessage}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Link2 className="w-5 h-5 text-blue-600" />
-                          Workspace Channel Inventory
-                        </h3>
-                        <p className="mt-1 text-sm text-slate-500">
-                          Configure connection credentials once here, then assign or move them into the selected event explicitly.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Configs</p>
-                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelCount}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Active</p>
-                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceActiveChannelCount}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Platforms</p>
-                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelPlatformCount}</p>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Events Wired</p>
-                        <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelEventCount}</p>
-                      </div>
-                    </div>
-
-                    {workspaceChannelPreview.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                        {workspaceChannelCount === 0
-                          ? "No channels configured anywhere in this workspace yet."
-                          : "All configured channels currently belong to the selected event. Use Selected Event Channels below to manage them."}
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                        {workspaceChannelPreview.map((channel) => {
-                          const isSelected = setupSelectedChannelId === channel.id;
-                          return (
-                          <div
-                            key={`workspace-${channel.id}`}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => {
-                              focusSetupChannel(channel);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                focusSetupChannel(channel);
-                              }
-                            }}
-                            className={`rounded-2xl border p-3 transition cursor-pointer ${
-                              isSelected
-                                ? "border-blue-200 bg-blue-50"
-                                : "border-slate-200 bg-slate-50 hover:border-slate-300"
-                            }`}
-                          >
-                            <div className="flex items-start gap-3">
-                              <ChannelPlatformLogo platform={channel.platform} />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
-                                  {isSelected && <SelectionMarker />}
-                                </div>
-                                <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                                  {channel.platform_label || channel.platform}
-                                </p>
-                                <p className="mt-1 text-[11px] text-slate-500">
-                                  {channel.event_id
-                                    ? `Assigned to ${eventNameById.get(channel.event_id) || channel.event_id}`
-                                    : "Currently unassigned"}
-                                </p>
-                                <div className="mt-3 flex flex-wrap items-center gap-2">
-                                  <ActionButton
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      openChannelConfigDialog(channel);
-                                    }}
-                                    tone="blue"
-                                    className="px-3 text-sm"
-                                  >
-                                    <PencilLine className="h-3.5 w-3.5" />
-                                    Configure
-                                  </ActionButton>
-                                  <ActionButton
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void handleAssignChannelToSelectedEvent(channel);
-                                    }}
-                                    disabled={eventLoading || selectedEventChannelWritesLocked}
-                                    tone="neutral"
-                                    className="px-3 text-sm"
-                                  >
-                                    <Link2 className="h-3.5 w-3.5" />
-                                    {channel.event_id ? "Move to Selected Event" : "Assign to Selected Event"}
-                                  </ActionButton>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )})}
-                      </div>
-                    )}
-
-                    {workspaceOtherEventChannels.length > workspaceChannelPreview.length && (
-                      <p className="text-xs text-slate-500">
-                        Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} channels not currently assigned to the selected event.
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 sm:p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <Link2 className="w-5 h-5 text-blue-600" />
-                          Selected Event Channels
-                        </h3>
-                        <StatusLine
-                          className="mt-1"
-                          items={[
-                            `${visibleSelectedEventChannels.length} linked`,
-                            selectedEvent ? getEventStatusLabel(selectedEvent.effective_status) : null,
-                            selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
-                              ? getRegistrationAvailabilityLabel(selectedEvent.registration_availability)
-                              : null,
-                          ]}
-                        />
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
-                          <p className="text-sm text-slate-500">These assignments currently apply to the selected event only. Use cards for quick status checks and routing control.</p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
-                          <ActionButton
-                            onClick={() => openChannelConfigDialog()}
-                            disabled={selectedEventChannelWritesLocked}
-                            tone="blue"
-                            active
-                            className="px-3 text-sm"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                            New Connection
-                          </ActionButton>
-                        )}
-                        <CollapseIconButton
-                          collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
-                          onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
-                        />
-                      </div>
-                    </div>
-
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels) && (
-                      <>
-                        {selectedEvent && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" ? (
-                          <InlineWarning tone="amber">
-                            Channels remain connected, but closed-registration guardrails are active.
-                          </InlineWarning>
-                        ) : (
-                          <InlineWarning tone={toBannerTone(eventOperatorGuard.tone)}>
-                            {eventOperatorGuard.body}
-                          </InlineWarning>
-                        )}
-
-                        {visibleSelectedEventChannels.length === 0 ? (
-                          <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                            No channels assigned to this event yet. Use New Connection to create one, or assign an existing connection from Workspace Channel Inventory above.
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                            {visibleSelectedEventChannels.map((channel) => {
-                              const isSelected = setupSelectedChannel?.id === channel.id;
-                              const isFocused = isSearchFocused("channel", channel.id);
-                              const disableToggle = selectedEventChannelWritesLocked && !channel.is_active;
-                              const tokenStatusMeta = getChannelTokenStatusMeta(channel);
-                              const toggleLabel = disableToggle
-                                ? "Locked"
-                                : channel.is_active
-                                ? "Disable"
-                                : "Enable";
-                              return (
-                                <div
-                                  key={channel.id}
-                                  id={getSearchTargetDomId("channel", channel.id)}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => selectSetupChannel(channel)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Enter" || event.key === " ") {
-                                      event.preventDefault();
-                                      selectSetupChannel(channel);
-                                    }
-                                  }}
-                                  className={`rounded-2xl border p-3 transition cursor-pointer ${
-                                    isSelected
-                                      ? "border-blue-200 bg-blue-50"
-                                      : "border-slate-200 bg-slate-50 hover:border-slate-300"
-                                  } ${isFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""}`}
-                                >
-                                  <div className="space-y-2.5">
-                                    <div className="flex items-start gap-3">
-                                      <ChannelPlatformLogo platform={channel.platform} />
-                                      <div className="min-w-0 flex-1">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <p className="text-sm font-semibold leading-snug text-slate-900">{channel.display_name}</p>
-                                          {isSelected && <SelectionMarker />}
-                                        </div>
-                                        <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                                          {channel.platform_label || channel.platform}
-                                        </p>
-                                        <p className="mt-1 text-[11px] font-mono text-slate-500 break-all">{channel.external_id}</p>
-                                      </div>
-                                    </div>
-                                    <StatusLine
-                                      items={[
-                                        channel.connection_status ? `Connected ${channel.connection_status}` : "Connection incomplete",
-                                        channel.is_active ? "Channel active" : "Channel inactive",
-                                        <span className={`inline-flex items-center gap-1.5 ${tokenStatusMeta.className}`}>
-                                          {tokenStatusMeta.icon}
-                                          {tokenStatusMeta.label}
-                                        </span>,
-                                      ]}
-                                    />
-                                    {channel.missing_requirements && channel.missing_requirements.length > 0 && (
-                                      <p className="text-xs text-amber-700">
-                                        Missing: {channel.missing_requirements.join(", ")}
-                                      </p>
-                                    )}
-                                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                                      <ActionButton
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          openChannelConfigDialog(channel);
-                                        }}
-                                        tone="blue"
-                                        className="px-3 text-sm"
-                                      >
-                                        <PencilLine className="h-3.5 w-3.5" />
-                                        Configure
-                                      </ActionButton>
-                                      <ActionButton
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void handleUnassignChannelFromSelectedEvent(channel);
-                                        }}
-                                        disabled={eventLoading}
-                                        tone="neutral"
-                                        className="px-3 text-sm"
-                                      >
-                                        <Link2 className="h-3.5 w-3.5" />
-                                        Remove from Event
-                                      </ActionButton>
-                                      <ActionButton
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void handleToggleChannel(channel);
-                                        }}
-                                        disabled={eventLoading || disableToggle}
-                                        tone={disableToggle ? "neutral" : channel.is_active ? "amber" : "emerald"}
-                                        className="px-3 text-sm"
-                                      >
-                                        <Power className="h-3.5 w-3.5" />
-                                        {toggleLabel}
-                                      </ActionButton>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                        {selectedEvent && selectedEventChannelWritesLocked && (
-                          <p className="text-xs text-amber-700">
-                            Archived, closed, or cancelled events cannot link or re-enable channels. You can still remove an assignment or disable an active channel if you want to stop replies entirely.
-                          </p>
-                        )}
-                        {selectedEvent && !selectedEventChannelWritesLocked && selectedEvent.registration_availability && selectedEvent.registration_availability !== "open" && (
-                          <p className="text-xs text-slate-500">
-                            Channel wiring stays available, but this event currently responds with guardrails for <span className="font-semibold">{getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</span> instead of accepting normal registrations.
-                          </p>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-4 xl:col-span-4">
-                  <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) ? "p-3 sm:p-3" : "space-y-4 p-4 sm:p-5"}`}>
-                    <div className={`${isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) ? "mb-0" : "mb-4"} flex items-center justify-between gap-2`}>
-                      <div>
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                          <SettingsIcon className="w-5 h-5 text-blue-600" />
-                          Webhook & Sync
-                        </h3>
-                        {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) && (
-                          <p className="text-sm text-slate-500">Organization-level endpoints live here. Selecting a channel card only changes which event assignment you are inspecting.</p>
-                        )}
-                      </div>
-                      <CollapseIconButton
-                        collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig)}
-                        onClick={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig)}
-                      />
-                    </div>
-                    {!isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig) && (
-                      <div className="space-y-4">
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          {setupSelectedChannel ? (
-                            <div className="space-y-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex min-w-0 items-start gap-3">
-                                  <ChannelPlatformLogo platform={setupSelectedChannel.platform} className="h-11 w-11 rounded-2xl" />
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-slate-900">{setupSelectedChannel.display_name}</p>
-                                    <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                                      {setupSelectedChannel.platform_label || setupSelectedChannel.platform}
-                                    </p>
-                                    <p className="mt-1 break-all text-xs font-mono text-slate-500">{setupSelectedChannel.external_id}</p>
-                                  </div>
-                                </div>
-                                <ActionButton
-                                  onClick={() => openChannelConfigDialog(setupSelectedChannel)}
-                                  tone="blue"
-                                  className="px-3 text-sm"
-                                >
-                                  <PencilLine className="h-3.5 w-3.5" />
-                                  Configure
-                                </ActionButton>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <StatusLine
-                                  items={[
-                                    setupSelectedChannel.connection_status || "incomplete",
-                                    setupSelectedChannel.is_active ? "active" : "inactive",
-                                  ]}
-                                />
-                              </div>
-                              {setupSelectedChannel.platform_description && (
-                                <p className="text-xs text-slate-600">{setupSelectedChannel.platform_description}</p>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              <p className="text-sm font-semibold text-slate-900">No channel selected</p>
-                              <p className="text-xs text-slate-500">Assign the first event channel to load endpoint setup details here.</p>
-                              <ActionButton
-                                onClick={() => openChannelConfigDialog()}
-                                tone="blue"
-                                active
-                                className="px-3 text-sm"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                                Assign Channel
-                              </ActionButton>
-                            </div>
-                          )}
-                        </div>
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                            <div className="min-w-0 flex-1">
-                              <label className="block text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
-                                Webhook Endpoint
-                              </label>
-                              <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                <Link2 className="h-4 w-4 shrink-0 text-slate-400" />
-                                <select
-                                  value={selectedWebhookConfigKey}
-                                  onChange={(e) => setSelectedWebhookConfigKey(e.target.value as WebhookConfigKey)}
-                                  className="min-w-0 w-full bg-transparent text-sm font-medium outline-none"
-                                >
-                                  {setupWebhookItems.map((item) => (
-                                    <option key={item.key} value={item.key}>
-                                      {item.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => copyToClipboard(selectedWebhookConfigItem.value)}
-                              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                              aria-label={`Copy ${selectedWebhookConfigItem.label}`}
-                            >
-                              {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4 text-slate-400" />}
-                              <span>Copy URL</span>
-                            </button>
-                          </div>
-                          <div className="mt-4">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Selected Endpoint</p>
-                            <p className="mt-2 text-sm font-semibold text-slate-900">{selectedWebhookConfigItem.label}</p>
-                          </div>
-                          <textarea
-                            readOnly
-                            value={selectedWebhookConfigItem.value}
-                            rows={4}
-                            className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-mono leading-relaxed outline-none"
-                          />
-                          {selectedWebhookConfigItem.help ? (
-                            <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-600">
-                              {selectedWebhookConfigItem.help}
-                            </div>
-                          ) : null}
-                          {setupSelectedChannel?.platform === "web_chat" && (
-                            <div className="mt-3 rounded-2xl border border-violet-100 bg-violet-50 p-3 space-y-2">
-                              <p className="text-xs font-semibold text-violet-800">Web Chat Embed Snippet</p>
-                              <pre className="overflow-x-auto rounded-lg bg-white border border-violet-100 p-3 text-[11px] leading-relaxed text-slate-700">
-                                <code>{buildWebChatEmbedSnippet(appUrl, setupSelectedChannel.external_id)}</code>
-                              </pre>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <ActionButton
-                                  onClick={() => copyToClipboard(buildWebChatEmbedSnippet(appUrl, setupSelectedChannel.external_id))}
-                                  tone="violet"
-                                >
-                                  Copy Embed
-                                </ActionButton>
-                                <ActionButton
-                                  onClick={() => copyToClipboard(`${appUrl}/api/webchat/config/${encodeURIComponent(setupSelectedChannel.external_id)}`)}
-                                  tone="neutral"
-                                >
-                                  Copy Config URL
-                                </ActionButton>
-                              </div>
-                            </div>
-                          )}
-                          <p className="mt-3 text-xs text-slate-500">
-                            Endpoint list auto-filters by the selected channel platform.
-                          </p>
-                        </div>
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <label className="block text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Verify Token</label>
-                            <StatusLine items={[webhookSettingsDirty ? "Unsaved" : "Saved"]} />
-                          </div>
-                          <div className="flex gap-2">
-                            <input
-                              value={settings.verify_token}
-                              onChange={(e) => setSettings({ ...settings, verify_token: e.target.value })}
-                              className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                            />
-                            <ActionButton
-                              onClick={() => void saveWebhookSettings()}
-                              tone="blue"
-                              active
-                              className="px-3"
-                            >
-                              <Save className="w-5 h-5" />
-                              Save
-                            </ActionButton>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                </div>
-              </div>
-            </motion.div>
+            <SettingsScreen
+              settings={settings}
+              onSettingsChange={setSettings}
+              aiSettingsDirty={aiSettingsDirty}
+              llmModelsLoading={llmModelsLoading}
+              onSaveAiSettings={saveAiSettings}
+              saving={saving}
+              llmModels={llmModels}
+              selectedEvent={selectedEvent}
+              settingsMessage={settingsMessage}
+              llmModelsError={llmModelsError}
+              workspaceChannelCount={workspaceChannelCount}
+              workspaceActiveChannelCount={workspaceActiveChannelCount}
+              workspaceChannelPlatformCount={workspaceChannelPlatformCount}
+              workspaceChannelEventCount={workspaceChannelEventCount}
+              workspaceChannelPreview={workspaceChannelPreview}
+              workspaceOtherEventChannels={workspaceOtherEventChannels}
+              setupSelectedChannelId={setupSelectedChannelId}
+              eventNameById={eventNameById}
+              onFocusSetupChannel={focusSetupChannel}
+              onOpenChannelConfigDialog={openChannelConfigDialog}
+              onAssignChannelToSelectedEvent={handleAssignChannelToSelectedEvent}
+              eventLoading={eventLoading}
+              selectedEventChannelWritesLocked={selectedEventChannelWritesLocked}
+              visibleSelectedEventChannels={visibleSelectedEventChannels}
+              getEventStatusLabel={getEventStatusLabel}
+              getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+              channelsCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+              onToggleChannelsCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+              eventOperatorGuardTone={toBannerTone(eventOperatorGuard.tone)}
+              eventOperatorGuardBody={eventOperatorGuard.body}
+              setupSelectedChannel={setupSelectedChannel}
+              onSelectSetupChannel={selectSetupChannel}
+              getSearchTargetDomId={getSearchTargetDomId}
+              isSearchFocused={isSearchFocused}
+              getChannelTokenStatusMeta={getChannelTokenStatusMeta}
+              onUnassignChannelFromSelectedEvent={handleUnassignChannelFromSelectedEvent}
+              onToggleChannel={handleToggleChannel}
+              webhookConfigCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig)}
+              onToggleWebhookConfigCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupWebhookConfig)}
+              selectedWebhookConfigKey={selectedWebhookConfigKey}
+              onSelectedWebhookConfigKeyChange={(key) => setSelectedWebhookConfigKey(key as WebhookConfigKey)}
+              setupWebhookItems={setupWebhookItems}
+              selectedWebhookConfigItem={selectedWebhookConfigItem}
+              copied={copied}
+              onCopyToClipboard={copyToClipboard}
+              buildWebChatEmbedSnippet={buildWebChatEmbedSnippet}
+              appUrl={appUrl}
+              webhookSettingsDirty={webhookSettingsDirty}
+              onSaveWebhookSettings={saveWebhookSettings}
+            />
           )}
           {activeTab === "team" && (
             <motion.div

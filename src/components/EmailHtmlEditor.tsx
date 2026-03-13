@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CircleHelp } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+
+import { HelpPopover } from "./shared/AppUi";
 
 type EmailHtmlEditorMode = "code" | "visual" | "rendered";
 type EmailQuickBlockId = "hero" | "details" | "cta" | "footer";
@@ -12,97 +13,6 @@ type EmailHtmlEditorProps = {
 };
 
 const CODE_EDITOR_LINE_HEIGHT = 24;
-
-function EmailEditorHelpBubble({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const bubbleRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const [panelOffset, setPanelOffset] = useState(0);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!bubbleRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      setPanelOffset(0);
-      return;
-    }
-
-    const updatePosition = () => {
-      const panel = panelRef.current;
-      if (!panel) return;
-      const margin = 16;
-      const rect = panel.getBoundingClientRect();
-      let nextOffset = 0;
-
-      if (rect.left < margin) {
-        nextOffset += margin - rect.left;
-      }
-      if (rect.right > window.innerWidth - margin) {
-        nextOffset -= rect.right - (window.innerWidth - margin);
-      }
-
-      setPanelOffset(nextOffset);
-    };
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    return () => {
-      window.removeEventListener("resize", updatePosition);
-    };
-  }, [open]);
-
-  return (
-    <div className="relative shrink-0" ref={bubbleRef}>
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50"
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={label}
-        title={label}
-      >
-        <CircleHelp className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <div
-          ref={panelRef}
-          className="absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl"
-          style={panelOffset ? { transform: `translateX(${panelOffset}px)` } : undefined}
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function serializeDocumentWithDoctype(doc: Document) {
   const doctype = doc.doctype;
@@ -551,18 +461,19 @@ export function EmailHtmlEditor({
   const updateCodeCursorState = (textarea: HTMLTextAreaElement) => {
     setCodeActiveLine(getCodeLineNumberFromOffset(value, textarea.selectionStart || 0));
   };
+  const editorHeightClass = "h-[600px] sm:h-[720px]";
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-3">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex items-center gap-2">
           <p className="text-sm font-semibold text-slate-900">HTML Composer</p>
-          <EmailEditorHelpBubble label="Open note for HTML Composer">
+          <HelpPopover label="Open note for HTML Composer">
             <p>Switch between source editing, inline visual editing, and final rendered preview in one place.</p>
             <p className="mt-2">Visual Edit writes changes back into the HTML body. Rendered Preview shows sample event data applied.</p>
-          </EmailEditorHelpBubble>
+          </HelpPopover>
         </div>
-        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+        <div className="inline-flex w-full flex-wrap rounded-[1.25rem] border border-slate-200 bg-slate-50 p-1 sm:w-auto sm:flex-nowrap">
           {([
             { id: "rendered", label: "Rendered Preview" },
             { id: "visual", label: "Visual Edit" },
@@ -577,9 +488,9 @@ export function EmailHtmlEditor({
                 }
                 setMode(tab.id);
               }}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              className={`min-w-0 flex-1 rounded-[1rem] px-3 py-2 text-xs font-semibold leading-tight transition sm:flex-none ${
                 mode === tab.id
-                  ? "bg-white text-blue-600 shadow-sm"
+                  ? "border border-slate-200 bg-white text-blue-600 shadow-sm"
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
@@ -589,21 +500,21 @@ export function EmailHtmlEditor({
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
+      <div className="space-y-2.5">
         {mode !== "rendered" && (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+          <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-3 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-center gap-2">
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Quick Blocks</p>
-                <EmailEditorHelpBubble label="Open note for Quick Blocks">
+                <HelpPopover label="Open note for Quick Blocks">
                   <p>Insert reusable sections like a hero, details card, CTA, or footer without writing the full markup by hand.</p>
                   <p className="mt-2">In Visual Edit blocks insert at the cursor. In HTML Body they append before the closing body tag.</p>
-                </EmailEditorHelpBubble>
+                </HelpPopover>
               </div>
               <button
                 type="button"
                 onClick={() => setQuickBlocksOpen((current) => !current)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-600"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:text-blue-600"
               >
                 {quickBlocksOpen ? "Hide Blocks" : "Show Blocks"}
               </button>
@@ -615,7 +526,7 @@ export function EmailHtmlEditor({
                     key={block.id}
                     type="button"
                     onClick={() => insertQuickBlock(block.id)}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-600"
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:text-blue-600"
                   >
                     {block.label}
                   </button>
@@ -626,13 +537,13 @@ export function EmailHtmlEditor({
         )}
 
         {mode === "visual" && (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+          <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-3 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Formatting Toolbar</p>
-                <EmailEditorHelpBubble label="Open note for Formatting Toolbar">
+                <HelpPopover label="Open note for Formatting Toolbar">
                   <p>Select text inside Visual Edit, then apply headings, lists, links, or inline formatting.</p>
-                </EmailEditorHelpBubble>
+                </HelpPopover>
               </div>
               <div className="flex flex-wrap gap-2">
                 {formattingButtons.map((button) => (
@@ -642,7 +553,7 @@ export function EmailHtmlEditor({
                     onClick={button.action}
                     disabled={!visualReady}
                     title={button.title}
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-blue-200 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {button.label}
                   </button>
@@ -653,26 +564,26 @@ export function EmailHtmlEditor({
         )}
       </div>
 
-      <div className="mt-4">
+      <div>
         {mode === "code" && (
           <div>
-            <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">HTML Body</p>
               <span className="text-[11px] text-slate-500">Syntax colors + line focus enabled.</span>
             </div>
-            <div className="relative h-[720px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-              <div className="absolute inset-y-0 left-0 w-14 border-r border-slate-200 bg-white/75" />
+            <div className={`relative ${editorHeightClass} overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white`}>
+              <div className="absolute inset-y-0 left-0 w-14 border-r border-slate-100 bg-slate-50" />
               {codeLineHighlightVisible && (
                 <>
                   <div
-                    className="pointer-events-none absolute left-0 z-0 w-14 bg-blue-100/80"
+                    className="pointer-events-none absolute left-0 z-0 w-14 bg-blue-100"
                     style={{
                       top: `${codeActiveLineTop}px`,
                       height: `${CODE_EDITOR_LINE_HEIGHT}px`,
                     }}
                   />
                   <div
-                    className="pointer-events-none absolute left-14 right-0 z-0 bg-blue-100/60"
+                    className="pointer-events-none absolute left-14 right-0 z-0 bg-blue-50"
                     style={{
                       top: `${codeActiveLineTop}px`,
                       height: `${CODE_EDITOR_LINE_HEIGHT}px`,
@@ -701,7 +612,7 @@ export function EmailHtmlEditor({
                 <pre
                   ref={codeHighlightRef}
                   aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 overflow-hidden px-4 py-3 font-mono text-[12px] leading-6 whitespace-pre text-slate-800"
+                  className="pointer-events-none absolute inset-0 overflow-hidden bg-slate-50 px-4 py-3 font-mono text-[12px] leading-6 whitespace-pre text-slate-800"
                 >
                   <code
                     className="block min-w-max"
@@ -727,7 +638,7 @@ export function EmailHtmlEditor({
                 }}
                 wrap="off"
                 spellCheck={false}
-                className="absolute inset-y-0 left-14 right-0 z-20 h-full w-auto resize-none overflow-auto bg-transparent px-4 py-3 font-mono text-[12px] leading-6 text-transparent caret-slate-900 outline-none focus:ring-2 focus:ring-blue-500"
+                className="absolute inset-y-0 left-14 right-0 z-20 h-full w-auto resize-none overflow-auto bg-transparent px-4 py-3 font-mono text-[12px] leading-6 text-transparent caret-slate-900 outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
                 style={{ WebkitTextFillColor: "transparent" }}
               />
             </div>
@@ -736,17 +647,17 @@ export function EmailHtmlEditor({
 
         {mode === "visual" && (
           <div>
-            <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Visual Edit</p>
               <span className="text-[11px] text-slate-500">
                 {visualReady ? "Select text to jump into HTML Body." : "Preparing visual editor..."}
               </span>
             </div>
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+            <div className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white">
               <iframe
                 ref={iframeRef}
                 title="Editable email HTML preview"
-                className="h-[720px] w-full border-0 bg-white"
+                className={`${editorHeightClass} w-full border-0 bg-white`}
               />
             </div>
           </div>
@@ -754,15 +665,15 @@ export function EmailHtmlEditor({
 
         {mode === "rendered" && (
           <div>
-            <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Rendered Preview</p>
               <span className="text-[11px] text-slate-500">Sample data applied.</span>
             </div>
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+            <div className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-white">
               <iframe
                 title="Rendered email preview"
                 srcDoc={renderedPreviewHtml}
-                className="h-[720px] w-full border-0 bg-white"
+                className={`${editorHeightClass} w-full border-0 bg-white`}
               />
             </div>
           </div>

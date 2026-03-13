@@ -62,8 +62,8 @@ export function AdminWorkspaceHeader({
     >
       <div className="mx-auto max-w-7xl px-3 py-1 sm:px-4 lg:px-6">
         <div className="flex flex-col gap-1.5 lg:flex-row lg:items-center">
-          <div className="flex items-center justify-between gap-2 lg:w-auto lg:min-w-[10.75rem]">
-            <div className="flex min-w-0 items-center gap-2">
+          <div className="flex w-full items-center justify-between gap-2 lg:w-auto lg:min-w-[10.75rem]">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
               <button
                 type="button"
                 onClick={onToggleMobileSidebar}
@@ -90,26 +90,40 @@ export function AdminWorkspaceHeader({
                 </p>
               </div>
             </div>
-            {selectedEvent && (
-              <div className="hidden items-center gap-1.5 xl:flex">
-                <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
-                  {getEventStatusLabel(selectedEvent.effective_status)}
-                </StatusBadge>
-                {selectedEvent.registration_availability !== "open" && (
-                  <StatusBadge
-                    tone={selectedEvent.registration_availability === "full" ? "rose" : "amber"}
-                  >
-                    {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              {selectedEvent && (
+                <div className="hidden items-center gap-1.5 xl:flex">
+                  <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
+                    {getEventStatusLabel(selectedEvent.effective_status)}
                   </StatusBadge>
-                )}
-              </div>
-            )}
+                  {selectedEvent.registration_availability !== "open" && (
+                    <StatusBadge
+                      tone={selectedEvent.registration_availability === "full" ? "rose" : "amber"}
+                    >
+                      {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
+                    </StatusBadge>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setGlobalSearchOpen(true)}
+                className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border transition-colors lg:hidden ${
+                  globalSearchOpen
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700"
+                }`}
+                aria-label="Open global search"
+              >
+                <Search className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           <button
             type="button"
             onClick={() => setGlobalSearchOpen(true)}
-            className={`group flex min-w-0 flex-1 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors lg:max-w-[22rem] ${
+            className={`group hidden min-w-0 flex-1 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors lg:flex lg:max-w-[22rem] ${
               globalSearchOpen
                 ? "border-blue-200 bg-blue-50 text-blue-700"
                 : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white"

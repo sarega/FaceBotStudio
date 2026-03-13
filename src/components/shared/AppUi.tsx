@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   CheckCircle2,
@@ -497,13 +498,14 @@ export function HelpPopover({
   const [open, setOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [panelOffset, setPanelOffset] = useState(0);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
     if (!open) return;
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (!popoverRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!popoverRef.current?.contains(target) && !panelRef.current?.contains(target)) {
         setOpen(false);
       }
     };
@@ -524,31 +526,47 @@ export function HelpPopover({
 
   useEffect(() => {
     if (!open) {
-      setPanelOffset(0);
+      setPanelStyle(null);
       return;
     }
 
     const updatePosition = () => {
+      const trigger = popoverRef.current;
       const panel = panelRef.current;
-      if (!panel) return;
+      if (!trigger || !panel) return;
+
       const margin = 16;
-      const rect = panel.getBoundingClientRect();
-      let nextOffset = 0;
+      const gap = 10;
+      const triggerRect = trigger.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const panelWidth = Math.min(panelRect.width || 288, window.innerWidth - margin * 2);
+      const panelHeight = panelRect.height || 0;
 
-      if (rect.left < margin) {
-        nextOffset += margin - rect.left;
-      }
-      if (rect.right > window.innerWidth - margin) {
-        nextOffset -= rect.right - (window.innerWidth - margin);
+      let left = triggerRect.left + triggerRect.width / 2 - panelWidth / 2;
+      left = Math.min(Math.max(margin, left), window.innerWidth - panelWidth - margin);
+
+      let top = triggerRect.bottom + gap;
+      if (top + panelHeight > window.innerHeight - margin && triggerRect.top - gap - panelHeight >= margin) {
+        top = triggerRect.top - gap - panelHeight;
       }
 
-      setPanelOffset(nextOffset);
+      setPanelStyle({
+        position: "fixed",
+        top: `${Math.round(Math.max(margin, top))}px`,
+        left: `${Math.round(left)}px`,
+        width: `${Math.round(panelWidth)}px`,
+        maxHeight: `${Math.max(160, window.innerHeight - margin * 2)}px`,
+      });
     };
 
     updatePosition();
+    const rafId = window.requestAnimationFrame(updatePosition);
     window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
     return () => {
+      window.cancelAnimationFrame(rafId);
       window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
     };
   }, [open]);
 
@@ -564,14 +582,15 @@ export function HelpPopover({
       >
         <CircleHelp className="h-3.5 w-3.5" />
       </button>
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <div
           ref={panelRef}
-          className="app-overlay-surface absolute right-0 top-full z-20 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl"
-          style={panelOffset ? { transform: `translateX(${panelOffset}px)` } : undefined}
+          className="app-overlay-surface z-[120] w-[min(20rem,calc(100vw-2rem))] max-w-[20rem] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-xl whitespace-normal break-words"
+          style={panelStyle ?? { position: "fixed", left: "-9999px", top: "-9999px", visibility: "hidden" }}
         >
           {children}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
