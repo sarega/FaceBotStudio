@@ -1849,7 +1849,11 @@ export class SqliteAppDatabase implements AppDatabase {
        WHERE ca.platform = ? AND ca.external_id = ? AND ca.is_active = 1
        LIMIT 1`,
     ).get(platform, String(externalId || "").trim()) as { event_id?: string } | undefined;
-    return row?.event_id;
+    const eventId = row?.event_id;
+    if (!eventId) return undefined;
+
+    const event = await this.getEventById(eventId);
+    return event?.effective_status === "active" ? event.id : undefined;
   }
 
   async listFacebookPages() {

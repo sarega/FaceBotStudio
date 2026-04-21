@@ -78,6 +78,7 @@ import {
   type ChannelPlatform,
   type CreateMessageAttachmentInput,
   type EventDocumentChunkEmbeddingRow,
+  type EventStatus,
   type MessageAttachmentRow,
   type MessageRow,
   type OrganizerProfileRow,
@@ -495,6 +496,78 @@ function getInboundConversationChannelFromPlatform(platform: ChannelPlatform) {
     default:
       return platform;
   }
+}
+
+function clearInboundConversationRuntimeState(conversationKey: string) {
+  const snapshot = {
+    tails: inboundConversationTails.has(conversationKey),
+    handled: inboundHandledMessageIds.has(conversationKey),
+    activity: inboundConversationActivity.has(conversationKey),
+    reserved: inboundReservedMessageIds.has(conversationKey),
+    failed: failedInboundTurns.has(conversationKey),
+  };
+  inboundConversationTails.delete(conversationKey);
+  inboundHandledMessageIds.delete(conversationKey);
+  inboundConversationActivity.delete(conversationKey);
+  inboundReservedMessageIds.delete(conversationKey);
+  failedInboundTurns.delete(conversationKey);
+  return snapshot;
+}
+
+function clearInboundConversationRuntimeStateForSender(channel: string, senderId: string, eventId?: string | null) {
+  const normalizedChannel = String(channel || "").trim();
+  const normalizedSenderId = String(senderId || "").trim();
+  const normalizedEventId = normalizeOptionalText(eventId);
+  if (!normalizedChannel || !normalizedSenderId) {
+    return {
+      matched_keys: [] as string[],
+      cleared: {
+        tails: 0,
+        handled: 0,
+        activity: 0,
+        reserved: 0,
+        failed: 0,
+      },
+    };
+  }
+
+  const exactKey = normalizedEventId
+    ? buildInboundConversationKey(normalizedChannel, normalizedSenderId, normalizedEventId)
+    : null;
+  const keyMatcher = (key: string) => {
+    if (exactKey) return key === exactKey;
+    return key.startsWith(`${normalizedChannel}:`) && key.endsWith(`:${normalizedSenderId}`);
+  };
+
+  const keySet = new Set<string>();
+  for (const key of inboundConversationTails.keys()) if (keyMatcher(key)) keySet.add(key);
+  for (const key of inboundHandledMessageIds.keys()) if (keyMatcher(key)) keySet.add(key);
+  for (const key of inboundConversationActivity.keys()) if (keyMatcher(key)) keySet.add(key);
+  for (const key of inboundReservedMessageIds.keys()) if (keyMatcher(key)) keySet.add(key);
+  for (const key of failedInboundTurns.keys()) if (keyMatcher(key)) keySet.add(key);
+  if (exactKey && keySet.size === 0) {
+    keySet.add(exactKey);
+  }
+
+  let tails = 0;
+  let handled = 0;
+  let activity = 0;
+  let reserved = 0;
+  let failed = 0;
+  const matchedKeys = [...keySet];
+  for (const key of matchedKeys) {
+    const cleared = clearInboundConversationRuntimeState(key);
+    if (cleared.tails) tails += 1;
+    if (cleared.handled) handled += 1;
+    if (cleared.activity) activity += 1;
+    if (cleared.reserved) reserved += 1;
+    if (cleared.failed) failed += 1;
+  }
+
+  return {
+    matched_keys: matchedKeys,
+    cleared: { tails, handled, activity, reserved, failed },
+  };
 }
 
 function rememberFailedInboundTurn(
@@ -3871,6 +3944,66 @@ async function getTelegramWebhookSecret(botKey?: string) {
   const channel = await getTelegramChannel(botKey);
   const config = safeParseChannelConfig(channel?.config_json);
   return String(config.webhook_secret || "").trim();
+}
+
+type FacebookInboundRoutingResolution = {
+  pageId: string | null;
+  channel: ChannelAccountRow | undefined;
+  assignedEventId: string | null;
+  assignedEventStatus: EventStatus | null;
+  resolvedEventId: string | undefined;
+  resolvedVia: "default" | "channel-assignment" | "single-active-event" | "none";
+  activeCandidateIds: string[];
+};
+
+async function resolveFacebookInboundRouting(pageId?: string): Promise<FacebookInboundRoutingResolution> {
+  const normalizedPageId = normalizeOptionalText(pageId);
+  if (!normalizedPageId) {
+    return {
+      pageId: null,
+      channel: undefined,
+      assignedEventId: null,
+      assignedEventStatus: null,
+      resolvedEventId: DEFAULT_EVENT_ID,
+      resolvedVia: "default",
+      activeCandidateIds: [],
+    };
+  }
+
+  const channel = await appDb.getChannelAccount("facebook", normalizedPageId);
+  const assignedEventId = normalizeOptionalText(channel?.event_id) || null;
+  const assignedEvent = assignedEventId ? await appDb.getEventById(assignedEventId) : undefined;
+  const resolvedEventId = await appDb.resolveEventIdForPage(normalizedPageId);
+  if (resolvedEventId) {
+    return {
+      pageId: normalizedPageId,
+      channel,
+      assignedEventId,
+      assignedEventStatus: assignedEvent?.effective_status || null,
+      resolvedEventId,
+      resolvedVia: "channel-assignment",
+      activeCandidateIds: [resolvedEventId],
+    };
+  }
+
+  const allEvents = await appDb.listEvents();
+  const activeEvents = allEvents.filter((event) => event.effective_status === "active");
+  const activeNonDefaultEvents = activeEvents.filter((event) => !event.is_default);
+  const fallbackCandidates = activeNonDefaultEvents.length === 1
+    ? activeNonDefaultEvents
+    : activeNonDefaultEvents.length === 0 && activeEvents.length === 1
+    ? activeEvents
+    : [];
+
+  return {
+    pageId: normalizedPageId,
+    channel,
+    assignedEventId,
+    assignedEventStatus: assignedEvent?.effective_status || null,
+    resolvedEventId: fallbackCandidates[0]?.id,
+    resolvedVia: fallbackCandidates.length === 1 ? "single-active-event" : "none",
+    activeCandidateIds: activeEvents.map((event) => event.id),
+  };
 }
 
 function extractFacebookStyleImageAttachments(webhookEvent: any) {
@@ -9519,12 +9652,23 @@ async function handleIncomingFacebookText(
   const trimmed = String(text || "").trim();
   if (!trimmed && attachments.length === 0) return;
 
-  const resolvedEventId = pageId ? await appDb.resolveEventIdForPage(pageId) : DEFAULT_EVENT_ID;
-  if (pageId && !resolvedEventId) {
+  const routing = await resolveFacebookInboundRouting(pageId);
+  console.info("Facebook inbound routing", {
+    page_id: routing.pageId,
+    assigned_event_id: routing.assignedEventId,
+    assigned_event_status: routing.assignedEventStatus,
+    channel_active: routing.channel?.is_active ?? null,
+    resolved_event_id: routing.resolvedEventId || null,
+    resolved_via: routing.resolvedVia,
+    active_candidate_ids: routing.activeCandidateIds,
+    runtime: APP_RUNTIME || "all",
+    queue_mode: canUseFacebookWebhookQueue() ? "redis" : "inline",
+  });
+  if (pageId && !routing.resolvedEventId) {
     console.warn(`No active event mapping found for Facebook page ${pageId}; skipping automated reply`);
     return;
   }
-  const eventId = resolvedEventId || DEFAULT_EVENT_ID;
+  const eventId = routing.resolvedEventId || DEFAULT_EVENT_ID;
   await saveMessage(senderId, trimmed, "incoming", eventId, pageId, attachments);
   const conversationKey = buildInboundConversationKey("facebook", senderId, eventId);
   markInboundConversationActivity(conversationKey);
@@ -11271,6 +11415,30 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to fetch Facebook pages:", error);
       return res.status(500).json({ error: "Failed to fetch Facebook pages" });
+    }
+  });
+
+  app.get("/api/facebook-pages/:pageId/routing", requireAuth, async (req, res) => {
+    try {
+      const pageId = String(req.params.pageId || "").trim();
+      if (!pageId) {
+        return res.status(400).json({ error: "pageId is required" });
+      }
+
+      const routing = await resolveFacebookInboundRouting(pageId);
+      return res.json({
+        page_id: routing.pageId,
+        channel_id: routing.channel?.id || null,
+        channel_active: routing.channel?.is_active ?? null,
+        assigned_event_id: routing.assignedEventId,
+        assigned_event_status: routing.assignedEventStatus,
+        resolved_event_id: routing.resolvedEventId || null,
+        resolved_via: routing.resolvedVia,
+        active_candidate_ids: routing.activeCandidateIds,
+      });
+    } catch (error) {
+      console.error("Failed to resolve Facebook page routing:", error);
+      return res.status(500).json({ error: "Failed to resolve Facebook page routing" });
     }
   });
 
@@ -13677,6 +13845,61 @@ async function startServer() {
           ? 400
           : 500;
       return res.status(statusCode).json({ error: message });
+    }
+    },
+  );
+
+  app.post(
+    "/api/messages/runtime-reset",
+    requireRoles(["owner", "admin", "operator"]),
+    manualOutboundActionRateLimit,
+    async (req: AuthenticatedRequest, res) => {
+    try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 255 });
+      const platform = readEnumValue(
+        body,
+        "platform",
+        ["facebook", "line_oa", "instagram", "whatsapp", "telegram", "web_chat"] as const,
+        issues,
+        { required: false, label: "platform" },
+      );
+      const eventId = readOptionalString(body, "event_id", 128);
+      const pageId = readOptionalString(body, "page_id", 255);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const resolvedPlatform = (platform || "facebook") as ChannelPlatform;
+      const channel = getInboundConversationChannelFromPlatform(resolvedPlatform);
+      const reset = clearInboundConversationRuntimeStateForSender(channel, senderId, eventId || null);
+      if (eventId) {
+        clearPendingCancellationIntent(senderId, eventId);
+      }
+
+      await recordAudit(req, "message.runtime_reset", "message", senderId, {
+        platform: resolvedPlatform,
+        channel,
+        sender_id: senderId,
+        event_id: eventId || null,
+        page_id: pageId || null,
+        matched_keys: reset.matched_keys,
+        cleared: reset.cleared,
+      });
+
+      return res.json({
+        status: "ok",
+        platform: resolvedPlatform,
+        channel,
+        sender_id: senderId,
+        event_id: eventId || null,
+        matched_keys: reset.matched_keys,
+        cleared: reset.cleared,
+      });
+    } catch (error) {
+      console.error("Failed to reset message runtime state:", error);
+      return res.status(500).json({ error: "Failed to reset message runtime state" });
     }
     },
   );

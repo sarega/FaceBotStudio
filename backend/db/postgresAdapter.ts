@@ -1639,7 +1639,11 @@ export class PostgresAppDatabase implements AppDatabase {
        LIMIT 1`,
       [platform, String(externalId || "").trim()],
     );
-    return result.rows[0]?.event_id;
+    const eventId = result.rows[0]?.event_id;
+    if (!eventId) return undefined;
+
+    const event = await this.getEventById(eventId);
+    return event?.effective_status === "active" ? event.id : undefined;
   }
 
   async listFacebookPages() {
