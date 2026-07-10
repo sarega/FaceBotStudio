@@ -46,6 +46,8 @@ export interface AuthUser {
   is_active: boolean;
   created_at: string;
   last_login_at: string | null;
+  system_version: string;
+  system_revision: string;
 }
 
 export interface OrganizerProfileRecord {

@@ -24,6 +24,10 @@ This contains everything you need to run your app locally.
 4. Run the app:
    `npm run dev`
 
+Optional release metadata:
+- `APP_VERSION` overrides the version shown in user profiles and audit logs.
+- `APP_REVISION` stores the deployed Git commit or release ID in user profiles and audit logs.
+
 Production runtime modes:
 - `npm run start` = web + embedded worker (`APP_RUNTIME=all`)
 - `npm run start:web` = web-only runtime

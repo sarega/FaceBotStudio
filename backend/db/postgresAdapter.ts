@@ -54,6 +54,7 @@ import type {
   UpsertFacebookPageInput,
   UserRole,
 } from "./types";
+import { getSystemAuditMetadata } from "../runtime/systemInfo";
 
 const DEFAULT_ORGANIZATION_ID = "org_default";
 const DEFAULT_ORGANIZATION_NAME = process.env.ORGANIZATION_NAME || "Default Organization";
@@ -1901,7 +1902,7 @@ export class PostgresAppDatabase implements AppDatabase {
         entry.action,
         entry.target_type || null,
         entry.target_id || null,
-        JSON.stringify(entry.metadata || {}),
+        JSON.stringify({ ...getSystemAuditMetadata(), ...(entry.metadata || {}) }),
       ],
     );
   }

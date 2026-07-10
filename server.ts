@@ -20,6 +20,7 @@ import { enqueueWhatsAppInboundJob, startEmbeddedWhatsAppWorker, acquireWhatsApp
 import { createRateLimitMiddleware, resetRateLimitCounter } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
 import { resolveStartupSecurityConfig } from "./backend/runtime/startupSecurity";
+import { SYSTEM_REVISION, SYSTEM_VERSION } from "./backend/runtime/systemInfo";
 import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
 import {
   ALLOWED_CHANNEL_PLATFORMS,
@@ -2480,6 +2481,8 @@ function toPublicAuthUser(user: AuthUserRow) {
     is_active: user.is_active,
     created_at: user.created_at,
     last_login_at: user.last_login_at,
+    system_version: SYSTEM_VERSION,
+    system_revision: SYSTEM_REVISION,
   };
 }
 

@@ -638,6 +638,7 @@ export function AdminWorkspaceSidebar({
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
               <p className="truncate text-sm font-semibold text-slate-900">{authUser?.display_name || authUser?.username}</p>
               <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
+              <p className="mt-2 text-[11px] text-slate-500">System v{authUser?.system_version || "-"} · {authUser?.system_revision || "-"}</p>
             </div>
             <div className="mt-3">
               <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
