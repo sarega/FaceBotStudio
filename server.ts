@@ -10212,7 +10212,12 @@ async function handleIncomingTelegramText(
 function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | null {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
-  const text = String(webhookEvent?.message?.text || "").trim();
+  const text = String(
+    webhookEvent?.message?.text
+    || webhookEvent?.postback?.payload
+    || webhookEvent?.postback?.title
+    || "",
+  ).trim();
   const attachments = extractFacebookStyleImageAttachments(webhookEvent);
   const isEcho = Boolean(webhookEvent?.message?.is_echo);
 
@@ -10226,7 +10231,11 @@ function normalizeFacebookInboundJob(webhookEvent: any): FacebookInboundJob | nu
     pageId: pageId || null,
     text,
     attachments,
-    messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
+    messageMid: typeof webhookEvent?.message?.mid === "string"
+      ? webhookEvent.message.mid.trim()
+      : typeof webhookEvent?.postback?.mid === "string"
+      ? webhookEvent.postback.mid.trim()
+      : null,
     eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
   };
 }

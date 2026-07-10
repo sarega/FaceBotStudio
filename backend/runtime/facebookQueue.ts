@@ -38,9 +38,14 @@ export function buildFacebookWebhookDedupKey(webhookEvent: any) {
     return `fb-mid:${messageMid}`;
   }
 
+  const postbackMid = typeof webhookEvent?.postback?.mid === "string" ? webhookEvent.postback.mid.trim() : "";
+  if (postbackMid) {
+    return `fb-mid:${postbackMid}`;
+  }
+
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const pageId = String(webhookEvent?.recipient?.id || "").trim();
-  const text = String(webhookEvent?.message?.text || "").trim();
+  const text = String(webhookEvent?.message?.text || webhookEvent?.postback?.payload || webhookEvent?.postback?.title || "").trim();
   const attachmentKey = (Array.isArray(webhookEvent?.message?.attachments) ? webhookEvent.message.attachments : [])
     .map((attachment: any) => String(attachment?.payload?.url || attachment?.type || "").trim())
     .filter(Boolean)
