@@ -1,4 +1,4 @@
-import { CalendarRange, ChevronDown, Plus, RefreshCw, Search, X } from "lucide-react";
+import { CalendarRange, ChevronDown, PanelRightClose, Plus, RefreshCw, Search, X } from "lucide-react";
 
 import { ActionButton, SelectionMarker, StatusBadge, StatusLine, type BadgeTone } from "../../../components/shared/AppUi";
 import type { EventRecord, EventStatus } from "../../../types";
@@ -29,7 +29,7 @@ type HistoryEventGroup = {
 };
 
 type EventWorkspacePanelProps = {
-  collapsed: boolean;
+  onCollapse: () => void;
   eventCreateOpen: boolean;
   onToggleEventCreate: () => void;
   onRefresh: () => unknown;
@@ -104,7 +104,7 @@ function EventWorkspaceRow({
       className="w-full overflow-hidden rounded-2xl text-left"
     >
       <div
-        className={`${selected ? "border-blue-200 bg-blue-50 shadow-sm" : "border-slate-200 bg-slate-50 hover:bg-slate-100"} ${
+        className={`${selected ? "event-workspace-row-selected border-blue-200 bg-blue-50 shadow-sm" : "event-workspace-row border-slate-200 bg-slate-50 hover:bg-slate-100"} ${
           searchFocused ? "ring-2 ring-blue-200 ring-offset-2" : ""
         } rounded-2xl border px-3 py-3 transition-colors sm:px-4`.trim()}
       >
@@ -162,7 +162,7 @@ function EventWorkspaceRow({
 }
 
 export function EventWorkspacePanel({
-  collapsed,
+  onCollapse,
   eventCreateOpen,
   onToggleEventCreate,
   onRefresh,
@@ -202,13 +202,9 @@ export function EventWorkspacePanel({
 }: EventWorkspacePanelProps) {
   return (
     <div
-      className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${
-        collapsed
-          ? "p-3 sm:p-3"
-          : "flex flex-col space-y-4 p-4 sm:p-5 xl:max-h-[calc(100dvh-10rem)] xl:overflow-hidden"
-      }`}
+      className="workspace-section workspace-section-cyan flex flex-col space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 xl:max-h-[calc(100dvh-10rem)] xl:overflow-hidden"
     >
-      <div className={`flex justify-between gap-3 ${collapsed ? "items-center" : "items-start"}`}>
+      <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold flex items-center gap-2">
             <CalendarRange className="w-5 h-5 text-blue-600" />
@@ -234,11 +230,20 @@ export function EventWorkspacePanel({
           >
             <RefreshCw className={`w-4 h-4 text-slate-500 ${eventLoading ? "animate-spin" : ""}`} />
           </button>
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="hidden h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-white/70 hover:text-slate-800 xl:inline-flex"
+            title="Hide Event Workspace"
+            aria-label="Hide Event Workspace"
+          >
+            <PanelRightClose className="h-4 w-4" />
+          </button>
         </div>
       </div>
 
       {eventCreateOpen && (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+        <div className="workspace-control-band rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
               value={newEventName}
@@ -259,8 +264,8 @@ export function EventWorkspacePanel({
         </div>
       )}
 
-      <div className={collapsed ? "space-y-3" : "space-y-3 xl:flex-shrink-0"}>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="space-y-3 xl:flex-shrink-0">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_9rem]">
           <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
@@ -279,7 +284,21 @@ export function EventWorkspacePanel({
               </button>
             )}
           </div>
-          <div className="sm:w-56">
+          <div>
+            <select
+              value={eventWorkspaceFilter}
+              onChange={(event) => onEventWorkspaceFilterChange(event.target.value as EventWorkspaceFilter)}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Filter events by status"
+            >
+              {eventWorkspaceFilterOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label} ({option.count})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <select
               value={eventWorkspaceSort}
               onChange={(event) => onEventWorkspaceSortChange(event.target.value as EventWorkspaceSort)}
@@ -291,30 +310,6 @@ export function EventWorkspacePanel({
               <option value="modified_desc">Modified Time</option>
             </select>
           </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {eventWorkspaceFilterOptions.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => onEventWorkspaceFilterChange(option.id)}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                eventWorkspaceFilter === option.id
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              <span>{option.label}</span>
-              <span
-                className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
-                  eventWorkspaceFilter === option.id ? "bg-white/15 text-white" : "bg-white text-slate-500"
-                }`}
-              >
-                {option.count}
-              </span>
-            </button>
-          ))}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
@@ -330,7 +325,7 @@ export function EventWorkspacePanel({
         </div>
       </div>
 
-      <div className={collapsed ? "space-y-5" : "min-h-0 flex-1 space-y-5 overflow-y-auto pr-1 xl:overscroll-contain"}>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1 xl:overscroll-contain">
         {filteredEventWorkspaceEvents.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
             {deferredEventListQuery

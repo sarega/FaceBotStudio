@@ -27,6 +27,7 @@ import {
   MessageSquare,
   Mic2,
   Phone,
+  PanelRightOpen,
   Plus,
   Power,
   QrCode,
@@ -193,6 +194,8 @@ type EventWorkspaceScreenProps = {
   publicContactLineHref: string;
   publicContactPhoneHref: string;
   eventWorkspacePanel: ReactNode;
+  eventWorkspacePanelCollapsed: boolean;
+  onToggleEventWorkspacePanelCollapsed: () => void;
 };
 
 type PublicEventMediaUploadKind = "speaker_photo" | "sponsor_logo";
@@ -491,6 +494,8 @@ export function EventWorkspaceScreen({
   publicContactLineHref,
   publicContactPhoneHref,
   eventWorkspacePanel,
+  eventWorkspacePanelCollapsed,
+  onToggleEventWorkspacePanelCollapsed,
 }: EventWorkspaceScreenProps) {
   const [mobileWorkspaceBrowserOpen, setMobileWorkspaceBrowserOpen] = useState(false);
   const [publicMediaUploadKey, setPublicMediaUploadKey] = useState("");
@@ -565,10 +570,10 @@ export function EventWorkspaceScreen({
   return (
     <div className="space-y-4 overflow-x-hidden">
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start">
-        <div className="min-w-0 space-y-4 xl:col-span-7 xl:self-start">
+        <div className={`min-w-0 space-y-4 xl:self-start ${eventWorkspacePanelCollapsed ? "xl:col-span-12" : "xl:col-span-7"}`}>
           {eventWorkspaceView === "setup" ? (
             <>
-              <div className="surface-panel rounded-2xl p-4 sm:p-5">
+              <div className="surface-panel surface-panel-blue rounded-2xl p-4 sm:p-5">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -687,6 +692,17 @@ export function EventWorkspaceScreen({
                           </MenuActionItem>
                         )}
                       </InlineActionsMenu>
+                    )}
+                    {eventWorkspacePanelCollapsed && (
+                      <button
+                        type="button"
+                        onClick={onToggleEventWorkspacePanelCollapsed}
+                        className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-600 xl:inline-flex"
+                        title="Show Event Workspace"
+                        aria-label="Show Event Workspace"
+                      >
+                        <PanelRightOpen className="h-4 w-4" />
+                      </button>
                     )}
                   </div>
                 </div>
@@ -929,7 +945,7 @@ export function EventWorkspaceScreen({
                 </div>
               </div>
 
-              <div className="surface-panel rounded-2xl p-4 sm:p-5">
+              <div className="surface-panel surface-panel-emerald rounded-2xl p-4 sm:p-5">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1076,7 +1092,7 @@ export function EventWorkspaceScreen({
             </>
           ) : (
             <>
-              <div className="surface-panel rounded-2xl p-4 sm:p-5">
+              <div className="surface-panel surface-panel-violet rounded-2xl p-4 sm:p-5">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1127,6 +1143,17 @@ export function EventWorkspaceScreen({
                       {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                       Save Public Page
                     </ActionButton>
+                    {eventWorkspacePanelCollapsed && (
+                      <button
+                        type="button"
+                        onClick={onToggleEventWorkspacePanelCollapsed}
+                        className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-300 hover:text-blue-600 xl:inline-flex"
+                        title="Show Event Workspace"
+                        aria-label="Show Event Workspace"
+                      >
+                        <PanelRightOpen className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -2063,7 +2090,7 @@ export function EventWorkspaceScreen({
                         </div>
 
                         <div className="surface-frame rounded-[24px] p-4 sm:p-5">
-                          <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                          <div className="public-preview-card space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="flex flex-wrap items-center gap-2">
                               <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
                                 {publicPageEnabled ? "Public page enabled" : "Draft mode"}
@@ -2095,7 +2122,7 @@ export function EventWorkspaceScreen({
                             </div>
 
                             {publicBrandVisible && (
-                              <div className="rounded-[1.5rem] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.08),_transparent_55%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] px-4 py-4 shadow-sm">
+                              <div className="public-preview-brand-pane rounded-[1.5rem] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.08),_transparent_55%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] px-4 py-4 shadow-sm">
                                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700">Sticky brand pane</p>
                                 <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
                                   <div>
@@ -2330,9 +2357,11 @@ export function EventWorkspaceScreen({
           )}
         </div>
 
-        <div className="hidden min-w-0 space-y-3 xl:col-span-5 xl:self-start xl:block">
-          {eventWorkspacePanel}
-        </div>
+        {!eventWorkspacePanelCollapsed && (
+          <div className="hidden min-w-0 space-y-3 xl:col-span-5 xl:self-start xl:block">
+            {eventWorkspacePanel}
+          </div>
+        )}
       </div>
     </div>
   );

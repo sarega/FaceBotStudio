@@ -83,7 +83,7 @@ export function AgentSetupScreen({
         </ActionButton>
       </div>
 
-      <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${agentRuntimeCollapsed ? "p-3" : "space-y-4 p-4"}`}>
+      <div className={`workspace-section workspace-section-violet rounded-2xl border border-slate-200 bg-white shadow-sm ${agentRuntimeCollapsed ? "p-3" : "space-y-4 p-4"}`}>
         <div className={`flex justify-between gap-3 ${agentRuntimeCollapsed ? "items-center" : "items-start"}`}>
           <button
             type="button"
@@ -110,7 +110,7 @@ export function AgentSetupScreen({
 
         {!agentRuntimeCollapsed && (
           <>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="workspace-control-band rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <label className="flex items-start gap-3 text-sm">
                 <input
                   type="checkbox"
@@ -181,7 +181,7 @@ export function AgentSetupScreen({
               </div>
             </div>
 
-            <details className="rounded-xl border border-slate-200 bg-slate-50">
+            <details className="workspace-disclosure rounded-xl border border-slate-200 bg-slate-50">
               <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-semibold text-slate-800">
                 Advanced Action Policy
               </summary>
@@ -269,7 +269,7 @@ export function AgentSetupScreen({
               </div>
             </details>
 
-            <details className="rounded-xl border border-slate-200 bg-slate-50">
+            <details className="workspace-disclosure rounded-xl border border-slate-200 bg-slate-50">
               <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-semibold text-slate-800">
                 Notification Automation
               </summary>
@@ -409,7 +409,7 @@ export function AgentSetupScreen({
         )}
       </div>
 
-      <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${agentExternalChannelCollapsed ? "p-3" : "space-y-4 p-4"}`}>
+      <div className={`workspace-section workspace-section-cyan rounded-2xl border border-slate-200 bg-white shadow-sm ${agentExternalChannelCollapsed ? "p-3" : "space-y-4 p-4"}`}>
         <div className={`flex justify-between gap-3 ${agentExternalChannelCollapsed ? "items-center" : "items-start"}`}>
           <button
             type="button"
@@ -456,7 +456,7 @@ export function AgentSetupScreen({
 
         {!agentExternalChannelCollapsed && (
           <>
-            <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            <label className="workspace-control-band flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
               <input
                 type="checkbox"
                 checked={settings.admin_agent_telegram_enabled === "1"}
@@ -508,7 +508,7 @@ export function AgentSetupScreen({
               </div>
             </div>
 
-            <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+            <div className="workspace-control-band space-y-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Telegram Webhook URL</p>
               <code className="block break-all text-xs text-slate-700">{adminAgentTelegramWebhookUrl}</code>
               <div className="flex flex-wrap gap-2">

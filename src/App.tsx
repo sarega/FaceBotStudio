@@ -743,6 +743,7 @@ const COLLAPSIBLE_SECTION_KEYS = {
   contextLlmUsage: "context-llm-usage",
   agentRuntime: "agent-runtime",
   agentExternalChannel: "agent-external-channel",
+  eventWorkspaceBrowser: "event-workspace-browser",
   setupChannels: "setup-channels",
   setupWebhookConfig: "setup-webhook-config",
 } as const;
@@ -9580,7 +9581,7 @@ export default function App() {
               publicContactPhoneHref={publicContactPhoneHref}
               eventWorkspacePanel={(
                 <EventWorkspacePanel
-                  collapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.setupChannels)}
+                  onCollapse={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.eventWorkspaceBrowser)}
                   eventCreateOpen={eventCreateOpen}
                   onToggleEventCreate={() => setEventCreateOpen((current) => !current)}
                   onRefresh={() => Promise.all([fetchEvents(), fetchChannels()])}
@@ -9625,6 +9626,8 @@ export default function App() {
                   getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
                 />
               )}
+              eventWorkspacePanelCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.eventWorkspaceBrowser)}
+              onToggleEventWorkspacePanelCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.eventWorkspaceBrowser)}
             />
           )}
 
