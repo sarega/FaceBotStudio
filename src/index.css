@@ -303,6 +303,32 @@
   button {
     font-size: 16px;
   }
+
+  /* Keep the phone workspace compact without altering any screen behavior. */
+  .app-mobile-content {
+    padding-top: 0.875rem;
+  }
+
+  .app-mobile-content > * {
+    gap: 0.875rem;
+  }
+
+  .app-mobile-content .surface-panel,
+  .app-mobile-content .surface-subpanel,
+  .app-mobile-content .surface-tile,
+  .app-mobile-content .surface-frame {
+    border-radius: 0.875rem;
+  }
+
+  .app-mobile-content .surface-panel,
+  .app-mobile-content .surface-subpanel {
+    box-shadow: 0 12px 28px -26px rgba(15, 23, 42, 0.28);
+  }
+
+  .app-mobile-content .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
 }
 
 .app-shell {

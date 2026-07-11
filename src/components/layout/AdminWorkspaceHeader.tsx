@@ -56,18 +56,18 @@ export function AdminWorkspaceHeader({
 }: AdminWorkspaceHeaderProps) {
   return (
     <header
-      className={`app-header-surface sticky top-0 z-30 border-b border-slate-200 backdrop-blur-xl ${
+      className={`app-header-surface sticky top-0 z-30 border-b border-slate-200 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:pt-0 ${
         isAgentMobileFocusMode ? "hidden lg:block" : ""
       }`}
     >
-      <div className="mx-auto max-w-7xl px-3 py-1 sm:px-4 lg:px-6">
-        <div className="flex flex-col gap-1.5 lg:flex-row lg:items-center">
+      <div className="mx-auto max-w-7xl px-3 py-2 sm:px-4 lg:px-6 lg:py-1">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-1.5">
           <div className="flex w-full items-center justify-between gap-2 lg:w-auto lg:min-w-[10.75rem]">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <button
                 type="button"
                 onClick={onToggleMobileSidebar}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 lg:hidden"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 lg:hidden"
                 aria-label={mobileSidebarOpen ? "Close navigation" : "Open navigation"}
                 aria-expanded={mobileSidebarOpen}
               >
@@ -81,7 +81,7 @@ export function AdminWorkspaceHeader({
               >
                 {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
               </button>
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-600 shadow-[0_10px_20px_rgba(37,99,235,0.18)]">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 shadow-[0_10px_20px_rgba(37,99,235,0.18)] lg:h-8 lg:w-8">
                 <Bot className="h-4 w-4 text-white" />
               </div>
               <div className="min-w-0">
@@ -108,7 +108,7 @@ export function AdminWorkspaceHeader({
               <button
                 type="button"
                 onClick={() => setGlobalSearchOpen(true)}
-                className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border transition-colors lg:hidden ${
+                className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border transition-colors lg:hidden ${
                   globalSearchOpen
                     ? "border-blue-200 bg-blue-50 text-blue-700"
                     : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700"
@@ -147,7 +147,7 @@ export function AdminWorkspaceHeader({
             <label htmlFor="event-selector" className="sr-only">
               Workspace switcher
             </label>
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+            <div className="flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] lg:min-h-0">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-white text-slate-500">
                 <CalendarRange className="h-4 w-4" />
               </span>

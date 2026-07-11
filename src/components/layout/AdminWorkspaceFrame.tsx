@@ -46,7 +46,7 @@ export function AdminWorkspaceFrame({
                   ? isAgentMobileFocusMode
                     ? "h-full min-h-0 overflow-hidden"
                     : "mx-auto h-full min-h-0 w-full max-w-[96rem] overflow-hidden px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-4"
-                  : `mx-auto w-full max-w-[96rem] px-3 py-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4 lg:px-6 lg:py-4 ${canEditSettings ? "lg:pb-28" : ""}`
+                  : `app-mobile-content mx-auto w-full max-w-[96rem] px-3 py-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4 lg:px-6 lg:py-4 ${canEditSettings ? "lg:pb-28" : ""}`
               }
             >
               {children}

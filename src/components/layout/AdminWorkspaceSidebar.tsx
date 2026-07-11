@@ -714,8 +714,8 @@ export function AdminWorkspaceSidebar({
             className="absolute inset-0 bg-slate-950/35 backdrop-blur-[1px]"
             aria-label="Close navigation drawer"
           />
-          <div className="absolute inset-y-0 left-0 w-[min(22rem,calc(100vw-1rem))] p-2">
-            <div className="workspace-rail-surface h-full overflow-hidden rounded-[2rem] border border-slate-200 shadow-[0_26px_70px_rgba(15,23,42,0.22)]">
+          <div className="absolute inset-y-0 left-0 w-[min(22rem,calc(100vw-0.75rem))] pb-[calc(0.5rem+env(safe-area-inset-bottom))] pl-2 pr-0.5 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+            <div className="workspace-rail-surface h-full overflow-hidden rounded-[1.5rem] border border-slate-200 shadow-[0_26px_70px_rgba(15,23,42,0.22)]">
               {sidebarContent}
             </div>
           </div>

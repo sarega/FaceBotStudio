@@ -2,11 +2,9 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# FaceBotStudio
 
-This contains everything you need to run your app locally.
-
-<!-- View your app in AI Studio: https://ai.studio/apps/8ae339aa-d752-43e7-bcb4-6295c4d2f4b4 -->
+FaceBotStudio is a workspace for designing, testing, and operating Facebook Page conversations, registrations, event communications, and staff check-in.
 
 ## Run Locally
 
@@ -60,7 +58,7 @@ Recommended for low-traffic demos with SQLite:
    - `RESEND_API_KEY` (for transactional registration email)
    - `EMAIL_FROM`
    - `EMAIL_REPLY_TO`
-   - `OPENROUTER_DEFAULT_MODEL=google/gemini-3-flash-preview`
+   - `OPENROUTER_DEFAULT_MODEL=your-supported-model-id`
    - `OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small` (optional, for queued document vectors + retrieval)
    - `EMBEDDING_HOOK_URL=https://your-worker-or-api.example.com/embeddings` (optional, receives a copy of embedding jobs after local vectors are stored)
    - `SESSION_TTL_DAYS=14`
