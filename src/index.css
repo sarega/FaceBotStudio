@@ -78,6 +78,39 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
 
 .public-event-themed {
   --public-theme: #2563eb;
+  font-family: "Sarabun", "Noto Sans Thai", "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.public-event-themed * {
+  font-family: inherit;
+}
+
+.public-event-themed .text-sm {
+  font-size: 1rem !important;
+  line-height: 1.7 !important;
+}
+
+.public-event-themed .text-xs {
+  font-size: 0.875rem !important;
+  line-height: 1.55 !important;
+}
+
+.public-event-themed .event-description-content {
+  font-size: 1.0625rem;
+  line-height: 1.9;
+}
+
+.public-event-themed .event-description-content h2 {
+  font-size: 1.5rem;
+  line-height: 1.45;
+}
+
+.public-event-themed .event-description-content h3,
+.public-event-themed .event-description-content h4 {
+  font-size: 1.2rem;
+  line-height: 1.55;
 }
 
 .public-event-themed .bg-blue-600 {
