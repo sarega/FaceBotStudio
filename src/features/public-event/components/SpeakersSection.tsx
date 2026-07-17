@@ -5,7 +5,7 @@ import type { PublicEventPageResponse } from "../../../types";
 function SpeakerPhoto({ name, photoUrl }: { name: string; photoUrl: string }) {
   if (photoUrl) {
     return (
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:h-28 sm:w-28">
         <img
           src={photoUrl}
           alt={name}
@@ -20,8 +20,8 @@ function SpeakerPhoto({ name, photoUrl }: { name: string; photoUrl: string }) {
   }
 
   return (
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-      <UserRound className="h-5 w-5" />
+    <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 sm:h-28 sm:w-28">
+      <UserRound className="h-8 w-8" />
     </div>
   );
 }
@@ -41,11 +41,11 @@ export function SpeakersSection({ speakers }: SpeakersSectionProps) {
         <h2 className="text-base font-semibold text-slate-900 sm:text-lg">Speakers</h2>
       </div>
 
-      <div className="mt-3 divide-y divide-slate-200">
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
         {visibleSpeakers.map((speaker, index) => (
           <article
             key={`${speaker.name}:${speaker.photoUrl}:${index}`}
-            className={`flex gap-3 ${index === 0 ? "pt-0" : "pt-3"}`}
+            className="surface-tile flex items-start gap-4 rounded-2xl p-3.5"
           >
             <SpeakerPhoto name={speaker.name} photoUrl={speaker.photoUrl} />
             <div className="min-w-0 flex-1">

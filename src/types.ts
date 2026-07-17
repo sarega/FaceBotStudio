@@ -322,6 +322,8 @@ export interface Settings {
   event_public_show_seat_availability: string;
   event_public_slug: string;
   event_public_poster_url: string;
+  event_public_cover_url: string;
+  event_public_theme_color: string;
   event_public_summary: string;
   event_public_registration_enabled: string;
   event_public_ticket_recovery_mode: string;
@@ -489,6 +491,10 @@ export interface PublicEventPageResponse {
     about_url: string;
     privacy_url: string;
     contact_url: string;
+  };
+  appearance: {
+    theme_color: string;
+    cover_url: string;
   };
   organizer: {
     name: string;

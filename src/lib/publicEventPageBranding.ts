@@ -1,5 +1,7 @@
 export type PublicBrandMode = "hidden" | "subtle" | "full";
 
+export const DEFAULT_PUBLIC_THEME_COLOR = "#2563eb";
+
 export type PublicSponsorEntry = {
   name: string;
   tier: string;
@@ -9,6 +11,11 @@ export type PublicSponsorEntry = {
 
 function normalizeText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export function resolvePublicThemeColor(value: unknown) {
+  const normalized = normalizeText(value).toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : DEFAULT_PUBLIC_THEME_COLOR;
 }
 
 type PublicEntryParseOptions = {

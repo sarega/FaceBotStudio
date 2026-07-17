@@ -23,10 +23,8 @@ import {
   Eye,
   Handshake,
   Link2,
-  Lock,
-  MessageSquare,
   Mic2,
-  Phone,
+  Palette,
   PanelRightOpen,
   Plus,
   Power,
@@ -39,6 +37,7 @@ import {
   Upload,
 } from "lucide-react";
 
+import { EventDescriptionHtmlEditor } from "../../../components/EventDescriptionHtmlEditor";
 import {
   ActionButton,
   CompactStatRow,
@@ -47,7 +46,6 @@ import {
   InlineWarning,
   MenuActionItem,
   PageBanner,
-  PublicContactActionLink,
   StatusBadge,
   StatusLine,
   type BadgeTone,
@@ -61,6 +59,7 @@ import {
 import {
   parsePublicSponsorEntries,
   resolvePublicBrandMode,
+  resolvePublicThemeColor,
   serializePublicSponsorEntries,
   type PublicSponsorEntry,
 } from "../../../lib/publicEventPageBranding";
@@ -83,6 +82,15 @@ import type {
 } from "../../../types";
 
 type EventWorkspaceView = "setup" | "public";
+type PublicSetupPanel = "essentials" | "design" | "people" | "support" | "preview";
+
+const PUBLIC_SETUP_PANELS: Array<{ id: PublicSetupPanel; label: string }> = [
+  { id: "essentials", label: "Essentials" },
+  { id: "design", label: "Design" },
+  { id: "people", label: "People" },
+  { id: "support", label: "Support" },
+  { id: "preview", label: "Preview" },
+];
 
 type TimingInfo = {
   eventCloseLabel: string;
@@ -160,7 +168,7 @@ type EventWorkspaceScreenProps = {
   eventPublicDirty: boolean;
   saveEventPublicPage: () => unknown;
   publicPosterFileInputRef: RefObject<HTMLInputElement | null>;
-  handlePublicEventMediaUpload: (file: File, kind: "speaker_photo" | "sponsor_logo") => Promise<string | null>;
+  handlePublicEventMediaUpload: (file: File, kind: "speaker_photo" | "sponsor_logo" | "cover_image" | "description_image") => Promise<string | null>;
   handlePublicPosterFileUpload: (file: File | null) => unknown;
   publicPosterUploading: boolean;
   publicPagePosterUrl: string;
@@ -198,7 +206,7 @@ type EventWorkspaceScreenProps = {
   onToggleEventWorkspacePanelCollapsed: () => void;
 };
 
-type PublicEventMediaUploadKind = "speaker_photo" | "sponsor_logo";
+type PublicEventMediaUploadKind = "speaker_photo" | "sponsor_logo" | "cover_image" | "description_image";
 
 type UploadableImageFieldProps = {
   label: string;
@@ -499,7 +507,9 @@ export function EventWorkspaceScreen({
 }: EventWorkspaceScreenProps) {
   const [mobileWorkspaceBrowserOpen, setMobileWorkspaceBrowserOpen] = useState(false);
   const [publicMediaUploadKey, setPublicMediaUploadKey] = useState("");
+  const [publicSetupPanel, setPublicSetupPanel] = useState<PublicSetupPanel>("essentials");
   const publicBrandMode = resolvePublicBrandMode(settings.event_public_brand_mode);
+  const publicThemeColor = resolvePublicThemeColor(settings.event_public_theme_color);
   const publicBrandVisible = publicBrandMode !== "hidden";
   const publicBrandLabel = settings.event_public_brand_label.trim() || initialSettings.event_public_brand_label;
   const publicSectionEntries = parsePublicEventSections(settings.event_public_sections_json);
@@ -777,13 +787,16 @@ export function EventWorkspaceScreen({
                   </div>
 
                   <div className="md:col-span-2">
-                    <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Description</label>
-                    <textarea
+                    <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+                      <div>
+                        <label className="block text-xs font-bold uppercase text-slate-500">Description</label>
+                        <p className="mt-1 text-[11px] text-slate-500">Write plain text or format a professional event page with safe HTML.</p>
+                      </div>
+                    </div>
+                    <EventDescriptionHtmlEditor
                       value={settings.event_description}
-                      onChange={(event) => setSettings({ ...settings, event_description: event.target.value })}
-                      rows={6}
-                      className="min-h-[9rem] w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="What is this event about?"
+                      onChange={(value) => setSettings({ ...settings, event_description: value })}
+                      onUploadImage={(file) => handlePublicEventMediaUpload(file, "description_image")}
                     />
                   </div>
 
@@ -1092,8 +1105,8 @@ export function EventWorkspaceScreen({
             </>
           ) : (
             <>
-              <div className="surface-panel surface-panel-violet rounded-2xl p-4 sm:p-5">
-                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="surface-panel surface-panel-violet rounded-2xl p-3 sm:p-4">
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="flex items-center gap-2 text-lg font-semibold">
@@ -1110,15 +1123,8 @@ export function EventWorkspaceScreen({
                       <StatusLine
                         className="mt-1"
                         items={[
-                          publicRegistrationEnabled ? "Inline registration on" : "Inline registration off",
-                          publicShowSeatAvailability ? "Seat counts on" : "Seat counts hidden",
-                          publicBotEnabled ? "Help chat on" : "Help chat off",
-                          publicPrivacyEnabled ? "Privacy note on" : "Privacy note off",
-                          publicContactEnabled ? "Contact options on" : "Contact options off",
-                          publicBrandVisible ? `Brand ${publicBrandModeLabel.toLowerCase()}` : "Brand hidden",
-                          organizerVisible ? "Organizer info on" : "Organizer info off",
-                          publicSpeakerEntries.length > 0 ? `${publicSpeakerEntries.length} speakers` : "Speakers off",
-                          publicSponsorEntries.length > 0 ? `${publicSponsorEntries.length} sponsors` : "Sponsors off",
+                          publicPageEnabled ? "Attendee page available" : "Attendee page hidden",
+                          publicRegistrationEnabled ? "Registration enabled" : "Registration disabled",
                           eventPublicDirty ? "Unsaved changes" : "All changes saved",
                         ]}
                       />
@@ -1176,16 +1182,31 @@ export function EventWorkspaceScreen({
                   <div className="md:col-span-2 border-t border-slate-200 pt-4">
                     <div className="mb-4 flex items-start justify-between gap-3">
                       <div>
-                        <h4 className="text-sm font-semibold text-slate-900">Page Controls</h4>
-                        <p className="mt-1 text-xs text-slate-500">Publishing, attendee flow, privacy, support, and recovery behavior.</p>
+                        <h4 className="text-sm font-semibold text-slate-900">Public Page Builder</h4>
                       </div>
-                      <HelpPopover label="Open note for Page Controls">
-                        Use these toggles to stage the public route separately from internal event operations. You can enable the page itself, registration flow, seat visibility, support chat, privacy note, and contact options independently.
+                      <HelpPopover label="Open note for Public Page Builder">
+                        Essentials contains the settings needed to publish. Design controls the visual page. People contains profile and partner records. Support contains human contact paths, and Preview shows the final content hierarchy.
                       </HelpPopover>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div className="md:col-span-2 flex flex-wrap gap-2">
+                    <nav className="sticky top-3 z-20 mb-4 grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50/95 p-1.5 shadow-sm backdrop-blur sm:grid-cols-5" aria-label="Public page setup areas">
+                      {PUBLIC_SETUP_PANELS.map((panel) => (
+                        <button
+                          key={panel.id}
+                          type="button"
+                          onClick={() => setPublicSetupPanel(panel.id)}
+                          className={`rounded-xl px-3 py-2.5 text-center transition-all ${publicSetupPanel === panel.id ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-100" : "text-slate-500 hover:bg-white/70 hover:text-slate-800"}`}
+                        >
+                          <span className="block text-xs font-bold">{panel.label}</span>
+                        </button>
+                      ))}
+                    </nav>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className={`${publicSetupPanel === "essentials" ? "flex" : "hidden"} md:col-span-2 flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-4`}>
+                        <div className="mb-1 w-full">
+                          <p className="text-sm font-semibold text-slate-900">Publishing & registration</p>
+                        </div>
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"
@@ -1266,11 +1287,81 @@ export function EventWorkspaceScreen({
                         </label>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "design" ? "block" : "hidden"} md:col-span-2`}>
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div>
+                            <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                              <Palette className="h-4 w-4 text-blue-600" />
+                              Event Appearance
+                            </h5>
+                          </div>
+                          <HelpPopover label="Open note for Event Appearance">
+                            The accent is applied to the main calls to action, links, icons, and focus states. For the cover, use a wide image around 1600 × 600 px; the event poster remains a separate portrait asset.
+                          </HelpPopover>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                          <div>
+                            <label className="mb-2 block text-xs font-bold uppercase text-slate-500">Theme Color</label>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="color"
+                                value={publicThemeColor}
+                                onChange={(event) => setSettings({ ...settings, event_public_theme_color: event.target.value })}
+                                className="h-11 w-14 cursor-pointer rounded-xl border border-slate-200 bg-white p-1"
+                                aria-label="Custom public page theme color"
+                              />
+                              <input
+                                value={settings.event_public_theme_color}
+                                onChange={(event) => setSettings({ ...settings, event_public_theme_color: event.target.value })}
+                                onBlur={() => setSettings((current) => ({ ...current, event_public_theme_color: resolvePublicThemeColor(current.event_public_theme_color) }))}
+                                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="#2563eb"
+                              />
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {[
+                                ["Ocean", "#2563eb"],
+                                ["Indigo", "#4f46e5"],
+                                ["Orchid", "#9333ea"],
+                                ["Rose", "#e11d48"],
+                                ["Amber", "#d97706"],
+                                ["Forest", "#059669"],
+                              ].map(([label, color]) => (
+                                <button
+                                  key={color}
+                                  type="button"
+                                  onClick={() => setSettings({ ...settings, event_public_theme_color: color })}
+                                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition-colors ${publicThemeColor === color ? "border-slate-400 bg-slate-100 text-slate-900" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+                                >
+                                  <span className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: color }} />
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <UploadableImageField
+                            label="Header Cover Image"
+                            value={settings.event_public_cover_url}
+                            placeholder="/uploads/event-public-assets/... or https://.../cover.jpg"
+                            previewAlt="Public event header cover"
+                            uploading={publicMediaUploadKey === "cover-image"}
+                            onChange={(value) => setSettings({ ...settings, event_public_cover_url: value })}
+                            onUploadFile={(file) => void uploadPublicEventMediaForField({
+                              file,
+                              kind: "cover_image",
+                              uploadKey: "cover-image",
+                              applyUrl: (url) => setSettings((current) => ({ ...current, event_public_cover_url: url })),
+                            })}
+                          />
+                        </div>
+                      </div>
+
+                      <div className={`${publicSetupPanel === "design" ? "block" : "hidden"} md:col-span-2 border-t border-slate-200 pt-5`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="text-sm font-semibold text-slate-900">Page Sections</h5>
-                            <p className="mt-1 text-xs text-slate-500">Reorder and toggle the sections that appear in the main content column.</p>
                           </div>
                           <HelpPopover label="Open note for Page Sections">
                             Hero, sticky brand pane, footer branding, and the registration sidebar stay fixed. Only the main reading column is reorderable here.
@@ -1347,11 +1438,10 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "essentials" ? "block" : "hidden"} md:col-span-2 border-t border-slate-200 pt-5`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="text-sm font-semibold text-slate-900">Poster, Link & QR</h5>
-                            <p className="mt-1 text-xs text-slate-500">Graphic assets and shareable public links live together here.</p>
                           </div>
                           <HelpPopover label="Open note for Poster, Link, and QR">
                             Keep the poster, public slug, full link, and QR asset in one workflow because these are the main publish outputs for the public route. This is the fastest place to prepare something that can be shared on chat, print, or signage.
@@ -1530,11 +1620,10 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "essentials" ? "block" : "hidden"} md:col-span-2 border-t border-slate-200 pt-5`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="text-sm font-semibold text-slate-900">Public Page Copy</h5>
-                            <p className="mt-1 text-xs text-slate-500">Editable attendee-facing text and behavior settings.</p>
                           </div>
                           <HelpPopover label="Open note for Public Page Copy">
                             These fields control the wording and optional modules that appear lower on the public page. The snapshot below is read-only, so keep actual edits here and use the preview only to sanity-check the stack.
@@ -1652,14 +1741,13 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "design" ? "block" : "hidden"} md:col-span-2 border-t border-slate-200 pt-5`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                               <Sparkles className="h-4 w-4 text-blue-600" />
                               Platform Branding
                             </h5>
-                            <p className="mt-1 text-xs text-slate-500">Sticky header pane plus lightweight footer attribution.</p>
                           </div>
                           <HelpPopover label="Open note for Platform Branding">
                             This branding layer should stay persistent enough to build platform recall, but always remain secondary to the event identity and registration CTA.
@@ -1742,16 +1830,13 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "people" ? "block" : "hidden"} md:col-span-2`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                               <Building2 className="h-4 w-4 text-blue-600" />
                               Organizer Info
                             </h5>
-                            <p className="mt-1 text-xs text-slate-500">
-                              Shared organizer profile used across events under the same organizer.
-                            </p>
                           </div>
                           <HelpPopover label="Open note for Organizer Info">
                             This no longer saves per event. Updating it here refreshes the organizer card for all events under the same organizer context.
@@ -1846,14 +1931,13 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "people" ? "block" : "hidden"} md:col-span-2 border-t border-slate-200 pt-5`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                               <Mic2 className="h-4 w-4 text-blue-600" />
                               Speakers
                             </h5>
-                            <p className="mt-1 text-xs text-slate-500">Structured speaker cards for the public page.</p>
                           </div>
                           <HelpPopover label="Open note for Speakers">
                             Keep speaker cards concise. This first phase is card-based only, not a full agenda or track system.
@@ -1927,14 +2011,13 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "people" ? "block" : "hidden"} md:col-span-2 border-t border-slate-200 pt-5`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                               <Handshake className="h-4 w-4 text-blue-600" />
                               Sponsors & Partners
                             </h5>
-                            <p className="mt-1 text-xs text-slate-500">Logo grid data stored in event settings but edited as structured rows here.</p>
                           </div>
                           <HelpPopover label="Open note for Sponsors and Partners">
                             Sponsor cards should stay logo-first and clean. This is not a gallery treatment, so keep copy short and prefer contain-safe logos.
@@ -2008,11 +2091,10 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
+                      <div className={`${publicSetupPanel === "support" ? "block" : "hidden"} md:col-span-2`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="text-sm font-semibold text-slate-900">Help & Contact</h5>
-                            <p className="mt-1 text-xs text-slate-500">Fallback human support links and hours.</p>
                           </div>
                           <HelpPopover label="Open note for Help and Contact">
                             Show fallback contact methods when attendees need a human instead of web chat. Use this for Messenger, LINE, phone, and operating hours so urgent support has a clear path.
@@ -2078,255 +2160,61 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
-                      <div className="md:col-span-2 border-t border-slate-200 pt-4">
-                        <div className="mb-4 flex items-start justify-between gap-3">
-                          <div>
-                            <h5 className="text-sm font-semibold text-slate-900">Attendee Flow Snapshot</h5>
-                            <p className="mt-1 text-xs text-slate-500">Read-only compact preview of how the public page content stacks.</p>
-                          </div>
-                          <HelpPopover label="Open note for Attendee Flow Snapshot">
-                            This snapshot is only for hierarchy and wording checks. It should feel lighter than the edit controls above. When you need the real attendee-facing route, use the public page link in the publish section instead.
-                          </HelpPopover>
-                        </div>
-
-                        <div className="surface-frame rounded-[24px] p-4 sm:p-5">
-                          <div className="public-preview-card space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>
-                                {publicPageEnabled ? "Public page enabled" : "Draft mode"}
-                              </StatusBadge>
-                              {selectedEvent?.registration_availability && (
-                                <StatusBadge tone={selectedEvent.registration_availability === "open" ? "blue" : "amber"}>
-                                  {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}
-                                </StatusBadge>
-                              )}
-                              {publicPagePosterUrl && (
-                                <StatusBadge tone="blue">
-                                  Poster ready
-                                </StatusBadge>
+                      <div className={`${publicSetupPanel === "preview" ? "block" : "hidden"} md:col-span-2`}>
+                        <div className="public-preview-card overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                          <div className="grid gap-4 p-4 sm:grid-cols-[5.5rem_minmax(0,1fr)] sm:p-5">
+                            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                              {publicPagePosterUrl ? (
+                                <img src={publicPagePosterUrl} alt="Event poster preview" className="aspect-[4/5] h-full w-full object-cover" />
+                              ) : (
+                                <div className="flex aspect-[4/5] items-center justify-center text-slate-400"><Eye className="h-5 w-5" /></div>
                               )}
                             </div>
-
-                            <div>
-                              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Main Column Order</p>
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                {activeMainSectionLabels.map((label) => (
-                                  <span
-                                    key={label}
-                                    className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
-                                  >
-                                    {label}
-                                  </span>
-                                ))}
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge tone={publicPageEnabled ? "emerald" : "neutral"}>{publicPageEnabled ? "Live" : "Draft"}</StatusBadge>
+                                <StatusBadge tone={publicRegistrationEnabled ? "blue" : "neutral"}>{publicRegistrationEnabled ? "Registration" : "No registration"}</StatusBadge>
+                                {eventPublicDirty && <StatusBadge tone="amber">Unsaved</StatusBadge>}
                               </div>
-                            </div>
-
-                            {publicBrandVisible && (
-                              <div className="public-preview-brand-pane rounded-[1.5rem] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.08),_transparent_55%),linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(248,250,252,0.96))] px-4 py-4 shadow-sm">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700">Sticky brand pane</p>
-                                <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-                                  <div>
-                                    <p className="text-sm font-semibold text-slate-900">
-                                      {publicBrandMode === "full"
-                                        ? publicBrandLabel
-                                        : `Event page by ${publicBrandLabel}`}
-                                    </p>
-                                    <p className="mt-1 text-xs text-slate-500">
-                                      {publicBrandMode === "full"
-                                        ? "Persistent platform identity with optional utility links."
-                                        : "Compact attribution that stays visible while attendees scroll."}
-                                    </p>
-                                  </div>
-                                  <StatusBadge tone="blue">{publicBrandModeLabel}</StatusBadge>
-                                </div>
-                              </div>
-                            )}
-
-                            <div>
-                              <h4 className="text-2xl font-bold tracking-tight text-slate-900">
+                              <h4 className="mt-3 line-clamp-2 text-lg font-semibold text-slate-900">
                                 {settings.event_name || selectedEvent?.name || "Event title"}
                               </h4>
-                              <p className="mt-2 text-sm leading-6 text-slate-600">
-                                {publicPageSummary || "Public summary will appear here. Keep it short, easy to scan, and non-technical for attendees."}
-                              </p>
-                              <p className="mt-2 text-[11px] text-slate-500">
-                                Compact setup preview only. For the actual attendee-facing route, use <span className="font-semibold text-slate-700">Open Public Page</span>.
-                              </p>
-                            </div>
-
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                              <div className="surface-tile rounded-2xl px-4 py-3">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Date & Time</p>
-                                <p className="mt-1 text-sm text-slate-800">{timingInfo.eventDateLabel}</p>
-                              </div>
-                              <div className="surface-tile rounded-2xl px-4 py-3">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Location</p>
-                                <p className="mt-1 text-sm text-slate-800">{attendeeLocationLabel || "Venue details"}</p>
+                              <p className="mt-1 line-clamp-2 text-sm text-slate-500">{publicPageSummary || "No public summary"}</p>
+                              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                                <span>{timingInfo.eventDateLabel}</span>
+                                <span className="truncate">{attendeeLocationLabel || "Venue not set"}</span>
                               </div>
                             </div>
+                          </div>
 
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="inline-flex items-center rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm">
-                                {settings.event_public_cta_label.trim() || initialSettings.event_public_cta_label}
-                              </span>
-                              {publicPrivacyEnabled && (
-                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                  <Lock className="mr-1.5 h-3.5 w-3.5" />
-                                  {settings.event_public_privacy_label.trim() || initialSettings.event_public_privacy_label}
-                                </span>
-                              )}
-                              {publicBotEnabled && (
-                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                  <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
-                                  Ask for help
-                                </span>
-                              )}
-                              {publicContactEnabled && publicContactHasContent && (
-                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                                  <Phone className="mr-1.5 h-3.5 w-3.5" />
-                                  Contact fallback
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="border-t border-slate-200 pt-4">
-                              <div className="flex items-center justify-between gap-3">
-                                <div>
-                                  <p className="text-sm font-semibold text-slate-900">Inline Registration</p>
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    One short form, ticket returned immediately on the same page, email optional as backup.
-                                  </p>
-                                </div>
-                                <StatusBadge tone={publicRegistrationEnabled ? "emerald" : "neutral"}>
-                                  {publicRegistrationEnabled ? "enabled" : "hidden"}
-                                </StatusBadge>
+                          <div className="grid grid-cols-2 border-t border-slate-200 sm:grid-cols-4">
+                            {[
+                              ["Sections", String(activeMainSectionLabels.length)],
+                              ["Speakers", String(publicSpeakerEntries.length)],
+                              ["Sponsors", String(publicSponsorEntries.length)],
+                              ["Brand", publicBrandVisible ? publicBrandModeLabel : "Off"],
+                            ].map(([label, value]) => (
+                              <div key={label} className="border-r border-slate-200 px-4 py-3 last:border-r-0">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-800">{value}</p>
                               </div>
+                            ))}
+                          </div>
 
-                              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                <div className="surface-tile rounded-2xl px-4 py-3 text-sm text-slate-500">First name</div>
-                                <div className="surface-tile rounded-2xl px-4 py-3 text-sm text-slate-500">Last name</div>
-                                <div className="surface-tile rounded-2xl px-4 py-3 text-sm text-slate-500">Phone</div>
-                                <div className="surface-tile rounded-2xl px-4 py-3 text-sm text-slate-500">Email</div>
-                              </div>
-
-                              <div className="surface-dashed mt-4 rounded-2xl border border-dashed border-blue-200 bg-blue-50 px-4 py-4">
-                                <p className="text-sm font-semibold text-blue-900">Success state</p>
-                                <p className="mt-1 text-sm leading-6 text-blue-800">
-                                  {settings.event_public_success_message.trim() || initialSettings.event_public_success_message}
-                                </p>
-                              </div>
-
-                              <div className="mt-4 border-t border-slate-200 pt-3">
-                                <p className="text-sm font-semibold text-slate-900">Ticket recovery</p>
-                                <p className="mt-1 text-xs leading-5 text-slate-600">
-                                  {publicTicketRecoveryMode === "verified_contact"
-                                    ? "Verified recovery mode. Paid events can plug OTP or order-reference verification into this slot later."
-                                    : "Shared-contact mode. If one phone or email is used for multiple attendees, the public page will ask for the attendee name before releasing a ticket."}
-                                </p>
-                              </div>
-
-                              {publicPrivacyEnabled && (
-                                <div className="mt-4 border-t border-slate-200 pt-3">
-                                  <p className="text-sm font-semibold text-slate-900">
-                                    {settings.event_public_privacy_label.trim() || initialSettings.event_public_privacy_label}
-                                  </p>
-                                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                                    {settings.event_public_privacy_text.trim() || initialSettings.event_public_privacy_text}
-                                  </p>
-                                </div>
-                              )}
-
-                              {publicContactEnabled && publicContactHasContent && (
-                                <div className="mt-4 border-t border-slate-200 pt-3">
-                                  <p className="text-sm font-semibold text-slate-900">Help & Contact</p>
-                                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                                    {publicContactIntro}
-                                  </p>
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    {publicContactMessengerHref && (
-                                      <PublicContactActionLink href={publicContactMessengerHref} label="Messenger" kind="messenger" compact />
-                                    )}
-                                    {publicContactLineHref && (
-                                      <PublicContactActionLink href={publicContactLineHref} label="LINE" kind="line" compact />
-                                    )}
-                                    {publicContactPhoneHref && (
-                                      <PublicContactActionLink href={publicContactPhoneHref} label={settings.event_public_contact_phone.trim() || "Call"} kind="phone" compact />
-                                    )}
-                                  </div>
-                                  {settings.event_public_contact_hours.trim() && (
-                                    <p className="mt-3 text-xs text-slate-500">
-                                      Available: <span className="font-semibold text-slate-700">{settings.event_public_contact_hours.trim()}</span>
-                                    </p>
-                                  )}
-                                </div>
-                              )}
-
-                              {organizerVisible && publicSectionEntries.some((section) => section.id === "organizer" && section.enabled) && (
-                                <div className="mt-4 border-t border-slate-200 pt-3">
-                                  <p className="text-sm font-semibold text-slate-900">Organizer Info</p>
-                                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                                    {settings.event_public_organizer_name.trim() || "Organizer name"}
-                                  </p>
-                                  {(settings.event_public_organizer_description.trim() || settings.event_public_organizer_contact_text.trim()) && (
-                                    <p className="mt-2 text-xs leading-5 text-slate-500">
-                                      {settings.event_public_organizer_description.trim() || settings.event_public_organizer_contact_text.trim()}
-                                    </p>
-                                  )}
-                                </div>
-                              )}
-
-                              {publicSectionEntries.some((section) => section.id === "countdown" && section.enabled) && (
-                                <div className="mt-4 border-t border-slate-200 pt-3">
-                                  <p className="text-sm font-semibold text-slate-900">Countdown</p>
-                                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                                    Countdown to {timingInfo.startLabel} in {timingInfo.timeZone}
-                                  </p>
-                                </div>
-                              )}
-
-                              {publicSpeakerEntries.length > 0 && publicSectionEntries.some((section) => section.id === "speakers" && section.enabled) && (
-                                <div className="mt-4 border-t border-slate-200 pt-3">
-                                  <p className="text-sm font-semibold text-slate-900">Speakers</p>
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    {publicSpeakerEntries.map((entry, index) => (
-                                      <span
-                                        key={`${entry.name}:${entry.photoUrl}:${index}`}
-                                        className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
-                                      >
-                                        {entry.name}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {publicSponsorEntries.length > 0 && publicSectionEntries.some((section) => section.id === "sponsors" && section.enabled) && (
-                                <div className="mt-4 border-t border-slate-200 pt-3">
-                                  <p className="text-sm font-semibold text-slate-900">Sponsors & Partners</p>
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    {publicSponsorEntries.map((entry, index) => (
-                                      <span
-                                        key={`${entry.name}:${entry.logoUrl}:${index}`}
-                                        className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
-                                      >
-                                        {entry.name || `Sponsor ${index + 1}`}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {publicBrandVisible && (
-                                <div className="mt-4 border-t border-slate-200 pt-3">
-                                  <p className="text-sm font-semibold text-slate-900">Footer Branding</p>
-                                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                                    {publicBrandMode === "full"
-                                      ? `${publicBrandLabel} with footer utility links`
-                                      : `Event page and registration by ${publicBrandLabel}`}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
+                          <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3">
+                            <ActionButton
+                              onClick={() => window.open(publicPagePreviewPath, "_blank", "noopener,noreferrer")}
+                              disabled={!publicPageEnabled}
+                              tone="blue"
+                              className="px-3 text-xs"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              Open Page
+                            </ActionButton>
+                            <ActionButton onClick={() => void copyPublicPageUrlToClipboard()} tone="neutral" className="px-3 text-xs">
+                              {publicPageLinkCopied ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                              {publicPageLinkCopied ? "Copied" : "Copy Link"}
+                            </ActionButton>
                           </div>
                         </div>
                       </div>

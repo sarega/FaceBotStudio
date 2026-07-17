@@ -46,7 +46,7 @@ export function truncatePublicSummary(value: string, maxChars = PUBLIC_SUMMARY_M
 }
 
 export function buildPublicAutoSummary(description: string, maxChars = PUBLIC_SUMMARY_MAX_CHARS) {
-  const normalized = normalizeWhitespace(description);
+  const normalized = normalizeWhitespace(eventDescriptionToPlainText(description));
   if (!normalized) return "";
   const length = countPublicSummaryChars(normalized);
   if (length <= maxChars) {
@@ -87,3 +87,4 @@ export function resolveEnglishPublicSlug(options: {
 
   return `event-${buildEnglishFallbackSeed(options.eventId)}`;
 }
+import { eventDescriptionToPlainText } from "./eventDescriptionHtml";

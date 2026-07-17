@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useEffect, useState, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import {
   AlertCircle,
   Download,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { PublicContactActionLink, StatusBadge, type BadgeTone } from "../../../components/shared/AppUi";
+import { renderEventDescriptionHtml } from "../../../lib/eventDescriptionHtml";
 import { CountdownSection } from "./CountdownSection";
 import { OrganizerCard } from "./OrganizerCard";
 import { PlatformBrandPane } from "./PlatformBrandPane";
@@ -106,9 +107,10 @@ function AboutSection({ description }: { description: string }) {
         <Eye className="h-4 w-4 text-blue-600" />
         <h2 className="text-base font-semibold text-slate-900 sm:text-lg">About This Event</h2>
       </div>
-      <p className="mt-2.5 whitespace-pre-line text-sm leading-6 text-slate-600">
-        {description}
-      </p>
+      <div
+        className="event-description-content mt-2.5"
+        dangerouslySetInnerHTML={{ __html: renderEventDescriptionHtml(description) }}
+      />
     </section>
   );
 }
@@ -317,8 +319,12 @@ export function PublicEventPage({
     };
   }, []);
 
+  const publicThemeStyle = page
+    ? ({ "--public-theme": page.appearance.theme_color } as CSSProperties)
+    : undefined;
+
   return (
-    <div className="public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans">
+    <div className="public-event-themed public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans" style={publicThemeStyle}>
       <header className="sticky top-0 z-40 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
         <AnimatePresence initial={false}>
           {page && !headerCondensed && (
@@ -382,6 +388,25 @@ export function PublicEventPage({
           </div>
         ) : (
           <>
+            {page.appearance.cover_url && (
+              <section className="relative mb-4 min-h-[11rem] overflow-hidden rounded-[1.75rem] bg-slate-900 shadow-sm sm:min-h-[15rem] lg:min-h-[18rem]">
+                <img
+                  src={page.appearance.cover_url}
+                  alt={`${page.event.name} cover`}
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/20 to-transparent" />
+                <div className="relative flex min-h-[11rem] items-end p-5 sm:min-h-[15rem] sm:p-7 lg:min-h-[18rem] lg:p-9">
+                  <div className="max-w-4xl">
+                    <div className="mb-3 h-1 w-16 rounded-full bg-white/90" />
+                    <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/75">Featured Event</p>
+                    <h1 className="mt-2 text-2xl font-bold tracking-tight text-white drop-shadow-sm sm:text-4xl lg:text-5xl">
+                      {page.event.name}
+                    </h1>
+                  </div>
+                </div>
+              </section>
+            )}
             <section className="grid gap-4 lg:items-start lg:grid-cols-[minmax(0,18.5rem)_minmax(0,1fr)]">
               <div className="surface-panel self-start overflow-hidden rounded-[1.75rem]">
                 <div className="aspect-[800/1132] w-full">

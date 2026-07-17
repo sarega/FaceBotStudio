@@ -5,6 +5,108 @@
   --font-edit: "Sarabun", "Noto Sans Thai", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
+.event-description-content {
+  color: rgb(71 85 105);
+  font-size: 0.875rem;
+  line-height: 1.75;
+}
+
+.event-description-content > * + * {
+  margin-top: 0.85rem;
+}
+
+.event-description-content h2 {
+  color: rgb(15 23 42);
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+  margin-top: 1.5rem;
+}
+
+.event-description-content h3,
+.event-description-content h4 {
+  color: rgb(30 41 59);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.5;
+  margin-top: 1.25rem;
+}
+
+.event-description-content ul,
+.event-description-content ol {
+  padding-left: 1.35rem;
+}
+
+.event-description-content ul { list-style: disc; }
+.event-description-content ol { list-style: decimal; }
+.event-description-content li + li { margin-top: 0.35rem; }
+.event-description-content strong { color: rgb(30 41 59); font-weight: 700; }
+.event-description-content em { font-style: italic; }
+.event-description-content u { text-decoration: underline; text-underline-offset: 0.16em; }
+.event-description-content a { color: rgb(37 99 235); font-weight: 600; text-decoration: underline; text-underline-offset: 0.18em; }
+.event-description-content blockquote {
+  border-left: 3px solid rgb(147 197 253);
+  background: rgb(239 246 255);
+  border-radius: 0 0.75rem 0.75rem 0;
+  color: rgb(51 65 85);
+  padding: 0.75rem 1rem;
+}
+
+.event-description-content img {
+  display: block;
+  height: auto;
+  max-height: 34rem;
+  max-width: 100%;
+  object-fit: contain;
+  margin: 1.25rem auto;
+  border-radius: 1rem;
+}
+
+.rich-event-editor:empty::before {
+  color: rgb(148 163 184);
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+html.theme-dark .event-description-content { color: rgb(148 163 184); }
+html.theme-dark .event-description-content h2,
+html.theme-dark .event-description-content h3,
+html.theme-dark .event-description-content h4,
+html.theme-dark .event-description-content strong { color: rgb(226 232 240); }
+html.theme-dark .event-description-content blockquote { background: rgb(15 23 42); }
+
+.public-event-themed {
+  --public-theme: #2563eb;
+}
+
+.public-event-themed .bg-blue-600 {
+  background-color: var(--public-theme) !important;
+}
+
+.public-event-themed .hover\:bg-blue-700:hover {
+  background-color: color-mix(in srgb, var(--public-theme) 82%, black) !important;
+}
+
+.public-event-themed .text-blue-600,
+.public-event-themed .text-blue-700,
+.public-event-themed .event-description-content a {
+  color: var(--public-theme) !important;
+}
+
+.public-event-themed .hover\:text-blue-600:hover {
+  color: var(--public-theme) !important;
+}
+
+.public-event-themed .hover\:border-blue-200:hover {
+  border-color: color-mix(in srgb, var(--public-theme) 38%, white) !important;
+}
+
+.public-event-themed input:focus,
+.public-event-themed textarea:focus {
+  --tw-ring-color: color-mix(in srgb, var(--public-theme) 72%, transparent) !important;
+}
+
 @layer base {
   html {
     color-scheme: light;

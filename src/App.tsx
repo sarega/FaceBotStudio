@@ -98,7 +98,7 @@ import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAcco
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
 import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
-import { parsePublicSponsorEntries, resolvePublicBrandMode, serializePublicSponsorEntries } from "./lib/publicEventPageBranding";
+import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor, serializePublicSponsorEntries } from "./lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries, serializePublicEventSections, serializePublicSpeakerEntries } from "./lib/publicEventPageLayout";
 
 interface Registration {
@@ -2013,6 +2013,8 @@ const INITIAL_SETTINGS: Settings = {
   event_public_show_seat_availability: "0",
   event_public_slug: "",
   event_public_poster_url: "",
+  event_public_cover_url: "",
+  event_public_theme_color: "#2563eb",
   event_public_summary: "",
   event_public_registration_enabled: "1",
   event_public_ticket_recovery_mode: "shared_contact",
@@ -2086,6 +2088,8 @@ function getBlankEventScopedSettings() {
     event_public_show_seat_availability: "0",
     event_public_slug: "",
     event_public_poster_url: "",
+    event_public_cover_url: "",
+    event_public_theme_color: "#2563eb",
     event_public_summary: "",
     event_public_registration_enabled: "1",
     event_public_ticket_recovery_mode: "shared_contact",
@@ -2157,6 +2161,8 @@ function getBlankEventScopedSettings() {
     | "event_public_show_seat_availability"
     | "event_public_slug"
     | "event_public_poster_url"
+    | "event_public_cover_url"
+    | "event_public_theme_color"
     | "event_public_summary"
     | "event_public_registration_enabled"
     | "event_public_ticket_recovery_mode"
@@ -2270,6 +2276,8 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_show_seat_availability",
   "event_public_slug",
   "event_public_poster_url",
+  "event_public_cover_url",
+  "event_public_theme_color",
   "event_public_summary",
   "event_public_registration_enabled",
   "event_public_ticket_recovery_mode",
@@ -2456,6 +2464,11 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_poster_url === "string"
         ? data.event_public_poster_url
         : INITIAL_SETTINGS.event_public_poster_url,
+    event_public_cover_url:
+      typeof data.event_public_cover_url === "string"
+        ? data.event_public_cover_url
+        : INITIAL_SETTINGS.event_public_cover_url,
+    event_public_theme_color: resolvePublicThemeColor(data.event_public_theme_color),
     event_public_summary:
       typeof data.event_public_summary === "string"
         ? truncatePublicSummary(data.event_public_summary)
@@ -5889,6 +5902,7 @@ export default function App() {
     ...source,
     event_public_slug: sanitizeEnglishSlugInput(source.event_public_slug),
     event_public_brand_mode: resolvePublicBrandMode(source.event_public_brand_mode),
+    event_public_theme_color: resolvePublicThemeColor(source.event_public_theme_color),
     event_public_sponsors_json: serializePublicSponsorEntries(parsePublicSponsorEntries(source.event_public_sponsors_json)),
     event_public_sections_json: serializePublicEventSections(parsePublicEventSections(source.event_public_sections_json)),
     event_public_speakers_json: serializePublicSpeakerEntries(parsePublicSpeakerEntries(source.event_public_speakers_json)),
@@ -6301,11 +6315,17 @@ export default function App() {
 
   const handlePublicEventMediaUpload = async (
     file: File,
-    kind: "speaker_photo" | "sponsor_logo",
+    kind: "speaker_photo" | "sponsor_logo" | "cover_image" | "description_image",
   ): Promise<string | null> => {
     if (!file || !selectedEventId) return null;
 
-    const mediaLabel = kind === "speaker_photo" ? "Speaker photo" : "Sponsor logo";
+    const mediaLabel = kind === "speaker_photo"
+      ? "Speaker photo"
+      : kind === "cover_image"
+      ? "Cover image"
+      : kind === "description_image"
+      ? "Description image"
+      : "Sponsor logo";
     const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
     if (!allowedTypes.has(file.type)) {
       setSettingsMessage(`${mediaLabel} must be PNG, JPG, or WebP`);

@@ -10,6 +10,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
+import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
 import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
 import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
@@ -90,7 +91,7 @@ import {
 import { DEFAULT_EVENT_ID, EVENT_SETTING_KEYS, GLOBAL_SETTING_KEYS } from "./backend/db/defaultSettings";
 import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
-import { parsePublicSponsorEntries, resolvePublicBrandMode } from "./src/lib/publicEventPageBranding";
+import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor } from "./src/lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries } from "./src/lib/publicEventPageLayout";
 
 dotenv.config();
@@ -3632,7 +3633,7 @@ async function buildPublicEventPagePayload(
       slug: publicSlug,
       status: event.effective_status,
       summary,
-      description: String(settings.event_description || "").trim(),
+      description: sanitizeEventDescriptionHtml(settings.event_description),
       poster_url: String(settings.event_public_poster_url || "").trim(),
       cta_label: String(settings.event_public_cta_label || "").trim() || "Register Now",
       success_message:
@@ -3686,6 +3687,10 @@ async function buildPublicEventPagePayload(
       about_url: String(settings.event_public_brand_about_url || "").trim(),
       privacy_url: String(settings.event_public_brand_privacy_url || "").trim(),
       contact_url: String(settings.event_public_brand_contact_url || "").trim(),
+    },
+    appearance: {
+      theme_color: resolvePublicThemeColor(settings.event_public_theme_color),
+      cover_url: String(settings.event_public_cover_url || "").trim(),
     },
     organizer: {
       name: organizer.display_name,
@@ -12906,7 +12911,7 @@ async function startServer() {
         return res.status(404).json({ error: "Event not found" });
       }
 
-      const allowedKinds = new Set(["speaker_photo", "sponsor_logo", "organizer_logo", "brand_logo", "gallery_image"]);
+      const allowedKinds = new Set(["speaker_photo", "sponsor_logo", "cover_image", "description_image", "organizer_logo", "brand_logo", "gallery_image"]);
       const requestedKind = normalizeOptionalText(req.query.kind).toLowerCase();
       const kind = allowedKinds.has(requestedKind) ? requestedKind : "asset";
 

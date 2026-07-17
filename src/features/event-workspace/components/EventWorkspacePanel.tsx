@@ -1,4 +1,5 @@
 import { CalendarRange, ChevronDown, PanelRightClose, Plus, RefreshCw, Search, X } from "lucide-react";
+import { useState } from "react";
 
 import { ActionButton, SelectionMarker, StatusBadge, StatusLine, type BadgeTone } from "../../../components/shared/AppUi";
 import type { EventRecord, EventStatus } from "../../../types";
@@ -200,6 +201,9 @@ export function EventWorkspacePanel({
   getEventStatusLabel,
   getRegistrationAvailabilityLabel,
 }: EventWorkspacePanelProps) {
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const showArchivedEvents = archivedOpen || Boolean(deferredEventListQuery) || eventWorkspaceFilter === "archived";
+
   return (
     <div
       className="workspace-section workspace-section-cyan flex flex-col space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 xl:max-h-[calc(100dvh-10rem)] xl:overflow-hidden"
@@ -388,26 +392,36 @@ export function EventWorkspacePanel({
 
             {filteredArchivedEvents.length > 0 && (
               <div className="space-y-2 border-t border-slate-100 pt-5">
-                <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => setArchivedOpen((current) => !current)}
+                  className="flex w-full items-center justify-between gap-3 rounded-xl px-1 py-1 text-left"
+                  aria-expanded={showArchivedEvents}
+                >
                   <p className="text-sm font-semibold text-slate-700">{archivedWorkspaceHeading}</p>
-                  <span className="text-xs font-medium text-slate-500">{filteredArchivedEvents.length} events</span>
-                </div>
-                <div className="space-y-2">
-                  {filteredArchivedEvents.map((event) => (
-                    <EventWorkspaceRow
-                      key={event.id}
-                      event={event}
-                      selected={selectedEventId === event.id}
-                      searchFocused={isSearchFocused(event.id)}
-                      onSelect={() => onSelectEvent(event.id)}
-                      getSearchTargetDomId={getSearchTargetDomId}
-                      formatEventWorkspaceDateLabel={formatEventWorkspaceDateLabel}
-                      getEventStatusTone={getEventStatusTone}
-                      getEventStatusLabel={getEventStatusLabel}
-                      getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
-                    />
-                  ))}
-                </div>
+                  <span className="inline-flex items-center gap-2 text-xs font-medium text-slate-500">
+                    {filteredArchivedEvents.length} events
+                    <ChevronDown className={`h-4 w-4 transition-transform ${showArchivedEvents ? "rotate-180" : ""}`} />
+                  </span>
+                </button>
+                {showArchivedEvents && (
+                  <div className="space-y-2">
+                    {filteredArchivedEvents.map((event) => (
+                      <EventWorkspaceRow
+                        key={event.id}
+                        event={event}
+                        selected={selectedEventId === event.id}
+                        searchFocused={isSearchFocused(event.id)}
+                        onSelect={() => onSelectEvent(event.id)}
+                        getSearchTargetDomId={getSearchTargetDomId}
+                        formatEventWorkspaceDateLabel={formatEventWorkspaceDateLabel}
+                        getEventStatusTone={getEventStatusTone}
+                        getEventStatusLabel={getEventStatusLabel}
+                        getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
