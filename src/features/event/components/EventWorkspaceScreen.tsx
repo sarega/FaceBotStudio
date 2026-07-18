@@ -1189,7 +1189,7 @@ export function EventWorkspaceScreen({
                       </HelpPopover>
                     </div>
 
-                    <nav className="sticky top-3 z-20 mb-4 grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50/95 p-1.5 shadow-sm backdrop-blur sm:grid-cols-5" aria-label="Public page setup areas">
+                    <nav className="public-setup-tabs sticky top-3 z-20 mb-4 grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50/95 p-1.5 shadow-sm backdrop-blur sm:grid-cols-5" aria-label="Public page setup areas">
                       {PUBLIC_SETUP_PANELS.map((panel) => (
                         <button
                           key={panel.id}

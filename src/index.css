@@ -707,6 +707,10 @@ html.theme-dark .workspace-disclosure {
   border-color: rgba(148, 163, 184, 0.08) !important;
 }
 
+html.theme-dark .public-setup-tabs {
+  background: rgba(15, 23, 42, 0.95) !important;
+}
+
 html.theme-dark .event-workspace-row {
   background: rgba(2, 6, 23, 0.52) !important;
   border-color: transparent !important;

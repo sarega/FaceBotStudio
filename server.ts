@@ -3756,6 +3756,23 @@ function serializeChannelAccount(channel: ChannelAccountRow) {
   };
 }
 
+async function getActiveChannelsAssignedToEvent(eventId: string) {
+  const normalizedEventId = String(eventId || "").trim();
+  if (!normalizedEventId) return [];
+  return (await appDb.listChannelAccounts()).filter(
+    (channel) => channel.is_active && channel.event_id === normalizedEventId,
+  );
+}
+
+function summarizeBlockingChannels(channels: ChannelAccountRow[]) {
+  return channels.map((channel) => ({
+    id: channel.id,
+    platform: channel.platform,
+    display_name: channel.display_name,
+    external_id: channel.external_id,
+  }));
+}
+
 type CheckinAccessPayloadSource = {
   id: string;
   label: string;
@@ -6691,6 +6708,14 @@ async function executeAdminAgentToolCall(
       const status = normalizeAdminEventStatusInput(call.args.status);
       if (!status) {
         throw new Error("Valid event status is required (pending/active/inactive/cancelled/archived)");
+      }
+      if (status !== "active") {
+        const blockingChannels = await getActiveChannelsAssignedToEvent(targetEventId);
+        if (blockingChannels.length > 0) {
+          throw new Error(
+            `Cannot set event ${targetEventId} to ${status} while active channels are assigned: ${blockingChannels.map((channel) => channel.display_name || channel.external_id).join(", ")}. Reassign or disable them first.`,
+          );
+        }
       }
       const updated = await appDb.updateEvent(targetEventId, { status });
       if (!updated) {
@@ -11394,6 +11419,16 @@ async function startServer() {
       }
       if (issues.length > 0) {
         return respondValidationError(res, issues);
+      }
+      if (status && status !== "active") {
+        const blockingChannels = await getActiveChannelsAssignedToEvent(eventId);
+        if (blockingChannels.length > 0) {
+          return res.status(409).json({
+            error: `Cannot set this event to ${status} while active channels are assigned. Reassign or disable them first.`,
+            code: "EVENT_HAS_ACTIVE_CHANNELS",
+            channels: summarizeBlockingChannels(blockingChannels),
+          });
+        }
       }
       const updated = await appDb.updateEvent(eventId, {
         name: nameRaw || undefined,

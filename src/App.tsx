@@ -8158,6 +8158,13 @@ export default function App() {
     silent?: boolean;
   } = {}) => {
     if (!selectedEventId || !selectedEvent) return;
+    const blockingChannels = selectedEventChannels.filter((channel) => channel.is_active);
+    if (status && status !== "active" && blockingChannels.length > 0) {
+      setEventMessage(
+        `Error: reassign or disable ${blockingChannels.map((channel) => channel.display_name || channel.external_id).join(", ")} before setting this event to ${status}.`,
+      );
+      return;
+    }
     const payload: Record<string, unknown> = {};
     const trimmedName = String(name || "").trim();
     if (trimmedName && trimmedName !== selectedEvent.name) {
