@@ -1124,7 +1124,9 @@ export function EventWorkspaceScreen({
                         className="mt-1"
                         items={[
                           publicPageEnabled ? "Attendee page available" : "Attendee page hidden",
-                          publicRegistrationEnabled ? "Registration enabled" : "Registration disabled",
+                          settings.event_public_ticketing_mode === "external"
+                            ? "External ticketing"
+                            : publicRegistrationEnabled ? "Registration enabled" : "Registration disabled",
                           eventPublicDirty ? "Unsaved changes" : "All changes saved",
                         ]}
                       />
@@ -1220,7 +1222,7 @@ export function EventWorkspaceScreen({
                           />
                           Public page enabled
                         </label>
-                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                        {settings.event_public_ticketing_mode !== "external" && <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"
                             className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
@@ -1232,7 +1234,7 @@ export function EventWorkspaceScreen({
                               })}
                           />
                           Inline registration
-                        </label>
+                        </label>}
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"
@@ -1246,6 +1248,32 @@ export function EventWorkspaceScreen({
                           />
                           Show seat counts
                         </label>
+                        <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="grid gap-3 md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)] md:items-end">
+                            <label>
+                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Ticketing</span>
+                              <select
+                                value={settings.event_public_ticketing_mode}
+                                onChange={(event) => setSettings({ ...settings, event_public_ticketing_mode: event.target.value === "external" ? "external" : "inline" })}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                <option value="inline">Register on Meetrix</option>
+                                <option value="external">Send to ticket URL</option>
+                              </select>
+                            </label>
+                            {settings.event_public_ticketing_mode === "external" && <label>
+                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Ticket URL</span>
+                              <input
+                                value={settings.event_public_external_ticket_url}
+                                onChange={(event) => setSettings({ ...settings, event_public_external_ticket_url: event.target.value })}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="https://ticketmelon.com/..."
+                                type="url"
+                              />
+                            </label>}
+                          </div>
+                          {settings.event_public_ticketing_mode === "external" && <p className="mt-2 text-xs text-slate-500">The public CTA opens this URL in a new tab. Meetrix registration and ticket recovery are hidden.</p>}
+                        </div>
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"

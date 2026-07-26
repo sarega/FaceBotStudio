@@ -2017,6 +2017,8 @@ const INITIAL_SETTINGS: Settings = {
   event_public_theme_color: "#2563eb",
   event_public_summary: "",
   event_public_registration_enabled: "1",
+  event_public_ticketing_mode: "inline",
+  event_public_external_ticket_url: "",
   event_public_ticket_recovery_mode: "shared_contact",
   event_public_bot_enabled: "1",
   event_public_success_message: "Registration complete. Save your ticket image to your phone now.",
@@ -2092,6 +2094,8 @@ function getBlankEventScopedSettings() {
     event_public_theme_color: "#2563eb",
     event_public_summary: "",
     event_public_registration_enabled: "1",
+    event_public_ticketing_mode: "inline",
+    event_public_external_ticket_url: "",
     event_public_ticket_recovery_mode: "shared_contact",
     event_public_bot_enabled: "1",
     event_public_success_message: "Registration complete. Save your ticket image to your phone now.",
@@ -2165,6 +2169,8 @@ function getBlankEventScopedSettings() {
     | "event_public_theme_color"
     | "event_public_summary"
     | "event_public_registration_enabled"
+    | "event_public_ticketing_mode"
+    | "event_public_external_ticket_url"
     | "event_public_ticket_recovery_mode"
     | "event_public_bot_enabled"
     | "event_public_success_message"
@@ -2280,6 +2286,8 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_theme_color",
   "event_public_summary",
   "event_public_registration_enabled",
+  "event_public_ticketing_mode",
+  "event_public_external_ticket_url",
   "event_public_ticket_recovery_mode",
   "event_public_bot_enabled",
   "event_public_success_message",
@@ -2477,6 +2485,12 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_registration_enabled === "string" && data.event_public_registration_enabled.trim()
         ? data.event_public_registration_enabled.trim()
         : INITIAL_SETTINGS.event_public_registration_enabled,
+    event_public_ticketing_mode:
+      data.event_public_ticketing_mode === "external" ? "external" : "inline",
+    event_public_external_ticket_url:
+      typeof data.event_public_external_ticket_url === "string"
+        ? data.event_public_external_ticket_url.trim()
+        : INITIAL_SETTINGS.event_public_external_ticket_url,
     event_public_ticket_recovery_mode:
       typeof data.event_public_ticket_recovery_mode === "string" && data.event_public_ticket_recovery_mode.trim()
         ? data.event_public_ticket_recovery_mode.trim()

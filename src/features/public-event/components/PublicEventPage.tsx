@@ -227,6 +227,9 @@ export function PublicEventPage({
   const publicEventName = page?.event.name || "Event";
   const publicLocationLabel = page?.location.compact || "Venue details will be announced soon";
   const publicSummary = page?.event.summary || page?.event.description || "";
+  const externalTicketing = Boolean(
+    page?.event.ticketing_mode === "external" && page.event.external_ticket_url,
+  );
   const contactVisible = Boolean(
     page?.contact.enabled
     && (
@@ -238,6 +241,7 @@ export function PublicEventPage({
   );
   const registrationAvailable = Boolean(
     page
+    && !externalTicketing
     && page.event.registration_enabled
     && page.event.registration_availability === "open",
   );
@@ -249,6 +253,7 @@ export function PublicEventPage({
   const nameVerificationRequired = registrationResult?.status === "name_verification_required";
   const verifiedRecoveryRequired = registrationResult?.status === "verification_required";
   const availabilityHelper = (() => {
+    if (externalTicketing) return "Tickets are available through our ticketing partner.";
     switch (page?.event.registration_availability) {
       case "full":
         return "This event is full right now.";
@@ -493,7 +498,9 @@ export function PublicEventPage({
 
                 <div className="flex flex-wrap items-center gap-2">
                   <a
-                    href="#public-registration"
+                    href={externalTicketing ? page.event.external_ticket_url : "#public-registration"}
+                    target={externalTicketing ? "_blank" : undefined}
+                    rel={externalTicketing ? "noopener noreferrer" : undefined}
                     className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-4.5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                   >
                     {page.event.cta_label}
@@ -519,6 +526,27 @@ export function PublicEventPage({
               </div>
 
               <aside id="public-registration" className="space-y-4 xl:sticky xl:top-5 xl:self-start">
+                {externalTicketing ? (
+                  <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h2 className="text-lg font-semibold text-slate-900">Tickets</h2>
+                        <p className="mt-1 text-sm leading-6 text-slate-500">Choose tickets and complete your purchase with our ticketing partner.</p>
+                      </div>
+                      <StatusBadge tone="blue">External</StatusBadge>
+                    </div>
+                    <a
+                      href={page.event.external_ticket_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="public-page-control mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      {page.event.cta_label}
+                    </a>
+                    <p className="mt-3 text-xs leading-5 text-slate-500">You will continue to the external ticketing website in a new tab.</p>
+                  </div>
+                ) : (
                 <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
                   {!ticketReady ? (
                     <>
@@ -760,6 +788,7 @@ export function PublicEventPage({
                     </div>
                   )}
                 </div>
+                )}
 
                 {contactVisible && (
                   <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">

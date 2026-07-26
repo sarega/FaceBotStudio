@@ -55,18 +55,98 @@
 
 .event-description-content img {
   display: block;
-  height: auto;
-  max-height: 34rem;
   max-width: 100%;
-  object-fit: contain;
   margin: 1.25rem auto;
   border-radius: 1rem;
+}
+
+.event-description-content img.fr-fil { float: left; margin: 0.35rem 1.25rem 0.75rem 0; }
+.event-description-content img.fr-fir { float: right; margin: 0.35rem 0 0.75rem 1.25rem; }
+.event-description-content figure { display: table; margin: 1.25rem auto; max-width: 100%; }
+.event-description-content figcaption { color: rgb(100 116 139); display: table-caption; caption-side: bottom; font-size: 0.875em; padding-top: 0.35rem; text-align: center; }
+
+.event-description-content hr {
+  border: 0;
+  border-top: 1px solid rgb(203 213 225);
+  margin: 1.5rem 0;
+}
+
+.event-description-content table {
+  border-collapse: collapse;
+  display: table;
+  margin: 1.25rem 0;
+  width: 100%;
+}
+
+.event-description-content th,
+.event-description-content td {
+  border: 1px solid rgb(203 213 225);
+  min-width: 5rem;
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.event-description-content th {
+  background: rgb(241 245 249);
+  color: rgb(30 41 59);
+  font-weight: 700;
 }
 
 .rich-event-editor:empty::before {
   color: rgb(148 163 184);
   content: attr(data-placeholder);
   pointer-events: none;
+}
+
+/* Keep the full Froala toolset compact enough for a two-row editor toolbar. */
+.froala-event-editor .fr-toolbar {
+  padding: 3px 5px;
+}
+
+.froala-event-editor .fr-toolbar .fr-btn-grp {
+  margin: 0 !important;
+}
+
+.froala-event-editor .fr-toolbar .fr-command.fr-btn {
+  height: 36px;
+  margin: 2px 0 !important;
+  padding: 0 !important;
+}
+
+.froala-event-editor .fr-toolbar .fr-command.fr-btn:not(.fr-btn-text) {
+  min-width: 36px !important;
+  width: 36px !important;
+}
+
+.froala-event-editor .fr-toolbar .fr-command.fr-btn i,
+.froala-event-editor .fr-toolbar .fr-command.fr-btn svg {
+  font-size: 16px;
+  height: 16px !important;
+  margin: 10px !important;
+  width: 16px !important;
+}
+
+.froala-event-editor .fr-toolbar .fr-command.fr-btn.fr-btn-text {
+  min-width: 44px;
+  padding: 0 5px !important;
+}
+
+.froala-event-editor .fr-toolbar .fr-command.fr-btn[data-cmd="fontFamily"] {
+  min-width: 150px !important;
+  padding: 0 16px 0 8px !important;
+  width: 150px !important;
+}
+
+.froala-event-editor .fr-toolbar .fr-command.fr-btn[data-cmd="fontSize"] {
+  min-width: 58px !important;
+  padding: 0 14px 0 5px !important;
+  width: 58px !important;
+}
+
+.froala-event-editor .fr-toolbar .fr-command.fr-btn.fr-btn-text .fr-sr-only + span,
+.froala-event-editor .fr-toolbar .fr-command.fr-btn.fr-btn-text > span {
+  font-size: 12px;
 }
 
 html.theme-dark .event-description-content { color: rgb(148 163 184); }
@@ -81,10 +161,6 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   font-family: "Sarabun", "Noto Sans Thai", "Inter", ui-sans-serif, system-ui, sans-serif !important;
   font-size: 1rem;
   line-height: 1.65;
-}
-
-.public-event-themed * {
-  font-family: inherit;
 }
 
 .public-event-themed .text-sm {

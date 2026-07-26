@@ -3625,6 +3625,9 @@ async function buildPublicEventPagePayload(
     eventSlug: event.slug,
     eventId: event.id,
   });
+  const configuredExternalTicketUrl = String(settings.event_public_external_ticket_url || "").trim();
+  const externalTicketUrl = /^https?:\/\//i.test(configuredExternalTicketUrl) ? configuredExternalTicketUrl : "";
+  const ticketingMode = settings.event_public_ticketing_mode === "external" && externalTicketUrl ? "external" : "inline";
 
   return {
     event: {
@@ -3635,7 +3638,7 @@ async function buildPublicEventPagePayload(
       summary,
       description: sanitizeEventDescriptionHtml(settings.event_description),
       poster_url: String(settings.event_public_poster_url || "").trim(),
-      cta_label: String(settings.event_public_cta_label || "").trim() || "Register Now",
+      cta_label: String(settings.event_public_cta_label || "").trim() || (ticketingMode === "external" ? "Buy Tickets" : "Register Now"),
       success_message:
         String(settings.event_public_success_message || "").trim()
         || "Registration complete. Save your ticket image to your phone now.",
@@ -3643,7 +3646,9 @@ async function buildPublicEventPagePayload(
       end_date: String(settings.event_end_date || "").trim(),
       date_label: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
       timezone: normalizeTimeZone(settings.event_timezone),
-      registration_enabled: isTruthySetting(settings.event_public_registration_enabled ?? "1"),
+      registration_enabled: ticketingMode === "inline" && isTruthySetting(settings.event_public_registration_enabled ?? "1"),
+      ticketing_mode: ticketingMode,
+      external_ticket_url: externalTicketUrl,
       ticket_recovery_mode: resolvePublicTicketRecoveryMode(settings.event_public_ticket_recovery_mode),
       show_seat_availability: isTruthySetting(settings.event_public_show_seat_availability ?? "0"),
       registration_availability: event.registration_availability || capacity.registrationAvailability,

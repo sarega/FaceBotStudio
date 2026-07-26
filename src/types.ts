@@ -326,6 +326,8 @@ export interface Settings {
   event_public_theme_color: string;
   event_public_summary: string;
   event_public_registration_enabled: string;
+  event_public_ticketing_mode: string;
+  event_public_external_ticket_url: string;
   event_public_ticket_recovery_mode: string;
   event_public_bot_enabled: string;
   event_public_success_message: string;
@@ -452,6 +454,8 @@ export interface PublicEventPageResponse {
     date_label: string;
     timezone: string;
     registration_enabled: boolean;
+    ticketing_mode: "inline" | "external";
+    external_ticket_url: string;
     ticket_recovery_mode: "shared_contact" | "verified_contact";
     show_seat_availability: boolean;
     registration_availability: "open" | "not_started" | "closed" | "invalid" | "full";
