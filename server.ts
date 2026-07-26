@@ -11162,9 +11162,7 @@ async function startServer() {
         return res.status(400).json({ error: "Query token exchange is no longer supported. Use POST /api/checkin-access/exchange." });
       }
 
-      // This endpoint is also a silent browser probe during normal admin bootstrap.
-      // No check-in cookie is an expected state, not an authentication failure.
-      return res.status(204).end();
+      return res.status(401).json({ error: "Check-in access session is required" });
     } catch (error) {
       console.error("Failed to resolve check-in session:", error);
       return res.status(500).json({ error: "Failed to resolve check-in session" });
