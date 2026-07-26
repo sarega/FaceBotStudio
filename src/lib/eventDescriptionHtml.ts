@@ -65,7 +65,7 @@ function sanitizeInlineStyle(value: string) {
   const rules = [
     new RegExp(`^text-align\\s*:\\s*(left|center|right|justify)$`, "i"),
     new RegExp(`^(color|background-color)\\s*:\\s*${safeColor}$`, "i"),
-    /^font-family\s*:\s*(?:Sarabun|Noto Sans Thai|Tahoma|Arial|Georgia|Times New Roman)(?:\s*,\s*(?:sans-serif|serif))?$/i,
+    /^font-family\s*:\s*(?:Sarabun(?:\s*,\s*sans-serif)?|Noto Sans Thai(?:\s*,\s*sans-serif)?|Arial(?:\s*,\s*Helvetica)?(?:\s*,\s*sans-serif)?|Tahoma(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Georgia(?:\s*,\s*serif)?|Times New Roman(?:\s*,\s*Times)?(?:\s*,\s*serif)?(?:\s*,\s*-webkit-standard)?|Verdana(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Impact(?:\s*,\s*Charcoal)?(?:\s*,\s*sans-serif)?)$/i,
     /^font-size\s*:\s*(?:[8-9]|[1-9]\d)px$/i,
     /^font-weight\s*:\s*(?:normal|bold|[1-9]00)$/i,
     /^font-style\s*:\s*(?:normal|italic)$/i,
@@ -138,7 +138,7 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
       if (/^(#[0-9a-f]{3,8}|rgb\([\d\s,.%]+\))$/i.test(originalColor)) {
         element.setAttribute("color", originalColor);
       }
-      if (/^(Sarabun|Noto Sans Thai|Arial|Tahoma|Georgia|Times New Roman)$/i.test(originalFace)) {
+      if (/^(?:Sarabun|NotoSansThai|Arial(?:,Helvetica(?:,sans-serif)?)?|Tahoma(?:,Geneva(?:,sans-serif)?)?|Georgia(?:,serif)?|TimesNewRoman(?:,Times(?:,serif(?:,-webkit-standard)?)?)?|Verdana(?:,Geneva(?:,sans-serif)?)?|Impact(?:,Charcoal(?:,sans-serif)?)?)$/i.test(originalFace.replace(/\s+/g, ""))) {
         element.setAttribute("face", originalFace);
       }
       if (/^[1-7]$/.test(originalSize)) {

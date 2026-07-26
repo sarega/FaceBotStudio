@@ -99,56 +99,6 @@
   pointer-events: none;
 }
 
-/* Keep the full Froala toolset compact enough for a two-row editor toolbar. */
-.froala-event-editor .fr-toolbar {
-  padding: 3px 5px;
-}
-
-.froala-event-editor .fr-toolbar .fr-btn-grp {
-  margin: 0 !important;
-}
-
-.froala-event-editor .fr-toolbar .fr-command.fr-btn {
-  height: 36px;
-  margin: 2px 0 !important;
-  padding: 0 !important;
-}
-
-.froala-event-editor .fr-toolbar .fr-command.fr-btn:not(.fr-btn-text) {
-  min-width: 36px !important;
-  width: 36px !important;
-}
-
-.froala-event-editor .fr-toolbar .fr-command.fr-btn i,
-.froala-event-editor .fr-toolbar .fr-command.fr-btn svg {
-  font-size: 16px;
-  height: 16px !important;
-  margin: 10px !important;
-  width: 16px !important;
-}
-
-.froala-event-editor .fr-toolbar .fr-command.fr-btn.fr-btn-text {
-  min-width: 44px;
-  padding: 0 5px !important;
-}
-
-.froala-event-editor .fr-toolbar .fr-command.fr-btn[data-cmd="fontFamily"] {
-  min-width: 150px !important;
-  padding: 0 16px 0 8px !important;
-  width: 150px !important;
-}
-
-.froala-event-editor .fr-toolbar .fr-command.fr-btn[data-cmd="fontSize"] {
-  min-width: 58px !important;
-  padding: 0 14px 0 5px !important;
-  width: 58px !important;
-}
-
-.froala-event-editor .fr-toolbar .fr-command.fr-btn.fr-btn-text .fr-sr-only + span,
-.froala-event-editor .fr-toolbar .fr-command.fr-btn.fr-btn-text > span {
-  font-size: 12px;
-}
-
 html.theme-dark .event-description-content { color: rgb(148 163 184); }
 html.theme-dark .event-description-content h2,
 html.theme-dark .event-description-content h3,

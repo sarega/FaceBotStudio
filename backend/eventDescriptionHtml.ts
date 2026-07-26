@@ -19,7 +19,8 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
       "*": {
         color: [/^#[0-9a-f]{3,8}$/i, /^rgba?\([\d\s,.%]+\)$/i, /^[a-z]+$/i],
         "background-color": [/^#[0-9a-f]{3,8}$/i, /^rgba?\([\d\s,.%]+\)$/i, /^(?:transparent|[a-z]+)$/i],
-        "font-family": [/^(?:Sarabun|Noto Sans Thai|Tahoma|Arial|Georgia|Times New Roman)(?:\s*,\s*(?:sans-serif|serif))?$/i],
+        // Includes the standard font stacks emitted by Froala when HTML is pasted in.
+        "font-family": [/^(?:Sarabun(?:\s*,\s*sans-serif)?|Noto Sans Thai(?:\s*,\s*sans-serif)?|Arial(?:\s*,\s*Helvetica)?(?:\s*,\s*sans-serif)?|Tahoma(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Georgia(?:\s*,\s*serif)?|Times New Roman(?:\s*,\s*Times)?(?:\s*,\s*serif)?(?:\s*,\s*-webkit-standard)?|Verdana(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Impact(?:\s*,\s*Charcoal)?(?:\s*,\s*sans-serif)?)$/i],
         "font-size": [/^(?:[8-9]|[1-9]\d)px$/],
         "font-weight": [/^(?:normal|bold|[1-9]00)$/i],
         "font-style": [/^(?:normal|italic)$/i],
