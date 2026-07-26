@@ -4110,13 +4110,13 @@ export default function App() {
     try {
       const sessionRes = await fetch("/api/checkin-access/session");
       const sessionData = await sessionRes.json().catch(() => ({}));
-      if (sessionRes.ok) {
-        const session = sessionData?.session as CheckinAccessSession;
-        setCheckinAccessSession(session);
-        setSelectedEventId(session?.event_id || "");
+      const existingSession = sessionData?.session as CheckinAccessSession | undefined;
+      if (sessionRes.ok && sessionRes.status !== 204 && existingSession) {
+        setCheckinAccessSession(existingSession);
+        setSelectedEventId(existingSession.event_id || "");
         setCheckinAccessMode(true);
         stripCheckinTokenFromUrl();
-        return session;
+        return existingSession;
       }
 
       if (silentNoSession && (sessionRes.status === 204 || sessionRes.status === 401) && !token) {
