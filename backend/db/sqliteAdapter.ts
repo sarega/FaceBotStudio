@@ -1124,8 +1124,13 @@ export class SqliteAppDatabase implements AppDatabase {
     ).all(limit) as MessageRow[];
   }
 
-  async getMessageHistoryRows(senderId: string, limit: number, eventId?: string) {
+  async getMessageHistoryRows(senderId: string, limit: number, eventId?: string, pageId?: string) {
     if (eventId) {
+      if (pageId) {
+        return this.db.prepare(
+          "SELECT text, type FROM messages WHERE sender_id = ? AND event_id = ? AND page_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+        ).all(senderId, eventId, pageId, limit) as Array<{ text: string; type: MessageType }>;
+      }
       return this.db.prepare(
         "SELECT text, type FROM messages WHERE sender_id = ? AND event_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
       ).all(senderId, eventId, limit) as Array<{ text: string; type: MessageType }>;
@@ -1135,8 +1140,13 @@ export class SqliteAppDatabase implements AppDatabase {
     ).all(senderId, limit) as Array<{ text: string; type: MessageType }>;
   }
 
-  async getConversationRowsForSender(senderId: string, limit: number, eventId?: string) {
+  async getConversationRowsForSender(senderId: string, limit: number, eventId?: string, pageId?: string) {
     if (eventId) {
+      if (pageId) {
+        return this.db.prepare(
+          "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages WHERE sender_id = ? AND event_id = ? AND page_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+        ).all(senderId, eventId, pageId, limit) as MessageRow[];
+      }
       return this.db.prepare(
         "SELECT id, sender_id, event_id, page_id, text, timestamp, type FROM messages WHERE sender_id = ? AND event_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?",
       ).all(senderId, eventId, limit) as MessageRow[];

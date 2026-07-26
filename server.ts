@@ -437,11 +437,17 @@ function getSystemInstruction(
   eventStatus = "active",
   knowledgeContext = "",
   capacitySnapshot?: EventCapacitySnapshot | null,
+  eventId?: string | null,
 ) {
   const globalPrompt = String(settings.global_system_prompt || "").trim();
   const eventContext = String(settings.context || "").trim();
+  const currentEventId = normalizeOptionalText(eventId);
+  const currentEventName = normalizeOptionalText(settings.event_name);
   return [
     globalPrompt,
+    currentEventId || currentEventName
+      ? `Current Event Boundary:\n- Event ID: ${currentEventId || "-"}\n- Event Name: ${currentEventName || "-"}\nYou are answering ONLY for this event. Do not use, mention, compare, or infer details from any other event. If the user asks about another event, say this chat only supports the current event.`
+      : "",
     eventContext ? `Event Context:\n${eventContext}` : "",
     knowledgeContext,
     buildEventInfo(settings, eventStatus, capacitySnapshot),
@@ -485,8 +491,17 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildInboundConversationKey(channel: string, senderId: string, eventId: string) {
-  return `${channel}:${eventId}:${senderId}`;
+function encodeInboundConversationKeyPart(value: string) {
+  return encodeURIComponent(String(value || "").trim() || "-");
+}
+
+function buildInboundConversationKey(channel: string, senderId: string, eventId: string, routeId?: string | null) {
+  return [
+    channel,
+    eventId,
+    normalizeOptionalText(routeId) || "default",
+    senderId,
+  ].map(encodeInboundConversationKeyPart).join(":");
 }
 
 function getInboundConversationChannelFromPlatform(platform: ChannelPlatform) {
@@ -497,6 +512,65 @@ function getInboundConversationChannelFromPlatform(platform: ChannelPlatform) {
       return "webchat";
     default:
       return platform;
+  }
+}
+
+function getChannelPlatformFromInboundConversationChannel(channel: string): ChannelPlatform | null {
+  switch (channel) {
+    case "facebook":
+      return "facebook";
+    case "line":
+      return "line_oa";
+    case "instagram":
+      return "instagram";
+    case "whatsapp":
+      return "whatsapp";
+    case "telegram":
+      return "telegram";
+    case "webchat":
+      return "web_chat";
+    default:
+      return null;
+  }
+}
+
+class ConversationScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationScopeError";
+  }
+}
+
+function isConversationScopeError(error: unknown) {
+  return error instanceof ConversationScopeError;
+}
+
+async function assertAutomatedConversationScope(channel: string, eventId: string, routeId?: string | null) {
+  const normalizedChannel = normalizeOptionalText(channel);
+  const normalizedEventId = normalizeOptionalText(eventId);
+  const normalizedRouteId = normalizeOptionalText(routeId);
+  if (!normalizedChannel || !normalizedEventId) {
+    throw new ConversationScopeError("Conversation scope is incomplete");
+  }
+
+  if (normalizedChannel === "public-web") {
+    if (normalizedRouteId !== `public-event:${normalizedEventId}`) {
+      throw new ConversationScopeError("Public conversation route does not match the current event");
+    }
+    return;
+  }
+
+  const platform = getChannelPlatformFromInboundConversationChannel(normalizedChannel);
+  if (!platform) {
+    throw new ConversationScopeError(`Unsupported conversation channel: ${normalizedChannel}`);
+  }
+  if (!normalizedRouteId) {
+    throw new ConversationScopeError(`Missing route identity for ${normalizedChannel} conversation`);
+  }
+
+  const resolvedEventId = await appDb.resolveEventIdForChannel(platform, normalizedRouteId);
+  if (resolvedEventId !== normalizedEventId) {
+    throw new ConversationScopeError(`Conversation route ${normalizedChannel}/${normalizedRouteId} is not assigned to event ${normalizedEventId}`);
   }
 }
 
@@ -516,10 +590,11 @@ function clearInboundConversationRuntimeState(conversationKey: string) {
   return snapshot;
 }
 
-function clearInboundConversationRuntimeStateForSender(channel: string, senderId: string, eventId?: string | null) {
+function clearInboundConversationRuntimeStateForSender(channel: string, senderId: string, eventId?: string | null, routeId?: string | null) {
   const normalizedChannel = String(channel || "").trim();
   const normalizedSenderId = String(senderId || "").trim();
   const normalizedEventId = normalizeOptionalText(eventId);
+  const normalizedRouteId = normalizeOptionalText(routeId);
   if (!normalizedChannel || !normalizedSenderId) {
     return {
       matched_keys: [] as string[],
@@ -534,11 +609,17 @@ function clearInboundConversationRuntimeStateForSender(channel: string, senderId
   }
 
   const exactKey = normalizedEventId
-    ? buildInboundConversationKey(normalizedChannel, normalizedSenderId, normalizedEventId)
+    ? normalizedRouteId
+      ? buildInboundConversationKey(normalizedChannel, normalizedSenderId, normalizedEventId, normalizedRouteId)
+      : null
     : null;
+  const channelPrefix = `${encodeInboundConversationKeyPart(normalizedChannel)}:`;
+  const eventPrefix = normalizedEventId ? `${channelPrefix}${encodeInboundConversationKeyPart(normalizedEventId)}:` : "";
+  const senderSuffix = `:${encodeInboundConversationKeyPart(normalizedSenderId)}`;
   const keyMatcher = (key: string) => {
     if (exactKey) return key === exactKey;
-    return key.startsWith(`${normalizedChannel}:`) && key.endsWith(`:${normalizedSenderId}`);
+    if (normalizedEventId) return key.startsWith(eventPrefix) && key.endsWith(senderSuffix);
+    return key.startsWith(channelPrefix) && key.endsWith(senderSuffix);
   };
 
   const keySet = new Set<string>();
@@ -877,9 +958,10 @@ async function buildPendingConversationTurn(
   conversationKey: string,
   senderId: string,
   eventId: string,
+  routeId?: string | null,
 ): Promise<PendingConversationTurn | null> {
   const rows = await hydrateMessageRowsWithAttachments(
-    await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId),
+    await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId, normalizeOptionalText(routeId) || undefined),
   );
   if (!rows.length) return null;
 
@@ -961,9 +1043,10 @@ async function prepareBundledConversationTurnForSender(
   channel: string,
   senderId: string,
   eventId: string,
-  options?: { burstWindowMs?: number; alreadySerialized?: boolean },
+  options?: { burstWindowMs?: number; alreadySerialized?: boolean; routeId?: string | null },
 ): Promise<PreparedConversationTurn | null> {
-  const conversationKey = buildInboundConversationKey(channel, senderId, eventId);
+  const routeId = normalizeOptionalText(options?.routeId) || null;
+  const conversationKey = buildInboundConversationKey(channel, senderId, eventId, routeId);
   const burstWindowMs = Math.max(0, options?.burstWindowMs ?? INBOUND_BURST_WINDOW_MS);
 
   const prepareTurn = async () => {
@@ -977,7 +1060,7 @@ async function prepareBundledConversationTurnForSender(
         await sleep(remainingQuietMs);
       }
 
-      const pendingTurn = await buildPendingConversationTurn(conversationKey, senderId, eventId);
+      const pendingTurn = await buildPendingConversationTurn(conversationKey, senderId, eventId, routeId);
       if (!pendingTurn) return null;
 
       const remainingAfterReadMs = getRemainingQuietWindowMs(conversationKey, burstWindowMs);
@@ -1001,16 +1084,20 @@ async function prepareBundledConversationTurnForSender(
 }
 
 async function generateReplyForPreparedTurn(
+  channel: string,
   senderId: string,
   eventId: string,
   preparedTurn: PreparedConversationTurn,
+  routeId?: string | null,
 ): Promise<BotReplyResult> {
+  await assertAutomatedConversationScope(channel, eventId, routeId);
   const result = await generateBotReplyForSender(
     senderId,
     eventId,
     preparedTurn.inputText,
     preparedTurn.history,
     preparedTurn.inputParts,
+    routeId,
   );
   const shouldSuppressDuplicate =
     preparedTurn.pendingMessageCount > 1 &&
@@ -1022,9 +1109,9 @@ async function generateReplyForPreparedTurn(
   };
 }
 
-async function buildLatestIncomingRetryTurn(senderId: string, eventId: string) {
+async function buildLatestIncomingRetryTurn(senderId: string, eventId: string, routeId?: string | null) {
   const rows = await hydrateMessageRowsWithAttachments(
-    await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId),
+    await appDb.getConversationRowsForSender(senderId, CONVERSATION_ROW_LIMIT, eventId, normalizeOptionalText(routeId) || undefined),
   );
   if (!rows.length) return null;
 
@@ -1046,7 +1133,7 @@ async function buildLatestIncomingRetryTurn(senderId: string, eventId: string) {
   } as const;
 }
 
-async function buildRetryTurnForConversation(conversationKey: string, senderId: string, eventId: string) {
+async function buildRetryTurnForConversation(conversationKey: string, senderId: string, eventId: string, routeId?: string | null) {
   const failedTurn = getFailedInboundTurn(conversationKey);
   if (failedTurn) {
     return {
@@ -1058,7 +1145,7 @@ async function buildRetryTurnForConversation(conversationKey: string, senderId: 
     } as const;
   }
 
-  const latestIncomingTurn = await buildLatestIncomingRetryTurn(senderId, eventId);
+  const latestIncomingTurn = await buildLatestIncomingRetryTurn(senderId, eventId, routeId);
   if (!latestIncomingTurn) return null;
   return {
     ...latestIncomingTurn,
@@ -3505,8 +3592,7 @@ async function findConflictingPublicSlug(slug: string, excludeEventId?: string) 
 
 async function listPublicConversationRows(eventId: string, senderId: string, limit = 240) {
   const pageId = `public-event:${eventId}`;
-  return (await hydrateMessageRowsWithAttachments(await appDb.getConversationRowsForSender(senderId, limit, eventId)))
-    .filter((row) => normalizeOptionalText(row.page_id) === pageId)
+  return (await hydrateMessageRowsWithAttachments(await appDb.getConversationRowsForSender(senderId, limit, eventId, pageId)))
     .sort((left, right) => Number(left.id || 0) - Number(right.id || 0));
 }
 
@@ -3982,7 +4068,7 @@ type FacebookInboundRoutingResolution = {
   assignedEventId: string | null;
   assignedEventStatus: EventStatus | null;
   resolvedEventId: string | undefined;
-  resolvedVia: "default" | "channel-assignment" | "single-active-event" | "none";
+  resolvedVia: "channel-assignment" | "none";
   activeCandidateIds: string[];
 };
 
@@ -3994,8 +4080,8 @@ async function resolveFacebookInboundRouting(pageId?: string): Promise<FacebookI
       channel: undefined,
       assignedEventId: null,
       assignedEventStatus: null,
-      resolvedEventId: DEFAULT_EVENT_ID,
-      resolvedVia: "default",
+      resolvedEventId: undefined,
+      resolvedVia: "none",
       activeCandidateIds: [],
     };
   }
@@ -4016,23 +4102,14 @@ async function resolveFacebookInboundRouting(pageId?: string): Promise<FacebookI
     };
   }
 
-  const allEvents = await appDb.listEvents();
-  const activeEvents = allEvents.filter((event) => event.effective_status === "active");
-  const activeNonDefaultEvents = activeEvents.filter((event) => !event.is_default);
-  const fallbackCandidates = activeNonDefaultEvents.length === 1
-    ? activeNonDefaultEvents
-    : activeNonDefaultEvents.length === 0 && activeEvents.length === 1
-    ? activeEvents
-    : [];
-
   return {
     pageId: normalizedPageId,
     channel,
     assignedEventId,
     assignedEventStatus: assignedEvent?.effective_status || null,
-    resolvedEventId: fallbackCandidates[0]?.id,
-    resolvedVia: fallbackCandidates.length === 1 ? "single-active-event" : "none",
-    activeCandidateIds: activeEvents.map((event) => event.id),
+    resolvedEventId: undefined,
+    resolvedVia: "none",
+    activeCandidateIds: [],
   };
 }
 
@@ -4332,20 +4409,22 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
 
 async function retryBotReplyForOutboundTarget(target: ManualOutboundTarget) {
   const channel = getInboundConversationChannelFromPlatform(target.platform);
-  const conversationKey = buildInboundConversationKey(channel, target.senderId, target.eventId);
+  const conversationKey = buildInboundConversationKey(channel, target.senderId, target.eventId, target.externalId);
 
   return runSerializedInboundTask(conversationKey, async () => {
-    const retryTurn = await buildRetryTurnForConversation(conversationKey, target.senderId, target.eventId);
+    const retryTurn = await buildRetryTurnForConversation(conversationKey, target.senderId, target.eventId, target.externalId);
     if (!retryTurn) {
       throw new Error("No recent incoming message is available to retry");
     }
 
+    await assertAutomatedConversationScope(channel, target.eventId, target.externalId);
     const result = await generateBotReplyForSender(
       target.senderId,
       target.eventId,
       retryTurn.inputText,
       retryTurn.history,
       retryTurn.inputParts || [],
+      target.externalId,
     );
 
     const replyText = String(result.text || "").trim();
@@ -8780,9 +8859,9 @@ function normalizeMessageTextForHistory(text: string) {
   return raw;
 }
 
-async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?: string): Promise<ChatHistoryMessage[]> {
+async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?: string, routeId?: string | null): Promise<ChatHistoryMessage[]> {
   const rows = await hydrateMessageRowsWithAttachments(
-    await appDb.getConversationRowsForSender(senderId, limit, eventId),
+    await appDb.getConversationRowsForSender(senderId, limit, eventId, normalizeOptionalText(routeId) || undefined),
   );
   return buildChatHistoryFromRows(rows);
 }
@@ -9048,7 +9127,7 @@ async function requestOpenRouterChat(
       messages: [
         {
           role: "system",
-          content: getSystemInstruction(settings, eventStatus, knowledgeContext, capacitySnapshot),
+          content: getSystemInstruction(settings, eventStatus, knowledgeContext, capacitySnapshot, eventId),
         },
         ...normalizeHistoryForOpenRouter(history),
         {
@@ -9270,13 +9349,14 @@ async function generateBotReplyForSender(
   incomingText: string,
   historyOverride?: ChatHistoryMessage[],
   incomingParts: ChatPart[] = [],
+  routeId?: string | null,
 ): Promise<BotReplyResult> {
   const settings = await getSettingsMap(eventId);
   const documents = await getEventDocuments(eventId);
   const chunks = await getEventDocumentChunkEmbeddings(eventId);
   const knowledgeContext = await buildKnowledgeContext(documents, chunks, incomingText);
   const event = await appDb.getEventById(eventId);
-  const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId);
+  const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId, routeId);
 
   const firstResponse = await requestOpenRouterChat(
     incomingText,
@@ -9702,13 +9782,13 @@ async function handleIncomingFacebookText(
     runtime: APP_RUNTIME || "all",
     queue_mode: canUseFacebookWebhookQueue() ? "redis" : "inline",
   });
-  if (pageId && !routing.resolvedEventId) {
-    console.warn(`No active event mapping found for Facebook page ${pageId}; skipping automated reply`);
+  if (!routing.resolvedEventId) {
+    console.warn(`No active event mapping found for Facebook page ${pageId || "unknown"}; skipping automated reply`);
     return;
   }
-  const eventId = routing.resolvedEventId || DEFAULT_EVENT_ID;
+  const eventId = routing.resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, pageId, attachments);
-  const conversationKey = buildInboundConversationKey("facebook", senderId, eventId);
+  const conversationKey = buildInboundConversationKey("facebook", senderId, eventId, pageId);
   markInboundConversationActivity(conversationKey);
 
   if (!(await getFacebookAccessToken(pageId))) {
@@ -9720,17 +9800,22 @@ async function handleIncomingFacebookText(
     const preparedTurn = await prepareBundledConversationTurnForSender("facebook", senderId, eventId, {
       burstWindowMs: FACEBOOK_INBOUND_BURST_WINDOW_MS,
       alreadySerialized: true,
+      routeId: pageId,
     });
     if (!preparedTurn) return;
 
     let replyText = "";
     let ticketRegistrationIds: string[] = [];
     try {
-      const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+      const result = await generateReplyForPreparedTurn("facebook", senderId, eventId, preparedTurn, pageId);
       replyText = result.text;
       ticketRegistrationIds = result.ticketRegistrationIds;
       clearFailedInboundTurn(preparedTurn.conversationKey);
     } catch (error) {
+      if (isConversationScopeError(error)) {
+        console.warn("Skipped Facebook reply because conversation scope changed:", error instanceof Error ? error.message : String(error));
+        replyText = "";
+      } else {
       console.error("Failed to generate bot reply:", error);
       rememberFailedInboundTurn(
         preparedTurn.conversationKey,
@@ -9738,6 +9823,7 @@ async function handleIncomingFacebookText(
         error instanceof Error ? error.message : String(error),
       );
       replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+      }
     }
 
     if (replyText) {
@@ -9826,7 +9912,7 @@ async function handleIncomingLineText(
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, destination, attachments);
-  markInboundConversationActivity(buildInboundConversationKey("line", senderId, eventId));
+  markInboundConversationActivity(buildInboundConversationKey("line", senderId, eventId, destination));
 
   if (!(await getLineAccessToken(destination))) {
     console.warn(`LINE access token is unavailable for destination ${destination}; skipping outbound reply`);
@@ -9834,17 +9920,23 @@ async function handleIncomingLineText(
     return;
   }
 
-  const preparedTurn = await prepareBundledConversationTurnForSender("line", senderId, eventId);
+  const preparedTurn = await prepareBundledConversationTurnForSender("line", senderId, eventId, {
+    routeId: destination,
+  });
   if (!preparedTurn) return;
 
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+    const result = await generateReplyForPreparedTurn("line", senderId, eventId, preparedTurn, destination);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
     clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
+    if (isConversationScopeError(error)) {
+      console.warn("Skipped LINE reply because conversation scope changed:", error instanceof Error ? error.message : String(error));
+      replyText = "";
+    } else {
     console.error("Failed to generate LINE bot reply:", error);
     rememberFailedInboundTurn(
       preparedTurn.conversationKey,
@@ -9852,6 +9944,7 @@ async function handleIncomingLineText(
       error instanceof Error ? error.message : String(error),
     );
     replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+    }
   }
 
   if (replyText) {
@@ -9954,24 +10047,30 @@ async function handleIncomingInstagramText(
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, accountId, attachments);
-  markInboundConversationActivity(buildInboundConversationKey("instagram", senderId, eventId));
+  markInboundConversationActivity(buildInboundConversationKey("instagram", senderId, eventId, accountId));
 
   if (!(await getInstagramAccessToken(accountId))) {
     console.warn(`Instagram access token is unavailable for account ${accountId || "unknown"}; skipping outbound reply`);
     return;
   }
 
-  const preparedTurn = await prepareBundledConversationTurnForSender("instagram", senderId, eventId);
+  const preparedTurn = await prepareBundledConversationTurnForSender("instagram", senderId, eventId, {
+    routeId: accountId,
+  });
   if (!preparedTurn) return;
 
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+    const result = await generateReplyForPreparedTurn("instagram", senderId, eventId, preparedTurn, accountId);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
     clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
+    if (isConversationScopeError(error)) {
+      console.warn("Skipped Instagram reply because conversation scope changed:", error instanceof Error ? error.message : String(error));
+      replyText = "";
+    } else {
     console.error("Failed to generate Instagram bot reply:", error);
     rememberFailedInboundTurn(
       preparedTurn.conversationKey,
@@ -9979,6 +10078,7 @@ async function handleIncomingInstagramText(
       error instanceof Error ? error.message : String(error),
     );
     replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+    }
   }
 
   if (replyText) {
@@ -10057,24 +10157,30 @@ async function handleIncomingWhatsAppText(
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, phoneNumberId, attachments);
-  markInboundConversationActivity(buildInboundConversationKey("whatsapp", senderId, eventId));
+  markInboundConversationActivity(buildInboundConversationKey("whatsapp", senderId, eventId, phoneNumberId));
 
   if (!(await getWhatsAppAccessToken(phoneNumberId))) {
     console.warn(`WhatsApp access token is unavailable for phone number ${phoneNumberId || "unknown"}; skipping outbound reply`);
     return;
   }
 
-  const preparedTurn = await prepareBundledConversationTurnForSender("whatsapp", senderId, eventId);
+  const preparedTurn = await prepareBundledConversationTurnForSender("whatsapp", senderId, eventId, {
+    routeId: phoneNumberId,
+  });
   if (!preparedTurn) return;
 
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+    const result = await generateReplyForPreparedTurn("whatsapp", senderId, eventId, preparedTurn, phoneNumberId);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
     clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
+    if (isConversationScopeError(error)) {
+      console.warn("Skipped WhatsApp reply because conversation scope changed:", error instanceof Error ? error.message : String(error));
+      replyText = "";
+    } else {
     console.error("Failed to generate WhatsApp bot reply:", error);
     rememberFailedInboundTurn(
       preparedTurn.conversationKey,
@@ -10082,6 +10188,7 @@ async function handleIncomingWhatsAppText(
       error instanceof Error ? error.message : String(error),
     );
     replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+    }
   }
 
   if (replyText) {
@@ -10160,24 +10267,30 @@ async function handleIncomingTelegramText(
   }
   const eventId = resolvedEventId;
   await saveMessage(senderId, trimmed, "incoming", eventId, botKey, attachments);
-  markInboundConversationActivity(buildInboundConversationKey("telegram", senderId, eventId));
+  markInboundConversationActivity(buildInboundConversationKey("telegram", senderId, eventId, botKey));
 
   if (!(await getTelegramAccessToken(botKey))) {
     console.warn(`Telegram bot token is unavailable for bot ${botKey || "unknown"}; skipping outbound reply`);
     return;
   }
 
-  const preparedTurn = await prepareBundledConversationTurnForSender("telegram", senderId, eventId);
+  const preparedTurn = await prepareBundledConversationTurnForSender("telegram", senderId, eventId, {
+    routeId: botKey,
+  });
   if (!preparedTurn) return;
 
   let replyText = "";
   let ticketRegistrationIds: string[] = [];
   try {
-    const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+    const result = await generateReplyForPreparedTurn("telegram", senderId, eventId, preparedTurn, botKey);
     replyText = result.text;
     ticketRegistrationIds = result.ticketRegistrationIds;
     clearFailedInboundTurn(preparedTurn.conversationKey);
   } catch (error) {
+    if (isConversationScopeError(error)) {
+      console.warn("Skipped Telegram reply because conversation scope changed:", error instanceof Error ? error.message : String(error));
+      replyText = "";
+    } else {
     console.error("Failed to generate Telegram bot reply:", error);
     rememberFailedInboundTurn(
       preparedTurn.conversationKey,
@@ -10185,6 +10298,7 @@ async function handleIncomingTelegramText(
       error instanceof Error ? error.message : String(error),
     );
     replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+    }
   }
 
   if (replyText) {
@@ -12226,22 +12340,27 @@ async function startServer() {
 
       const pageId = `public-event:${match.event.id}`;
       await saveMessage(senderId, text, "incoming", match.event.id, pageId, attachments);
-      const conversationKey = buildInboundConversationKey("public-web", senderId, match.event.id);
+      const conversationKey = buildInboundConversationKey("public-web", senderId, match.event.id, pageId);
       markInboundConversationActivity(conversationKey);
 
       const preparedTurn = await prepareBundledConversationTurnForSender("public-web", senderId, match.event.id, {
         burstWindowMs: WEBCHAT_BURST_WINDOW_MS,
+        routeId: pageId,
       });
 
       let replyText = "";
       let ticketRegistrationIds: string[] = [];
       if (preparedTurn) {
         try {
-          const result = await generateReplyForPreparedTurn(senderId, match.event.id, preparedTurn);
+          const result = await generateReplyForPreparedTurn("public-web", senderId, match.event.id, preparedTurn, pageId);
           replyText = result.text;
           ticketRegistrationIds = result.ticketRegistrationIds;
           clearFailedInboundTurn(preparedTurn.conversationKey);
         } catch (error) {
+          if (isConversationScopeError(error)) {
+            console.warn("Skipped public event reply because conversation scope changed:", error instanceof Error ? error.message : String(error));
+            replyText = "";
+          } else {
           console.error("Failed to generate public event bot reply:", error);
           rememberFailedInboundTurn(
             preparedTurn.conversationKey,
@@ -12249,6 +12368,7 @@ async function startServer() {
             error instanceof Error ? error.message : String(error),
           );
           replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+          }
         }
       }
 
@@ -13648,8 +13768,7 @@ async function startServer() {
       const status = rawStatus as PublicInboxConversationStatus;
 
       const pageId = `public-event:${eventId}`;
-      const rows = (await appDb.getConversationRowsForSender(senderId, 10, eventId))
-        .filter((row) => normalizeOptionalText(row.page_id) === pageId);
+      const rows = await appDb.getConversationRowsForSender(senderId, 10, eventId, pageId);
       if (rows.length === 0) {
         return res.status(404).json({ error: "Public inbox conversation not found" });
       }
@@ -15054,21 +15173,26 @@ async function startServer() {
       }
 
       await saveMessage(senderId, text, "incoming", eventId, widgetKey, attachments);
-      markInboundConversationActivity(buildInboundConversationKey("webchat", senderId, eventId));
+      markInboundConversationActivity(buildInboundConversationKey("webchat", senderId, eventId, widgetKey));
 
       const preparedTurn = await prepareBundledConversationTurnForSender("webchat", senderId, eventId, {
         burstWindowMs: WEBCHAT_BURST_WINDOW_MS,
+        routeId: widgetKey,
       });
 
       let replyText = "";
       let ticketRegistrationIds: string[] = [];
       if (preparedTurn) {
         try {
-          const result = await generateReplyForPreparedTurn(senderId, eventId, preparedTurn);
+          const result = await generateReplyForPreparedTurn("webchat", senderId, eventId, preparedTurn, widgetKey);
           replyText = result.text;
           ticketRegistrationIds = result.ticketRegistrationIds;
           clearFailedInboundTurn(preparedTurn.conversationKey);
         } catch (error) {
+          if (isConversationScopeError(error)) {
+            console.warn("Skipped web chat reply because conversation scope changed:", error instanceof Error ? error.message : String(error));
+            replyText = "";
+          } else {
           console.error("Failed to generate web chat bot reply:", error);
           rememberFailedInboundTurn(
             preparedTurn.conversationKey,
@@ -15076,6 +15200,7 @@ async function startServer() {
             error instanceof Error ? error.message : String(error),
           );
           replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
+          }
         }
       }
 

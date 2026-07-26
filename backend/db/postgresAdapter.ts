@@ -830,8 +830,15 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows;
   }
 
-  async getMessageHistoryRows(senderId: string, limit: number, eventId?: string) {
+  async getMessageHistoryRows(senderId: string, limit: number, eventId?: string, pageId?: string) {
     if (eventId) {
+      if (pageId) {
+        const result = await this.pool.query<{ text: string; type: MessageType }>(
+          "SELECT text, type FROM messages WHERE sender_id = $1 AND event_id = $2 AND page_id = $3 ORDER BY timestamp DESC, id DESC LIMIT $4",
+          [senderId, eventId, pageId, limit],
+        );
+        return result.rows;
+      }
       const result = await this.pool.query<{ text: string; type: MessageType }>(
         "SELECT text, type FROM messages WHERE sender_id = $1 AND event_id = $2 ORDER BY timestamp DESC, id DESC LIMIT $3",
         [senderId, eventId, limit],
@@ -845,8 +852,15 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows;
   }
 
-  async getConversationRowsForSender(senderId: string, limit: number, eventId?: string) {
+  async getConversationRowsForSender(senderId: string, limit: number, eventId?: string, pageId?: string) {
     if (eventId) {
+      if (pageId) {
+        const result = await this.pool.query<MessageRow>(
+          "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE sender_id = $1 AND event_id = $2 AND page_id = $3 ORDER BY timestamp DESC, id DESC LIMIT $4",
+          [senderId, eventId, pageId, limit],
+        );
+        return result.rows;
+      }
       const result = await this.pool.query<MessageRow>(
         "SELECT id, sender_id, event_id, page_id, text, timestamp::text AS timestamp, type FROM messages WHERE sender_id = $1 AND event_id = $2 ORDER BY timestamp DESC, id DESC LIMIT $3",
         [senderId, eventId, limit],
