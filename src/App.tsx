@@ -4119,7 +4119,7 @@ export default function App() {
         return session;
       }
 
-      if (silentNoSession && sessionRes.status === 401 && !token) {
+      if (silentNoSession && (sessionRes.status === 204 || sessionRes.status === 401) && !token) {
         return null;
       }
 
