@@ -135,6 +135,7 @@ export interface ChannelAccountRecord {
   platform: ChannelPlatform;
   external_id: string;
   display_name: string;
+  organizer_id?: string | null;
   event_id?: string | null;
   is_active: boolean;
   has_access_token?: boolean;

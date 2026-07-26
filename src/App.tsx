@@ -4205,9 +4205,13 @@ export default function App() {
     }
   };
 
-  const fetchChannels = async () => {
+  const fetchChannels = async (eventId = selectedEventId) => {
     try {
-      const res = await apiFetch("/api/channels");
+      const scopedEventId = String(eventId || "").trim();
+      const endpoint = scopedEventId
+        ? `/api/channels?event_id=${encodeURIComponent(scopedEventId)}`
+        : "/api/channels";
+      const res = await apiFetch(endpoint);
       const data = await res.json().catch(() => ([]));
       if (!res.ok) {
         throw new Error(data?.error || "Failed to fetch channels");
@@ -4266,10 +4270,19 @@ export default function App() {
     try {
       const [eventRows] = await Promise.all([
         fetchEvents(),
-        fetchChannels(),
         fetchChannelPlatforms(),
         role === "owner" || role === "admin" ? fetchTeamUsers() : Promise.resolve(),
       ]);
+      const firstWorking =
+        eventRows.find((event) => event.effective_status === "active")
+        || eventRows.find((event) => event.effective_status === "pending")
+        || eventRows.find((event) => event.effective_status === "inactive")
+        || eventRows[0];
+      if (firstWorking?.id) {
+        await fetchChannels(firstWorking.id);
+      } else {
+        setChannels([]);
+      }
       if (!eventRows.length) {
         setLoading(false);
       }
@@ -4750,6 +4763,7 @@ export default function App() {
       setLoading(true);
       try {
         await Promise.all([
+          fetchChannels(selectedEventId),
           fetchSettings(selectedEventId),
           canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
           fetchRegistrations(selectedEventId),

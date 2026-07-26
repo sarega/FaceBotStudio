@@ -215,6 +215,7 @@ export interface ChannelAccountRow {
   platform: ChannelPlatform;
   external_id: string;
   display_name: string;
+  organizer_id: string;
   event_id?: string | null;
   access_token?: string | null;
   is_active: boolean;
@@ -321,6 +322,7 @@ export interface UpsertChannelAccountInput {
   platform: ChannelPlatform;
   external_id: string;
   display_name: string;
+  organizer_id?: string | null;
   event_id?: string | null;
   access_token?: string;
   is_active?: boolean;

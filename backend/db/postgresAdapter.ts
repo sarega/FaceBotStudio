@@ -233,6 +233,7 @@ function mapChannelRow(row: Record<string, unknown>) {
     platform: String(row.platform) as ChannelPlatform,
     external_id: String(row.external_id),
     display_name: String(row.display_name),
+    organizer_id: typeof row.organizer_id === "string" && row.organizer_id.trim() ? row.organizer_id : DEFAULT_ORGANIZATION_ID,
     event_id: row.event_id == null ? null : String(row.event_id),
     access_token: typeof row.access_token === "string" ? row.access_token : null,
     config_json: typeof row.config_json === "string" ? row.config_json : "{}",
@@ -1453,7 +1454,7 @@ export class PostgresAppDatabase implements AppDatabase {
   async listChannelAccounts(platform?: ChannelPlatform) {
     const query = platform
       ? {
-          sql: `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
+          sql: `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
                 FROM channel_accounts ca
                 LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
                 WHERE ca.platform = $1
@@ -1461,7 +1462,7 @@ export class PostgresAppDatabase implements AppDatabase {
           values: [platform],
         }
       : {
-          sql: `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
+          sql: `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
                 FROM channel_accounts ca
                 LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
                 ORDER BY ca.created_at ASC`,
@@ -1473,7 +1474,7 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async getChannelAccount(platform: ChannelPlatform, externalId: string) {
     const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
        FROM channel_accounts ca
        LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
        WHERE ca.platform = $1 AND ca.external_id = $2
@@ -1490,6 +1491,11 @@ export class PostgresAppDatabase implements AppDatabase {
     const hasEventId = Object.prototype.hasOwnProperty.call(input, "event_id");
     const eventId = String(input.event_id || "").trim();
     const storageEventId = eventId || DEFAULT_EVENT_ID;
+    const requestedOrganizerId = String(input.organizer_id || "").trim();
+    const eventOrganizerResult = eventId
+      ? await this.pool.query<{ organizer_id: string }>("SELECT organizer_id FROM events WHERE id = $1 LIMIT 1", [eventId])
+      : undefined;
+    const organizerId = requestedOrganizerId || eventOrganizerResult?.rows[0]?.organizer_id || DEFAULT_ORGANIZATION_ID;
     const accessToken = String(input.access_token || "").trim();
     const configJson = String(input.config_json || "{}").trim() || "{}";
     const existing = await this.pool.query<{ id: string }>(
@@ -1499,16 +1505,17 @@ export class PostgresAppDatabase implements AppDatabase {
     const id = existing.rows[0]?.id || generateEntityId("chn");
 
     await this.pool.query(
-      `INSERT INTO channel_accounts (id, platform, external_id, display_name, event_id, access_token, config_json, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO channel_accounts (id, platform, external_id, display_name, organizer_id, event_id, access_token, config_json, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (platform, external_id) DO UPDATE
        SET display_name = EXCLUDED.display_name,
+           organizer_id = COALESCE(NULLIF(EXCLUDED.organizer_id, ''), channel_accounts.organizer_id),
            event_id = channel_accounts.event_id,
            access_token = COALESCE(NULLIF(EXCLUDED.access_token, ''), channel_accounts.access_token),
            config_json = EXCLUDED.config_json,
            is_active = EXCLUDED.is_active,
            updated_at = CURRENT_TIMESTAMP`,
-      [id, platform, externalId, displayName, storageEventId, accessToken, configJson, input.is_active === false ? false : true],
+      [id, platform, externalId, displayName, organizerId, storageEventId, accessToken, configJson, input.is_active === false ? false : true],
     );
 
     if (hasEventId) {
@@ -1527,7 +1534,7 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
        FROM channel_accounts ca
        LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
        WHERE ca.platform = $1 AND ca.external_id = $2
@@ -1542,7 +1549,7 @@ export class PostgresAppDatabase implements AppDatabase {
     const sourcePlatform = (String(originalPlatform || "facebook").trim() || "facebook") as ChannelPlatform;
     const sourceExternalId = String(originalExternalId || "").trim();
     const originalResult = await this.pool.query<Record<string, unknown>>(
-      "SELECT id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM channel_accounts WHERE platform = $1 AND external_id = $2 LIMIT 1",
+      "SELECT id, platform, external_id, display_name, organizer_id, event_id, access_token, config_json, is_active, created_at::text AS created_at, updated_at::text AS updated_at FROM channel_accounts WHERE platform = $1 AND external_id = $2 LIMIT 1",
       [sourcePlatform, sourceExternalId],
     );
     if (!originalResult.rows[0]) {
@@ -1555,6 +1562,11 @@ export class PostgresAppDatabase implements AppDatabase {
     const displayName = String(input.display_name || "").trim() || externalId;
     const hasEventId = Object.prototype.hasOwnProperty.call(input, "event_id");
     const eventId = String(input.event_id || "").trim();
+    const requestedOrganizerId = String(input.organizer_id || "").trim();
+    const eventOrganizerResult = eventId
+      ? await this.pool.query<{ organizer_id: string }>("SELECT organizer_id FROM events WHERE id = $1 LIMIT 1", [eventId])
+      : undefined;
+    const organizerId = requestedOrganizerId || eventOrganizerResult?.rows[0]?.organizer_id || original.organizer_id || DEFAULT_ORGANIZATION_ID;
     const accessToken = String(input.access_token || "").trim();
     const configJson = String(input.config_json || "{}").trim() || "{}";
     const conflicting = await this.pool.query<{ id: string }>(
@@ -1570,13 +1582,14 @@ export class PostgresAppDatabase implements AppDatabase {
        SET platform = $1,
            external_id = $2,
            display_name = $3,
-           access_token = $4,
-           config_json = $5,
-           is_active = $6,
+           organizer_id = $4,
+           access_token = $5,
+           config_json = $6,
+           is_active = $7,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7
-       RETURNING id, platform, external_id, display_name, access_token, config_json, is_active, created_at::text AS created_at, updated_at::text AS updated_at`,
-      [platform, externalId, displayName, accessToken, configJson, input.is_active === false ? false : true, original.id],
+       WHERE id = $8
+       RETURNING id, platform, external_id, display_name, organizer_id, access_token, config_json, is_active, created_at::text AS created_at, updated_at::text AS updated_at`,
+      [platform, externalId, displayName, organizerId, accessToken, configJson, input.is_active === false ? false : true, original.id],
     );
     if (!result.rows[0]) throw new Error("Failed to update channel account");
 
@@ -1596,7 +1609,7 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const refreshed = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
        FROM channel_accounts ca
        LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
        WHERE ca.id = $1
@@ -1611,6 +1624,18 @@ export class PostgresAppDatabase implements AppDatabase {
     const normalizedChannelId = String(channelId || "").trim();
     const normalizedEventId = String(eventId || "").trim();
     if (!normalizedChannelId || !normalizedEventId) return undefined;
+    const eventOrganizerResult = await this.pool.query<{ organizer_id: string }>(
+      "SELECT organizer_id FROM events WHERE id = $1 LIMIT 1",
+      [normalizedEventId],
+    );
+    const eventOrganizerId = eventOrganizerResult.rows[0]?.organizer_id || DEFAULT_ORGANIZATION_ID;
+    await this.pool.query(
+      `UPDATE channel_accounts
+       SET organizer_id = COALESCE(NULLIF(BTRIM(organizer_id), ''), $1),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [eventOrganizerId, normalizedChannelId],
+    );
     await this.pool.query(
       `INSERT INTO channel_event_assignments (channel_id, event_id)
        VALUES ($1, $2)
@@ -1620,7 +1645,7 @@ export class PostgresAppDatabase implements AppDatabase {
       [normalizedChannelId, normalizedEventId],
     );
     const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
        FROM channel_accounts ca
        LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
        WHERE ca.id = $1
@@ -1635,7 +1660,7 @@ export class PostgresAppDatabase implements AppDatabase {
     if (!normalizedChannelId) return undefined;
     await this.pool.query("DELETE FROM channel_event_assignments WHERE channel_id = $1", [normalizedChannelId]);
     const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
+      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
        FROM channel_accounts ca
        LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
        WHERE ca.id = $1
@@ -2397,15 +2422,18 @@ export class PostgresAppDatabase implements AppDatabase {
 
   private async ensureChannelAccountsBootstrap() {
     await this.pool.query(
-      `INSERT INTO channel_accounts (id, platform, external_id, display_name, event_id, access_token, config_json, is_active, created_at, updated_at)
-       SELECT id, 'facebook', page_id, page_name, event_id, page_access_token, '{}', is_active, created_at, updated_at
-       FROM facebook_pages
+      `INSERT INTO channel_accounts (id, platform, external_id, display_name, organizer_id, event_id, access_token, config_json, is_active, created_at, updated_at)
+       SELECT fp.id, 'facebook', fp.page_id, fp.page_name, COALESCE(e.organizer_id, $1), fp.event_id, fp.page_access_token, '{}', fp.is_active, fp.created_at, fp.updated_at
+       FROM facebook_pages fp
+       LEFT JOIN events e ON e.id = fp.event_id
        ON CONFLICT (platform, external_id) DO UPDATE
        SET display_name = EXCLUDED.display_name,
+           organizer_id = COALESCE(NULLIF(EXCLUDED.organizer_id, ''), channel_accounts.organizer_id),
            event_id = EXCLUDED.event_id,
            access_token = COALESCE(NULLIF(EXCLUDED.access_token, ''), channel_accounts.access_token),
            is_active = EXCLUDED.is_active,
            updated_at = CURRENT_TIMESTAMP`,
+      [DEFAULT_ORGANIZATION_ID],
     );
   }
 

@@ -99,6 +99,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
+const DEFAULT_ORGANIZATION_ID = "org_default";
 const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview";
 const startupSecurityConfig = resolveStartupSecurityConfig(process.env);
 for (const warning of startupSecurityConfig.warnings) {
@@ -3827,6 +3828,7 @@ function serializeChannelAccount(channel: ChannelAccountRow) {
     platform_description: getChannelPlatformDefinition(channel.platform)?.description || "",
     external_id: channel.external_id,
     display_name: channel.display_name,
+    organizer_id: channel.organizer_id,
     event_id: channel.event_id,
     is_active: channel.is_active,
     has_access_token: Boolean(channel.access_token),
@@ -11616,8 +11618,17 @@ async function startServer() {
   app.get("/api/channels", requireAuth, async (req, res) => {
     try {
       const platform = typeof req.query.platform === "string" ? req.query.platform.trim() as ChannelPlatform : undefined;
+      const eventId = typeof req.query.event_id === "string" ? req.query.event_id.trim() : "";
+      const event = eventId ? await appDb.getEventById(eventId) : undefined;
+      if (eventId && !event) {
+        return res.status(404).json({ error: "Event not found" });
+      }
       const channels = await appDb.listChannelAccounts(platform);
-      return res.json(channels.map(serializeChannelAccount));
+      const organizerId = normalizeOptionalText(event?.organizer_id);
+      const visibleChannels = organizerId
+        ? channels.filter((channel) => (normalizeOptionalText(channel.organizer_id) || DEFAULT_ORGANIZATION_ID) === organizerId)
+        : channels;
+      return res.json(visibleChannels.map(serializeChannelAccount));
     } catch (error) {
       console.error("Failed to fetch channels:", error);
       return res.status(500).json({ error: "Failed to fetch channels" });
@@ -11774,6 +11785,15 @@ async function startServer() {
       if (targetAssignedEventId && !targetAssignedEvent) {
         return res.status(404).json({ error: "Assigned event not found" });
       }
+      const existingOrganizerId = normalizeOptionalText(originalChannel?.organizer_id || existingChannel?.organizer_id);
+      const targetOrganizerId = normalizeOptionalText(targetAssignedEvent?.organizer_id)
+        || existingOrganizerId
+        || DEFAULT_ORGANIZATION_ID;
+      if (targetAssignedEvent && existingOrganizerId && existingOrganizerId !== targetAssignedEvent.organizer_id) {
+        return res.status(409).json({
+          error: "This channel belongs to a different organizer and cannot be linked to the selected event",
+        });
+      }
       const isAssignmentChanging = hasEventId && targetAssignedEventId !== currentAssignedEventId;
       const isReenable = Boolean(originalChannel || existingChannel) && !(originalChannel || existingChannel)?.is_active && isActive;
       const isNewActiveAssignment = !currentAssignedEventId && Boolean(targetAssignedEventId) && isActive;
@@ -11802,6 +11822,7 @@ async function startServer() {
         platform,
         external_id: resolvedExternalId,
         display_name: resolvedDisplayName || resolvedExternalId,
+        organizer_id: targetOrganizerId,
         ...(hasEventId ? { event_id: targetAssignedEventId || null } : {}),
         access_token: effectiveAccessToken,
         config_json: JSON.stringify(mergedConfig),
@@ -11869,6 +11890,12 @@ async function startServer() {
         || targetEvent.effective_status === "archived"
       ) {
         return res.status(400).json({ error: "Archived, closed, or cancelled events cannot link channels" });
+      }
+      const channelOrganizerId = normalizeOptionalText(existingChannel.organizer_id) || DEFAULT_ORGANIZATION_ID;
+      if (channelOrganizerId !== targetEvent.organizer_id) {
+        return res.status(409).json({
+          error: "This channel belongs to a different organizer and cannot be linked to the selected event",
+        });
       }
 
       const previousEventId = normalizeOptionalText(existingChannel.event_id);
