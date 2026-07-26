@@ -221,7 +221,7 @@ export function SettingsScreen({
                     </div>
                     <p className="mt-1 text-sm text-slate-500">Inherited unless an event override is enabled.</p>
                   </div>
-                  <StatusLine items={["Applies to all events"]} />
+                  <StatusLine items={["Organization-wide", "Not event facts"]} />
                 </div>
 
                 <div>
@@ -235,8 +235,11 @@ export function SettingsScreen({
                     value={settings.global_system_prompt}
                     onChange={(event) => onSettingsChange({ ...settings, global_system_prompt: event.target.value })}
                     className="h-40 w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Global operating rules for the bot across all events and channels."
+                    placeholder="Shared tone, safety rules, escalation behavior, and operating style. Do not put event schedules, prices, venue details, or event-specific FAQs here."
                   />
+                  <InlineWarning tone="amber" className="mt-2 text-xs">
+                    Keep event-specific facts in the selected event Context. Anything saved here is inherited by every event in this organizer.
+                  </InlineWarning>
                 </div>
 
                 <div>
@@ -393,19 +396,21 @@ export function SettingsScreen({
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="flex items-center gap-2 text-lg font-semibold">
                     <Link2 className="h-5 w-5 text-blue-600" />
-                    Workspace Channel Inventory
+                    Organizer Channel Library
                   </h3>
-                  <HelpPopover label="Open note for Workspace Channel Inventory">
-                    Connection credentials are managed once at the workspace level, then explicitly assigned or moved into events. This keeps shared channels reusable instead of recreating credentials per event.
+                  <HelpPopover label="Open note for Organizer Channel Library">
+                    These are reusable channel configs owned by the same organizer as the selected event. They are shown here so you can reuse credentials safely without seeing channels from other organizers.
                   </HelpPopover>
                 </div>
-                <p className="mt-1 text-sm text-slate-500">Shared connections available across events.</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Same-organizer connections not currently routed to the selected event.
+                </p>
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <div className="surface-tile rounded-xl px-3 py-3">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Configs</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Org configs</p>
                 <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelCount}</p>
               </div>
               <div className="surface-tile rounded-xl px-3 py-3">
@@ -417,7 +422,7 @@ export function SettingsScreen({
                 <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelPlatformCount}</p>
               </div>
               <div className="surface-tile rounded-xl px-3 py-3">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Events Wired</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Events linked</p>
                 <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelEventCount}</p>
               </div>
             </div>
@@ -425,8 +430,8 @@ export function SettingsScreen({
             {workspaceChannelPreview.length === 0 ? (
               <div className="surface-dashed rounded-xl border border-dashed p-4 text-sm text-slate-400">
                 {workspaceChannelCount === 0
-                  ? "No channels configured anywhere in this workspace yet."
-                  : "All configured channels currently belong to the selected event. Use Selected Event Channels below to manage them."}
+                  ? "No same-organizer channels have been configured yet."
+                  : "All same-organizer channels are currently routed to the selected event. Manage them in Selected Event Channels below."}
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -462,8 +467,8 @@ export function SettingsScreen({
                           </p>
                           <p className="mt-1 text-[11px] text-slate-500">
                             {channel.event_id
-                              ? `Assigned to ${eventNameById.get(channel.event_id) || channel.event_id}`
-                              : "Currently unassigned"}
+                              ? `Currently routed to ${eventNameById.get(channel.event_id) || channel.event_id}`
+                              : "Same organizer · not routed to any event"}
                           </p>
                           <div className="mt-3 flex flex-wrap items-center gap-2">
                             <ActionButton
@@ -487,7 +492,7 @@ export function SettingsScreen({
                               className="px-3 text-sm"
                             >
                               <Link2 className="h-3.5 w-3.5" />
-                              {channel.event_id ? "Move to Selected Event" : "Assign to Selected Event"}
+                              {channel.event_id ? "Move Route to This Event" : "Route to This Event"}
                             </ActionButton>
                           </div>
                         </div>
@@ -500,7 +505,7 @@ export function SettingsScreen({
 
             {workspaceOtherEventChannels.length > workspaceChannelPreview.length && (
               <p className="text-xs text-slate-500">
-                Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} channels not currently assigned to the selected event.
+                Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} same-organizer channels not currently routed to the selected event.
               </p>
             )}
           </div>
@@ -514,7 +519,7 @@ export function SettingsScreen({
                     Selected Event Channels
                   </h3>
                   <HelpPopover label="Open note for Selected Event Channels">
-                    These assignments apply only to the currently selected event. Use this section for fast routing control, channel health checks, and event-specific enable or disable actions.
+                    Only channels listed here can route incoming messages to the selected event. Use this section for event routing, channel health checks, and event-specific enable or disable actions.
                   </HelpPopover>
                 </div>
                 <StatusLine
@@ -562,7 +567,7 @@ export function SettingsScreen({
 
                 {visibleSelectedEventChannels.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                    No channels assigned to this event yet. Use New Connection to create one, or assign an existing connection from Workspace Channel Inventory above.
+                    No channels are routed to this event yet. Use New Connection to create one, or route an existing same-organizer connection from Organizer Channel Library above.
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
