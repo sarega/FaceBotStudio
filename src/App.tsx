@@ -3102,6 +3102,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [knowledgeActionsOpen, setKnowledgeActionsOpen] = useState(false);
+  const [contextOptimizing, setContextOptimizing] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [hoverDropdownEnabled, setHoverDropdownEnabled] = useState(false);
   const [registrationVisibleCount, setRegistrationVisibleCount] = useState(120);
@@ -6787,6 +6788,30 @@ export default function App() {
 
   const saveEventContext = async () => saveSettingsSubset(["context"], "Event context saved");
 
+  const optimizeEventContext = async () => {
+    if (!selectedEventId || !settings.context.trim()) return;
+    setContextOptimizing(true);
+    setSettingsMessage("");
+    try {
+      const res = await apiFetch("/api/context/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: selectedEventId, context: settings.context }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to optimize context");
+      const optimizedContext = typeof data?.optimized_context === "string" ? data.optimized_context.trim() : "";
+      if (!optimizedContext) throw new Error("Optimizer returned an empty context");
+      setSettings((previous) => ({ ...previous, context: optimizedContext }));
+      const gateCount = Math.max(0, Number(data?.promo_gate_count || 0));
+      setSettingsMessage(`Context optimized${gateCount ? ` · ${gateCount} protected promotion gate${gateCount === 1 ? "" : "s"}` : ""}. Review and save when ready.`);
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? error.message : "Failed to optimize context");
+    } finally {
+      setContextOptimizing(false);
+    }
+  };
+
   const saveAiSettings = async () => saveSettingsSubset([
     "global_system_prompt",
     "global_llm_model",
@@ -9734,6 +9759,8 @@ export default function App() {
               eventCollapsed={isSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
               onToggleEventCollapsed={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.contextEvent)}
               onSaveEventContext={saveEventContext}
+              onOptimizeEventContext={optimizeEventContext}
+              contextOptimizing={contextOptimizing}
               saving={saving}
               canManageKnowledge={canManageKnowledge}
               knowledgeActionsRef={knowledgeActionsRef}

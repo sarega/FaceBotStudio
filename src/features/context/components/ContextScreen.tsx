@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Sparkles,
   X,
 } from "lucide-react";
 
@@ -42,6 +43,16 @@ type UsageTotals = {
   request_count: number;
 };
 
+function splitContextForEditor(context: string) {
+  const visibleLines: string[] = [];
+  const gateLines: string[] = [];
+  for (const line of String(context || "").split(/\r?\n/)) {
+    if (/^\s*\[\[PROMO_GATE\s+.+\]\]\s*$/.test(line)) gateLines.push(line.trim());
+    else visibleLines.push(line);
+  }
+  return { visibleContext: visibleLines.join("\n"), gateLines };
+}
+
 type ContextScreenProps = {
   selectedEvent: EventRecord | null;
   getEventStatusTone: (status: EventRecord["effective_status"]) => BadgeTone;
@@ -50,6 +61,8 @@ type ContextScreenProps = {
   eventCollapsed: boolean;
   onToggleEventCollapsed: () => void;
   onSaveEventContext: () => unknown;
+  onOptimizeEventContext: () => unknown;
+  contextOptimizing: boolean;
   saving: boolean;
   canManageKnowledge: boolean;
   knowledgeActionsRef: RefObject<HTMLDivElement | null>;
@@ -137,6 +150,8 @@ export function ContextScreen({
   eventCollapsed,
   onToggleEventCollapsed,
   onSaveEventContext,
+  onOptimizeEventContext,
+  contextOptimizing,
   saving,
   canManageKnowledge,
   knowledgeActionsRef,
@@ -215,6 +230,7 @@ export function ContextScreen({
   formatCompactNumber,
   formatUsdCost,
 }: ContextScreenProps) {
+  const editableContext = splitContextForEditor(settings.context);
   return (
     <motion.div
       key="design"
@@ -262,8 +278,17 @@ export function ContextScreen({
                   {!eventCollapsed && (
                     <>
                       <ActionButton
+                        onClick={() => void onOptimizeEventContext()}
+                        disabled={contextOptimizing || saving || !settings.context.trim() || !canManageKnowledge}
+                        tone="neutral"
+                        className="min-w-0 flex-1 text-sm sm:flex-none"
+                      >
+                        {contextOptimizing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                        {contextOptimizing ? "Optimizing..." : "Optimize Context"}
+                      </ActionButton>
+                      <ActionButton
                         onClick={() => void onSaveEventContext()}
-                        disabled={saving || !canManageKnowledge}
+                        disabled={saving || contextOptimizing || !canManageKnowledge}
                         tone="blue"
                         active
                         className="min-w-0 flex-1 text-sm sm:flex-none"
@@ -321,11 +346,22 @@ export function ContextScreen({
               <>
                 <textarea
                   rows={10}
-                  value={settings.context}
-                  onChange={(event) => onSettingsChange({ ...settings, context: event.target.value })}
+                  value={editableContext.visibleContext}
+                  onChange={(event) => onSettingsChange({
+                    ...settings,
+                    context: [event.target.value, ...editableContext.gateLines].filter(Boolean).join("\n\n"),
+                  })}
                   className="min-h-[16rem] w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
                   placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
                 />
+                <p className="mt-2 text-xs text-slate-500">
+                  Optimize restructures your draft and creates protected promotion gates automatically. Review the result before saving.
+                  {editableContext.gateLines.length > 0 && (
+                    <span className="ml-1 font-semibold text-emerald-700">
+                      {editableContext.gateLines.length} protected promotion gate{editableContext.gateLines.length === 1 ? "" : "s"} active.
+                    </span>
+                  )}
+                </p>
                 {settingsMessage && (
                   <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
                     {settingsMessage}
