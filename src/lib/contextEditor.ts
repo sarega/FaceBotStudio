@@ -11,6 +11,7 @@ export function splitContextForEditor(context: string) {
 }
 
 export function composeContextFromEditor(visibleContext: string, gateLines: string[]) {
+  if (!visibleContext) return "";
   if (gateLines.length === 0) return visibleContext;
-  return `${visibleContext}${visibleContext ? "\n" : ""}${gateLines.join("\n")}`;
+  return `${visibleContext}\n${gateLines.join("\n")}`;
 }

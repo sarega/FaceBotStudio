@@ -63,6 +63,7 @@ type ContextScreenProps = {
   knowledgeResetting: boolean;
   selectedEventId: string;
   onResetEventKnowledge: (resetContext: boolean) => unknown;
+  onClearEventContextAndGates: () => unknown;
   settings: Settings;
   onSettingsChange: (nextSettings: Settings) => void;
   settingsMessage: string;
@@ -152,6 +153,7 @@ export function ContextScreen({
   knowledgeResetting,
   selectedEventId,
   onResetEventKnowledge,
+  onClearEventContextAndGates,
   settings,
   onSettingsChange,
   settingsMessage,
@@ -317,6 +319,17 @@ export function ContextScreen({
                             <button
                               onClick={() => {
                                 onKnowledgeActionsOpenChange(false);
+                                void onClearEventContextAndGates();
+                              }}
+                              className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-rose-700 transition-colors hover:bg-rose-50"
+                              role="menuitem"
+                            >
+                              <AlertCircle className="h-4 w-4 shrink-0" />
+                              <span className="font-medium">Clear Context + Reset Gates</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                onKnowledgeActionsOpenChange(false);
                                 void onResetEventKnowledge(true);
                               }}
                               className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-rose-700 transition-colors hover:bg-rose-50"
@@ -339,12 +352,20 @@ export function ContextScreen({
                 {editableContext.gateLines.length > 0 && (
                   <div className="mb-3 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-emerald-900">
                     <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold">Protected promotion gates are active</p>
                       <p className="mt-0.5 text-xs text-emerald-700">
                         {editableContext.gateLines.length} gate{editableContext.gateLines.length === 1 ? "" : "s"} will verify conditions before releasing protected codes.
                       </p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => onSettingsChange({ ...settings, context: editableContext.visibleContext })}
+                      disabled={!canManageKnowledge}
+                      className="shrink-0 rounded-lg border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-800 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Remove gates
+                    </button>
                   </div>
                 )}
                 <textarea

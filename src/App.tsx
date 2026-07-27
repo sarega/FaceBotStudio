@@ -6819,6 +6819,19 @@ export default function App() {
 
   const saveEventContext = async () => saveSettingsSubset(["context"], "Event context saved");
 
+  const clearEventContextAndGates = async () => {
+    if (!selectedEventId) return false;
+    const eventLabel = selectedEvent?.name || "the selected event";
+    if (!window.confirm(
+      `Clear Event Context and promotion gates for "${eventLabel}"?\n\nKnowledge Documents will be kept.`,
+    )) return false;
+    return saveSettingsSubset(
+      ["context"],
+      "Event Context and promotion gates cleared",
+      { ...settings, context: "" },
+    );
+  };
+
   const optimizeEventContext = async () => {
     if (!selectedEventId || !settings.context.trim()) return;
     setContextOptimizing(true);
@@ -9800,6 +9813,7 @@ export default function App() {
               knowledgeResetting={knowledgeResetting}
               selectedEventId={selectedEventId}
               onResetEventKnowledge={handleResetEventKnowledge}
+              onClearEventContextAndGates={clearEventContextAndGates}
               settings={settings}
               onSettingsChange={setSettings}
               settingsMessage={settingsMessage}

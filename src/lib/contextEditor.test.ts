@@ -13,11 +13,11 @@ test("editing visible context does not accumulate hidden separator lines", () =>
   assert.equal(splitContextForEditor(stored).visibleContext, "line one");
 });
 
-test("deleting all visible text leaves the editor empty while preserving gates", () => {
+test("deleting all visible text clears hidden gates too", () => {
   const stored = composeContextFromEditor("", [gate]);
   const result = splitContextForEditor(stored);
   assert.equal(result.visibleContext, "");
-  assert.deepEqual(result.gateLines, [gate]);
+  assert.deepEqual(result.gateLines, []);
 });
 
 test("preserves intentional trailing newlines without moving the cursor value", () => {
