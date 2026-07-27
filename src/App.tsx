@@ -6859,6 +6859,7 @@ export default function App() {
       const optimizedContext = typeof data?.optimized_context === "string" ? data.optimized_context.trim() : "";
       if (!optimizedContext) throw new Error("Optimizer returned an empty context");
       setSettings((previous) => ({ ...previous, context: optimizedContext }));
+      setTestMessages([]);
       const gateCount = Math.max(0, Number(data?.promo_gate_count || 0));
       setSettingsMessage(`Context optimized${gateCount ? ` · ${gateCount} protected promotion gate${gateCount === 1 ? "" : "s"}` : ""}. Review and save when ready.`);
     } catch (error) {
