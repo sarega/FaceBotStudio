@@ -435,6 +435,14 @@ export class PostgresAppDatabase implements AppDatabase {
     return globalRow.rows[0]?.value;
   }
 
+  async getEventSettingUpdatedAt(eventId: string, key: string) {
+    const result = await this.pool.query<{ updated_at: string }>(
+      "SELECT updated_at::text AS updated_at FROM event_settings WHERE event_id = $1 AND key = $2",
+      [eventId, key],
+    );
+    return result.rows[0]?.updated_at || null;
+  }
+
   async upsertSettings(entries: Record<string, string>, eventId = DEFAULT_EVENT_ID) {
     const values = Object.entries(entries);
     if (!values.length) return;

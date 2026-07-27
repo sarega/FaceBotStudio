@@ -788,6 +788,13 @@ export class SqliteAppDatabase implements AppDatabase {
     return globalRow?.value;
   }
 
+  async getEventSettingUpdatedAt(eventId: string, key: string) {
+    const row = this.db.prepare(
+      "SELECT updated_at FROM event_settings WHERE event_id = ? AND key = ?",
+    ).get(eventId, key) as { updated_at?: string } | undefined;
+    return row?.updated_at || null;
+  }
+
   async upsertSettings(entries: Record<string, string>, eventId = DEFAULT_EVENT_ID) {
     const eventStmt = this.db.prepare(
       `INSERT INTO event_settings (event_id, key, value, updated_at)

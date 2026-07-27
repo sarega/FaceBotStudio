@@ -96,6 +96,7 @@ import {
   parsePromoGates,
   sanitizeProtectedPromoCodes,
 } from "./backend/promoGate";
+import { filterRowsAfterContextUpdate } from "./backend/conversationMemory";
 import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor } from "./src/lib/publicEventPageBranding";
@@ -127,6 +128,7 @@ const FACEBOOK_INBOUND_BURST_WINDOW_MS = Math.max(
 );
 const WEBCHAT_BURST_WINDOW_MS = Math.max(0, Number.parseInt(process.env.WEBCHAT_BURST_WINDOW_MS || "350", 10) || 350);
 const CONVERSATION_ROW_LIMIT = Math.max(12, Number.parseInt(process.env.CONVERSATION_ROW_LIMIT || "24", 10) || 24);
+const MODEL_HISTORY_MESSAGE_LIMIT = 6;
 const INBOUND_RESERVATION_TTL_MS = Math.max(5000, Number.parseInt(process.env.INBOUND_RESERVATION_TTL_MS || "30000", 10) || 30000);
 const FAILED_INBOUND_TURN_TTL_MS = Math.max(
   60000,
@@ -473,6 +475,11 @@ function getSystemInstruction(
     "Do not volunteer exact remaining seat counts unless the user asks, but never imply registration is still open when capacity is full.",
     "If the event lifecycle is past, explain that the event has already ended.",
     "Read the recent conversation history before replying and continue naturally from the current chat.",
+    "The current Event Context and Protected Promotion Rules override conflicting or outdated conditions in recent conversation history.",
+    "Treat prior assistant messages only as conversational context, never as verified registration facts.",
+    "Never invent an attendee name, Registration ID, registration status, phone number, email, count, or database match.",
+    "A registration exists only when confirmed by a successful tool or database result. If no record is found, say so and ask for a Registration ID or user-provided identifying details.",
+    "If a prior assistant message claimed registration data without a tool result, ignore that claim.",
     "Only greet on the first assistant reply of a conversation or after a long idle gap. Do not greet on every reply.",
     "If the user sent several back-to-back messages before your turn, answer them in one natural reply without restarting from the beginning.",
     "If image attachments are present, inspect them before replying.",
@@ -910,7 +917,15 @@ function buildChatHistoryFromRows(rows: MessageRow[]): ChatHistoryMessage[] {
   }
 
   historyRows.sort((left, right) => left.id - right.id);
-  return historyRows.map(({ role, parts }) => ({ role, parts }));
+  return historyRows
+    .slice(-MODEL_HISTORY_MESSAGE_LIMIT)
+    .map(({ role, parts }) => ({ role, parts }));
+}
+
+async function filterConversationRowsForCurrentContext(rows: MessageRow[], eventId?: string) {
+  if (!eventId || rows.length === 0) return rows;
+  const contextUpdatedAt = await appDb.getEventSettingUpdatedAt(eventId, "context");
+  return filterRowsAfterContextUpdate(rows, contextUpdatedAt);
 }
 
 function getReservedPendingMessageId(conversationKey: string, now = Date.now()) {
@@ -993,10 +1008,10 @@ async function buildPendingConversationTurn(
   const priorPendingRowIds = new Set(
     distinctPendingRows.slice(0, -1).map((row) => row.id),
   );
-  const historyRows = rows.filter((row) => {
+  const historyRows = await filterConversationRowsForCurrentContext(rows.filter((row) => {
     if (row.id <= boundaryMessageId) return true;
     return row.type === "incoming" && priorPendingRowIds.has(row.id);
-  });
+  }), eventId);
   const latestVisibleOutgoingRow = historyRows.find(
     (row) => row.type === "outgoing" && normalizeMessageTextForHistory(row.text || ""),
   );
@@ -1134,7 +1149,10 @@ async function buildLatestIncomingRetryTurn(senderId: string, eventId: string, r
   const inputParts = buildChatPartsFromStoredMessageRow(latestIncomingRow);
   if (!inputText && inputParts.length === 0) return null;
 
-  const historyRows = rows.filter((row) => row.id < latestIncomingRow.id);
+  const historyRows = await filterConversationRowsForCurrentContext(
+    rows.filter((row) => row.id < latestIncomingRow.id),
+    eventId,
+  );
   return {
     inputText,
     inputParts,
@@ -1377,12 +1395,13 @@ async function optimizeEventContext(context: string, settings: Record<string, an
             "Preserve every factual detail, URL, date, price, limit, condition, and promotion code exactly.",
             "Rewrite into concise Thai headings and bullet points with explicit conversational order.",
             "Remove repeated warnings while preserving their intent once as a clear rule.",
-            "When a promotion has a code that must only be released after conditions:",
+            "Whenever the source contains a promotion code, protect it with a gate even when asking for the promotion is the only requirement:",
             "1. Remove the visible CODE line from normal prose.",
             "2. Add exactly one final directive line using valid JSON:",
             '[[PROMO_GATE {"id":"short-stable-id","code":"EXACT_CODE","label":"Thai promotion/show label","requirement":"selection"}]]',
             'Use requirement "selection" when the bot must ask the user to choose a show first.',
             'Use requirement "image_checklist" when image evidence must show page follow, public share, and friend tag.',
+            'Use requirement "request" when the user only needs to ask for the promotion and no other proof, selection, or condition is required.',
             'If an expiry is explicit, add "expires_at" as an ISO 8601 timestamp with +07:00.',
             "Never place a protected code anywhere except the code field of its PROMO_GATE directive.",
             "Do not add facts or eligibility requirements absent from the source.",
@@ -8953,11 +8972,16 @@ function normalizeMessageTextForHistory(text: string) {
   return raw;
 }
 
-async function getMessageHistoryForSender(senderId: string, limit = 12, eventId?: string, routeId?: string | null): Promise<ChatHistoryMessage[]> {
+async function getMessageHistoryForSender(
+  senderId: string,
+  limit = MODEL_HISTORY_MESSAGE_LIMIT,
+  eventId?: string,
+  routeId?: string | null,
+): Promise<ChatHistoryMessage[]> {
   const rows = await hydrateMessageRowsWithAttachments(
     await appDb.getConversationRowsForSender(senderId, limit, eventId, normalizeOptionalText(routeId) || undefined),
   );
-  return buildChatHistoryFromRows(rows);
+  return buildChatHistoryFromRows(await filterConversationRowsForCurrentContext(rows, eventId));
 }
 
 async function createRegistration(input: RegistrationInput, options?: { source?: string }) {
@@ -9320,6 +9344,7 @@ async function requestOpenRouterChat(
         },
       ],
       tool_choice: "auto",
+      parallel_tool_calls: false,
     }),
   });
 
@@ -9402,6 +9427,21 @@ function getTextFromNormalizedResponse(response: NormalizedChatResponse) {
     .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function sanitizePromoTextParts(
+  response: NormalizedChatResponse,
+  gates: ReturnType<typeof parsePromoGates>["gates"],
+  allowedCodes: string[] = [],
+) {
+  for (const candidate of response.candidates || []) {
+    candidate.content.parts = (candidate.content.parts || []).map((part) =>
+      typeof part.text === "string"
+        ? { ...part, text: sanitizeProtectedPromoCodes(part.text, gates, allowedCodes) }
+        : part,
+    );
+  }
+  return response;
 }
 
 async function buildToolResponseMessages(
@@ -9492,7 +9532,12 @@ async function generateBotReplyForSender(
   const chunks = await getEventDocumentChunkEmbeddings(eventId);
   const knowledgeContext = await buildKnowledgeContext(documents, chunks, incomingText);
   const event = await appDb.getEventById(eventId);
-  const history = historyOverride || await getMessageHistoryForSender(senderId, 12, eventId, routeId);
+  const history = (historyOverride || await getMessageHistoryForSender(
+    senderId,
+    MODEL_HISTORY_MESSAGE_LIMIT,
+    eventId,
+    routeId,
+  )).slice(-MODEL_HISTORY_MESSAGE_LIMIT);
 
   const firstResponse = await requestOpenRouterChat(
     incomingText,
@@ -14397,7 +14442,9 @@ async function startServer() {
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
-      const history = Array.isArray(body.history) ? (body.history as ChatHistoryMessage[]) : [];
+      const history = Array.isArray(body.history)
+        ? (body.history as ChatHistoryMessage[]).slice(-MODEL_HISTORY_MESSAGE_LIMIT)
+        : [];
       const eventId = getRequestedEventId(req);
       const settings = (body.settings && typeof body.settings === "object")
         ? body.settings as Record<string, any>
@@ -14409,7 +14456,11 @@ async function startServer() {
       const hasToolResponses = history.some((entry) =>
         Array.isArray(entry?.parts) && entry.parts.some((part) => Boolean(part?.functionResponse)),
       );
-      const response = await requestOpenRouterChat(
+      const currentParts = [
+        ...(message ? [{ text: message } satisfies ChatPart] : []),
+        ...attachments.map((image) => ({ image } satisfies ChatPart)),
+      ];
+      let response = await requestOpenRouterChat(
         message,
         history,
         settings,
@@ -14425,11 +14476,46 @@ async function startServer() {
           },
         },
         eventId,
-        [
-          ...(message ? [{ text: message } satisfies ChatPart] : []),
-          ...attachments.map((image) => ({ image } satisfies ChatPart)),
-        ],
+        currentParts,
       );
+      const promoCalls = response.functionCalls?.filter((call) => call.name === "releasePromoCode") || [];
+      let issuedPromoCodes: string[] = [];
+      if (promoCalls.length > 0) {
+        const toolResult = await buildToolResponseMessages(
+          "TEST_USER",
+          eventId,
+          promoCalls,
+          message,
+          settings,
+          currentParts,
+          history,
+        );
+        issuedPromoCodes = toolResult.issuedPromoCodes;
+        const assistantMessage: ChatHistoryMessage = {
+          role: "model",
+          parts: response.candidates?.[0]?.content?.parts || [{ text: "" }],
+        };
+        response = await requestOpenRouterChat(
+          "Continue based on the promotion tool result. Reply to the user in plain text only.",
+          [
+            ...history,
+            { role: "user", parts: currentParts },
+            assistantMessage,
+            ...toolResult.messages,
+          ],
+          settings,
+          event?.effective_status || "active",
+          knowledgeContext,
+          {
+            eventId,
+            actorUserId: req.auth?.user.id || null,
+            source: "admin_test",
+            metadata: { stage: "promo_tool_followup" },
+          },
+          eventId,
+        );
+      }
+      sanitizePromoTextParts(response, parsePromoGates(settings.context).gates, issuedPromoCodes);
       res.json(response);
     } catch (error) {
       console.error("OpenRouter chat error:", error);

@@ -413,6 +413,7 @@ export interface AppDatabase {
   listMessages(limit: number, eventId?: string, beforeId?: number): Promise<MessageRow[]>;
   getMessageHistoryRows(senderId: string, limit: number, eventId?: string, pageId?: string): Promise<Array<{ text: string; type: MessageType }>>;
   getConversationRowsForSender(senderId: string, limit: number, eventId?: string, pageId?: string): Promise<MessageRow[]>;
+  getEventSettingUpdatedAt(eventId: string, key: string): Promise<string | null>;
   listEvents(): Promise<EventRow[]>;
   getEventById(eventId: string): Promise<EventRow | undefined>;
   createEvent(input: CreateEventInput): Promise<EventRow>;

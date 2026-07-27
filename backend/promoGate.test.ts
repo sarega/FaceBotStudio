@@ -12,6 +12,7 @@ const context = [
   "ข้อมูลกิจกรรม",
   '[[PROMO_GATE {"id":"student-day","code":"STUDENT22DAY","label":"รอบเสาร์ 14:00","requirement":"selection"}]]',
   '[[PROMO_GATE {"id":"fan","code":"MANOHRA10","label":"ส่วนลดแฟนเพจ 10%","requirement":"image_checklist"}]]',
+  '[[PROMO_GATE {"id":"instant","code":"ASK10","label":"ส่วนลดเมื่อผู้ใช้สอบถาม","requirement":"request"}]]',
 ].join("\n");
 
 test("removes protected codes from model context", () => {
@@ -19,7 +20,7 @@ test("removes protected codes from model context", () => {
   const prompt = `${parsed.safeContext}\n${buildPromoGateInstruction(parsed.gates)}`;
   assert.equal(prompt.includes("STUDENT22DAY"), false);
   assert.equal(prompt.includes("MANOHRA10"), false);
-  assert.equal(parsed.gates.length, 2);
+  assert.equal(parsed.gates.length, 3);
 });
 
 test("requires a current image and complete checklist for fan promotion", () => {
@@ -51,6 +52,11 @@ test("requires the bot to ask for a show before releasing a student code", () =>
   assert.equal(evaluatePromoGate(student, {}, false, false).approved, false);
   assert.equal(evaluatePromoGate(student, {}, false, true).approved, true);
   assert.equal(historyHasShowQuestion(["ต้องการชมรอบไหนคะ"]), true);
+});
+
+test("releases a request-only promotion without old proof requirements", () => {
+  const instant = parsePromoGates(context).gates.find((gate) => gate.id === "instant");
+  assert.equal(evaluatePromoGate(instant, {}, false, false).approved, true);
 });
 
 test("blocks direct code leakage but permits an issued code", () => {

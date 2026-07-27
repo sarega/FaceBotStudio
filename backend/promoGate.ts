@@ -1,4 +1,4 @@
-export type PromoGateRequirement = "selection" | "image_checklist";
+export type PromoGateRequirement = "request" | "selection" | "image_checklist";
 
 export type PromoGate = {
   id: string;
@@ -27,7 +27,7 @@ export function parsePromoGates(context: string) {
       const code = String(value.code || "").trim();
       const label = String(value.label || "").trim();
       const requirement = value.requirement;
-      if (id && code && label && (requirement === "selection" || requirement === "image_checklist")) {
+      if (id && code && label && (requirement === "request" || requirement === "selection" || requirement === "image_checklist")) {
         const expires_at = String(value.expires_at || "").trim() || undefined;
         gates.push({ id, code, label, requirement, expires_at });
       }
@@ -46,7 +46,9 @@ export function buildPromoGateInstruction(gates: PromoGate[]) {
     `- promo_id "${gate.id}": ${gate.label}; gate: ${
       gate.requirement === "image_checklist"
         ? "the current user message must contain image evidence visibly showing page follow, public post share, and friend tag"
-        : "the user must explicitly select this show"
+        : gate.requirement === "selection"
+          ? "the user must explicitly select this show"
+          : "the user must explicitly ask for this promotion; no other proof or condition is required"
     }`,
   );
 
@@ -57,6 +59,7 @@ export function buildPromoGateInstruction(gates: PromoGate[]) {
     "Ask only for the next missing requirement.",
     "For image evidence, inspect the current attached image. Call releasePromoCode only when all three checklist items are visibly present; otherwise say exactly what is missing.",
     "For a show-selection promotion, call releasePromoCode only after the user explicitly identifies one listed show.",
+    "For a request-only promotion, call releasePromoCode as soon as the user asks for that promotion. Do not ask for proof or repeat conditions from old conversation history.",
     ...options,
   ].join("\n");
 }
@@ -95,7 +98,7 @@ export function evaluatePromoGate(
     if (!complete) {
       return { approved: false as const, message: "หลักฐานยังไม่ครบทั้งการติดตามเพจ แชร์แบบสาธารณะ และแท็กเพื่อน" };
     }
-  } else if (!hasPriorShowQuestion) {
+  } else if (gate.requirement === "selection" && !hasPriorShowQuestion) {
     return { approved: false as const, message: "ต้องถามผู้ใช้ก่อนว่าต้องการชมรอบใด แล้วรอคำตอบก่อนปล่อยรหัส" };
   }
 

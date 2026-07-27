@@ -97,6 +97,7 @@ import { TeamAccessPanel } from "./features/team/components/TeamAccessPanel";
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, OrganizerProfileRecord, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
+import { splitContextForEditor } from "./lib/contextEditor";
 import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor, serializePublicSponsorEntries } from "./lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries, serializePublicEventSections, serializePublicSpeakerEntries } from "./lib/publicEventPageLayout";
@@ -758,6 +759,7 @@ const CHANNEL_PLATFORM_WEBHOOK_MAP: Record<ChannelPlatform, WebhookConfigKey[]> 
 const ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-pref-v1";
 const ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-last-audit-v1";
 const WORKSPACE_SESSION_STORAGE_KEY = "facebotstudio-workspace-session-v1";
+const TEST_CHAT_HISTORY_MESSAGE_LIMIT = 6;
 const ADMIN_AGENT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const ADMIN_AGENT_ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const PUBLIC_CHAT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -6817,7 +6819,17 @@ export default function App() {
     }
   };
 
-  const saveEventContext = async () => saveSettingsSubset(["context"], "Event context saved");
+  const saveEventContext = async (
+    sourceSettings = settings,
+    successLabel = "Event context saved",
+  ) => {
+    const contextChanged = sourceSettings.context !== savedSettings.context;
+    const saved = await saveSettingsSubset(["context"], successLabel, sourceSettings);
+    if (saved && contextChanged) {
+      setTestMessages([]);
+    }
+    return saved;
+  };
 
   const clearEventContextAndGates = async () => {
     if (!selectedEventId) return false;
@@ -6825,22 +6837,22 @@ export default function App() {
     if (!window.confirm(
       `Clear Event Context and promotion gates for "${eventLabel}"?\n\nKnowledge Documents will be kept.`,
     )) return false;
-    return saveSettingsSubset(
-      ["context"],
-      "Event Context and promotion gates cleared",
+    return saveEventContext(
       { ...settings, context: "" },
+      "Event Context and promotion gates cleared",
     );
   };
 
   const optimizeEventContext = async () => {
-    if (!selectedEventId || !settings.context.trim()) return;
+    const visibleContext = splitContextForEditor(settings.context).visibleContext.trim();
+    if (!selectedEventId || !visibleContext) return;
     setContextOptimizing(true);
     setSettingsMessage("");
     try {
       const res = await apiFetch("/api/context/optimize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event_id: selectedEventId, context: settings.context }),
+        body: JSON.stringify({ event_id: selectedEventId, context: visibleContext }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Failed to optimize context");
@@ -7014,6 +7026,7 @@ export default function App() {
 
       if (clearContext) {
         setSettings((prev) => ({ ...prev, context: "" }));
+        setTestMessages([]);
       }
       setDocuments([]);
       resetDocumentForm();
@@ -7798,7 +7811,7 @@ export default function App() {
       setInputText("");
       clearTestPendingImages();
 
-      const history = testMessages.map(m => ({
+      const history = testMessages.slice(-TEST_CHAT_HISTORY_MESSAGE_LIMIT).map(m => ({
         role: m.role,
         parts: m.parts
       }));
