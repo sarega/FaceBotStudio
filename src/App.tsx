@@ -757,6 +757,7 @@ const CHANNEL_PLATFORM_WEBHOOK_MAP: Record<ChannelPlatform, WebhookConfigKey[]> 
 };
 const ADMIN_AGENT_DESKTOP_NOTIFY_PREF_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-pref-v1";
 const ADMIN_AGENT_DESKTOP_NOTIFY_LAST_AUDIT_STORAGE_KEY = "facebotstudio-admin-agent-desktop-notify-last-audit-v1";
+const WORKSPACE_SESSION_STORAGE_KEY = "facebotstudio-workspace-session-v1";
 const ADMIN_AGENT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 const ADMIN_AGENT_ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const PUBLIC_CHAT_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -774,6 +775,31 @@ function getDefaultTabForRole(role: UserRole | null | undefined): AppTab {
   if (role === "viewer") return "logs";
   if (role === "operator") return "test";
   return "event";
+}
+
+function readWorkspaceSession() {
+  const fallback = { eventId: "", activeTab: "event" as AppTab, eventWorkspaceView: "setup" as EventWorkspaceView };
+  if (typeof window === "undefined") return fallback;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
+    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "checkin", "inbox"];
+    return {
+      eventId: typeof parsed.eventId === "string" ? parsed.eventId : "",
+      activeTab: validTabs.includes(parsed.activeTab as AppTab) ? parsed.activeTab as AppTab : fallback.activeTab,
+      eventWorkspaceView: parsed.eventWorkspaceView === "public" ? "public" as const : "setup" as const,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeWorkspaceSession(eventId: string, activeTab: AppTab, eventWorkspaceView: EventWorkspaceView) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(WORKSPACE_SESSION_STORAGE_KEY, JSON.stringify({ eventId, activeTab, eventWorkspaceView }));
+  } catch {
+    // Ignore browsers that disable session storage.
+  }
 }
 
 function stripCheckinTokenFromUrl() {
@@ -2869,7 +2895,8 @@ function resetEmailTemplateToDefault(settings: Settings, kind: EmailTemplateKind
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<AppTab>("event");
+  const initialWorkspaceSession = readWorkspaceSession();
+  const [activeTab, setActiveTab] = useState<AppTab>(initialWorkspaceSession.activeTab);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState("");
@@ -2938,7 +2965,7 @@ export default function App() {
   const [publicInboxReplySending, setPublicInboxReplySending] = useState(false);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState("");
+  const [selectedEventId, setSelectedEventId] = useState(initialWorkspaceSession.eventId);
   const [eventLoading, setEventLoading] = useState(false);
   const [eventMessage, setEventMessage] = useState("");
   const [newEventName, setNewEventName] = useState("");
@@ -3092,7 +3119,7 @@ export default function App() {
   const [scannerStarting, setScannerStarting] = useState(false);
   const [scannerError, setScannerError] = useState("");
   const [lastScannedValue, setLastScannedValue] = useState("");
-  const [eventWorkspaceView, setEventWorkspaceView] = useState<EventWorkspaceView>("setup");
+  const [eventWorkspaceView, setEventWorkspaceView] = useState<EventWorkspaceView>(initialWorkspaceSession.eventWorkspaceView);
   const [eventWorkspaceMenuOpen, setEventWorkspaceMenuOpen] = useState(false);
   const [operationsMenuOpen, setOperationsMenuOpen] = useState(false);
   const [setupMenuOpen, setSetupMenuOpen] = useState(false);
@@ -4738,7 +4765,6 @@ export default function App() {
         if (cancelled) return;
         setAuthUser(user);
         setAuthStatus("authenticated");
-        setActiveTab(getDefaultTabForRole(user.role));
       } catch {
         if (cancelled) return;
         setAuthStatus("unauthenticated");
@@ -4750,6 +4776,11 @@ export default function App() {
       cancelled = true;
     };
   }, [checkinAccessMode, publicEventSlug]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !selectedEventId || publicEventSlug || checkinAccessMode) return;
+    writeWorkspaceSession(selectedEventId, activeTab, eventWorkspaceView);
+  }, [authStatus, selectedEventId, activeTab, eventWorkspaceView, publicEventSlug, checkinAccessMode]);
 
   useEffect(() => {
     if (publicEventSlug || checkinAccessMode || authStatus !== "authenticated") return;

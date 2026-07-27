@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
@@ -36,22 +37,13 @@ import type {
   RetrievalDebugResponse,
   Settings,
 } from "../../../types";
+import { composeContextFromEditor, splitContextForEditor } from "../../../lib/contextEditor";
 
 type UsageTotals = {
   total_tokens: number;
   estimated_cost_usd: number;
   request_count: number;
 };
-
-function splitContextForEditor(context: string) {
-  const visibleLines: string[] = [];
-  const gateLines: string[] = [];
-  for (const line of String(context || "").split(/\r?\n/)) {
-    if (/^\s*\[\[PROMO_GATE\s+.+\]\]\s*$/.test(line)) gateLines.push(line.trim());
-    else visibleLines.push(line);
-  }
-  return { visibleContext: visibleLines.join("\n"), gateLines };
-}
 
 type ContextScreenProps = {
   selectedEvent: EventRecord | null;
@@ -344,23 +336,29 @@ export function ContextScreen({
             </div>
             {!eventCollapsed && (
               <>
+                {editableContext.gateLines.length > 0 && (
+                  <div className="mb-3 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-emerald-900">
+                    <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                    <div>
+                      <p className="text-sm font-semibold">Protected promotion gates are active</p>
+                      <p className="mt-0.5 text-xs text-emerald-700">
+                        {editableContext.gateLines.length} gate{editableContext.gateLines.length === 1 ? "" : "s"} will verify conditions before releasing protected codes.
+                      </p>
+                    </div>
+                  </div>
+                )}
                 <textarea
                   rows={10}
                   value={editableContext.visibleContext}
                   onChange={(event) => onSettingsChange({
                     ...settings,
-                    context: [event.target.value, ...editableContext.gateLines].filter(Boolean).join("\n\n"),
+                    context: composeContextFromEditor(event.target.value, editableContext.gateLines),
                   })}
                   className="min-h-[16rem] w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:border-transparent focus:ring-2 focus:ring-blue-500"
                   placeholder="Event-specific FAQ, speaker details, agenda, venue notes, policies, etc."
                 />
                 <p className="mt-2 text-xs text-slate-500">
                   Optimize restructures your draft and creates protected promotion gates automatically. Review the result before saving.
-                  {editableContext.gateLines.length > 0 && (
-                    <span className="ml-1 font-semibold text-emerald-700">
-                      {editableContext.gateLines.length} protected promotion gate{editableContext.gateLines.length === 1 ? "" : "s"} active.
-                    </span>
-                  )}
                 </p>
                 {settingsMessage && (
                   <p className={`mt-3 text-xs ${settingsMessage.toLowerCase().includes("failed") || settingsMessage.toLowerCase().includes("error") ? "text-rose-600" : "text-emerald-600"}`}>
