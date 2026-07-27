@@ -10691,6 +10691,33 @@ async function processInstagramInboundJob(job: InstagramInboundJob) {
   await handleIncomingInstagramText(job.senderId, job.text, job.accountId, job.attachments || []);
 }
 
+async function processInstagramWebhookEntries(entries: any[]) {
+  for (const entry of entries) {
+    const entryAccountId = String(entry?.id || "").trim();
+    const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
+    for (const webhookEvent of messagingEvents) {
+      try {
+        const normalized = normalizeInstagramTextEvent(webhookEvent, entryAccountId);
+        if (!normalized) continue;
+        const acquired = await acquireInstagramWebhookDedup(normalized.dedupKey);
+        if (!acquired) {
+          console.log("Skipped duplicate Instagram webhook event:", normalized.dedupKey);
+          continue;
+        }
+
+        if (canUseInstagramWebhookQueue()) {
+          const queued = await enqueueInstagramInboundJob(normalized);
+          if (queued) continue;
+        }
+
+        await processInstagramInboundJob(normalized);
+      } catch (error) {
+        console.error("Failed to handle incoming Instagram message:", error);
+      }
+    }
+  }
+}
+
 async function processLineInboundJob(job: LineInboundJob) {
   await handleIncomingLineText(job.senderId, job.text, job.destination, job.replyToken || undefined, job.attachments || []);
 }
@@ -14963,7 +14990,7 @@ async function startServer() {
 
     const body = req.body;
 
-    if (!body || body.object !== "page") {
+    if (!body || (body.object !== "page" && body.object !== "instagram")) {
       res.sendStatus(404);
       return;
     }
@@ -14971,6 +14998,11 @@ async function startServer() {
     res.status(200).send("EVENT_RECEIVED");
 
     const entries = Array.isArray(body.entry) ? body.entry : [];
+    if (body.object === "instagram") {
+      void processInstagramWebhookEntries(entries);
+      return;
+    }
+
     void (async () => {
       for (const entry of entries) {
         const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
@@ -15129,34 +15161,7 @@ async function startServer() {
     res.status(200).send("EVENT_RECEIVED");
 
     const entries = Array.isArray(body.entry) ? body.entry : [];
-    void (async () => {
-      for (const entry of entries) {
-        const entryAccountId = String(entry?.id || "").trim();
-        const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
-        for (const webhookEvent of messagingEvents) {
-          try {
-            const normalized = normalizeInstagramTextEvent(webhookEvent, entryAccountId);
-            if (!normalized) continue;
-            const acquired = await acquireInstagramWebhookDedup(normalized.dedupKey);
-            if (!acquired) {
-              console.log("Skipped duplicate Instagram webhook event:", normalized.dedupKey);
-              continue;
-            }
-
-            if (canUseInstagramWebhookQueue()) {
-              const queued = await enqueueInstagramInboundJob(normalized);
-              if (queued) {
-                continue;
-              }
-            }
-
-            await processInstagramInboundJob(normalized);
-          } catch (error) {
-            console.error("Failed to handle incoming Instagram message:", error);
-          }
-        }
-      }
-    })();
+    void processInstagramWebhookEntries(entries);
   });
 
   app.get("/api/webhook/whatsapp", webhookRateLimit, (req, res) => {
