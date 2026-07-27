@@ -43,9 +43,14 @@ export function buildInstagramWebhookDedupKey(webhookEvent: any, fallbackAccount
     return `ig-msg:${messageId}`;
   }
 
+  const postbackMid = typeof webhookEvent?.postback?.mid === "string" ? webhookEvent.postback.mid.trim() : "";
+  if (postbackMid) {
+    return `ig-mid:${postbackMid}`;
+  }
+
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const accountId = String(webhookEvent?.recipient?.id || fallbackAccountId || "").trim();
-  const text = String(webhookEvent?.message?.text || "").trim();
+  const text = String(webhookEvent?.message?.text || webhookEvent?.postback?.payload || webhookEvent?.postback?.title || "").trim();
   const attachmentKey = (Array.isArray(webhookEvent?.message?.attachments) ? webhookEvent.message.attachments : [])
     .map((attachment: any) => String(attachment?.payload?.url || attachment?.type || "").trim())
     .filter(Boolean)

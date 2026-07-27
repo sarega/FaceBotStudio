@@ -10616,7 +10616,12 @@ async function normalizeLineInboundJob(event: any, destination: string) {
 function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: string) {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const accountId = String(webhookEvent?.recipient?.id || fallbackAccountId || "").trim();
-  const text = String(webhookEvent?.message?.text || "").trim();
+  const text = String(
+    webhookEvent?.message?.text
+    || webhookEvent?.postback?.payload
+    || webhookEvent?.postback?.title
+    || "",
+  ).trim();
   const attachments = extractFacebookStyleImageAttachments(webhookEvent);
   const isEcho = Boolean(webhookEvent?.message?.is_echo);
 
@@ -10630,7 +10635,11 @@ function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: stri
     accountId,
     text,
     attachments,
-    messageMid: typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : null,
+    messageMid: typeof webhookEvent?.message?.mid === "string"
+      ? webhookEvent.message.mid.trim()
+      : typeof webhookEvent?.postback?.mid === "string"
+      ? webhookEvent.postback.mid.trim()
+      : null,
     eventTimestamp: Number(webhookEvent?.timestamp || Date.now()),
   } satisfies InstagramInboundJob;
 }
