@@ -1116,6 +1116,11 @@ async function generateReplyForPreparedTurn(
   routeId?: string | null,
 ): Promise<BotReplyResult> {
   await assertAutomatedConversationScope(channel, eventId, routeId);
+  const settings = await getSettingsMap(eventId);
+  if (!isTruthySetting(settings.event_public_bot_enabled ?? "1")) {
+    console.info("Skipped automated reply because the event bot is paused", { channel, event_id: eventId });
+    return { text: "", ticketRegistrationIds: [] };
+  }
   const result = await generateBotReplyForSender(
     senderId,
     eventId,
@@ -1124,6 +1129,10 @@ async function generateReplyForPreparedTurn(
     preparedTurn.inputParts,
     routeId,
   );
+  const latestSettings = await getSettingsMap(eventId);
+  if (!isTruthySetting(latestSettings.event_public_bot_enabled ?? "1")) {
+    return { text: "", ticketRegistrationIds: [] };
+  }
   const shouldSuppressDuplicate =
     preparedTurn.pendingMessageCount > 1 &&
     isNearDuplicateReply(result.text, preparedTurn.latestVisibleOutgoingText);
@@ -3958,23 +3967,6 @@ function serializeChannelAccount(channel: ChannelAccountRow) {
     created_at: channel.created_at,
     updated_at: channel.updated_at,
   };
-}
-
-async function getActiveChannelsAssignedToEvent(eventId: string) {
-  const normalizedEventId = String(eventId || "").trim();
-  if (!normalizedEventId) return [];
-  return (await appDb.listChannelAccounts()).filter(
-    (channel) => channel.is_active && channel.event_id === normalizedEventId,
-  );
-}
-
-function summarizeBlockingChannels(channels: ChannelAccountRow[]) {
-  return channels.map((channel) => ({
-    id: channel.id,
-    platform: channel.platform,
-    display_name: channel.display_name,
-    external_id: channel.external_id,
-  }));
 }
 
 type CheckinAccessPayloadSource = {
@@ -6906,18 +6898,11 @@ async function executeAdminAgentToolCall(
       if (!status) {
         throw new Error("Valid event status is required (pending/active/inactive/cancelled/archived)");
       }
-      if (status !== "active") {
-        const blockingChannels = await getActiveChannelsAssignedToEvent(targetEventId);
-        if (blockingChannels.length > 0) {
-          throw new Error(
-            `Cannot set event ${targetEventId} to ${status} while active channels are assigned: ${blockingChannels.map((channel) => channel.display_name || channel.external_id).join(", ")}. Reassign or disable them first.`,
-          );
-        }
-      }
       const updated = await appDb.updateEvent(targetEventId, { status });
       if (!updated) {
         throw new Error(`Failed to update event status for ${targetEventId}`);
       }
+      await appDb.upsertSettings({ event_public_bot_enabled: status === "active" ? "1" : "0" }, targetEventId);
       return {
         reply: `ตั้งสถานะ ${targetEventId} เป็น ${status} แล้ว`,
         result: {
@@ -11770,16 +11755,6 @@ async function startServer() {
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
-      if (status && status !== "active") {
-        const blockingChannels = await getActiveChannelsAssignedToEvent(eventId);
-        if (blockingChannels.length > 0) {
-          return res.status(409).json({
-            error: `Cannot set this event to ${status} while active channels are assigned. Reassign or disable them first.`,
-            code: "EVENT_HAS_ACTIVE_CHANNELS",
-            channels: summarizeBlockingChannels(blockingChannels),
-          });
-        }
-      }
       const updated = await appDb.updateEvent(eventId, {
         name: nameRaw || undefined,
         status: status ? status as any : undefined,
@@ -11787,9 +11762,13 @@ async function startServer() {
       if (!updated) {
         return res.status(404).json({ error: "Event not found" });
       }
+      if (status) {
+        await appDb.upsertSettings({ event_public_bot_enabled: status === "active" ? "1" : "0" }, eventId);
+      }
       await recordAudit(req, "event.updated", "event", eventId, {
         name: nameRaw || null,
         status: status || null,
+        bot_enabled: status ? status === "active" : null,
       });
       return res.json({ status: "ok" });
     } catch (error) {

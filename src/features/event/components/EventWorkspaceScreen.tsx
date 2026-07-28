@@ -26,6 +26,8 @@ import {
   Mic2,
   Palette,
   PanelRightOpen,
+  Pause,
+  Play,
   Plus,
   Power,
   QrCode,
@@ -140,7 +142,9 @@ type EventWorkspaceScreenProps = {
     successMessage?: string;
     silent?: boolean;
   }) => unknown;
+  handleSetEventBotEnabled: (enabled: boolean) => unknown;
   eventStatusToggle: EventStatusToggle;
+  eventBotRunning: boolean;
   eventLoading: boolean;
   handleCloneEvent: () => unknown;
   handleDeleteEvent: () => unknown;
@@ -447,7 +451,9 @@ export function EventWorkspaceScreen({
   saveEventDetails,
   saving,
   handleUpdateEvent,
+  handleSetEventBotEnabled,
   eventStatusToggle,
+  eventBotRunning,
   eventLoading,
   handleCloneEvent,
   handleDeleteEvent,
@@ -607,6 +613,9 @@ export function EventWorkspaceScreen({
                         selectedEvent?.registration_availability && selectedEvent.registration_availability !== "open"
                           ? <>Registration {getRegistrationAvailabilityLabel(selectedEvent.registration_availability)}</>
                           : "Registration open",
+                        selectedEvent?.effective_status === "active"
+                          ? eventBotRunning ? "Bot running" : "Bot paused"
+                          : "Bot stopped",
                         eventSetupDirty ? "Unsaved changes" : "All changes saved",
                       ]}
                     />
@@ -636,6 +645,16 @@ export function EventWorkspaceScreen({
                         : <Activity className="h-4 w-4" />}
                       {eventStatusToggle.label}
                     </ActionButton>
+                    <ActionButton
+                      onClick={() => void handleSetEventBotEnabled(!eventBotRunning)}
+                      disabled={!selectedEvent || selectedEvent.effective_status !== "active" || eventLoading || saving}
+                      tone={eventBotRunning ? "amber" : "emerald"}
+                      active={!eventBotRunning}
+                      className="w-full text-sm sm:w-auto sm:shrink-0"
+                    >
+                      {eventBotRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      {eventBotRunning ? "Pause Bot" : "Resume Bot"}
+                    </ActionButton>
                     {selectedEvent && (
                       <InlineActionsMenu label="Event Actions" tone="neutral">
                         <MenuActionItem
@@ -654,7 +673,7 @@ export function EventWorkspaceScreen({
                             className="mt-1"
                           >
                             <Power className="h-3.5 w-3.5" />
-                            <span className="font-medium">Set Inactive</span>
+                            <span className="font-medium">Stop Event</span>
                           </MenuActionItem>
                         )}
                         {!selectedEvent.is_default && selectedEvent.status !== "archived" && (
@@ -1274,19 +1293,10 @@ export function EventWorkspaceScreen({
                           </div>
                           {settings.event_public_ticketing_mode === "external" && <p className="mt-2 text-xs text-slate-500">The public CTA opens this URL in a new tab. Meetrix registration and ticket recovery are hidden.</p>}
                         </div>
-                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            checked={publicBotEnabled}
-                            onChange={(event) =>
-                              setSettings({
-                                ...settings,
-                                event_public_bot_enabled: event.target.checked ? "1" : "0",
-                              })}
-                          />
-                          Bot help
-                        </label>
+                        <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                          <Bot className="h-4 w-4" />
+                          Event bot {publicBotEnabled ? "running" : "paused"} · controlled from Event Information
+                        </span>
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"

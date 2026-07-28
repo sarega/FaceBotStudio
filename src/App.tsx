@@ -1509,17 +1509,17 @@ function describeEventTiming(settings: Settings) {
 function getEventStatusLabel(status: EventStatus) {
   switch (status) {
     case "pending":
-      return "pending";
+      return "READY";
     case "active":
-      return "active";
+      return "LIVE";
     case "inactive":
-      return "inactive";
+      return "STOPPED";
     case "closed":
-      return "closed";
+      return "FINISHED";
     case "cancelled":
-      return "cancelled";
+      return "CANCELLED";
     case "archived":
-      return "archived";
+      return "ARCHIVED";
     default:
       return status;
   }
@@ -3444,6 +3444,7 @@ export default function App() {
     ? "verified_contact"
     : "shared_contact";
   const publicBotEnabled = settings.event_public_bot_enabled === "1";
+  const eventBotRunning = selectedEvent?.effective_status === "active" && publicBotEnabled;
   const publicPrivacyEnabled = settings.event_public_privacy_enabled === "1";
   const publicContactEnabled = settings.event_public_contact_enabled === "1";
   const publicContactIntro = settings.event_public_contact_intro.trim() || INITIAL_SETTINGS.event_public_contact_intro;
@@ -3715,7 +3716,7 @@ export default function App() {
         };
       }
       return {
-        label: "Set Inactive",
+        label: "Stop Event",
         nextStatus: "inactive" as const,
         tone: "neutral" as ActionTone,
         disabled: eventLoading,
@@ -3723,7 +3724,7 @@ export default function App() {
     }
     if (selectedEvent.status === "active") {
       return {
-        label: "Set Inactive",
+        label: "Stop Event",
         nextStatus: "inactive" as const,
         tone: "neutral" as ActionTone,
         disabled: eventLoading,
@@ -3731,7 +3732,7 @@ export default function App() {
     }
     if (selectedEvent.status === "inactive") {
       return {
-        label: "LIVE!",
+        label: "Go Live",
         nextStatus: "active" as const,
         tone: "emerald" as ActionTone,
         disabled: eventLoading,
@@ -3754,7 +3755,7 @@ export default function App() {
       };
     }
     return {
-      label: "LIVE!",
+      label: "Go Live",
       nextStatus: "active" as const,
       tone: "emerald" as ActionTone,
       disabled: eventLoading,
@@ -8269,13 +8270,6 @@ export default function App() {
     silent?: boolean;
   } = {}) => {
     if (!selectedEventId || !selectedEvent) return;
-    const blockingChannels = selectedEventChannels.filter((channel) => channel.is_active);
-    if (status && status !== "active" && blockingChannels.length > 0) {
-      setEventMessage(
-        `Error: reassign or disable ${blockingChannels.map((channel) => channel.display_name || channel.external_id).join(", ")} before setting this event to ${status}.`,
-      );
-      return;
-    }
     const payload: Record<string, unknown> = {};
     const trimmedName = String(name || "").trim();
     if (trimmedName && trimmedName !== selectedEvent.name) {
@@ -8298,6 +8292,11 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data?.error || "Failed to update event");
       }
+      if (status) {
+        const nextBotEnabled = status === "active" ? "1" : "0";
+        setSettings((current) => ({ ...current, event_public_bot_enabled: nextBotEnabled }));
+        setSavedSettings((current) => ({ ...current, event_public_bot_enabled: nextBotEnabled }));
+      }
       await fetchEvents();
       if (!silent && successMessage) {
         setEventMessage(successMessage);
@@ -8315,6 +8314,17 @@ export default function App() {
     } finally {
       setEventLoading(false);
     }
+  };
+
+  const handleSetEventBotEnabled = async (enabled: boolean) => {
+    if (!selectedEventId || selectedEvent?.effective_status !== "active") return false;
+    const nextSettings = { ...settings, event_public_bot_enabled: enabled ? "1" : "0" };
+    setSettings(nextSettings);
+    return saveSettingsSubset(
+      ["event_public_bot_enabled"],
+      enabled ? "Event bot resumed" : "Event bot paused; incoming messages will remain in the inbox",
+      nextSettings,
+    );
   };
 
   const handleCloneEvent = async () => {
@@ -9657,7 +9667,9 @@ export default function App() {
               saveEventDetails={saveEventDetails}
               saving={saving}
               handleUpdateEvent={handleUpdateEvent}
+              handleSetEventBotEnabled={handleSetEventBotEnabled}
               eventStatusToggle={eventStatusToggle}
+              eventBotRunning={eventBotRunning}
               eventLoading={eventLoading}
               handleCloneEvent={handleCloneEvent}
               handleDeleteEvent={handleDeleteEvent}
