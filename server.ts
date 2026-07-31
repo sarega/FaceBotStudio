@@ -8645,7 +8645,7 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const panelArtwork = artworkDataUrl && artworkMode === "panel"
     ? `<rect x="742" y="46" width="384" height="200" rx="22" fill="${accentColor}" opacity=".32"/><image x="748" y="52" width="372" height="188" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`
     : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675"><style>${buildEmbeddedTicketFontCss()} text{font-family:"TicketNoto",sans-serif!important}</style>
     ${artworkDefs}<rect width="1200" height="675" fill="#0b1220"/><rect x="34" y="34" width="1132" height="607" rx="32" fill="#fffaf0"/>${backgroundArtwork}
     <path d="M34 258 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/><path d="M62 74 Q62 62 74 62 M1138 74 Q1138 62 1126 62" fill="none" stroke="${accentColor}" stroke-width="2" opacity=".8"/>
     ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="26" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
@@ -9059,6 +9059,10 @@ async function renderDirectTicketPdfBuffer(svg: string) {
   try {
     const page = await browser.newPage();
     await page.setContent(`<!doctype html><html><head><style>@page{size:154mm 111mm;margin:0}html,body{margin:0;width:154mm;height:111mm;overflow:hidden}svg{position:absolute;inset:0;display:block;width:154mm;height:111mm}</style></head><body>${svg}</body></html>`, { waitUntil: "domcontentloaded" });
+    await page.evaluate(async () => {
+      const fonts = (document as any).fonts;
+      if (fonts?.ready) await fonts.ready;
+    });
     return Buffer.from(await page.pdf({ printBackground: true, preferCSSPageSize: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
   } finally { await browser.close(); }
 }
@@ -9075,6 +9079,10 @@ async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
       sheets.push(`<section class="sheet">${items}</section>`);
     }
     await page.setContent(`<!doctype html><html><head><style>@page{size:A4 landscape;margin:0}html,body{margin:0}.sheet{box-sizing:border-box;width:297mm;height:210mm;display:grid;grid-template-columns:repeat(2,148.5mm);grid-template-rows:repeat(2,105mm);break-after:page}.ticket{position:relative;overflow:hidden;border:.15mm dashed #777}.ticket svg{display:block;width:148.5mm;height:105mm}</style></head><body>${sheets.join("")}</body></html>`, { waitUntil: "domcontentloaded" });
+    await page.evaluate(async () => {
+      const fonts = (document as any).fonts;
+      if (fonts?.ready) await fonts.ready;
+    });
     return Buffer.from(await page.pdf({ format: "A4", landscape: true, printBackground: true, preferCSSPageSize: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
   } finally { await browser.close(); }
 }
