@@ -8597,9 +8597,11 @@ function resolveDirectTicketArtworkDataUrl(settings: Record<string, string>) {
 }
 
 function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string, string>, qrDataUrl: string, artworkDataUrl = "") {
-  const eventName = escapeXml(String(settings.event_name || "Event Ticket").trim() || "Event Ticket");
-  const holder = escapeXml(ticket.holder_name || ticket.buyer_name || "Guest");
-  const performance = escapeXml(ticket.performance_title || ticket.performance_code || "Performance");
+  const wrap = (value: string, max: number) => { const words = value.trim().split(/\s+/); const lines: string[] = []; let line = ""; for (const word of words) { if ((line + " " + word).trim().length > max && line) { lines.push(line); line = word; } else line = (line + " " + word).trim(); } if (line) lines.push(line); return lines.slice(0, 2); };
+  const text = (value: string, max: number) => wrap(value, max).map((line, index) => `<tspan x="88" dy="${index ? 42 : 0}">${escapeXml(line)}</tspan>`).join("");
+  const eventName = text(String(settings.event_name || "Event Ticket").trim() || "Event Ticket", 30);
+  const holder = text(ticket.holder_name || ticket.buyer_name || "Guest", 28);
+  const performance = text(ticket.performance_title || ticket.performance_code || "Performance", 34);
   const seat = escapeXml([ticket.zone, ticket.row_label && `Row ${ticket.row_label}`, ticket.seat_label && `Seat ${ticket.seat_label}`].filter(Boolean).join(" · "));
   const ticketClass = escapeXml(ticket.ticket_class || "VIP");
   const ticketId = escapeXml(ticket.id);
@@ -8610,20 +8612,20 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const heading = escapeXml(String(settings.direct_ticket_heading || "DIRECT SEAT TICKET").trim().slice(0, 60) || "DIRECT SEAT TICKET");
   const note = escapeXml(String(settings.direct_ticket_note || "").trim().slice(0, 120));
   const artworkMode = settings.direct_ticket_artwork_mode === "background" ? "background" : "panel";
-  const artworkDefs = artworkDataUrl ? `<defs><clipPath id="ticket"><rect x="34" y="34" width="1132" height="607" rx="32"/></clipPath><clipPath id="artwork"><rect x="850" y="48" width="270" height="178" rx="18"/></clipPath></defs>` : "";
+  const artworkDefs = artworkDataUrl ? `<defs><clipPath id="ticket"><rect x="34" y="34" width="1132" height="607" rx="32"/></clipPath><clipPath id="artwork"><rect x="748" y="52" width="372" height="188" rx="18"/></clipPath></defs>` : "";
   const backgroundArtwork = artworkDataUrl && artworkMode === "background"
-    ? `<image x="34" y="34" width="1132" height="607" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#ticket)"/><rect x="34" y="258" width="1132" height="383" fill="#fffaf0" opacity=".94"/><rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}" opacity=".82"/>`
+    ? `<image x="34" y="34" width="1132" height="607" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#ticket)"/><rect x="34" y="258" width="1132" height="383" fill="#fffaf0" opacity=".82"/><rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}" opacity=".84"/>`
     : "";
   const panelArtwork = artworkDataUrl && artworkMode === "panel"
-    ? `<image x="850" y="48" width="270" height="178" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`
+    ? `<rect x="742" y="46" width="384" height="200" rx="22" fill="${accentColor}" opacity=".32"/><image x="748" y="52" width="372" height="188" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`
     : "";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
     ${artworkDefs}<rect width="1200" height="675" fill="#0b1220"/><rect x="34" y="34" width="1132" height="607" rx="32" fill="#fffaf0"/>${backgroundArtwork}
-    <path d="M34 258 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/>
+    <path d="M34 258 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/><path d="M62 74 Q62 62 74 62 M1138 74 Q1138 62 1126 62" fill="none" stroke="${accentColor}" stroke-width="2" opacity=".8"/>
     ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="26" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
-    <text x="88" y="163" font-family="sans-serif" font-size="44" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="208" font-family="sans-serif" font-size="25" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
+    <text x="88" y="150" font-family="sans-serif" font-size="36" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="222" font-family="sans-serif" font-size="22" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
     <text x="88" y="330" font-family="sans-serif" font-size="19" fill="#7a6f66">GUEST</text><text x="88" y="372" font-family="sans-serif" font-size="34" font-weight="700" fill="#251b16">${holder}</text>
-    <text x="88" y="432" font-family="sans-serif" font-size="19" fill="#7a6f66">PERFORMANCE</text><text x="88" y="466" font-family="sans-serif" font-size="25" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="496" font-family="sans-serif" font-size="18" fill="#5b5148">${performanceDate}</text>
+    <text x="88" y="432" font-family="sans-serif" font-size="19" fill="#7a6f66">PERFORMANCE</text><text x="88" y="466" font-family="sans-serif" font-size="25" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="520" font-family="sans-serif" font-size="18" fill="#5b5148">${performanceDate}</text>
     <text x="88" y="526" font-family="sans-serif" font-size="19" fill="#7a6f66">YOUR SEAT</text><text x="88" y="568" font-family="sans-serif" font-size="31" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
     ${note ? `<text x="88" y="612" font-family="sans-serif" font-size="16" fill="#6b625b">${note}</text>` : ""}
     <rect x="870" y="310" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="325" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>

@@ -2098,6 +2098,7 @@ const INITIAL_SETTINGS: Settings = {
   direct_ticket_accent_color: "#d8b66a",
   direct_ticket_heading: "DIRECT SEAT TICKET",
   direct_ticket_note: "Please present this ticket at the entrance.",
+  direct_ticket_classes_json: '[{"id":"vip","name":"VIP","price_amount":0,"payment_required":true},{"id":"complimentary","name":"Complimentary","price_amount":0,"payment_required":false}]',
   confirmation_email_enabled: "0",
   confirmation_email_subject: "Your registration for {{event_name}}",
   email_template_registration_confirmation_subject: "",
@@ -2181,6 +2182,7 @@ function getBlankEventScopedSettings() {
     direct_ticket_accent_color: "#d8b66a",
     direct_ticket_heading: "DIRECT SEAT TICKET",
     direct_ticket_note: "Please present this ticket at the entrance.",
+    direct_ticket_classes_json: '[{"id":"vip","name":"VIP","price_amount":0,"payment_required":true},{"id":"complimentary","name":"Complimentary","price_amount":0,"payment_required":false}]',
     confirmation_email_enabled: "0",
     confirmation_email_subject: "Your registration for {{event_name}}",
     email_template_registration_confirmation_subject: "",
@@ -2261,6 +2263,7 @@ function getBlankEventScopedSettings() {
     | "direct_ticket_accent_color"
     | "direct_ticket_heading"
     | "direct_ticket_note"
+    | "direct_ticket_classes_json"
     | "confirmation_email_enabled"
     | "confirmation_email_subject"
     | "email_template_registration_confirmation_subject"
@@ -2680,6 +2683,8 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.direct_ticket_heading === "string" ? data.direct_ticket_heading : INITIAL_SETTINGS.direct_ticket_heading,
     direct_ticket_note:
       typeof data.direct_ticket_note === "string" ? data.direct_ticket_note : INITIAL_SETTINGS.direct_ticket_note,
+    direct_ticket_classes_json:
+      typeof data.direct_ticket_classes_json === "string" ? data.direct_ticket_classes_json : INITIAL_SETTINGS.direct_ticket_classes_json,
     confirmation_email_enabled:
       typeof data.confirmation_email_enabled === "string" && data.confirmation_email_enabled.trim()
         ? data.confirmation_email_enabled.trim()

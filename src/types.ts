@@ -365,6 +365,7 @@ export interface Settings {
   direct_ticket_accent_color: string;
   direct_ticket_heading: string;
   direct_ticket_note: string;
+  direct_ticket_classes_json: string;
   confirmation_email_enabled: string;
   confirmation_email_subject: string;
   email_template_registration_confirmation_subject: string;
