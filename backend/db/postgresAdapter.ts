@@ -388,6 +388,7 @@ function mapDirectTicketRow(row: Record<string, unknown>) {
     created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
     performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined,
     performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined,
+    performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined,
     zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined,
     seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined,
   } satisfies DirectTicketRow;
@@ -820,7 +821,7 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   private async directTicketRows(where: string, params: unknown[]) {
-    const result = await this.pool.query<Record<string, unknown>>(`SELECT t.*,p.code performance_code,p.title performance_title,p.starts_at::text performance_starts_at,s.zone,s.row_label,s.seat_label FROM direct_tickets t JOIN event_performances p ON p.id=t.performance_id JOIN direct_seats s ON s.id=t.seat_id ${where}`, params); return result.rows.map(mapDirectTicketRow);
+    const result = await this.pool.query<Record<string, unknown>>(`SELECT t.*,p.code performance_code,p.title performance_title,p.starts_at::text performance_starts_at,p.ends_at::text performance_ends_at,s.zone,s.row_label,s.seat_label FROM direct_tickets t JOIN event_performances p ON p.id=t.performance_id JOIN direct_seats s ON s.id=t.seat_id ${where}`, params); return result.rows.map(mapDirectTicketRow);
   }
 
   async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketRows("WHERE t.event_id=$1 ORDER BY t.created_at DESC", [eventId]); }

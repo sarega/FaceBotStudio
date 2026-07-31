@@ -8606,6 +8606,11 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const ticketClass = escapeXml(ticket.ticket_class || "VIP");
   const ticketId = escapeXml(ticket.id);
   const performanceDate = escapeXml(formatStoredDateForDisplay(ticket.performance_starts_at || "", normalizeTimeZone(settings.event_timezone)));
+  const performanceEnd = ticket.performance_ends_at ? escapeXml(formatStoredDateForDisplay(ticket.performance_ends_at, normalizeTimeZone(settings.event_timezone))) : "";
+  const eventTime = performanceEnd ? `${performanceDate} – ${performanceEnd}` : performanceDate;
+  const venue = escapeXml(String(settings.event_venue_name || settings.event_location || "").trim());
+  const entryCode = escapeXml(ticket.id.replace(/^dtkt_/i, "").slice(-8).toUpperCase());
+  const price = ticket.price_amount > 0 ? `${ticket.price_amount.toLocaleString("en-US")} THB` : "Complimentary";
   const safeColor = (value: string, fallback: string) => /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
   const primaryColor = safeColor(String(settings.direct_ticket_primary_color || ""), "#321d48");
   const accentColor = safeColor(String(settings.direct_ticket_accent_color || ""), "#d8b66a");
@@ -8625,11 +8630,13 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
     ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="26" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
     <text x="88" y="150" font-family="sans-serif" font-size="36" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="222" font-family="sans-serif" font-size="22" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
     <text x="88" y="330" font-family="sans-serif" font-size="19" fill="#7a6f66">GUEST</text><text x="88" y="372" font-family="sans-serif" font-size="34" font-weight="700" fill="#251b16">${holder}</text>
-    <text x="88" y="432" font-family="sans-serif" font-size="19" fill="#7a6f66">PERFORMANCE</text><text x="88" y="466" font-family="sans-serif" font-size="25" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="520" font-family="sans-serif" font-size="18" fill="#5b5148">${performanceDate}</text>
-    <text x="88" y="526" font-family="sans-serif" font-size="19" fill="#7a6f66">YOUR SEAT</text><text x="88" y="568" font-family="sans-serif" font-size="31" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
-    ${note ? `<text x="88" y="612" font-family="sans-serif" font-size="16" fill="#6b625b">${note}</text>` : ""}
+    <text x="88" y="432" font-family="sans-serif" font-size="19" fill="#7a6f66">PERFORMANCE</text><text x="88" y="466" font-family="sans-serif" font-size="25" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="510" font-family="sans-serif" font-size="18" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="536" font-family="sans-serif" font-size="16" fill="#6b625b">${venue}</text>` : ""}
+    <text x="88" y="570" font-family="sans-serif" font-size="15" fill="#7a6f66">TICKET TYPE</text><text x="88" y="600" font-family="sans-serif" font-size="23" font-weight="700" fill="#251b16">${ticketClass}</text>
+    <text x="330" y="570" font-family="sans-serif" font-size="15" fill="#7a6f66">PRICE</text><text x="330" y="600" font-family="sans-serif" font-size="23" font-weight="700" fill="#251b16">${price}</text>
+    <text x="570" y="570" font-family="sans-serif" font-size="15" fill="#7a6f66">ZONE / SEAT</text><text x="570" y="600" font-family="sans-serif" font-size="23" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
+    ${note ? `<text x="88" y="625" font-family="sans-serif" font-size="13" fill="#6b625b">${note}</text>` : ""}
     <rect x="870" y="310" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="325" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>
-    <text x="980" y="572" text-anchor="middle" font-family="monospace" font-size="14" fill="#5b5148">${ticketId}</text>
+    <text x="980" y="558" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#5b5148">ENTRY CODE</text><text x="980" y="582" text-anchor="middle" font-family="monospace" font-size="17" font-weight="700" fill="#251b16">${entryCode}</text><text x="980" y="608" text-anchor="middle" font-family="monospace" font-size="11" fill="#6b625b">ORDER ${ticketId}</text>
   </svg>`;
 }
 

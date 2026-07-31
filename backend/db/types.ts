@@ -133,6 +133,7 @@ export interface DirectTicketRow {
   performance_code?: string;
   performance_title?: string;
   performance_starts_at?: string;
+  performance_ends_at?: string;
   zone?: string;
   row_label?: string;
   seat_label?: string;
