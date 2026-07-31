@@ -8620,10 +8620,10 @@ function resolveDirectTicketClassColors(settings: Record<string, string>, ticket
 
 function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string, string>, qrDataUrl: string, artworkDataUrl = "") {
   const wrap = (value: string, max: number) => { const words = value.trim().split(/\s+/); const lines: string[] = []; let line = ""; for (const word of words) { if ((line + " " + word).trim().length > max && line) { lines.push(line); line = word; } else line = (line + " " + word).trim(); } if (line) lines.push(line); return lines.slice(0, 2); };
-  const text = (value: string, max: number) => wrap(value, max).map((line, index) => `<tspan x="88" dy="${index ? 42 : 0}">${escapeXml(line)}</tspan>`).join("");
+  const text = (value: string, max: number, lineDy = 42) => wrap(value, max).map((line, index) => `<tspan x="88" dy="${index ? lineDy : 0}">${escapeXml(line)}</tspan>`).join("");
   const eventName = text(String(settings.event_name || "Event Ticket").trim() || "Event Ticket", 30);
   const holder = text(ticket.holder_name || ticket.buyer_name || "Guest", 28);
-  const performance = text(ticket.performance_title || ticket.performance_code || "Performance", 34);
+  const performance = text(ticket.performance_title || ticket.performance_code || "Performance", 48, 38);
   const seat = escapeXml([ticket.zone, ticket.row_label && `Row ${ticket.row_label}`, ticket.seat_label && `Seat ${ticket.seat_label}`].filter(Boolean).join(" · "));
   const ticketClass = escapeXml(ticket.ticket_class || "VIP");
   const ticketId = escapeXml(ticket.id);
@@ -8648,14 +8648,14 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675"><style>${buildEmbeddedTicketFontCss()} text{font-family:"TicketNoto",sans-serif!important}</style>
     ${artworkDefs}<rect width="1200" height="675" fill="#0b1220"/><rect x="34" y="34" width="1132" height="607" rx="32" fill="#fffaf0"/>${backgroundArtwork}
     <path d="M34 258 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/><path d="M62 74 Q62 62 74 62 M1138 74 Q1138 62 1126 62" fill="none" stroke="${accentColor}" stroke-width="2" opacity=".8"/>
-    ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="26" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
-    <text x="88" y="150" font-family="sans-serif" font-size="36" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="222" font-family="sans-serif" font-size="22" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
-    <text x="88" y="330" font-family="sans-serif" font-size="19" fill="#7a6f66">GUEST</text><text x="88" y="372" font-family="sans-serif" font-size="34" font-weight="700" fill="#251b16">${holder}</text>
-    <text x="88" y="432" font-family="sans-serif" font-size="19" fill="#7a6f66">PERFORMANCE</text><text x="88" y="466" font-family="sans-serif" font-size="25" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="510" font-family="sans-serif" font-size="18" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="536" font-family="sans-serif" font-size="16" fill="#6b625b">${venue}</text>` : ""}
-    <text x="88" y="570" font-family="sans-serif" font-size="15" fill="#7a6f66">TICKET TYPE</text><text x="88" y="600" font-family="sans-serif" font-size="23" font-weight="700" fill="#251b16">${ticketClass}</text>
-    <text x="330" y="570" font-family="sans-serif" font-size="15" fill="#7a6f66">PRICE</text><text x="330" y="600" font-family="sans-serif" font-size="23" font-weight="700" fill="#251b16">${price}</text>
-    <text x="570" y="570" font-family="sans-serif" font-size="15" fill="#7a6f66">ZONE / SEAT</text><text x="570" y="600" font-family="sans-serif" font-size="23" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
-    ${note ? `<text x="88" y="625" font-family="sans-serif" font-size="13" fill="#6b625b">${note}</text>` : ""}
+    ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="29" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
+    <text x="88" y="150" font-family="sans-serif" font-size="40" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="222" font-family="sans-serif" font-size="24" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
+    <text x="88" y="314" font-family="sans-serif" font-size="22" fill="#7a6f66">GUEST</text><text x="88" y="354" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${holder}</text>
+    <text x="88" y="400" font-family="sans-serif" font-size="22" fill="#7a6f66">PERFORMANCE</text><text x="88" y="438" font-family="sans-serif" font-size="32" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="500" font-family="sans-serif" font-size="23" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="530" font-family="sans-serif" font-size="21" fill="#6b625b">${venue}</text>` : ""}
+    <text x="88" y="560" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="592" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${ticketClass}</text>
+    <text x="330" y="560" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="592" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>
+    <text x="570" y="560" font-family="sans-serif" font-size="18" fill="#7a6f66">ZONE / SEAT</text><text x="570" y="592" font-family="sans-serif" font-size="28" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
+    ${note ? `<text x="88" y="622" font-family="sans-serif" font-size="15" fill="#6b625b">${note}</text>` : ""}
     <rect x="870" y="310" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="325" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>
     <text x="980" y="558" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#5b5148">ENTRY CODE</text><text x="980" y="582" text-anchor="middle" font-family="monospace" font-size="17" font-weight="700" fill="#251b16">${entryCode}</text><text x="980" y="608" text-anchor="middle" font-family="monospace" font-size="11" fill="#6b625b">ORDER ${ticketId}</text>
   </svg>`;
