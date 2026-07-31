@@ -4,7 +4,7 @@ import { createServer as createViteServer } from "vite";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
 import QRCode from "qrcode";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -8664,6 +8664,8 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
 function getDirectTicketTokenSecret() {
   const configured = String(process.env.DIRECT_TICKET_SECRET || "").trim();
   if (configured) return configured;
+  const stableIdentity = [process.env.APP_URL, process.env.PUBLIC_APP_URL, process.env.DATABASE_URL, process.env.RAILWAY_PROJECT_ID, process.env.RAILWAY_ENVIRONMENT_ID].map((value) => String(value || "").trim()).filter(Boolean).join("|");
+  if (stableIdentity) return createHash("sha256").update(`facebotstudio-direct-ticket:${stableIdentity}`).digest("hex");
   return IS_PRODUCTION ? "" : "facebotstudio-direct-ticket-development-only";
 }
 
@@ -13533,20 +13535,25 @@ async function startServer() {
     res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment("direct-seat-reconciliation.csv"); return res.send(`\ufeff${csv}`);
   });
   app.get("/api/direct-ticketing/tickets/print-a4.pdf", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
-    const eventId = getRequestedEventId(req);
-    const requestedIds = String(req.query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
-    const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => ["issued", "checked_in"].includes(ticket.status) && (!requestedIds.length || requestedIds.includes(ticket.id))).slice(0, 100);
-    if (!tickets.length) return res.status(404).send("No issued direct tickets found");
-    const settings = await getSettingsMap(eventId);
-    const artwork = resolveDirectTicketArtworkDataUrl(settings);
-    const svgs = await Promise.all(tickets.map(async (ticket) => {
-      const qrValue = buildDirectTicketQrValue(ticket.id);
-      if (!qrValue) throw new Error("Direct ticket security is not configured");
-      return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork);
-    }));
-    const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
-    await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
-    res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", 'inline; filename="direct-tickets-a4.pdf"'); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
+    try {
+      const eventId = getRequestedEventId(req);
+      const requestedIds = String(req.query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
+      const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => ["issued", "checked_in"].includes(ticket.status) && (!requestedIds.length || requestedIds.includes(ticket.id))).slice(0, 100);
+      if (!tickets.length) return res.status(404).send("No issued direct tickets found");
+      const settings = await getSettingsMap(eventId);
+      const artwork = resolveDirectTicketArtworkDataUrl(settings);
+      const svgs = await Promise.all(tickets.map(async (ticket) => {
+        const qrValue = buildDirectTicketQrValue(ticket.id);
+        if (!qrValue) throw new Error("Direct ticket security is not configured");
+        return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork);
+      }));
+      const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
+      await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
+      res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", 'inline; filename="direct-tickets-a4.pdf"'); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
+    } catch (error) {
+      console.error("Failed to render direct tickets A4 PDF:", error);
+      return res.status(503).json({ error: "Direct ticket A4 PDF is temporarily unavailable" });
+    }
   });
 
   app.get(
