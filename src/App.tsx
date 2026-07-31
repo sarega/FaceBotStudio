@@ -2094,6 +2094,7 @@ const INITIAL_SETTINGS: Settings = {
   event_public_speakers_json: "",
   direct_ticket_artwork_url: "",
   direct_ticket_artwork_mode: "panel",
+  direct_ticket_artwork_opacity: "0.18",
   direct_ticket_primary_color: "#321d48",
   direct_ticket_accent_color: "#d8b66a",
   direct_ticket_heading: "DIRECT SEAT TICKET",
@@ -2178,6 +2179,7 @@ function getBlankEventScopedSettings() {
     event_public_speakers_json: "",
     direct_ticket_artwork_url: "",
     direct_ticket_artwork_mode: "panel",
+    direct_ticket_artwork_opacity: "0.18",
     direct_ticket_primary_color: "#321d48",
     direct_ticket_accent_color: "#d8b66a",
     direct_ticket_heading: "DIRECT SEAT TICKET",
@@ -2259,6 +2261,7 @@ function getBlankEventScopedSettings() {
     | "event_public_speakers_json"
     | "direct_ticket_artwork_url"
     | "direct_ticket_artwork_mode"
+    | "direct_ticket_artwork_opacity"
     | "direct_ticket_primary_color"
     | "direct_ticket_accent_color"
     | "direct_ticket_heading"
@@ -2675,6 +2678,8 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.direct_ticket_artwork_url === "string" ? data.direct_ticket_artwork_url : INITIAL_SETTINGS.direct_ticket_artwork_url,
     direct_ticket_artwork_mode:
       data.direct_ticket_artwork_mode === "background" ? "background" : INITIAL_SETTINGS.direct_ticket_artwork_mode,
+    direct_ticket_artwork_opacity:
+      typeof data.direct_ticket_artwork_opacity === "string" ? data.direct_ticket_artwork_opacity : INITIAL_SETTINGS.direct_ticket_artwork_opacity,
     direct_ticket_primary_color:
       typeof data.direct_ticket_primary_color === "string" ? data.direct_ticket_primary_color : INITIAL_SETTINGS.direct_ticket_primary_color,
     direct_ticket_accent_color:

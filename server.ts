@@ -8617,9 +8617,10 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const heading = escapeXml(String(settings.direct_ticket_heading || "DIRECT SEAT TICKET").trim().slice(0, 60) || "DIRECT SEAT TICKET");
   const note = escapeXml(String(settings.direct_ticket_note || "").trim().slice(0, 120));
   const artworkMode = settings.direct_ticket_artwork_mode === "background" ? "background" : "panel";
+  const artworkOpacity = Math.min(0.6, Math.max(0, Number(settings.direct_ticket_artwork_opacity) || 0.18));
   const artworkDefs = artworkDataUrl ? `<defs><clipPath id="ticket"><rect x="34" y="34" width="1132" height="607" rx="32"/></clipPath><clipPath id="artwork"><rect x="748" y="52" width="372" height="188" rx="18"/></clipPath></defs>` : "";
   const backgroundArtwork = artworkDataUrl && artworkMode === "background"
-    ? `<image x="34" y="34" width="1132" height="607" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#ticket)"/><rect x="34" y="258" width="1132" height="383" fill="#fffaf0" opacity=".82"/><rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}" opacity=".84"/>`
+    ? `<image x="34" y="34" width="1132" height="607" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#ticket)"/><rect x="34" y="258" width="1132" height="383" fill="#fffaf0" opacity="${(1 - artworkOpacity).toFixed(2)}"/><rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}" opacity=".84"/>`
     : "";
   const panelArtwork = artworkDataUrl && artworkMode === "panel"
     ? `<rect x="742" y="46" width="384" height="200" rx="22" fill="${accentColor}" opacity=".32"/><image x="748" y="52" width="372" height="188" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`

@@ -361,6 +361,7 @@ export interface Settings {
   event_public_speakers_json: string;
   direct_ticket_artwork_url: string;
   direct_ticket_artwork_mode: string;
+  direct_ticket_artwork_opacity: string;
   direct_ticket_primary_color: string;
   direct_ticket_accent_color: string;
   direct_ticket_heading: string;

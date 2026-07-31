@@ -4,7 +4,7 @@ type Performance = { id: string; code: string; title: string; starts_at: string;
 type Seat = { id: string; performance_id: string; zone: string; row_label: string; seat_label: string; status: string; face_value: number | null };
 type Ticket = { id: string; performance_id: string; ticket_class: string; holder_name: string; buyer_name: string; price_amount: number; payment_status: string; status: string; hold_expires_at?: string | null; has_payment_proof?: boolean; performance_title?: string; zone?: string; row_label?: string; seat_label?: string; delivery?: { png_url: string; pdf_url: string } | null };
 type TicketClassPreset = { id: string; name: string; price_amount: number; payment_required: boolean };
-type TicketDesign = { event_name: string; direct_ticket_artwork_url: string; direct_ticket_artwork_mode: "panel" | "background"; direct_ticket_primary_color: string; direct_ticket_accent_color: string; direct_ticket_heading: string; direct_ticket_note: string };
+type TicketDesign = { event_name: string; direct_ticket_artwork_url: string; direct_ticket_artwork_mode: "panel" | "background"; direct_ticket_artwork_opacity: string; direct_ticket_primary_color: string; direct_ticket_accent_color: string; direct_ticket_heading: string; direct_ticket_note: string };
 
 type Props = { eventId: string; apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>; canManage: boolean };
 
@@ -17,6 +17,7 @@ const DEFAULT_TICKET_DESIGN: TicketDesign = {
   event_name: "Your Event",
   direct_ticket_artwork_url: "",
   direct_ticket_artwork_mode: "panel",
+  direct_ticket_artwork_opacity: "0.18",
   direct_ticket_primary_color: "#321d48",
   direct_ticket_accent_color: "#d8b66a",
   direct_ticket_heading: "DIRECT SEAT TICKET",
@@ -55,6 +56,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage }: Props) {
       event_name: String(settings.event_name || DEFAULT_TICKET_DESIGN.event_name),
       direct_ticket_artwork_url: String(settings.direct_ticket_artwork_url || ""),
       direct_ticket_artwork_mode: settings.direct_ticket_artwork_mode === "background" ? "background" : "panel",
+      direct_ticket_artwork_opacity: String(Math.min(0.6, Math.max(0, Number(settings.direct_ticket_artwork_opacity ?? DEFAULT_TICKET_DESIGN.direct_ticket_artwork_opacity) || 0.18))),
       direct_ticket_primary_color: /^#[0-9a-f]{6}$/i.test(settings.direct_ticket_primary_color) ? settings.direct_ticket_primary_color : DEFAULT_TICKET_DESIGN.direct_ticket_primary_color,
       direct_ticket_accent_color: /^#[0-9a-f]{6}$/i.test(settings.direct_ticket_accent_color) ? settings.direct_ticket_accent_color : DEFAULT_TICKET_DESIGN.direct_ticket_accent_color,
       direct_ticket_heading: String(settings.direct_ticket_heading || DEFAULT_TICKET_DESIGN.direct_ticket_heading),
@@ -124,6 +126,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage }: Props) {
             <span className="mt-1 block text-xs font-normal text-slate-500">PNG/JPG/WebP ≤ 4 MB · แนะนำ 1600 × 900 px</span>
           </label>
           <label className="text-sm font-semibold text-slate-700">Graphic placement<select disabled={!canManage} value={design.direct_ticket_artwork_mode} onChange={(event) => setDesign({ ...design, direct_ticket_artwork_mode: event.target.value as TicketDesign["direct_ticket_artwork_mode"] })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"><option value="panel">Image panel</option><option value="background">Full background</option></select></label>
+          {design.direct_ticket_artwork_mode === "background" && <label className="text-sm font-semibold text-slate-700">Background image strength<span className="mt-1 flex items-center gap-2"><input disabled={!canManage} type="range" min="0" max="0.6" step="0.02" value={design.direct_ticket_artwork_opacity} onChange={(event) => setDesign({ ...design, direct_ticket_artwork_opacity: event.target.value })} className="w-full" /><span className="w-12 text-right text-xs font-normal text-slate-500">{Math.round(Number(design.direct_ticket_artwork_opacity) * 100)}%</span></span><span className="mt-1 block text-xs font-normal text-slate-500">0% = จางมาก · 60% = ภาพชัด</span></label>}
           <label className="text-sm font-semibold text-slate-700">Ticket heading<input disabled={!canManage} maxLength={60} value={design.direct_ticket_heading} onChange={(event) => setDesign({ ...design, direct_ticket_heading: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
           <label className="text-sm font-semibold text-slate-700">Main color<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-300 px-2 py-1.5"><input disabled={!canManage} type="color" value={design.direct_ticket_primary_color} onChange={(event) => setDesign({ ...design, direct_ticket_primary_color: event.target.value })} className="h-7 w-10 cursor-pointer border-0 bg-transparent" /><span className="font-mono text-xs font-normal">{design.direct_ticket_primary_color}</span></span></label>
           <label className="text-sm font-semibold text-slate-700">Accent color<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-300 px-2 py-1.5"><input disabled={!canManage} type="color" value={design.direct_ticket_accent_color} onChange={(event) => setDesign({ ...design, direct_ticket_accent_color: event.target.value })} className="h-7 w-10 cursor-pointer border-0 bg-transparent" /><span className="font-mono text-xs font-normal">{design.direct_ticket_accent_color}</span></span></label>
@@ -133,7 +136,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage }: Props) {
         <div className="min-w-0">
           <p className="mb-2 text-xs font-bold uppercase tracking-[.14em] text-slate-500">Live preview</p>
           <div className="aspect-[16/9] w-full min-w-0 overflow-hidden rounded-xl bg-slate-950 p-[3%] shadow-inner">
-            <div className="relative h-full overflow-hidden rounded-[clamp(8px,2vw,22px)] bg-[#fffaf0]" style={design.direct_ticket_artwork_url && design.direct_ticket_artwork_mode === "background" ? { backgroundImage: `linear-gradient(rgb(255 250 240 / 82%), rgb(255 250 240 / 82%)), url("${design.direct_ticket_artwork_url}")`, backgroundPosition: "center", backgroundSize: "cover" } : undefined}>
+            <div className="relative h-full overflow-hidden rounded-[clamp(8px,2vw,22px)] bg-[#fffaf0]" style={design.direct_ticket_artwork_url && design.direct_ticket_artwork_mode === "background" ? { backgroundImage: `linear-gradient(rgb(255 250 240 / ${100 - Number(design.direct_ticket_artwork_opacity) * 100}%), rgb(255 250 240 / ${100 - Number(design.direct_ticket_artwork_opacity) * 100}%)), url("${design.direct_ticket_artwork_url}")`, backgroundPosition: "center", backgroundSize: "cover" } : undefined}>
               <div className="relative flex h-[35%] items-center justify-between gap-3 overflow-hidden border-b-2 border-dashed px-[5%] text-white" style={{ background: `linear-gradient(135deg, ${design.direct_ticket_primary_color}, #160f24)`, borderColor: design.direct_ticket_accent_color }}>
                 <div className="min-w-0"><p className="truncate text-[clamp(7px,1vw,13px)] font-bold uppercase tracking-[.22em]" style={{ color: design.direct_ticket_accent_color }}>VIP</p><p className="mt-[2%] line-clamp-2 whitespace-normal text-[clamp(12px,1.8vw,24px)] font-bold leading-tight">{design.event_name}</p><p className="truncate text-[clamp(7px,1vw,12px)] opacity-80">{design.direct_ticket_heading}</p></div>
                 {design.direct_ticket_artwork_url && design.direct_ticket_artwork_mode === "panel" && <img src={design.direct_ticket_artwork_url} alt="Ticket artwork" className="h-[88%] w-[35%] shrink-0 rounded-xl border border-white/30 object-cover shadow-lg" />}
