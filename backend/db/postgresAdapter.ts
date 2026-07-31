@@ -808,6 +808,27 @@ export class PostgresAppDatabase implements AppDatabase {
     return mapDirectPerformanceRow(result.rows[0]);
   }
 
+  async resetDirectPerformance(eventId: string, performanceId: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const performance = await client.query("SELECT id FROM event_performances WHERE id=$1 AND event_id=$2 FOR UPDATE", [performanceId, eventId]);
+      if (!performance.rows[0]) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const tickets = await client.query("DELETE FROM direct_tickets WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
+      const seats = await client.query("DELETE FROM direct_seats WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
+      await client.query("COMMIT");
+      return { tickets: tickets.rowCount || 0, seats: seats.rowCount || 0 };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async listDirectSeats(eventId: string, performanceId?: string) {
     await this.releaseExpiredDirectTicketHolds(eventId);
     const result = await this.pool.query<Record<string, unknown>>(`SELECT id,event_id,performance_id,zone,row_label,seat_label,external_seat_ref,face_value,x,y,status,created_at::text,updated_at::text FROM direct_seats WHERE event_id=$1 ${performanceId ? "AND performance_id=$2" : ""} ORDER BY zone,row_label,seat_label`, performanceId ? [eventId, performanceId] : [eventId]);
@@ -848,7 +869,28 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount||0;
   }
 
-  async voidDirectTicket(id: string, options?: { releaseSeat?: boolean }) { const ticket=await this.getDirectTicketById(id); if (!ticket) return undefined; await this.pool.query("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); await this.pool.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[options?.releaseSeat === false ? "voided" : "available",ticket.seat_id]); return this.getDirectTicketById(id); }
+  async voidDirectTicket(id: string, options?: { releaseSeat?: boolean }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query<Record<string, unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE", [id]);
+      const ticket = current.rows[0];
+      if (!ticket) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1", [id]);
+      const replacement = await client.query("SELECT 1 FROM direct_tickets WHERE seat_id=$1 AND id<>$2 AND status IN ('held','issued','checked_in') LIMIT 1", [ticket.seat_id, id]);
+      if (!replacement.rows[0]) await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2", [options?.releaseSeat === false ? "voided" : "available", ticket.seat_id]);
+      await client.query("COMMIT");
+      return this.getDirectTicketById(id);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   async reissueDirectTicket(id: string, issuedByUserId?: string | null) {
     const client=await this.pool.connect(); try { await client.query("BEGIN"); const current=await client.query<Record<string,unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE",[id]); const ticket=current.rows[0]; if(!ticket || !["issued","checked_in"].includes(String(ticket.status))) { await client.query("ROLLBACK"); return undefined; } const nextId=generateEntityId("dtkt"); await client.query("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); await client.query(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,payment_reference,status,issued_by_user_id,payment_verified_by_user_id,payment_verified_at,issued_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'issued',$13,$14,$15,CURRENT_TIMESTAMP,$16)`,[nextId,ticket.event_id,ticket.performance_id,ticket.seat_id,ticket.ticket_class,ticket.holder_name,ticket.buyer_name,ticket.phone,ticket.email,ticket.price_amount,ticket.payment_status,ticket.payment_reference,issuedByUserId||null,ticket.payment_verified_by_user_id,ticket.payment_verified_at,ticket.source]); await client.query("UPDATE direct_seats SET status='issued',updated_at=CURRENT_TIMESTAMP WHERE id=$1",[ticket.seat_id]); await client.query("COMMIT"); return this.getDirectTicketById(nextId); } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }

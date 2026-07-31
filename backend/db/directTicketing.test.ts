@@ -46,6 +46,8 @@ test("direct seats cannot issue two active tickets and rejected payment releases
   assert.notEqual(reissued?.id, replacement.ticket?.id);
   assert.equal((await db.checkInDirectTicket(replacement.ticket!.id)).ticket?.status, "voided");
   assert.equal((await db.checkInDirectTicket(reissued!.id)).ticket?.status, "checked_in");
+  assert.equal((await db.voidDirectTicket(reissued!.id))?.status, "voided");
+  assert.equal((await db.listDirectSeats(event.id, performance.id))[0].status, "available");
 });
 
 test("payment proof waits for review and one bank reference cannot issue two tickets", async () => {
@@ -82,4 +84,18 @@ test("expired direct-ticket holds release their seat", async () => {
   assert.equal(await db.releaseExpiredDirectTicketHolds(event.id), 1);
   assert.equal((await db.getDirectTicketById(held.ticket!.id))?.payment_status, "expired");
   assert.equal((await db.listDirectSeats(event.id, performance.id))[0].status, "available");
+});
+
+test("resetting a performance removes its test tickets and seats", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Reset test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  const [seat] = await db.importDirectSeats(event.id, performance.id, [{ zone: "VIP", row_label: "A", seat_label: "01" }]);
+  const ticket = await db.createDirectTicket({ event_id: event.id, performance_id: performance.id, seat_id: seat.id, ticket_class: "VIP", payment_required: false });
+  assert.ok(ticket.ticket);
+  assert.deepEqual(await db.resetDirectPerformance(event.id, performance.id), { tickets: 1, seats: 1 });
+  assert.equal((await db.listDirectSeats(event.id, performance.id)).length, 0);
+  assert.equal((await db.listDirectTickets(event.id)).length, 0);
+  assert.equal((await db.listDirectPerformances(event.id)).length, 1);
 });

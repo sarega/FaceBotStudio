@@ -1168,6 +1168,19 @@ export class SqliteAppDatabase implements AppDatabase {
     return mapDirectPerformanceRow(this.db.prepare("SELECT * FROM event_performances WHERE id = ?").get(id) as Record<string, unknown>);
   }
 
+  async resetDirectPerformance(eventId: string, performanceId: string) {
+    const reset = this.db.transaction(() => {
+      const performance = this.db.prepare("SELECT id FROM event_performances WHERE id = ? AND event_id = ?").get(performanceId, eventId);
+      if (!performance) return undefined;
+      const tickets = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_tickets WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
+      const seats = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_seats WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
+      this.db.prepare("DELETE FROM direct_tickets WHERE performance_id = ? AND event_id = ?").run(performanceId, eventId);
+      this.db.prepare("DELETE FROM direct_seats WHERE performance_id = ? AND event_id = ?").run(performanceId, eventId);
+      return { tickets, seats };
+    });
+    return reset();
+  }
+
   async listDirectSeats(eventId: string, performanceId?: string) {
     await this.releaseExpiredDirectTicketHolds(eventId);
     const rows = performanceId ? this.db.prepare("SELECT * FROM direct_seats WHERE event_id = ? AND performance_id = ? ORDER BY zone, row_label, seat_label").all(eventId, performanceId) : this.db.prepare("SELECT * FROM direct_seats WHERE event_id = ? ORDER BY zone, row_label, seat_label").all(eventId);
@@ -1238,7 +1251,15 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   async voidDirectTicket(id: string, options?: { releaseSeat?: boolean }) {
-    const run = this.db.transaction(() => { const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0]; if (!ticket) return undefined; if (ticket.status !== "voided") this.db.prepare("UPDATE direct_tickets SET status='voided', voided_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id); this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(options?.releaseSeat === false ? "voided" : "available", ticket.seat_id); return this.directTicketQuery("WHERE t.id = ?", [id])[0]; }); return run();
+    const run = this.db.transaction(() => {
+      const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0];
+      if (!ticket) return undefined;
+      if (ticket.status !== "voided") this.db.prepare("UPDATE direct_tickets SET status='voided', voided_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
+      const activeReplacement = this.db.prepare("SELECT 1 FROM direct_tickets WHERE seat_id = ? AND id != ? AND status IN ('held','issued','checked_in') LIMIT 1").get(ticket.seat_id, id);
+      if (!activeReplacement) this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(options?.releaseSeat === false ? "voided" : "available", ticket.seat_id);
+      return this.directTicketQuery("WHERE t.id = ?", [id])[0];
+    });
+    return run();
   }
 
   async reissueDirectTicket(id: string, issuedByUserId?: string | null) {

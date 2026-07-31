@@ -522,6 +522,7 @@ export interface AppDatabase {
   deleteRegistration(id: string): Promise<boolean>;
   listDirectPerformances(eventId: string): Promise<DirectPerformanceRow[]>;
   upsertDirectPerformance(input: UpsertDirectPerformanceInput): Promise<DirectPerformanceRow>;
+  resetDirectPerformance(eventId: string, performanceId: string): Promise<{ tickets: number; seats: number } | undefined>;
   listDirectSeats(eventId: string, performanceId?: string): Promise<DirectSeatRow[]>;
   importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]): Promise<DirectSeatRow[]>;
   listDirectTickets(eventId: string): Promise<DirectTicketRow[]>;

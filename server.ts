@@ -13428,6 +13428,18 @@ async function startServer() {
     await recordAudit(req, "direct_performance.upserted", "direct_performance", performance.id, { event_id: performance.event_id, code });
     return res.status(201).json(performance);
   });
+  app.post("/api/direct-ticketing/performances/:id/reset", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const reset = await appDb.resetDirectPerformance(eventId, String(req.params.id || "").trim());
+      if (!reset) return res.status(404).json({ error: "Performance not found" });
+      await recordAudit(req, "direct_performance.reset", "direct_performance", String(req.params.id || "").trim(), { event_id: eventId, deleted_tickets: reset.tickets, deleted_seats: reset.seats });
+      return res.json({ status: "reset", ...reset });
+    } catch (error) {
+      console.error("Failed to reset direct performance:", error);
+      return res.status(500).json({ error: "Failed to reset performance" });
+    }
+  });
   app.get("/api/direct-ticketing/seats", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const performanceId = typeof req.query.performance_id === "string" ? req.query.performance_id.trim() : undefined;
     return res.json(await appDb.listDirectSeats(getRequestedEventId(req), performanceId));
