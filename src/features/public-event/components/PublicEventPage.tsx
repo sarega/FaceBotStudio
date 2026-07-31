@@ -22,7 +22,6 @@ import { PlatformBrandPane } from "./PlatformBrandPane";
 import { PlatformFooter } from "./PlatformFooter";
 import { SpeakersSection } from "./SpeakersSection";
 import { SponsorsSection } from "./SponsorsSection";
-import { PublicDirectTicketPanel } from "../../direct-ticketing/components/PublicDirectTicketPanel";
 import type { ImageAttachment, PublicEventChatResponse, PublicEventPageResponse, PublicEventRecoveredRegistrationResponse, PublicEventRegistrationResponse } from "../../../types";
 
 type PublicRegistrationFormState = {
@@ -523,7 +522,6 @@ export function PublicEventPage({
 
             <section className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,21.5rem)]">
               <div className="divide-y divide-slate-200">
-                <PublicDirectTicketPanel slug={page.event.slug} />
                 {mainColumnSections}
               </div>
 
