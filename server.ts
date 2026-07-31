@@ -1374,6 +1374,12 @@ function openRouterHeaders() {
   return headers;
 }
 
+function parseModelJson(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1] || text;
+  try { return JSON.parse(fenced); } catch { const start = fenced.indexOf("{"); const end = fenced.lastIndexOf("}"); if (start >= 0 && end > start) { try { return JSON.parse(fenced.slice(start, end + 1)); } catch { return null; } } return null; }
+}
+
 function extractJsonObject(text: string) {
   const trimmed = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const start = trimmed.indexOf("{");
@@ -13359,6 +13365,36 @@ async function startServer() {
       console.error("Failed to delete registration:", error);
       return res.status(500).json({ error: "Failed to delete registration" });
     }
+  });
+
+  app.post("/api/direct-ticketing/seat-map/analyze", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: PUBLIC_EVENT_MEDIA_MAX_BYTES }), async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!process.env.OPENROUTER_API_KEY) return res.status(503).json({ error: "OPENROUTER_API_KEY is not configured" });
+      const mime = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) return res.status(400).json({ error: "Seat map must be PNG, JPG, or WebP" });
+      const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (!bytes.length || bytes.length > PUBLIC_EVENT_MEDIA_MAX_BYTES) return res.status(400).json({ error: "Seat map image is required and must be 4 MB or smaller" });
+      const eventId = getRequestedEventId(req);
+      const settings = await getSettingsMap(eventId);
+      const model = String(settings.llm_model || settings.global_llm_model || DEFAULT_OPENROUTER_MODEL).trim() || DEFAULT_OPENROUTER_MODEL;
+      const prompt = [
+        "Analyze this Ticketmelon seating-chart image for an event operator.",
+        "Return JSON only. Identify ONLY seats that are visibly blocked in red (the legend may say Blocked or Block Seat). Do not include sold, generated, available, or unreadable seats.",
+        "Read the visible row letter and seat number. A seat label is usually row letter + number; split it into row_label and seat_label.",
+        "Never invent a seat number. If a label is unclear, omit that seat and add a warning.",
+        "Use this exact shape: {\"seats\":[{\"zone\":\"ZONE 2\",\"row_label\":\"L\",\"seat_label\":\"13\",\"external_seat_ref\":\"\",\"face_value\":null,\"x\":123,\"y\":456,\"confidence\":0.98}],\"warnings\":[\"...\"]}.",
+        "x and y are pixel coordinates of the seat center in the uploaded image. Keep confidence between 0 and 1. If the zone is visible, use it; otherwise use an empty string and warn.",
+      ].join("\n");
+      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: openRouterHeaders(), body: JSON.stringify({ model, temperature: 0, response_format: { type: "json_object" }, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mime};base64,${bytes.toString("base64")}` } }] }] }) });
+      const payload = await upstream.json().catch(() => ({}));
+      if (!upstream.ok) return res.status(502).json({ error: payload?.error?.message || "Vision model request failed" });
+      const raw = payload?.choices?.[0]?.message?.content;
+      const parsed = parseModelJson(typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => part?.text || "").join("\n") : "");
+      if (!parsed || !Array.isArray(parsed.seats)) return res.status(502).json({ error: "Vision model returned invalid seat data" });
+      const seats = parsed.seats.map((seat: any) => ({ zone: String(seat?.zone || "").trim().slice(0, 80), row_label: String(seat?.row_label || "").trim().slice(0, 40), seat_label: String(seat?.seat_label || "").trim().slice(0, 40), external_seat_ref: String(seat?.external_seat_ref || "").trim().slice(0, 120), face_value: Number.isFinite(Number(seat?.face_value)) ? Number(seat.face_value) : null, x: Number.isFinite(Number(seat?.x)) ? Number(seat.x) : null, y: Number.isFinite(Number(seat?.y)) ? Number(seat.y) : null, confidence: Math.min(1, Math.max(0, Number(seat?.confidence) || 0)) })).filter((seat: any) => seat.row_label && seat.seat_label).slice(0, 2000);
+      await recordAudit(req, "direct_seat_map.ai_analyzed", "event", eventId, { event_id: eventId, model, seats: seats.length, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20) : [] });
+      return res.json({ model, seats, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20).map((warning: unknown) => String(warning).slice(0, 240)) : [] });
+    } catch (error) { console.error("Failed to analyze direct seat map:", error); return res.status(500).json({ error: "Failed to analyze seat map" }); }
   });
 
   // Direct seats are inventory explicitly withheld from Ticketmelon. These routes are
