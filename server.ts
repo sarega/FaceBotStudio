@@ -8638,26 +8638,26 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const note = escapeXml(String(settings.direct_ticket_note || "").trim().slice(0, 120));
   const artworkMode = settings.direct_ticket_artwork_mode === "background" ? "background" : "panel";
   const artworkOpacity = Math.min(0.6, Math.max(0, Number(settings.direct_ticket_artwork_opacity) || 0.18));
-  const artworkDefs = artworkDataUrl ? `<defs><clipPath id="ticket"><rect x="34" y="34" width="1132" height="607" rx="32"/></clipPath><clipPath id="artwork"><rect x="748" y="52" width="372" height="188" rx="18"/></clipPath></defs>` : "";
+  const artworkDefs = artworkDataUrl ? `<defs><clipPath id="ticket"><rect x="34" y="34" width="1132" height="782" rx="32"/></clipPath><clipPath id="artwork"><rect x="748" y="52" width="372" height="188" rx="18"/></clipPath></defs>` : "";
   const backgroundArtwork = artworkDataUrl && artworkMode === "background"
-    ? `<image x="34" y="34" width="1132" height="607" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#ticket)"/><rect x="34" y="258" width="1132" height="383" fill="#fffaf0" opacity="${(1 - artworkOpacity).toFixed(2)}"/><rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}" opacity=".84"/>`
+    ? `<image x="34" y="34" width="1132" height="782" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#ticket)"/><rect x="34" y="300" width="1132" height="516" fill="#fffaf0" opacity="${(1 - artworkOpacity).toFixed(2)}"/><rect x="34" y="34" width="1132" height="266" rx="32" fill="${primaryColor}" opacity=".84"/>`
     : "";
   const panelArtwork = artworkDataUrl && artworkMode === "panel"
     ? `<rect x="742" y="46" width="384" height="200" rx="22" fill="${accentColor}" opacity=".32"/><image x="748" y="52" width="372" height="188" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`
     : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675"><style>${buildEmbeddedTicketFontCss()} text{font-family:"TicketNoto",sans-serif!important}</style>
-    ${artworkDefs}<rect width="1200" height="675" fill="#0b1220"/><rect x="34" y="34" width="1132" height="607" rx="32" fill="#fffaf0"/>${backgroundArtwork}
-    <path d="M34 258 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/><path d="M62 74 Q62 62 74 62 M1138 74 Q1138 62 1126 62" fill="none" stroke="${accentColor}" stroke-width="2" opacity=".8"/>
-    ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="29" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
-    <text x="88" y="150" font-family="sans-serif" font-size="40" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="222" font-family="sans-serif" font-size="24" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
-    <text x="88" y="314" font-family="sans-serif" font-size="22" fill="#7a6f66">GUEST</text><text x="88" y="354" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${holder}</text>
-    <text x="88" y="400" font-family="sans-serif" font-size="22" fill="#7a6f66">PERFORMANCE</text><text x="88" y="438" font-family="sans-serif" font-size="32" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="500" font-family="sans-serif" font-size="23" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="530" font-family="sans-serif" font-size="21" fill="#6b625b">${venue}</text>` : ""}
-    <text x="88" y="560" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="592" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${ticketClass}</text>
-    <text x="330" y="560" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="592" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>
-    <text x="570" y="560" font-family="sans-serif" font-size="18" fill="#7a6f66">ZONE / SEAT</text><text x="570" y="592" font-family="sans-serif" font-size="28" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
-    ${note ? `<text x="88" y="622" font-family="sans-serif" font-size="15" fill="#6b625b">${note}</text>` : ""}
-    <rect x="870" y="310" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="325" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>
-    <text x="980" y="558" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#5b5148">ENTRY CODE</text><text x="980" y="582" text-anchor="middle" font-family="monospace" font-size="17" font-weight="700" fill="#251b16">${entryCode}</text><text x="980" y="608" text-anchor="middle" font-family="monospace" font-size="11" fill="#6b625b">ORDER ${ticketId}</text>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850"><style>${buildEmbeddedTicketFontCss()} text{font-family:"TicketNoto",sans-serif!important}</style>
+    ${artworkDefs}<rect width="1200" height="850" fill="#0b1220"/><rect x="34" y="34" width="1132" height="782" rx="32" fill="#fffaf0"/>${backgroundArtwork}
+    <path d="M34 300 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/><path d="M62 74 Q62 62 74 62 M1138 74 Q1138 62 1126 62" fill="none" stroke="${accentColor}" stroke-width="2" opacity=".8"/>
+    ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="266" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="29" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
+    <text x="88" y="158" font-family="sans-serif" font-size="40" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="250" font-family="sans-serif" font-size="24" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
+    <text x="88" y="350" font-family="sans-serif" font-size="22" fill="#7a6f66">GUEST</text><text x="88" y="392" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${holder}</text>
+    <text x="88" y="460" font-family="sans-serif" font-size="22" fill="#7a6f66">PERFORMANCE</text><text x="88" y="500" font-family="sans-serif" font-size="32" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="570" font-family="sans-serif" font-size="23" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="604" font-family="sans-serif" font-size="21" fill="#6b625b">${venue}</text>` : ""}
+    <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${ticketClass}</text>
+    <text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>
+    <text x="570" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">ZONE / SEAT</text><text x="570" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
+    ${note ? `<text x="88" y="758" font-family="sans-serif" font-size="15" fill="#6b625b">${note}</text>` : ""}
+    <rect x="870" y="344" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="359" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>
+    <text x="980" y="594" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#5b5148">ENTRY CODE</text><text x="980" y="620" text-anchor="middle" font-family="monospace" font-size="19" font-weight="700" fill="#251b16">${entryCode}</text><text x="980" y="648" text-anchor="middle" font-family="monospace" font-size="11" fill="#6b625b">ORDER ${ticketId}</text>
   </svg>`;
 }
 
@@ -9058,7 +9058,7 @@ async function renderDirectTicketPdfBuffer(svg: string) {
   const browser = await puppeteer.launch({ headless: true, executablePath: resolvePuppeteerExecutablePath(), args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
   try {
     const page = await browser.newPage();
-    await page.setContent(`<!doctype html><html><head><style>@page{size:154mm 111mm;margin:0}html,body{margin:0;width:154mm;height:111mm;overflow:hidden}svg{position:absolute;inset:0;display:block;width:154mm;height:111mm}</style></head><body>${svg}</body></html>`, { waitUntil: "domcontentloaded" });
+    await page.setContent(`<!doctype html><html><head><style>@page{size:148.5mm 105mm;margin:0}html,body{margin:0;width:148.5mm;height:105mm;overflow:hidden}svg{position:absolute;inset:0;display:block;width:148.5mm;height:105mm}</style></head><body>${svg}</body></html>`, { waitUntil: "domcontentloaded" });
     await page.evaluate(async () => {
       const fonts = (document as any).fonts;
       if (fonts?.ready) await fonts.ready;
