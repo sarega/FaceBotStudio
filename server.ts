@@ -8602,6 +8602,22 @@ function resolveDirectTicketArtworkDataUrl(settings: Record<string, string>) {
   return `data:${mime};base64,${readFileSync(filePath).toString("base64")}`;
 }
 
+function resolveDirectTicketClassColors(settings: Record<string, string>, ticketClass: string) {
+  const safeColor = (value: unknown, fallback: string) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+  const primaryFallback = safeColor(settings.direct_ticket_primary_color, "#321d48");
+  const accentFallback = safeColor(settings.direct_ticket_accent_color, "#d8b66a");
+  try {
+    const presets = JSON.parse(String(settings.direct_ticket_classes_json || ""));
+    const preset = Array.isArray(presets) ? presets.find((item) => String(item?.name || "").trim().toLowerCase() === ticketClass.trim().toLowerCase()) : null;
+    return {
+      primaryColor: safeColor(preset?.primary_color, primaryFallback),
+      accentColor: safeColor(preset?.accent_color, accentFallback),
+    };
+  } catch {
+    return { primaryColor: primaryFallback, accentColor: accentFallback };
+  }
+}
+
 function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string, string>, qrDataUrl: string, artworkDataUrl = "") {
   const wrap = (value: string, max: number) => { const words = value.trim().split(/\s+/); const lines: string[] = []; let line = ""; for (const word of words) { if ((line + " " + word).trim().length > max && line) { lines.push(line); line = word; } else line = (line + " " + word).trim(); } if (line) lines.push(line); return lines.slice(0, 2); };
   const text = (value: string, max: number) => wrap(value, max).map((line, index) => `<tspan x="88" dy="${index ? 42 : 0}">${escapeXml(line)}</tspan>`).join("");
@@ -8617,9 +8633,7 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const venue = escapeXml(String(settings.event_venue_name || settings.event_location || "").trim());
   const entryCode = escapeXml(ticket.id.replace(/^dtkt_/i, "").slice(-8).toUpperCase());
   const price = ticket.price_amount > 0 ? `${ticket.price_amount.toLocaleString("en-US")} THB` : "Complimentary";
-  const safeColor = (value: string, fallback: string) => /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
-  const primaryColor = safeColor(String(settings.direct_ticket_primary_color || ""), "#321d48");
-  const accentColor = safeColor(String(settings.direct_ticket_accent_color || ""), "#d8b66a");
+  const { primaryColor, accentColor } = resolveDirectTicketClassColors(settings, ticket.ticket_class || "VIP");
   const heading = escapeXml(String(settings.direct_ticket_heading || "DIRECT SEAT TICKET").trim().slice(0, 60) || "DIRECT SEAT TICKET");
   const note = escapeXml(String(settings.direct_ticket_note || "").trim().slice(0, 120));
   const artworkMode = settings.direct_ticket_artwork_mode === "background" ? "background" : "panel";
