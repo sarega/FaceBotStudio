@@ -8624,7 +8624,8 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const eventName = text(String(settings.event_name || "Event Ticket").trim() || "Event Ticket", 30);
   const holder = text(ticket.holder_name || ticket.buyer_name || "Guest", 28);
   const performance = text(ticket.performance_title || ticket.performance_code || "Performance", 48, 38);
-  const seat = escapeXml([ticket.zone, ticket.row_label && `Row ${ticket.row_label}`, ticket.seat_label && `Seat ${ticket.seat_label}`].filter(Boolean).join(" · "));
+  const seatZoneRow = escapeXml([ticket.zone, ticket.row_label && `Row ${ticket.row_label}`].filter(Boolean).join(" · "));
+  const seatNumber = escapeXml(ticket.seat_label || "-");
   const ticketClass = escapeXml(ticket.ticket_class || "VIP");
   const ticketId = escapeXml(ticket.id);
   const performanceDate = escapeXml(formatStoredDateForDisplay(ticket.performance_starts_at || "", normalizeTimeZone(settings.event_timezone)));
@@ -8654,10 +8655,14 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
     <text x="88" y="460" font-family="sans-serif" font-size="22" fill="#7a6f66">PERFORMANCE</text><text x="88" y="500" font-family="sans-serif" font-size="32" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="570" font-family="sans-serif" font-size="23" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="604" font-family="sans-serif" font-size="21" fill="#6b625b">${venue}</text>` : ""}
     <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${ticketClass}</text>
     <text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>
-    <text x="570" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">ZONE / SEAT</text><text x="570" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
+    <text x="570" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">ZONE / ROW</text><text x="570" y="700" font-family="sans-serif" font-size="27" font-weight="700" fill="${primaryColor}">${seatZoneRow || "Assigned at door"}</text>
+    <text x="760" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">SEAT</text><text x="760" y="702" font-family="sans-serif" font-size="36" font-weight="800" fill="${primaryColor}">${seatNumber}</text>
     ${note ? `<text x="88" y="758" font-family="sans-serif" font-size="15" fill="#6b625b">${note}</text>` : ""}
-    <rect x="870" y="344" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="359" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>
-    <text x="980" y="594" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#5b5148">ENTRY CODE</text><text x="980" y="620" text-anchor="middle" font-family="monospace" font-size="19" font-weight="700" fill="#251b16">${entryCode}</text><text x="980" y="648" text-anchor="middle" font-family="monospace" font-size="11" fill="#6b625b">ORDER ${ticketId}</text>
+    <rect x="840" y="300" width="326" height="516" fill="#f1e7d6" opacity=".58"/><path d="M840 300 V816" stroke="#8e7d68" stroke-width="3" stroke-dasharray="4 10"/>
+    <text x="1003" y="330" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="700" letter-spacing="2" fill="${primaryColor}">CHECK-IN AREA</text><text x="1003" y="352" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#6b625b">PUNCH / MARK WHEN USED</text>
+    <rect x="870" y="370" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="385" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>
+    <text x="980" y="620" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#5b5148">ENTRY CODE</text><text x="980" y="646" text-anchor="middle" font-family="monospace" font-size="19" font-weight="700" fill="#251b16">${entryCode}</text><text x="980" y="674" text-anchor="middle" font-family="monospace" font-size="11" fill="#6b625b">ORDER ${ticketId}</text>
+    <rect x="880" y="704" width="240" height="88" rx="12" fill="none" stroke="#8e7d68" stroke-width="2"/><text x="1000" y="728" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="#5b5148">USED / CHECKED-IN</text><text x="1000" y="750" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#6b625b">เจาะรูหรือประทับตรา</text><circle cx="930" cy="775" r="9" fill="none" stroke="${primaryColor}" stroke-width="2"/><circle cx="1000" cy="775" r="9" fill="none" stroke="${primaryColor}" stroke-width="2"/><circle cx="1070" cy="775" r="9" fill="none" stroke="${primaryColor}" stroke-width="2"/>
   </svg>`;
 }
 
