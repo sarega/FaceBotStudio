@@ -18,6 +18,7 @@ import type {
   CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
+  CreateDirectTicketInput,
   ExchangeCheckinSessionTokenInput,
   EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
@@ -26,6 +27,9 @@ import type {
   EmbeddingStatus,
   EventStatus,
   EventRow,
+  DirectPerformanceRow,
+  DirectSeatRow,
+  DirectTicketRow,
   FacebookPageRow,
   ManualEventStatus,
   MessageAttachmentRow,
@@ -45,11 +49,14 @@ import type {
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
+  UpsertDirectPerformanceInput,
+  ImportDirectSeatInput,
   UpdateOrganizerProfileInput,
   UpsertChannelAccountInput,
   UpsertEventDocumentInput,
   UpsertFacebookPageInput,
   UserRole,
+  UserPreferencesRow,
 } from "./types";
 import { getSystemAuditMetadata } from "../runtime/systemInfo";
 
@@ -245,6 +252,20 @@ function mapChannelRow(row: Record<string, unknown>) {
   } satisfies ChannelAccountRow;
 }
 
+function collapseChannelRows(rows: Array<Record<string, unknown>>) {
+  const channels = new Map<string, ChannelAccountRow>();
+  for (const row of rows) {
+    const mapped = mapChannelRow(row);
+    const channel = channels.get(mapped.id) || { ...mapped, event_ids: [] };
+    if (mapped.event_id && !channel.event_ids?.includes(mapped.event_id)) {
+      channel.event_ids?.push(mapped.event_id);
+    }
+    channel.event_id = channel.event_ids?.[0] || null;
+    channels.set(mapped.id, channel);
+  }
+  return [...channels.values()];
+}
+
 function mapEventDocumentRow(row: Record<string, unknown>) {
   return {
     id: String(row.id),
@@ -325,6 +346,23 @@ function mapCheckinAccessSessionRow(row: Record<string, unknown>) {
     revoked_at: revokedAt,
     is_active: !revokedAt && expiresAtMs > Date.now(),
   } satisfies CheckinAccessSessionRow;
+}
+
+function mapSqliteTimestamp(value: unknown) {
+  const text = String(value || "");
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text) ? `${text.replace(" ", "T")}Z` : text;
+}
+
+function mapDirectPerformanceRow(row: Record<string, unknown>) {
+  return { id: String(row.id || ""), event_id: String(row.event_id || ""), code: String(row.code || ""), title: String(row.title || ""), starts_at: String(row.starts_at || ""), ends_at: typeof row.ends_at === "string" ? row.ends_at : null, seat_plan_image_url: typeof row.seat_plan_image_url === "string" ? row.seat_plan_image_url : null, is_active: Boolean(row.is_active), created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at) } satisfies DirectPerformanceRow;
+}
+
+function mapDirectSeatRow(row: Record<string, unknown>) {
+  return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), zone: String(row.zone || ""), row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""), external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null, face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y), status: String(row.status || "available") as DirectSeatRow["status"], created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at) } satisfies DirectSeatRow;
+}
+
+function mapDirectTicketRow(row: Record<string, unknown>) {
+  return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""), ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null, payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null, rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null, source: row.source === "public" ? "public" : "admin", status: String(row.status || "held") as DirectTicketRow["status"], issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null, payment_verified_at: typeof row.payment_verified_at === "string" ? mapSqliteTimestamp(row.payment_verified_at) : null, issued_at: typeof row.issued_at === "string" ? mapSqliteTimestamp(row.issued_at) : null, checked_in_at: typeof row.checked_in_at === "string" ? mapSqliteTimestamp(row.checked_in_at) : null, voided_at: typeof row.voided_at === "string" ? mapSqliteTimestamp(row.voided_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined, seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined } satisfies DirectTicketRow;
 }
 
 export class SqliteAppDatabase implements AppDatabase {
@@ -417,6 +455,13 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_login_at DATETIME
+      );
+      CREATE TABLE IF NOT EXISTS user_preferences (
+        user_id TEXT PRIMARY KEY,
+        language TEXT NOT NULL DEFAULT 'th' CHECK (language IN ('th', 'en')),
+        timezone TEXT NOT NULL DEFAULT 'Asia/Bangkok',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS memberships (
         id TEXT PRIMARY KEY,
@@ -547,10 +592,21 @@ export class SqliteAppDatabase implements AppDatabase {
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS channel_event_assignments (
-        channel_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (channel_id, event_id),
+        FOREIGN KEY (channel_id) REFERENCES channel_accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS channel_sender_event_selections (
+        channel_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (channel_id, sender_id),
         FOREIGN KEY (channel_id) REFERENCES channel_accounts(id) ON DELETE CASCADE,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
@@ -565,6 +621,31 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS event_performances (
+        id TEXT PRIMARY KEY, event_id TEXT NOT NULL, code TEXT NOT NULL, title TEXT NOT NULL,
+        starts_at DATETIME NOT NULL, ends_at DATETIME, is_active INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (event_id, code), FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS direct_seats (
+        id TEXT PRIMARY KEY, event_id TEXT NOT NULL, performance_id TEXT NOT NULL, zone TEXT NOT NULL,
+        row_label TEXT NOT NULL, seat_label TEXT NOT NULL, external_seat_ref TEXT, face_value REAL,
+        x REAL, y REAL, status TEXT NOT NULL DEFAULT 'available', created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE (performance_id, zone, row_label, seat_label),
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY (performance_id) REFERENCES event_performances(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS direct_tickets (
+        id TEXT PRIMARY KEY, event_id TEXT NOT NULL, performance_id TEXT NOT NULL, seat_id TEXT NOT NULL,
+        ticket_class TEXT NOT NULL, holder_name TEXT NOT NULL DEFAULT '', buyer_name TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', price_amount REAL NOT NULL DEFAULT 0,
+        payment_status TEXT NOT NULL, payment_reference TEXT, status TEXT NOT NULL, issued_by_user_id TEXT,
+        payment_verified_by_user_id TEXT, payment_verified_at DATETIME, issued_at DATETIME, checked_in_at DATETIME,
+        voided_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY (performance_id) REFERENCES event_performances(id) ON DELETE RESTRICT,
+        FOREIGN KEY (seat_id) REFERENCES direct_seats(id) ON DELETE RESTRICT
       );
       CREATE TABLE IF NOT EXISTS event_document_chunks (
         id TEXT PRIMARY KEY,
@@ -598,6 +679,7 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_platform ON channel_accounts (platform);
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_external_id ON channel_accounts (external_id);
       CREATE INDEX IF NOT EXISTS idx_channel_event_assignments_event_id ON channel_event_assignments (event_id);
+      CREATE INDEX IF NOT EXISTS idx_channel_sender_event_selections_event_id ON channel_sender_event_selections (event_id);
       CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON message_attachments (message_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_event_documents_event_id ON event_documents (event_id);
       CREATE INDEX IF NOT EXISTS idx_event_documents_active ON event_documents (event_id, is_active);
@@ -606,6 +688,9 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_event_document_chunks_order ON event_document_chunks (document_id, chunk_index);
       CREATE INDEX IF NOT EXISTS idx_user_event_assignments_user_id ON user_event_assignments (user_id);
       CREATE INDEX IF NOT EXISTS idx_user_event_assignments_event_id ON user_event_assignments (event_id);
+      CREATE INDEX IF NOT EXISTS idx_direct_seats_event_performance ON direct_seats (event_id, performance_id, status);
+      CREATE INDEX IF NOT EXISTS idx_direct_tickets_event ON direct_tickets (event_id, created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_direct_tickets_active_seat ON direct_tickets (seat_id) WHERE status IN ('held', 'issued', 'checked_in');
     `);
 
     this.ensureColumn("registrations", "event_id", "TEXT");
@@ -641,9 +726,30 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("organizations", "verification_notes", "TEXT");
     this.ensureColumn("organizations", "updated_at", "DATETIME");
     this.ensureColumn("checkin_sessions", "exchanged_at", "DATETIME");
+    this.ensureColumn("event_performances", "seat_plan_image_url", "TEXT");
+    this.ensureColumn("direct_tickets", "hold_expires_at", "DATETIME");
+    this.ensureColumn("direct_tickets", "payment_proof_mime", "TEXT");
+    this.ensureColumn("direct_tickets", "payment_proof_base64", "TEXT");
+    this.ensureColumn("direct_tickets", "payment_proof_submitted_at", "DATETIME");
+    this.ensureColumn("direct_tickets", "rejection_reason", "TEXT");
+    this.ensureColumn("direct_tickets", "source", "TEXT NOT NULL DEFAULT 'admin'");
+    this.migrateChannelEventAssignmentsToMany();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_events_organizer_id ON events (organizer_id);
       CREATE INDEX IF NOT EXISTS idx_channel_accounts_organizer_id ON channel_accounts (organizer_id);
+      CREATE INDEX IF NOT EXISTS idx_channel_event_assignments_event_id ON channel_event_assignments (event_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_direct_tickets_verified_payment_reference
+        ON direct_tickets (payment_reference)
+        WHERE payment_status = 'verified' AND payment_reference IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_direct_tickets_review_queue
+        ON direct_tickets (event_id, payment_status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_direct_tickets_expiring_holds
+        ON direct_tickets (hold_expires_at)
+        WHERE status = 'held';
+
+      UPDATE direct_tickets
+      SET payment_status = 'awaiting_payment'
+      WHERE payment_status = 'pending';
 
       UPDATE events
       SET organizer_id = '${DEFAULT_ORGANIZATION_ID}'
@@ -1045,6 +1151,112 @@ export class SqliteAppDatabase implements AppDatabase {
       String(id || "").trim().toUpperCase(),
     );
     return result.changes > 0;
+  }
+
+  async listDirectPerformances(eventId: string) {
+    return this.db.prepare("SELECT * FROM event_performances WHERE event_id = ? ORDER BY starts_at").all(eventId).map((row) => mapDirectPerformanceRow(row as Record<string, unknown>));
+  }
+
+  async upsertDirectPerformance(input: UpsertDirectPerformanceInput) {
+    const eventId = String(input.event_id || "").trim();
+    const code = String(input.code || "").trim();
+    const existing = this.db.prepare("SELECT id FROM event_performances WHERE event_id = ? AND code = ?").get(eventId, code) as { id?: string } | undefined;
+    const id = existing?.id || generateEntityId("perf");
+    this.db.prepare(`INSERT INTO event_performances (id, event_id, code, title, starts_at, ends_at, seat_plan_image_url, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(event_id, code) DO UPDATE SET title=excluded.title, starts_at=excluded.starts_at, ends_at=excluded.ends_at, seat_plan_image_url=excluded.seat_plan_image_url, is_active=excluded.is_active, updated_at=CURRENT_TIMESTAMP`)
+      .run(id, eventId, code, String(input.title || "").trim(), input.starts_at, input.ends_at || null, input.seat_plan_image_url || null, input.is_active === false ? 0 : 1);
+    return mapDirectPerformanceRow(this.db.prepare("SELECT * FROM event_performances WHERE id = ?").get(id) as Record<string, unknown>);
+  }
+
+  async listDirectSeats(eventId: string, performanceId?: string) {
+    await this.releaseExpiredDirectTicketHolds(eventId);
+    const rows = performanceId ? this.db.prepare("SELECT * FROM direct_seats WHERE event_id = ? AND performance_id = ? ORDER BY zone, row_label, seat_label").all(eventId, performanceId) : this.db.prepare("SELECT * FROM direct_seats WHERE event_id = ? ORDER BY zone, row_label, seat_label").all(eventId);
+    return rows.map((row) => mapDirectSeatRow(row as Record<string, unknown>));
+  }
+
+  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]) {
+    const insert = this.db.prepare(`INSERT INTO direct_seats (id,event_id,performance_id,zone,row_label,seat_label,external_seat_ref,face_value,x,y)
+      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET external_seat_ref=excluded.external_seat_ref,face_value=excluded.face_value,x=excluded.x,y=excluded.y,updated_at=CURRENT_TIMESTAMP`);
+    this.db.transaction((items: ImportDirectSeatInput[]) => items.forEach((seat) => insert.run(generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null)))(seats);
+    return this.listDirectSeats(eventId, performanceId);
+  }
+
+  private directTicketQuery(where: string, params: unknown[]) {
+    return this.db.prepare(`SELECT t.*, p.code performance_code, p.title performance_title, p.starts_at performance_starts_at, s.zone, s.row_label, s.seat_label FROM direct_tickets t JOIN event_performances p ON p.id=t.performance_id JOIN direct_seats s ON s.id=t.seat_id ${where}`).all(...params).map((row) => mapDirectTicketRow(row as Record<string, unknown>));
+  }
+
+  async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketQuery("WHERE t.event_id = ? ORDER BY t.created_at DESC", [eventId]); }
+  async getDirectTicketById(id: string) { return this.directTicketQuery("WHERE t.id = ?", [id])[0]; }
+
+  async createDirectTicket(input: CreateDirectTicketInput) {
+    await this.releaseExpiredDirectTicketHolds(input.event_id);
+    const create = this.db.transaction(() => {
+      const seat = this.db.prepare("SELECT * FROM direct_seats WHERE id=? AND event_id=? AND performance_id=?").get(input.seat_id, input.event_id, input.performance_id) as Record<string, unknown> | undefined;
+      if (!seat) return { error: "invalid_seat" as const };
+      if (seat.status !== "available") return { error: "seat_unavailable" as const };
+      const paymentStatus = input.payment_required === false ? "not_required" : "awaiting_payment";
+      const status = paymentStatus === "not_required" ? "issued" : "held";
+      const id = generateEntityId("dtkt");
+      const holdMinutes = Math.min(120, Math.max(5, Math.round(Number(input.hold_minutes) || 15)));
+      this.db.prepare(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN ?='held' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?)`)
+        .run(id,input.event_id,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,status,status,`+${holdMinutes} minutes`,input.source === "public" ? "public" : "admin");
+      this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(status, input.seat_id);
+      return { ticket: this.directTicketQuery("WHERE t.id = ?", [id])[0] };
+    });
+    return create();
+  }
+
+  async updateDirectTicketPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
+    const update = this.db.transaction(() => {
+      const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0]; if (!ticket || (ticket.status !== "held" && input.payment_status !== "refunded")) return ticket;
+      const issued = input.payment_status === "verified";
+      this.db.prepare(`UPDATE direct_tickets SET payment_status=?, payment_reference=COALESCE(?,payment_reference), payment_verified_by_user_id=?, payment_verified_at=CURRENT_TIMESTAMP, rejection_reason=?, status=?, issued_at=CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE issued_at END, voided_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP END, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(input.payment_status,input.payment_reference || null,input.verified_by_user_id || null,input.rejection_reason || null,issued ? "issued" : "voided",issued ? 1 : 0,issued ? 1 : 0,id);
+      this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(issued ? "issued" : "available", ticket.seat_id);
+      return this.directTicketQuery("WHERE t.id = ?", [id])[0];
+    }); return update();
+  }
+
+  async submitDirectTicketPaymentProof(id: string, input: { payment_proof_mime: string; payment_proof_base64: string; payment_reference?: string | null }) {
+    await this.releaseExpiredDirectTicketHolds();
+    const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0];
+    if (!ticket || ticket.status !== "held") return ticket;
+    this.db.prepare(`UPDATE direct_tickets SET payment_status='proof_submitted',payment_proof_mime=?,payment_proof_base64=?,payment_proof_submitted_at=CURRENT_TIMESTAMP,payment_reference=?,hold_expires_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','+24 hours'),updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(input.payment_proof_mime, input.payment_proof_base64, input.payment_reference || null, id);
+    return this.directTicketQuery("WHERE t.id = ?", [id])[0];
+  }
+
+  async releaseExpiredDirectTicketHolds(eventId?: string) {
+    const run = this.db.transaction(() => {
+      const rows = this.db.prepare(`SELECT id,seat_id FROM direct_tickets WHERE status='held' AND hold_expires_at IS NOT NULL AND julianday(hold_expires_at) <= julianday('now') ${eventId ? "AND event_id=?" : ""}`).all(...(eventId ? [eventId] : [])) as Array<{ id: string; seat_id: string }>;
+      if (!rows.length) return 0;
+      const updateTicket = this.db.prepare("UPDATE direct_tickets SET status='voided',payment_status='expired',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?");
+      const releaseSeat = this.db.prepare("UPDATE direct_seats SET status='available',updated_at=CURRENT_TIMESTAMP WHERE id=?");
+      for (const row of rows) { updateTicket.run(row.id); releaseSeat.run(row.seat_id); }
+      return rows.length;
+    });
+    return run();
+  }
+
+  async voidDirectTicket(id: string, options?: { releaseSeat?: boolean }) {
+    const run = this.db.transaction(() => { const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0]; if (!ticket) return undefined; if (ticket.status !== "voided") this.db.prepare("UPDATE direct_tickets SET status='voided', voided_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id); this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(options?.releaseSeat === false ? "voided" : "available", ticket.seat_id); return this.directTicketQuery("WHERE t.id = ?", [id])[0]; }); return run();
+  }
+
+  async reissueDirectTicket(id: string, issuedByUserId?: string | null) {
+    const run = this.db.transaction(() => {
+      const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0];
+      if (!ticket || !["issued", "checked_in"].includes(ticket.status)) return undefined;
+      const nextId = generateEntityId("dtkt");
+      this.db.prepare("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
+      this.db.prepare(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,payment_reference,status,issued_by_user_id,payment_verified_by_user_id,payment_verified_at,issued_at,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)`)
+        .run(nextId,ticket.event_id,ticket.performance_id,ticket.seat_id,ticket.ticket_class,ticket.holder_name,ticket.buyer_name,ticket.phone,ticket.email,ticket.price_amount,ticket.payment_status,ticket.payment_reference,"issued",issuedByUserId||null,ticket.payment_verified_by_user_id,ticket.payment_verified_at,ticket.source);
+      this.db.prepare("UPDATE direct_seats SET status='issued',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(ticket.seat_id);
+      return this.directTicketQuery("WHERE t.id = ?", [nextId])[0];
+    });
+    return run();
+  }
+
+  async checkInDirectTicket(id: string) {
+    const run = this.db.transaction(() => { const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0]; if (!ticket) return { ticket: undefined, alreadyCheckedIn: false }; if (ticket.status === "checked_in") return { ticket, alreadyCheckedIn: true }; if (ticket.status !== "issued") return { ticket, alreadyCheckedIn: false }; this.db.prepare("UPDATE direct_tickets SET status='checked_in', checked_in_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id); return { ticket: this.directTicketQuery("WHERE t.id = ?", [id])[0], alreadyCheckedIn: false }; }); return run();
   }
 
   async saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string) {
@@ -1713,17 +1925,18 @@ export class SqliteAppDatabase implements AppDatabase {
            LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
            ORDER BY ca.created_at ASC`,
         ).all();
-    return (rows as Array<Record<string, unknown>>).map(mapChannelRow);
+    return collapseChannelRows(rows as Array<Record<string, unknown>>);
   }
 
   async getChannelAccount(platform: ChannelPlatform, externalId: string) {
-    const row = this.db.prepare(
+    const rows = this.db.prepare(
       `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
        FROM channel_accounts ca
        LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.platform = ? AND ca.external_id = ? LIMIT 1`,
-    ).get(platform, String(externalId || "").trim()) as Record<string, unknown> | undefined;
-    return row ? mapChannelRow(row) : undefined;
+       WHERE ca.platform = ? AND ca.external_id = ?
+       ORDER BY cea.created_at ASC`,
+    ).all(platform, String(externalId || "").trim()) as Array<Record<string, unknown>>;
+    return collapseChannelRows(rows)[0];
   }
 
   async upsertChannelAccount(input: UpsertChannelAccountInput) {
@@ -1760,26 +1973,23 @@ export class SqliteAppDatabase implements AppDatabase {
 
     if (hasEventId) {
       if (eventId) {
+        if (platform !== "facebook") {
+          this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(id);
+        }
         this.db.prepare(
           `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
            VALUES (?, ?, CURRENT_TIMESTAMP)
-           ON CONFLICT(channel_id) DO UPDATE
-           SET event_id = excluded.event_id,
-               updated_at = CURRENT_TIMESTAMP`,
+           ON CONFLICT(channel_id, event_id) DO UPDATE
+           SET updated_at = CURRENT_TIMESTAMP`,
         ).run(id, eventId);
       } else {
         this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(id);
       }
     }
 
-    const row = this.db.prepare(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
-       FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.platform = ? AND ca.external_id = ? LIMIT 1`,
-    ).get(platform, externalId) as Record<string, unknown> | undefined;
-    if (!row) throw new Error("Failed to upsert channel account");
-    return mapChannelRow(row);
+    const channel = await this.getChannelAccount(platform, externalId);
+    if (!channel) throw new Error("Failed to upsert channel account");
+    return channel;
   }
 
   async updateChannelAccount(originalPlatform: ChannelPlatform, originalExternalId: string, input: UpsertChannelAccountInput) {
@@ -1828,32 +2038,33 @@ export class SqliteAppDatabase implements AppDatabase {
 
     if (hasEventId) {
       if (eventId) {
+        if (platform !== "facebook") {
+          this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(original.id);
+        }
         this.db.prepare(
           `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
            VALUES (?, ?, CURRENT_TIMESTAMP)
-           ON CONFLICT(channel_id) DO UPDATE
-           SET event_id = excluded.event_id,
-               updated_at = CURRENT_TIMESTAMP`,
+           ON CONFLICT(channel_id, event_id) DO UPDATE
+           SET updated_at = CURRENT_TIMESTAMP`,
         ).run(original.id, eventId);
       } else {
         this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(original.id);
       }
     }
 
-    const row = this.db.prepare(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
-       FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.id = ? LIMIT 1`,
-    ).get(original.id) as Record<string, unknown> | undefined;
-    if (!row) throw new Error("Failed to update channel account");
-    return mapChannelRow(row);
+    const channel = await this.getChannelAccount(platform, externalId);
+    if (!channel) throw new Error("Failed to update channel account");
+    return channel;
   }
 
   async assignChannelAccount(channelId: string, eventId: string) {
     const normalizedChannelId = String(channelId || "").trim();
     const normalizedEventId = String(eventId || "").trim();
     if (!normalizedChannelId || !normalizedEventId) return undefined;
+    const channelIdentity = this.db.prepare(
+      "SELECT platform, external_id FROM channel_accounts WHERE id = ? LIMIT 1",
+    ).get(normalizedChannelId) as { platform?: ChannelPlatform; external_id?: string } | undefined;
+    if (!channelIdentity?.platform || !channelIdentity.external_id) return undefined;
     const eventOrganizerRow = this.db.prepare("SELECT organizer_id FROM events WHERE id = ? LIMIT 1").get(normalizedEventId) as { organizer_id?: string } | undefined;
     const eventOrganizerId = String(eventOrganizerRow?.organizer_id || "").trim() || DEFAULT_ORGANIZATION_ID;
     this.db.prepare(
@@ -1862,33 +2073,70 @@ export class SqliteAppDatabase implements AppDatabase {
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
     ).run(eventOrganizerId, normalizedChannelId);
+    if (channelIdentity.platform !== "facebook") {
+      this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(normalizedChannelId);
+    }
     this.db.prepare(
       `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
        VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(channel_id) DO UPDATE
-       SET event_id = excluded.event_id,
-           updated_at = CURRENT_TIMESTAMP`,
+       ON CONFLICT(channel_id, event_id) DO UPDATE
+       SET updated_at = CURRENT_TIMESTAMP`,
     ).run(normalizedChannelId, normalizedEventId);
-    const row = this.db.prepare(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
-       FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.id = ? LIMIT 1`,
-    ).get(normalizedChannelId) as Record<string, unknown> | undefined;
-    return row ? mapChannelRow(row) : undefined;
+    return this.getChannelAccount(channelIdentity.platform, channelIdentity.external_id);
   }
 
-  async unassignChannelAccount(channelId: string) {
+  async unassignChannelAccount(channelId: string, eventId?: string) {
     const normalizedChannelId = String(channelId || "").trim();
     if (!normalizedChannelId) return undefined;
-    this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(normalizedChannelId);
-    const row = this.db.prepare(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at, ca.updated_at
+    const channelIdentity = this.db.prepare(
+      "SELECT platform, external_id FROM channel_accounts WHERE id = ? LIMIT 1",
+    ).get(normalizedChannelId) as { platform?: ChannelPlatform; external_id?: string } | undefined;
+    if (!channelIdentity?.platform || !channelIdentity.external_id) return undefined;
+    const normalizedEventId = String(eventId || "").trim();
+    if (normalizedEventId) {
+      this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ? AND event_id = ?").run(normalizedChannelId, normalizedEventId);
+      this.db.prepare("DELETE FROM channel_sender_event_selections WHERE channel_id = ? AND event_id = ?").run(normalizedChannelId, normalizedEventId);
+    } else {
+      this.db.prepare("DELETE FROM channel_event_assignments WHERE channel_id = ?").run(normalizedChannelId);
+      this.db.prepare("DELETE FROM channel_sender_event_selections WHERE channel_id = ?").run(normalizedChannelId);
+    }
+    return this.getChannelAccount(channelIdentity.platform, channelIdentity.external_id);
+  }
+
+  async listEventIdsForChannel(platform: ChannelPlatform, externalId: string) {
+    const rows = this.db.prepare(
+      `SELECT cea.event_id
        FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.id = ? LIMIT 1`,
-    ).get(normalizedChannelId) as Record<string, unknown> | undefined;
-    return row ? mapChannelRow(row) : undefined;
+       JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       JOIN events e ON e.id = cea.event_id
+       WHERE ca.platform = ? AND ca.external_id = ? AND ca.is_active = 1
+       ORDER BY e.created_at ASC`,
+    ).all(platform, String(externalId || "").trim()) as Array<{ event_id?: string }>;
+    return rows.map((row) => String(row.event_id || "").trim()).filter(Boolean);
+  }
+
+  async getChannelSenderEventSelection(channelId: string, senderId: string) {
+    const row = this.db.prepare(
+      "SELECT event_id FROM channel_sender_event_selections WHERE channel_id = ? AND sender_id = ? LIMIT 1",
+    ).get(String(channelId || "").trim(), String(senderId || "").trim()) as { event_id?: string } | undefined;
+    return row?.event_id;
+  }
+
+  async setChannelSenderEventSelection(channelId: string, senderId: string, eventId?: string) {
+    const normalizedChannelId = String(channelId || "").trim();
+    const normalizedSenderId = String(senderId || "").trim();
+    const normalizedEventId = String(eventId || "").trim();
+    if (!normalizedChannelId || !normalizedSenderId) return;
+    if (!normalizedEventId) {
+      this.db.prepare("DELETE FROM channel_sender_event_selections WHERE channel_id = ? AND sender_id = ?").run(normalizedChannelId, normalizedSenderId);
+      return;
+    }
+    this.db.prepare(
+      `INSERT INTO channel_sender_event_selections (channel_id, sender_id, event_id, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(channel_id, sender_id) DO UPDATE
+       SET event_id = excluded.event_id, updated_at = CURRENT_TIMESTAMP`,
+    ).run(normalizedChannelId, normalizedSenderId, normalizedEventId);
   }
 
   async resolveEventIdForChannel(platform: ChannelPlatform, externalId: string) {
@@ -1994,6 +2242,24 @@ export class SqliteAppDatabase implements AppDatabase {
       "UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     ).run(normalizedPasswordHash, normalizedUserId);
     return result.changes > 0;
+  }
+
+  async getUserPreferences(userId: string) {
+    return this.db.prepare(
+      "SELECT user_id, language, timezone, updated_at FROM user_preferences WHERE user_id = ?",
+    ).get(String(userId || "").trim()) as UserPreferencesRow | undefined;
+  }
+
+  async upsertUserPreferences(userId: string, input: { language: "th" | "en"; timezone: string }) {
+    const normalizedUserId = String(userId || "").trim();
+    this.db.prepare(
+      `INSERT INTO user_preferences (user_id, language, timezone, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id) DO UPDATE SET language = excluded.language, timezone = excluded.timezone, updated_at = CURRENT_TIMESTAMP`,
+    ).run(normalizedUserId, input.language, input.timezone);
+    const preferences = await this.getUserPreferences(normalizedUserId);
+    if (!preferences) throw new Error("Failed to save user preferences");
+    return preferences;
   }
 
   async listUsers() {
@@ -2485,6 +2751,29 @@ export class SqliteAppDatabase implements AppDatabase {
     }
   }
 
+  private migrateChannelEventAssignmentsToMany() {
+    const columns = this.db.prepare("PRAGMA table_info(channel_event_assignments)").all() as Array<{ name: string; pk: number }>;
+    if (columns.find((column) => column.name === "event_id")?.pk) return;
+
+    this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE channel_event_assignments_many (
+          channel_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (channel_id, event_id),
+          FOREIGN KEY (channel_id) REFERENCES channel_accounts(id) ON DELETE CASCADE,
+          FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        );
+        INSERT INTO channel_event_assignments_many (channel_id, event_id, created_at, updated_at)
+        SELECT channel_id, event_id, created_at, updated_at FROM channel_event_assignments;
+        DROP TABLE channel_event_assignments;
+        ALTER TABLE channel_event_assignments_many RENAME TO channel_event_assignments;
+      `);
+    })();
+  }
+
   private uniqueEventSlug(baseName: string, excludeId?: string) {
     const base = slugifyText(baseName);
     let candidate = base;
@@ -2572,9 +2861,8 @@ export class SqliteAppDatabase implements AppDatabase {
     const assign = this.db.prepare(
       `INSERT INTO channel_event_assignments (channel_id, event_id, updated_at)
        VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(channel_id) DO UPDATE
-       SET event_id = excluded.event_id,
-           updated_at = CURRENT_TIMESTAMP`,
+       ON CONFLICT(channel_id, event_id) DO UPDATE
+       SET updated_at = CURRENT_TIMESTAMP`,
     );
 
     for (const row of rows) {

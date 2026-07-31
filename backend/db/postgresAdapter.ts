@@ -21,6 +21,7 @@ import type {
   CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
+  CreateDirectTicketInput,
   ExchangeCheckinSessionTokenInput,
   EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
@@ -29,6 +30,9 @@ import type {
   EmbeddingStatus,
   EventStatus,
   EventRow,
+  DirectPerformanceRow,
+  DirectSeatRow,
+  DirectTicketRow,
   FacebookPageRow,
   ManualEventStatus,
   MessageAttachmentRow,
@@ -48,11 +52,14 @@ import type {
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
+  UpsertDirectPerformanceInput,
+  ImportDirectSeatInput,
   UpdateOrganizerProfileInput,
   UpsertChannelAccountInput,
   UpsertEventDocumentInput,
   UpsertFacebookPageInput,
   UserRole,
+  UserPreferencesRow,
 } from "./types";
 import { getSystemAuditMetadata } from "../runtime/systemInfo";
 
@@ -243,6 +250,20 @@ function mapChannelRow(row: Record<string, unknown>) {
   } satisfies ChannelAccountRow;
 }
 
+function collapseChannelRows(rows: Array<Record<string, unknown>>) {
+  const channels = new Map<string, ChannelAccountRow>();
+  for (const row of rows) {
+    const mapped = mapChannelRow(row);
+    const channel = channels.get(mapped.id) || { ...mapped, event_ids: [] };
+    if (mapped.event_id && !channel.event_ids?.includes(mapped.event_id)) {
+      channel.event_ids?.push(mapped.event_id);
+    }
+    channel.event_id = channel.event_ids?.[0] || null;
+    channels.set(mapped.id, channel);
+  }
+  return [...channels.values()];
+}
+
 function mapEventDocumentRow(row: Record<string, unknown>) {
   return {
     id: String(row.id),
@@ -323,6 +344,53 @@ function mapCheckinAccessSessionRow(row: Record<string, unknown>) {
     revoked_at: revokedAt,
     is_active: !revokedAt && expiresAtMs > Date.now(),
   } satisfies CheckinAccessSessionRow;
+}
+
+function mapDirectPerformanceRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), event_id: String(row.event_id || ""), code: String(row.code || ""),
+    title: String(row.title || ""), starts_at: String(row.starts_at || ""), ends_at: typeof row.ends_at === "string" ? row.ends_at : null, seat_plan_image_url: typeof row.seat_plan_image_url === "string" ? row.seat_plan_image_url : null, is_active: Boolean(row.is_active),
+    created_at: String(row.created_at || ""), updated_at: String(row.updated_at || ""),
+  } satisfies DirectPerformanceRow;
+}
+
+function mapDirectSeatRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""),
+    zone: String(row.zone || ""), row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""),
+    external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null,
+    face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y),
+    status: String(row.status || "available") as DirectSeatRow["status"],
+    created_at: String(row.created_at || ""), updated_at: String(row.updated_at || ""),
+  } satisfies DirectSeatRow;
+}
+
+function mapPostgresTimestamp(value: unknown) {
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === "string" ? value : null;
+}
+
+function mapDirectTicketRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""),
+    ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""),
+    price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"],
+    payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null,
+    payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null,
+    payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null,
+    payment_proof_submitted_at: mapPostgresTimestamp(row.payment_proof_submitted_at),
+    rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null,
+    hold_expires_at: mapPostgresTimestamp(row.hold_expires_at),
+    source: row.source === "public" ? "public" : "admin",
+    status: String(row.status || "held") as DirectTicketRow["status"], issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, issued_at: mapPostgresTimestamp(row.issued_at),
+    payment_verified_at: mapPostgresTimestamp(row.payment_verified_at), payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null,
+    checked_in_at: mapPostgresTimestamp(row.checked_in_at), voided_at: mapPostgresTimestamp(row.voided_at),
+    created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
+    performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined,
+    performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined,
+    zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined,
+    seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined,
+  } satisfies DirectTicketRow;
 }
 
 export class PostgresAppDatabase implements AppDatabase {
@@ -726,6 +794,64 @@ export class PostgresAppDatabase implements AppDatabase {
     ]);
     return result.rowCount > 0;
   }
+
+  async listDirectPerformances(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT id,event_id,code,title,starts_at::text,ends_at::text,seat_plan_image_url,is_active,created_at::text,updated_at::text FROM event_performances WHERE event_id=$1 ORDER BY starts_at", [eventId]);
+    return result.rows.map(mapDirectPerformanceRow);
+  }
+
+  async upsertDirectPerformance(input: UpsertDirectPerformanceInput) {
+    const result = await this.pool.query<Record<string, unknown>>(`INSERT INTO event_performances (id,event_id,code,title,starts_at,ends_at,seat_plan_image_url,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT(event_id,code) DO UPDATE SET title=EXCLUDED.title,starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at,seat_plan_image_url=EXCLUDED.seat_plan_image_url,is_active=EXCLUDED.is_active,updated_at=CURRENT_TIMESTAMP
+      RETURNING id,event_id,code,title,starts_at::text,ends_at::text,seat_plan_image_url,is_active,created_at::text,updated_at::text`, [generateEntityId("perf"), input.event_id, input.code.trim(), input.title.trim(), input.starts_at, input.ends_at || null, input.seat_plan_image_url || null, input.is_active !== false]);
+    return mapDirectPerformanceRow(result.rows[0]);
+  }
+
+  async listDirectSeats(eventId: string, performanceId?: string) {
+    await this.releaseExpiredDirectTicketHolds(eventId);
+    const result = await this.pool.query<Record<string, unknown>>(`SELECT id,event_id,performance_id,zone,row_label,seat_label,external_seat_ref,face_value,x,y,status,created_at::text,updated_at::text FROM direct_seats WHERE event_id=$1 ${performanceId ? "AND performance_id=$2" : ""} ORDER BY zone,row_label,seat_label`, performanceId ? [eventId, performanceId] : [eventId]);
+    return result.rows.map(mapDirectSeatRow);
+  }
+
+  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]) {
+    const client = await this.pool.connect();
+    try { await client.query("BEGIN"); for (const seat of seats) await client.query(`INSERT INTO direct_seats (id,event_id,performance_id,zone,row_label,seat_label,external_seat_ref,face_value,x,y) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET external_seat_ref=EXCLUDED.external_seat_ref,face_value=EXCLUDED.face_value,x=EXCLUDED.x,y=EXCLUDED.y,updated_at=CURRENT_TIMESTAMP`, [generateEntityId("seat"),eventId,performanceId,String(seat.zone).trim(),String(seat.row_label).trim(),String(seat.seat_label).trim(),seat.external_seat_ref || null,seat.face_value ?? null,seat.x ?? null,seat.y ?? null]); await client.query("COMMIT"); } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+    return this.listDirectSeats(eventId, performanceId);
+  }
+
+  private async directTicketRows(where: string, params: unknown[]) {
+    const result = await this.pool.query<Record<string, unknown>>(`SELECT t.*,p.code performance_code,p.title performance_title,p.starts_at::text performance_starts_at,s.zone,s.row_label,s.seat_label FROM direct_tickets t JOIN event_performances p ON p.id=t.performance_id JOIN direct_seats s ON s.id=t.seat_id ${where}`, params); return result.rows.map(mapDirectTicketRow);
+  }
+
+  async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketRows("WHERE t.event_id=$1 ORDER BY t.created_at DESC", [eventId]); }
+  async getDirectTicketById(id: string) { return (await this.directTicketRows("WHERE t.id=$1", [id]))[0]; }
+
+  async createDirectTicket(input: CreateDirectTicketInput) {
+    await this.releaseExpiredDirectTicketHolds(input.event_id);
+    const client = await this.pool.connect();
+    try { await client.query("BEGIN"); const seat = await client.query<Record<string, unknown>>("SELECT * FROM direct_seats WHERE id=$1 AND event_id=$2 AND performance_id=$3 FOR UPDATE", [input.seat_id,input.event_id,input.performance_id]); if (!seat.rows[0]) { await client.query("ROLLBACK"); return { error: "invalid_seat" as const }; } if (seat.rows[0].status !== "available") { await client.query("ROLLBACK"); return { error: "seat_unavailable" as const }; } const paymentStatus = input.payment_required === false ? "not_required" : "awaiting_payment"; const status = paymentStatus === "not_required" ? "issued" : "held"; const id=generateEntityId("dtkt"); const holdMinutes=Math.min(120,Math.max(5,Math.round(Number(input.hold_minutes)||15))); await client.query(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $12='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN $12='held' THEN CURRENT_TIMESTAMP + ($14 * INTERVAL '1 minute') END,$15)`,[id,input.event_id,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,holdMinutes,input.source === "public" ? "public" : "admin"]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[status,input.seat_id]); await client.query("COMMIT"); return { ticket: await this.getDirectTicketById(id) }; } catch (error) { await client.query("ROLLBACK"); if ((error as { code?: string }).code === "23505") return { error: "seat_unavailable" as const }; throw error; } finally { client.release(); }
+  }
+
+  async updateDirectTicketPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
+    const client=await this.pool.connect(); try { await client.query("BEGIN"); const current=await client.query<Record<string,unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE",[id]); const ticket=current.rows[0]; if(!ticket || (ticket.status!=="held" && input.payment_status!=="refunded")) { await client.query("ROLLBACK"); return this.getDirectTicketById(id); } const issued=input.payment_status==="verified"; await client.query(`UPDATE direct_tickets SET payment_status=$1,payment_reference=COALESCE($2,payment_reference),payment_verified_by_user_id=$3,payment_verified_at=CURRENT_TIMESTAMP,rejection_reason=$4,status=$5,issued_at=CASE WHEN $6 THEN CURRENT_TIMESTAMP ELSE issued_at END,voided_at=CASE WHEN $6 THEN NULL ELSE CURRENT_TIMESTAMP END,updated_at=CURRENT_TIMESTAMP WHERE id=$7`,[input.payment_status,input.payment_reference||null,input.verified_by_user_id||null,input.rejection_reason||null,issued?"issued":"voided",issued,id]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[issued?"issued":"available",ticket.seat_id]); await client.query("COMMIT"); return this.getDirectTicketById(id); } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async submitDirectTicketPaymentProof(id: string, input: { payment_proof_mime: string; payment_proof_base64: string; payment_reference?: string | null }) {
+    await this.releaseExpiredDirectTicketHolds();
+    const result=await this.pool.query<Record<string,unknown>>(`UPDATE direct_tickets SET payment_status='proof_submitted',payment_proof_mime=$1,payment_proof_base64=$2,payment_proof_submitted_at=CURRENT_TIMESTAMP,payment_reference=$3,hold_expires_at=CURRENT_TIMESTAMP+INTERVAL '24 hours',updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND status='held' RETURNING id`,[input.payment_proof_mime,input.payment_proof_base64,input.payment_reference||null,id]);
+    return result.rows[0] ? this.getDirectTicketById(id) : undefined;
+  }
+
+  async releaseExpiredDirectTicketHolds(eventId?: string) {
+    const result=await this.pool.query(`WITH expired AS (UPDATE direct_tickets SET status='voided',payment_status='expired',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE status='held' AND hold_expires_at IS NOT NULL AND hold_expires_at<=CURRENT_TIMESTAMP ${eventId ? "AND event_id=$1" : ""} RETURNING seat_id) UPDATE direct_seats SET status='available',updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT seat_id FROM expired)`,eventId?[eventId]:[]);
+    return result.rowCount||0;
+  }
+
+  async voidDirectTicket(id: string, options?: { releaseSeat?: boolean }) { const ticket=await this.getDirectTicketById(id); if (!ticket) return undefined; await this.pool.query("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); await this.pool.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[options?.releaseSeat === false ? "voided" : "available",ticket.seat_id]); return this.getDirectTicketById(id); }
+  async reissueDirectTicket(id: string, issuedByUserId?: string | null) {
+    const client=await this.pool.connect(); try { await client.query("BEGIN"); const current=await client.query<Record<string,unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE",[id]); const ticket=current.rows[0]; if(!ticket || !["issued","checked_in"].includes(String(ticket.status))) { await client.query("ROLLBACK"); return undefined; } const nextId=generateEntityId("dtkt"); await client.query("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); await client.query(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,payment_reference,status,issued_by_user_id,payment_verified_by_user_id,payment_verified_at,issued_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'issued',$13,$14,$15,CURRENT_TIMESTAMP,$16)`,[nextId,ticket.event_id,ticket.performance_id,ticket.seat_id,ticket.ticket_class,ticket.holder_name,ticket.buyer_name,ticket.phone,ticket.email,ticket.price_amount,ticket.payment_status,ticket.payment_reference,issuedByUserId||null,ticket.payment_verified_by_user_id,ticket.payment_verified_at,ticket.source]); await client.query("UPDATE direct_seats SET status='issued',updated_at=CURRENT_TIMESTAMP WHERE id=$1",[ticket.seat_id]); await client.query("COMMIT"); return this.getDirectTicketById(nextId); } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+  async checkInDirectTicket(id: string) { const ticket=await this.getDirectTicketById(id); if (!ticket) return { ticket: undefined, alreadyCheckedIn: false }; if (ticket.status === "checked_in") return { ticket, alreadyCheckedIn: true }; if (ticket.status !== "issued") return { ticket, alreadyCheckedIn: false }; await this.pool.query("UPDATE direct_tickets SET status='checked_in',checked_in_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); return { ticket: await this.getDirectTicketById(id), alreadyCheckedIn: false }; }
 
   async saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string) {
     const result = await this.pool.query<{ id: number }>(
@@ -1477,7 +1603,7 @@ export class PostgresAppDatabase implements AppDatabase {
           values: [] as unknown[],
         };
     const result = await this.pool.query<Record<string, unknown>>(query.sql, query.values);
-    return result.rows.map(mapChannelRow);
+    return collapseChannelRows(result.rows);
   }
 
   async getChannelAccount(platform: ChannelPlatform, externalId: string) {
@@ -1486,10 +1612,10 @@ export class PostgresAppDatabase implements AppDatabase {
        FROM channel_accounts ca
        LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
        WHERE ca.platform = $1 AND ca.external_id = $2
-       LIMIT 1`,
+       ORDER BY cea.created_at ASC`,
       [platform, String(externalId || "").trim()],
     );
-    return result.rows[0] ? mapChannelRow(result.rows[0]) : undefined;
+    return collapseChannelRows(result.rows)[0];
   }
 
   async upsertChannelAccount(input: UpsertChannelAccountInput) {
@@ -1528,12 +1654,14 @@ export class PostgresAppDatabase implements AppDatabase {
 
     if (hasEventId) {
       if (eventId) {
+        if (platform !== "facebook") {
+          await this.pool.query("DELETE FROM channel_event_assignments WHERE channel_id = $1", [id]);
+        }
         await this.pool.query(
           `INSERT INTO channel_event_assignments (channel_id, event_id)
            VALUES ($1, $2)
-           ON CONFLICT (channel_id) DO UPDATE
-           SET event_id = EXCLUDED.event_id,
-               updated_at = CURRENT_TIMESTAMP`,
+           ON CONFLICT (channel_id, event_id) DO UPDATE
+           SET updated_at = CURRENT_TIMESTAMP`,
           [id, eventId],
         );
       } else {
@@ -1541,16 +1669,9 @@ export class PostgresAppDatabase implements AppDatabase {
       }
     }
 
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
-       FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.platform = $1 AND ca.external_id = $2
-       LIMIT 1`,
-      [platform, externalId],
-    );
-    if (!result.rows[0]) throw new Error("Failed to upsert channel account");
-    return mapChannelRow(result.rows[0]);
+    const channel = await this.getChannelAccount(platform, externalId);
+    if (!channel) throw new Error("Failed to upsert channel account");
+    return channel;
   }
 
   async updateChannelAccount(originalPlatform: ChannelPlatform, originalExternalId: string, input: UpsertChannelAccountInput) {
@@ -1603,12 +1724,14 @@ export class PostgresAppDatabase implements AppDatabase {
 
     if (hasEventId) {
       if (eventId) {
+        if (platform !== "facebook") {
+          await this.pool.query("DELETE FROM channel_event_assignments WHERE channel_id = $1", [original.id]);
+        }
         await this.pool.query(
           `INSERT INTO channel_event_assignments (channel_id, event_id)
            VALUES ($1, $2)
-           ON CONFLICT (channel_id) DO UPDATE
-           SET event_id = EXCLUDED.event_id,
-               updated_at = CURRENT_TIMESTAMP`,
+           ON CONFLICT (channel_id, event_id) DO UPDATE
+           SET updated_at = CURRENT_TIMESTAMP`,
           [original.id, eventId],
         );
       } else {
@@ -1616,22 +1739,21 @@ export class PostgresAppDatabase implements AppDatabase {
       }
     }
 
-    const refreshed = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
-       FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.id = $1
-       LIMIT 1`,
-      [original.id],
-    );
-    if (!refreshed.rows[0]) throw new Error("Failed to update channel account");
-    return mapChannelRow(refreshed.rows[0]);
+    const channel = await this.getChannelAccount(platform, externalId);
+    if (!channel) throw new Error("Failed to update channel account");
+    return channel;
   }
 
   async assignChannelAccount(channelId: string, eventId: string) {
     const normalizedChannelId = String(channelId || "").trim();
     const normalizedEventId = String(eventId || "").trim();
     if (!normalizedChannelId || !normalizedEventId) return undefined;
+    const identityResult = await this.pool.query<{ platform: ChannelPlatform; external_id: string }>(
+      "SELECT platform, external_id FROM channel_accounts WHERE id = $1 LIMIT 1",
+      [normalizedChannelId],
+    );
+    const channelIdentity = identityResult.rows[0];
+    if (!channelIdentity) return undefined;
     const eventOrganizerResult = await this.pool.query<{ organizer_id: string }>(
       "SELECT organizer_id FROM events WHERE id = $1 LIMIT 1",
       [normalizedEventId],
@@ -1644,38 +1766,79 @@ export class PostgresAppDatabase implements AppDatabase {
        WHERE id = $2`,
       [eventOrganizerId, normalizedChannelId],
     );
+    if (channelIdentity.platform !== "facebook") {
+      await this.pool.query("DELETE FROM channel_event_assignments WHERE channel_id = $1", [normalizedChannelId]);
+    }
     await this.pool.query(
       `INSERT INTO channel_event_assignments (channel_id, event_id)
        VALUES ($1, $2)
-       ON CONFLICT (channel_id) DO UPDATE
-       SET event_id = EXCLUDED.event_id,
-           updated_at = CURRENT_TIMESTAMP`,
+       ON CONFLICT (channel_id, event_id) DO UPDATE
+       SET updated_at = CURRENT_TIMESTAMP`,
       [normalizedChannelId, normalizedEventId],
     );
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
-       FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.id = $1
-       LIMIT 1`,
-      [normalizedChannelId],
-    );
-    return result.rows[0] ? mapChannelRow(result.rows[0]) : undefined;
+    return this.getChannelAccount(channelIdentity.platform, channelIdentity.external_id);
   }
 
-  async unassignChannelAccount(channelId: string) {
+  async unassignChannelAccount(channelId: string, eventId?: string) {
     const normalizedChannelId = String(channelId || "").trim();
     if (!normalizedChannelId) return undefined;
-    await this.pool.query("DELETE FROM channel_event_assignments WHERE channel_id = $1", [normalizedChannelId]);
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT ca.id, ca.platform, ca.external_id, ca.display_name, ca.organizer_id, cea.event_id, ca.access_token, ca.config_json, ca.is_active, ca.created_at::text AS created_at, ca.updated_at::text AS updated_at
-       FROM channel_accounts ca
-       LEFT JOIN channel_event_assignments cea ON cea.channel_id = ca.id
-       WHERE ca.id = $1
-       LIMIT 1`,
+    const identityResult = await this.pool.query<{ platform: ChannelPlatform; external_id: string }>(
+      "SELECT platform, external_id FROM channel_accounts WHERE id = $1 LIMIT 1",
       [normalizedChannelId],
     );
-    return result.rows[0] ? mapChannelRow(result.rows[0]) : undefined;
+    const channelIdentity = identityResult.rows[0];
+    if (!channelIdentity) return undefined;
+    const normalizedEventId = String(eventId || "").trim();
+    if (normalizedEventId) {
+      await this.pool.query("DELETE FROM channel_event_assignments WHERE channel_id = $1 AND event_id = $2", [normalizedChannelId, normalizedEventId]);
+      await this.pool.query("DELETE FROM channel_sender_event_selections WHERE channel_id = $1 AND event_id = $2", [normalizedChannelId, normalizedEventId]);
+    } else {
+      await this.pool.query("DELETE FROM channel_event_assignments WHERE channel_id = $1", [normalizedChannelId]);
+      await this.pool.query("DELETE FROM channel_sender_event_selections WHERE channel_id = $1", [normalizedChannelId]);
+    }
+    return this.getChannelAccount(channelIdentity.platform, channelIdentity.external_id);
+  }
+
+  async listEventIdsForChannel(platform: ChannelPlatform, externalId: string) {
+    const result = await this.pool.query<{ event_id: string }>(
+      `SELECT cea.event_id
+       FROM channel_accounts ca
+       JOIN channel_event_assignments cea ON cea.channel_id = ca.id
+       JOIN events e ON e.id = cea.event_id
+       WHERE ca.platform = $1 AND ca.external_id = $2 AND ca.is_active = TRUE
+       ORDER BY e.created_at ASC`,
+      [platform, String(externalId || "").trim()],
+    );
+    return result.rows.map((row) => row.event_id);
+  }
+
+  async getChannelSenderEventSelection(channelId: string, senderId: string) {
+    const result = await this.pool.query<{ event_id: string }>(
+      "SELECT event_id FROM channel_sender_event_selections WHERE channel_id = $1 AND sender_id = $2 LIMIT 1",
+      [String(channelId || "").trim(), String(senderId || "").trim()],
+    );
+    return result.rows[0]?.event_id;
+  }
+
+  async setChannelSenderEventSelection(channelId: string, senderId: string, eventId?: string) {
+    const normalizedChannelId = String(channelId || "").trim();
+    const normalizedSenderId = String(senderId || "").trim();
+    const normalizedEventId = String(eventId || "").trim();
+    if (!normalizedChannelId || !normalizedSenderId) return;
+    if (!normalizedEventId) {
+      await this.pool.query(
+        "DELETE FROM channel_sender_event_selections WHERE channel_id = $1 AND sender_id = $2",
+        [normalizedChannelId, normalizedSenderId],
+      );
+      return;
+    }
+    await this.pool.query(
+      `INSERT INTO channel_sender_event_selections (channel_id, sender_id, event_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (channel_id, sender_id) DO UPDATE
+       SET event_id = EXCLUDED.event_id, updated_at = CURRENT_TIMESTAMP`,
+      [normalizedChannelId, normalizedSenderId, normalizedEventId],
+    );
   }
 
   async resolveEventIdForChannel(platform: ChannelPlatform, externalId: string) {
@@ -1789,6 +1952,27 @@ export class PostgresAppDatabase implements AppDatabase {
       [normalizedPasswordHash, normalizedUserId],
     );
     return result.rowCount > 0;
+  }
+
+  async getUserPreferences(userId: string) {
+    const result = await this.pool.query<UserPreferencesRow>(
+      "SELECT user_id, language, timezone, updated_at::text AS updated_at FROM user_preferences WHERE user_id = $1",
+      [String(userId || "").trim()],
+    );
+    return result.rows[0];
+  }
+
+  async upsertUserPreferences(userId: string, input: { language: "th" | "en"; timezone: string }) {
+    const result = await this.pool.query<UserPreferencesRow>(
+      `INSERT INTO user_preferences (user_id, language, timezone, updated_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (user_id) DO UPDATE SET language = EXCLUDED.language, timezone = EXCLUDED.timezone, updated_at = CURRENT_TIMESTAMP
+       RETURNING user_id, language, timezone, updated_at::text AS updated_at`,
+      [String(userId || "").trim(), input.language, input.timezone],
+    );
+    const preferences = result.rows[0];
+    if (!preferences) throw new Error("Failed to save user preferences");
+    return preferences;
   }
 
   async listUsers() {
@@ -2454,7 +2638,7 @@ export class PostgresAppDatabase implements AppDatabase {
        WHERE cea.channel_id IS NULL
          AND ca.event_id IS NOT NULL
          AND BTRIM(ca.event_id) <> ''
-       ON CONFLICT (channel_id) DO NOTHING`,
+       ON CONFLICT (channel_id, event_id) DO NOTHING`,
     );
   }
 

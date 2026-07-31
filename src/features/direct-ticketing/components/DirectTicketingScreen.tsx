@@ -1,0 +1,133 @@
+import { useEffect, useMemo, useState } from "react";
+
+type Performance = { id: string; code: string; title: string; starts_at: string; seat_plan_image_url: string | null };
+type Seat = { id: string; performance_id: string; zone: string; row_label: string; seat_label: string; status: string; face_value: number | null };
+type Ticket = { id: string; performance_id: string; ticket_class: string; holder_name: string; buyer_name: string; price_amount: number; payment_status: string; status: string; hold_expires_at?: string | null; has_payment_proof?: boolean; performance_title?: string; zone?: string; row_label?: string; seat_label?: string; delivery?: { png_url: string; pdf_url: string } | null };
+type TicketDesign = { event_name: string; direct_ticket_artwork_url: string; direct_ticket_artwork_mode: "panel" | "background"; direct_ticket_primary_color: string; direct_ticket_accent_color: string; direct_ticket_heading: string; direct_ticket_note: string };
+
+type Props = { eventId: string; apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>; canManage: boolean };
+
+const csvRows = (text: string) => {
+  const [headerLine, ...lines] = text.trim().split(/\r?\n/); const headers = headerLine?.split(",").map((v) => v.trim().toLowerCase()) || [];
+  return lines.map((line) => Object.fromEntries(line.split(",").map((value, index) => [headers[index], value.trim()]))).filter((row) => row.zone && (row.row_label || row.row) && (row.seat_label || row.seat));
+};
+
+const DEFAULT_TICKET_DESIGN: TicketDesign = {
+  event_name: "Your Event",
+  direct_ticket_artwork_url: "",
+  direct_ticket_artwork_mode: "panel",
+  direct_ticket_primary_color: "#321d48",
+  direct_ticket_accent_color: "#d8b66a",
+  direct_ticket_heading: "DIRECT SEAT TICKET",
+  direct_ticket_note: "Please present this ticket at the entrance.",
+};
+
+export function DirectTicketingScreen({ eventId, apiFetch, canManage }: Props) {
+  const [performances, setPerformances] = useState<Performance[]>([]); const [seats, setSeats] = useState<Seat[]>([]); const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [performanceId, setPerformanceId] = useState(""); const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
+  const [performanceForm, setPerformanceForm] = useState({ code: "", title: "", starts_at: "", seat_plan_image_url: "" });
+  const [ticketForm, setTicketForm] = useState({ seat_id: "", ticket_class: "VIP", holder_name: "", buyer_name: "", phone: "", email: "", price_amount: "", payment_required: true, hold_minutes: "15" });
+  const [design, setDesign] = useState<TicketDesign>(DEFAULT_TICKET_DESIGN);
+  const load = async () => {
+    if (!eventId) return;
+    const query = `event_id=${encodeURIComponent(eventId)}`;
+    const [p, t] = await Promise.all([apiFetch(`/api/direct-ticketing/performances?${query}`), apiFetch(`/api/direct-ticketing/tickets?${query}`)]);
+    const nextPerformances = await p.json(); const nextTickets = await t.json(); setPerformances(Array.isArray(nextPerformances) ? nextPerformances : []); setTickets(Array.isArray(nextTickets) ? nextTickets : []);
+  };
+  useEffect(() => { void load(); }, [eventId]);
+  useEffect(() => {
+    if (!eventId) return;
+    void apiFetch(`/api/settings?event_id=${encodeURIComponent(eventId)}`).then((response) => response.json()).then((settings) => setDesign({
+      event_name: String(settings.event_name || DEFAULT_TICKET_DESIGN.event_name),
+      direct_ticket_artwork_url: String(settings.direct_ticket_artwork_url || ""),
+      direct_ticket_artwork_mode: settings.direct_ticket_artwork_mode === "background" ? "background" : "panel",
+      direct_ticket_primary_color: /^#[0-9a-f]{6}$/i.test(settings.direct_ticket_primary_color) ? settings.direct_ticket_primary_color : DEFAULT_TICKET_DESIGN.direct_ticket_primary_color,
+      direct_ticket_accent_color: /^#[0-9a-f]{6}$/i.test(settings.direct_ticket_accent_color) ? settings.direct_ticket_accent_color : DEFAULT_TICKET_DESIGN.direct_ticket_accent_color,
+      direct_ticket_heading: String(settings.direct_ticket_heading || DEFAULT_TICKET_DESIGN.direct_ticket_heading),
+      direct_ticket_note: String(settings.direct_ticket_note ?? DEFAULT_TICKET_DESIGN.direct_ticket_note),
+    })).catch(() => setMessage("Could not load ticket design"));
+  }, [eventId]);
+  useEffect(() => { if (!performanceId) { setSeats([]); return; } void apiFetch(`/api/direct-ticketing/seats?event_id=${encodeURIComponent(eventId)}&performance_id=${encodeURIComponent(performanceId)}`).then((r) => r.json()).then((data) => setSeats(Array.isArray(data) ? data : [])); }, [eventId, performanceId]);
+  const availableSeats = useMemo(() => seats.filter((seat) => seat.status === "available"), [seats]);
+  const submit = async (path: string, body: unknown) => { setBusy(true); setMessage(""); try { const response = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || "Request failed"); await load(); if (performanceId) { const refreshed = await apiFetch(`/api/direct-ticketing/seats?event_id=${encodeURIComponent(eventId)}&performance_id=${encodeURIComponent(performanceId)}`); setSeats(await refreshed.json()); } return data; } catch (error) { setMessage(error instanceof Error ? error.message : "Request failed"); return null; } finally { setBusy(false); } };
+  const createPerformance = async (event: React.FormEvent) => { event.preventDefault(); const data = await submit("/api/direct-ticketing/performances", { event_id: eventId, ...performanceForm }); if (data) { setPerformanceForm({ code: "", title: "", starts_at: "", seat_plan_image_url: "" }); setPerformanceId(data.id); setMessage("Performance saved"); } };
+  const importCsv = async (file?: File) => { if (!file || !performanceId) return; const rows = csvRows(await file.text()).map((row) => ({ zone: row.zone, row_label: row.row_label || row.row, seat_label: row.seat_label || row.seat, external_seat_ref: row.external_seat_ref || null, face_value: Number(row.face_value) || null, x: Number.isFinite(Number(row.x)) ? Number(row.x) : null, y: Number.isFinite(Number(row.y)) ? Number(row.y) : null })); const data = await submit("/api/direct-ticketing/seats/import", { event_id: eventId, performance_id: performanceId, seats: rows }); if (data) setMessage(`${rows.length} seats imported`); };
+  const createTicket = async (event: React.FormEvent) => { event.preventDefault(); if (!performanceId) return; const data = await submit("/api/direct-ticketing/tickets", { event_id: eventId, performance_id: performanceId, ...ticketForm, price_amount: Number(ticketForm.price_amount || 0), hold_minutes: Number(ticketForm.hold_minutes || 15) }); if (data) { setTicketForm((form) => ({ ...form, seat_id: "", holder_name: "", buyer_name: "", phone: "", email: "", price_amount: "" })); setMessage(ticketForm.payment_required ? "Seat held pending payment" : "Ticket issued"); } };
+  const updatePayment = async (ticket: Ticket, payment_status: "verified" | "rejected") => { const payment_reference = payment_status === "verified" ? window.prompt("Bank transaction/reference (required)") : null; if (payment_status === "verified" && !payment_reference?.trim()) return; const rejection_reason = payment_status === "rejected" ? window.prompt("Reason shown to the buyer") : null; if (payment_status === "rejected" && rejection_reason === null) return; const data = await submit(`/api/direct-ticketing/tickets/${encodeURIComponent(ticket.id)}/payment`, { event_id: eventId, payment_status, payment_reference, rejection_reason }); if (data) setMessage(payment_status === "verified" ? "Payment verified and ticket issued" : "Payment rejected and seat released"); };
+  const voidTicket = async (ticket: Ticket) => { if (!window.confirm("Void this ticket and release the seat?")) return; const data = await submit(`/api/direct-ticketing/tickets/${encodeURIComponent(ticket.id)}/void`, { event_id: eventId, release_seat: true }); if (data) setMessage("Ticket voided and seat released"); };
+  const reissueTicket = async (ticket: Ticket) => { if (!window.confirm("Invalidate the old QR and issue a replacement for the same seat?")) return; const data = await submit(`/api/direct-ticketing/tickets/${encodeURIComponent(ticket.id)}/reissue`, { event_id: eventId }); if (data) setMessage("Replacement issued; the old QR is now invalid"); };
+  const saveDesign = async (nextDesign = design) => {
+    setBusy(true); setMessage("");
+    try {
+      const { event_name: _eventName, ...payload } = nextDesign;
+      const response = await apiFetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, ...payload }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not save ticket design");
+      setDesign(nextDesign); setMessage("Ticket design saved — new PNG and PDF tickets will use it");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not save ticket design"); }
+    finally { setBusy(false); }
+  };
+  const uploadArtwork = async (file?: File) => {
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 4 * 1024 * 1024) { setMessage("Graphic must be PNG, JPG, or WebP and no larger than 4 MB"); return; }
+    setBusy(true); setMessage("");
+    try {
+      const response = await apiFetch(`/api/public-page/media-upload?event_id=${encodeURIComponent(eventId)}&kind=ticket_artwork`, { method: "POST", headers: { "Content-Type": file.type, "X-Upload-Filename": encodeURIComponent(file.name) }, body: file });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not upload graphic");
+      const nextDesign = { ...design, direct_ticket_artwork_url: String(data.asset_url || "") };
+      const saveResponse = await apiFetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, direct_ticket_artwork_url: nextDesign.direct_ticket_artwork_url }) });
+      if (!saveResponse.ok) throw new Error("Graphic uploaded but could not be saved to this ticket design");
+      setDesign(nextDesign); setMessage("Ticket graphic uploaded and saved");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not upload graphic"); }
+    finally { setBusy(false); }
+  };
+  return <div className="space-y-6">
+    <div><p className="text-xs font-bold uppercase tracking-[.18em] text-violet-600">Direct allocation</p><h2 className="text-2xl font-bold text-slate-900">VIP & Direct Tickets</h2><p className="mt-1 text-sm text-slate-500">Only import seats already locked for your allocation in Ticketmelon.</p></div>
+    {message && <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-700">{message}</div>}
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><p className="text-xs font-bold uppercase tracking-[.16em] text-violet-600">Ticket Designer</p><h3 className="mt-1 text-lg font-bold text-slate-900">ออกแบบบัตร VIP</h3><p className="mt-1 text-sm text-slate-500">กราฟิกและสีนี้จะใช้กับ PNG, A6 PDF และ A4 4-up ที่ออกจริง</p></div>
+        {canManage && <button type="button" disabled={busy} onClick={() => void saveDesign()} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Save design</button>}
+      </div>
+      <div className="mt-5 grid min-w-0 gap-5 xl:grid-cols-[minmax(270px,0.8fr)_minmax(420px,1.2fr)]">
+        <div className="grid content-start gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          <label className="text-sm font-semibold text-slate-700 sm:col-span-2 xl:col-span-1">Graphic background
+            <input disabled={!canManage || busy} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { void uploadArtwork(event.target.files?.[0]); event.currentTarget.value = ""; }} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" />
+            <span className="mt-1 block text-xs font-normal text-slate-500">PNG/JPG/WebP ≤ 4 MB · แนะนำ 1600 × 900 px</span>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">Graphic placement<select disabled={!canManage} value={design.direct_ticket_artwork_mode} onChange={(event) => setDesign({ ...design, direct_ticket_artwork_mode: event.target.value as TicketDesign["direct_ticket_artwork_mode"] })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"><option value="panel">Image panel</option><option value="background">Full background</option></select></label>
+          <label className="text-sm font-semibold text-slate-700">Ticket heading<input disabled={!canManage} maxLength={60} value={design.direct_ticket_heading} onChange={(event) => setDesign({ ...design, direct_ticket_heading: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
+          <label className="text-sm font-semibold text-slate-700">Main color<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-300 px-2 py-1.5"><input disabled={!canManage} type="color" value={design.direct_ticket_primary_color} onChange={(event) => setDesign({ ...design, direct_ticket_primary_color: event.target.value })} className="h-7 w-10 cursor-pointer border-0 bg-transparent" /><span className="font-mono text-xs font-normal">{design.direct_ticket_primary_color}</span></span></label>
+          <label className="text-sm font-semibold text-slate-700">Accent color<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-300 px-2 py-1.5"><input disabled={!canManage} type="color" value={design.direct_ticket_accent_color} onChange={(event) => setDesign({ ...design, direct_ticket_accent_color: event.target.value })} className="h-7 w-10 cursor-pointer border-0 bg-transparent" /><span className="font-mono text-xs font-normal">{design.direct_ticket_accent_color}</span></span></label>
+          <label className="text-sm font-semibold text-slate-700 sm:col-span-2 xl:col-span-1">Footer note<input disabled={!canManage} maxLength={120} value={design.direct_ticket_note} onChange={(event) => setDesign({ ...design, direct_ticket_note: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
+          {design.direct_ticket_artwork_url && canManage && <button type="button" onClick={() => setDesign({ ...design, direct_ticket_artwork_url: "" })} className="justify-self-start text-sm font-bold text-rose-600">Remove graphic</button>}
+        </div>
+        <div className="min-w-0">
+          <p className="mb-2 text-xs font-bold uppercase tracking-[.14em] text-slate-500">Live preview</p>
+          <div className="aspect-[16/9] w-full min-w-0 overflow-hidden rounded-xl bg-slate-950 p-[3%] shadow-inner">
+            <div className="relative h-full overflow-hidden rounded-[clamp(8px,2vw,22px)] bg-[#fffaf0]" style={design.direct_ticket_artwork_url && design.direct_ticket_artwork_mode === "background" ? { backgroundImage: `linear-gradient(rgb(255 250 240 / 92%), rgb(255 250 240 / 92%)), url("${design.direct_ticket_artwork_url}")`, backgroundPosition: "center", backgroundSize: "cover" } : undefined}>
+              <div className="relative flex h-[35%] items-center justify-between gap-3 overflow-hidden border-b-2 border-dashed px-[5%] text-white" style={{ backgroundColor: design.direct_ticket_primary_color, borderColor: design.direct_ticket_accent_color }}>
+                <div className="min-w-0"><p className="truncate text-[clamp(7px,1vw,13px)] font-bold uppercase tracking-[.22em]" style={{ color: design.direct_ticket_accent_color }}>VIP</p><p className="mt-[2%] truncate text-[clamp(12px,2vw,26px)] font-bold">{design.event_name}</p><p className="truncate text-[clamp(7px,1vw,12px)] opacity-80">{design.direct_ticket_heading}</p></div>
+                {design.direct_ticket_artwork_url && design.direct_ticket_artwork_mode === "panel" && <img src={design.direct_ticket_artwork_url} alt="" className="h-[78%] w-[25%] shrink-0 rounded-lg object-cover" />}
+              </div>
+              <div className="grid h-[65%] grid-cols-[1fr_28%] gap-[4%] px-[5%] py-[4%]">
+                <div className="min-w-0 space-y-[3%]" style={{ color: "#251b16", WebkitTextFillColor: "#251b16" }}><p className="text-[clamp(6px,.8vw,10px)] uppercase" style={{ color: "#7a6f66", WebkitTextFillColor: "#7a6f66" }}>Guest</p><p className="truncate text-[clamp(10px,1.5vw,19px)] font-bold">Sample VIP Guest</p><p className="text-[clamp(6px,.8vw,10px)] uppercase" style={{ color: "#7a6f66", WebkitTextFillColor: "#7a6f66" }}>Performance</p><p className="truncate text-[clamp(8px,1.2vw,15px)] font-semibold">Manohra Thai Choral Opera</p><p className="text-[clamp(6px,.8vw,10px)] uppercase" style={{ color: "#7a6f66", WebkitTextFillColor: "#7a6f66" }}>Your seat</p><p className="text-[clamp(10px,1.5vw,20px)] font-bold" style={{ color: design.direct_ticket_primary_color, WebkitTextFillColor: design.direct_ticket_primary_color }}>VIP · Row A · Seat 12</p>{design.direct_ticket_note && <p className="truncate text-[clamp(6px,.75vw,9px)]" style={{ color: "#6b625b", WebkitTextFillColor: "#6b625b" }}>{design.direct_ticket_note}</p>}</div>
+                <div className="flex flex-col items-center justify-center"><div className="aspect-square w-[82%] rounded bg-white p-[8%] shadow"><div className="h-full w-full" style={{ backgroundImage: "repeating-conic-gradient(#111 0 25%,#fff 0 50%)", backgroundSize: "22% 22%" }} /></div><span className="mt-1 text-[clamp(5px,.6vw,8px)] text-slate-500">QR CHECK-IN</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    {canManage && <div className="grid gap-5 lg:grid-cols-2">
+      <form onSubmit={createPerformance} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h3 className="font-bold">1. Add performance</h3><div className="mt-3 grid gap-3 sm:grid-cols-2"><input required placeholder="Code" value={performanceForm.code} onChange={(e) => setPerformanceForm({ ...performanceForm, code: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input required placeholder="Title" value={performanceForm.title} onChange={(e) => setPerformanceForm({ ...performanceForm, title: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input required type="datetime-local" value={performanceForm.starts_at} onChange={(e) => setPerformanceForm({ ...performanceForm, starts_at: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input placeholder="Seat-plan image URL (optional)" value={performanceForm.seat_plan_image_url} onChange={(e) => setPerformanceForm({ ...performanceForm, seat_plan_image_url: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /></div><button disabled={busy} className="mt-3 rounded-lg bg-violet-700 px-4 py-2 text-sm font-bold text-white">Save performance</button></form>
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h3 className="font-bold">2. Import locked seats</h3><select value={performanceId} onChange={(e) => setPerformanceId(e.target.value)} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">Choose performance</option>{performances.map((item) => <option key={item.id} value={item.id}>{item.code} — {item.title}</option>)}</select><label className="mt-3 block text-sm text-slate-600">CSV: <code>zone,row_label,seat_label,external_seat_ref,face_value,x,y</code><input disabled={!performanceId || busy} type="file" accept=".csv,text/csv" onChange={(e) => void importCsv(e.target.files?.[0])} className="mt-2 block w-full text-sm" /></label></div>
+    </div>}
+    {performanceId && <div className="grid gap-5 lg:grid-cols-[1fr_1.1fr]">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><h3 className="font-bold">3. Available seats</h3><span className="text-sm text-emerald-700">{availableSeats.length} available</span></div><div className="mt-3 max-h-72 overflow-auto"><div className="flex flex-wrap gap-2">{seats.map((seat) => <button type="button" key={seat.id} disabled={!canManage || seat.status !== "available"} onClick={() => setTicketForm({ ...ticketForm, seat_id: seat.id })} className={`rounded-lg border px-3 py-2 text-xs font-bold ${ticketForm.seat_id === seat.id ? "border-violet-600 bg-violet-100" : seat.status === "available" ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-slate-100 text-slate-400"}`}>{seat.zone} {seat.row_label}-{seat.seat_label}</button>)}</div></div></div>
+      {canManage && <form onSubmit={createTicket} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h3 className="font-bold">4. Issue or hold ticket</h3><p className="mt-1 text-sm text-slate-500">{ticketForm.seat_id ? `Selected: ${seats.find((s) => s.id === ticketForm.seat_id)?.zone || ""} ${seats.find((s) => s.id === ticketForm.seat_id)?.row_label || ""}-${seats.find((s) => s.id === ticketForm.seat_id)?.seat_label || ""}` : "Choose an available seat"}</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><input required placeholder="Guest name" value={ticketForm.holder_name} onChange={(e) => setTicketForm({ ...ticketForm, holder_name: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/><input placeholder="Buyer name" value={ticketForm.buyer_name} onChange={(e) => setTicketForm({ ...ticketForm, buyer_name: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/><input required placeholder="VIP / Special / Complimentary" value={ticketForm.ticket_class} onChange={(e) => setTicketForm({ ...ticketForm, ticket_class: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/><input type="number" min="0" placeholder="Price (THB)" value={ticketForm.price_amount} onChange={(e) => setTicketForm({ ...ticketForm, price_amount: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/>{ticketForm.payment_required && <input type="number" min="5" max="120" placeholder="Hold minutes" value={ticketForm.hold_minutes} onChange={(e) => setTicketForm({ ...ticketForm, hold_minutes: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/>}</div><label className="mt-3 flex gap-2 text-sm"><input type="checkbox" checked={ticketForm.payment_required} onChange={(e) => setTicketForm({ ...ticketForm, payment_required: e.target.checked })}/> Payment required (untick for complimentary)</label><button disabled={busy || !ticketForm.seat_id} className="mt-3 rounded-lg bg-violet-700 px-4 py-2 text-sm font-bold text-white">Create ticket</button></form>}
+    </div>}
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-bold">Direct tickets</h3><div className="flex flex-wrap gap-3"><a href={`/api/direct-ticketing/tickets/print-a4.pdf?event_id=${encodeURIComponent(eventId)}`} target="_blank" rel="noreferrer" className="text-sm font-bold text-violet-700">Print A4 4-up</a><a href={`/api/direct-ticketing/inventory/export?event_id=${encodeURIComponent(eventId)}`} className="text-sm font-bold text-violet-700">Reconcile seats</a><a href={`/api/direct-ticketing/tickets/export?event_id=${encodeURIComponent(eventId)}`} className="text-sm font-bold text-violet-700">Sales CSV</a></div></div><div className="mt-3 overflow-auto"><table className="w-full min-w-[720px] text-left text-sm"><thead className="border-b text-xs uppercase text-slate-500"><tr><th className="py-2">Guest</th><th>Seat</th><th>Performance</th><th>Payment</th><th>Status</th><th /></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id} className="border-b border-slate-100"><td className="py-3 font-medium">{ticket.holder_name || ticket.buyer_name || "—"}</td><td>{ticket.zone} {ticket.row_label}-{ticket.seat_label}</td><td>{ticket.performance_title || "—"}</td><td>{ticket.payment_status}{ticket.has_payment_proof && <span className="ml-1 text-amber-700">• proof</span>}</td><td>{ticket.status}</td><td className="space-x-2 whitespace-nowrap">{ticket.status === "held" && canManage && <><a href={`/api/direct-ticketing/payment-qr?event_id=${encodeURIComponent(eventId)}&amount=${encodeURIComponent(ticket.price_amount)}`} target="_blank" rel="noreferrer" className="font-bold text-violet-700">PromptPay QR</a>{ticket.has_payment_proof && <a href={`/api/direct-ticketing/tickets/${encodeURIComponent(ticket.id)}/payment-proof?event_id=${encodeURIComponent(eventId)}`} target="_blank" rel="noreferrer" className="font-bold text-amber-700">View proof</a>}<button onClick={() => void updatePayment(ticket, "verified")} className="font-bold text-emerald-700">Verify</button><button onClick={() => void updatePayment(ticket, "rejected")} className="font-bold text-rose-700">Reject</button></>}{["issued", "checked_in"].includes(ticket.status) && ticket.delivery && <><a href={ticket.delivery.png_url} target="_blank" rel="noreferrer" className="font-bold text-violet-700">PNG</a><a href={ticket.delivery.pdf_url} target="_blank" rel="noreferrer" className="font-bold text-violet-700">A6 PDF</a>{canManage && <><button onClick={() => void reissueTicket(ticket)} className="font-bold text-amber-700">Reissue</button><button onClick={() => void voidTicket(ticket)} className="font-bold text-rose-700">Void</button></>}</>}</td></tr>)}</tbody></table>{tickets.length === 0 && <p className="py-5 text-sm text-slate-500">No direct tickets yet.</p>}</div></div>
+  </div>;
+}

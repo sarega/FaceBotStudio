@@ -84,6 +84,7 @@ import { AgentSetupScreen } from "./features/agent/components/AgentSetupScreen";
 import { CheckinAccessRoute } from "./features/checkin/components/CheckinAccessRoute";
 import { CheckinScreen } from "./features/checkin/components/CheckinScreen";
 import { ContextScreen } from "./features/context/components/ContextScreen";
+import { DirectTicketingScreen } from "./features/direct-ticketing/components/DirectTicketingScreen";
 import { EventWorkspaceScreen } from "./features/event/components/EventWorkspaceScreen";
 import { EventWorkspacePanel } from "./features/event-workspace/components/EventWorkspacePanel";
 import { EventMailScreen } from "./features/mail/components/EventMailScreen";
@@ -112,6 +113,11 @@ interface Registration {
   email: string;
   timestamp: string;
   status: string;
+  direct_ticket?: {
+    ticket_class: string;
+    performance: string;
+    seat: string;
+  };
 }
 
 interface LlmModelOption {
@@ -160,7 +166,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "checkin" | "inbox";
+type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "checkin" | "inbox";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -291,6 +297,14 @@ interface HelpContent {
 }
 
 const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
+  direct_tickets: {
+    title: "Direct Tickets Help",
+    summary: "Manage the seats you have locked for direct sales separately from Ticketmelon inventory.",
+    points: [
+      { label: "Import only locked seats", body: "Upload only the allocation held back in Ticketmelon; all other seats remain unavailable here." },
+      { label: "Manual payment", body: "A paid ticket is issued only after staff verifies the PromptPay transfer." },
+    ],
+  },
   event: {
     title: "Event Workspace Help",
     summary: "Keep operational event facts here. This tab defines what the event is and when registration should behave as open, closed, or unavailable.",
@@ -723,6 +737,7 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
   settings: "Setup",
   team: "Team",
   registrations: "Registrations",
+  direct_tickets: "Direct Tickets",
   checkin: "Check-in",
   inbox: "Inbox",
 };
@@ -784,7 +799,7 @@ function readWorkspaceSession() {
   if (typeof window === "undefined") return fallback;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
-    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "checkin", "inbox"];
+    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "direct_tickets", "checkin", "inbox"];
     return {
       eventId: typeof parsed.eventId === "string" ? parsed.eventId : "",
       activeTab: validTabs.includes(parsed.activeTab as AppTab) ? parsed.activeTab as AppTab : fallback.activeTab,
@@ -2077,6 +2092,12 @@ const INITIAL_SETTINGS: Settings = {
   event_public_sponsors_json: "",
   event_public_sections_json: "",
   event_public_speakers_json: "",
+  direct_ticket_artwork_url: "",
+  direct_ticket_artwork_mode: "panel",
+  direct_ticket_primary_color: "#321d48",
+  direct_ticket_accent_color: "#d8b66a",
+  direct_ticket_heading: "DIRECT SEAT TICKET",
+  direct_ticket_note: "Please present this ticket at the entrance.",
   confirmation_email_enabled: "0",
   confirmation_email_subject: "Your registration for {{event_name}}",
   email_template_registration_confirmation_subject: "",
@@ -2154,6 +2175,12 @@ function getBlankEventScopedSettings() {
     event_public_sponsors_json: "",
     event_public_sections_json: "",
     event_public_speakers_json: "",
+    direct_ticket_artwork_url: "",
+    direct_ticket_artwork_mode: "panel",
+    direct_ticket_primary_color: "#321d48",
+    direct_ticket_accent_color: "#d8b66a",
+    direct_ticket_heading: "DIRECT SEAT TICKET",
+    direct_ticket_note: "Please present this ticket at the entrance.",
     confirmation_email_enabled: "0",
     confirmation_email_subject: "Your registration for {{event_name}}",
     email_template_registration_confirmation_subject: "",
@@ -2228,6 +2255,12 @@ function getBlankEventScopedSettings() {
     | "event_public_sponsors_json"
     | "event_public_sections_json"
     | "event_public_speakers_json"
+    | "direct_ticket_artwork_url"
+    | "direct_ticket_artwork_mode"
+    | "direct_ticket_primary_color"
+    | "direct_ticket_accent_color"
+    | "direct_ticket_heading"
+    | "direct_ticket_note"
     | "confirmation_email_enabled"
     | "confirmation_email_subject"
     | "email_template_registration_confirmation_subject"
@@ -2635,6 +2668,18 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_speakers_json === "string"
         ? serializePublicSpeakerEntries(parsePublicSpeakerEntries(data.event_public_speakers_json))
         : INITIAL_SETTINGS.event_public_speakers_json,
+    direct_ticket_artwork_url:
+      typeof data.direct_ticket_artwork_url === "string" ? data.direct_ticket_artwork_url : INITIAL_SETTINGS.direct_ticket_artwork_url,
+    direct_ticket_artwork_mode:
+      data.direct_ticket_artwork_mode === "background" ? "background" : INITIAL_SETTINGS.direct_ticket_artwork_mode,
+    direct_ticket_primary_color:
+      typeof data.direct_ticket_primary_color === "string" ? data.direct_ticket_primary_color : INITIAL_SETTINGS.direct_ticket_primary_color,
+    direct_ticket_accent_color:
+      typeof data.direct_ticket_accent_color === "string" ? data.direct_ticket_accent_color : INITIAL_SETTINGS.direct_ticket_accent_color,
+    direct_ticket_heading:
+      typeof data.direct_ticket_heading === "string" ? data.direct_ticket_heading : INITIAL_SETTINGS.direct_ticket_heading,
+    direct_ticket_note:
+      typeof data.direct_ticket_note === "string" ? data.direct_ticket_note : INITIAL_SETTINGS.direct_ticket_note,
     confirmation_email_enabled:
       typeof data.confirmation_email_enabled === "string" && data.confirmation_email_enabled.trim()
         ? data.confirmation_email_enabled.trim()
@@ -3345,7 +3390,7 @@ export default function App() {
     { id: "public" as const, icon: Eye, label: "Public Page", description: "Poster, public copy, and privacy messaging" },
   ];
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
-  const isOperationsTab = activeTab === "registrations" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
+  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const effectiveSidebarCollapsed = sidebarCollapsed;
   const primaryTabs = [
@@ -3356,7 +3401,7 @@ export default function App() {
     ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: "Agent" }] : []),
   ];
   const setupTabs = [
-    ...(canEditSettings ? [{ id: "settings" as const, icon: SettingsIcon, label: "Organization Setup" }] : []),
+    ...(authUser ? [{ id: "settings" as const, icon: SettingsIcon, label: "Settings Center" }] : []),
     ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: "Team Access" }] : []),
   ];
   const selectedSetupTab = setupTabs.find((tab) => tab.id === activeTab) || setupTabs[0] || null;
@@ -3366,6 +3411,7 @@ export default function App() {
   ];
   const operationsTabs = [
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
+    ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: "Direct Tickets" }] : []),
     ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: "Public Inbox" }] : []),
     ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: "Check-in" }] : []),
     ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: "Logs" }] : []),
@@ -3542,13 +3588,15 @@ export default function App() {
     selectedEvent?.effective_status,
     selectedEvent?.registration_availability,
   );
-  const selectedEventChannels = channels.filter((channel) => channel.event_id === selectedEventId);
+  const channelEventIds = (channel: ChannelAccountRecord) =>
+    channel.event_ids || (channel.event_id ? [channel.event_id] : []);
+  const selectedEventChannels = channels.filter((channel) => channelEventIds(channel).includes(selectedEventId));
   const eventNameById = new Map(events.map((event) => [event.id, event.name] as const));
   const workspaceChannelCount = channels.length;
   const workspaceActiveChannelCount = channels.filter((channel) => channel.is_active).length;
   const workspaceChannelPlatformCount = new Set(channels.map((channel) => channel.platform)).size;
-  const workspaceChannelEventCount = new Set(channels.map((channel) => channel.event_id).filter(Boolean)).size;
-  const workspaceOtherEventChannels = channels.filter((channel) => channel.event_id !== selectedEventId);
+  const workspaceChannelEventCount = new Set(channels.flatMap(channelEventIds)).size;
+  const workspaceOtherEventChannels = channels.filter((channel) => !channelEventIds(channel).includes(selectedEventId));
   const workspaceChannelPreview = workspaceOtherEventChannels.slice(0, 6);
   const allChannelIdsKey = channels.map((channel) => channel.id).join("|");
   const selectedEventChannelIdsKey = selectedEventChannels.map((channel) => channel.id).join("|");
@@ -3848,7 +3896,7 @@ export default function App() {
   const selectedSenderRegistrationKey = selectedSenderRegistrations.map((registration) => registration.id).join("|");
   const selectedLogChannel = selectedLogMessage?.page_id
     ? channels.find((channel) =>
-        channel.event_id === (selectedLogMessage.event_id || selectedEventId)
+        channelEventIds(channel).includes(selectedLogMessage.event_id || selectedEventId)
         && channel.external_id === selectedLogMessage.page_id,
       ) || null
     : null;
@@ -4069,6 +4117,28 @@ export default function App() {
       email: String(value.email || ""),
       timestamp: String(value.timestamp || ""),
       status: String(value.status || "registered"),
+    };
+  };
+
+  const normalizeDirectCheckinTicket = (value: any): Registration | null => {
+    if (!value || typeof value !== "object") return null;
+    const id = String(value.id || "").trim();
+    if (!id) return null;
+    return {
+      id,
+      sender_id: "",
+      event_id: value.event_id == null ? null : String(value.event_id),
+      first_name: String(value.holder_name || value.buyer_name || "Guest"),
+      last_name: "",
+      phone: "",
+      email: "",
+      timestamp: String(value.checked_in_at || value.issued_at || ""),
+      status: value.status === "checked_in" ? "checked-in" : String(value.status || ""),
+      direct_ticket: {
+        ticket_class: String(value.ticket_class || "Direct"),
+        performance: String(value.performance_title || value.performance_code || "Performance"),
+        seat: [value.zone, value.row_label && `Row ${value.row_label}`, value.seat_label && `Seat ${value.seat_label}`].filter(Boolean).join(" · "),
+      },
     };
   };
 
@@ -5281,10 +5351,10 @@ export default function App() {
       ...(canEditSettings ? ["design"] : []),
       ...(canRunTest ? ["test"] : []),
       ...(canRunAgent ? ["agent"] : []),
-      ...(canManageRegistrations ? ["registrations", "checkin"] : []),
+      ...(canManageRegistrations ? ["registrations", "direct_tickets", "checkin"] : []),
       ...(canViewLogs ? ["inbox"] : []),
       ...(canViewLogs ? ["logs"] : []),
-      ...(canEditSettings ? ["settings"] : []),
+      ...(authUser ? ["settings"] : []),
       ...(canManageUsers ? ["team"] : []),
     ] as AppTab[];
 
@@ -5297,6 +5367,11 @@ export default function App() {
     const text = String(rawValue || "").trim().toUpperCase();
     const match = text.match(/REG-[A-Z0-9]+/);
     return match?.[0] || "";
+  };
+
+  const extractDirectTicketId = (rawValue: string) => {
+    const match = String(rawValue || "").trim().match(/^DIRECT:(dtkt_[a-z0-9]+):[A-Za-z0-9_-]+$/i);
+    return match?.[1] || "";
   };
 
   const loadOrganizerProfile = async (eventId: string) => {
@@ -7424,8 +7499,9 @@ export default function App() {
   };
 
   const handleCheckinById = async (rawId: string, options?: { clearInputOnSuccess?: boolean }) => {
+    const directTicketId = extractDirectTicketId(rawId);
     const normalizedId = extractRegistrationId(rawId);
-    if (!normalizedId) {
+    if (!normalizedId && !directTicketId) {
       setCheckinStatus("error");
       setCheckinErrorMessage("Invalid registration ID / QR code");
       return false;
@@ -7435,26 +7511,32 @@ export default function App() {
     setCheckinErrorMessage("");
     try {
       const requestBody = { id: normalizedId };
-      const res = await (checkinAccessMode ? fetch("/api/checkin-access/checkin", {
+      const res = directTicketId
+        ? await (checkinAccessMode ? fetch("/api/checkin-access/checkin-direct", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ qr_value: rawId }),
+        }) : apiFetch(`/api/direct-ticketing/tickets/${encodeURIComponent(directTicketId)}/checkin`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: selectedEventId, qr_value: rawId }) }))
+        : await (checkinAccessMode ? fetch("/api/checkin-access/checkin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
-      }) : apiFetch("/api/registrations/checkin", {
+        }) : apiFetch("/api/registrations/checkin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
-      }));
+        }));
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setCheckinStatus("success");
-        setSearchId(normalizedId);
-        const latest = normalizeCheckinRegistration(data?.registration);
+        setSearchId(directTicketId || normalizedId);
+        const latest = directTicketId ? normalizeDirectCheckinTicket(data?.ticket) : normalizeCheckinRegistration(data?.registration);
         if (latest) {
           setCheckinLatestResult(latest);
           if (!checkinAccessMode) {
             setSelectedRegistrationId(latest.id);
           }
-        } else if (!checkinAccessMode) {
+        } else if (!checkinAccessMode && !directTicketId) {
           setSelectedRegistrationId(normalizedId);
         }
         if (checkinAccessMode && checkinAccessSession) {
@@ -7477,7 +7559,7 @@ export default function App() {
       } else {
         setCheckinStatus("error");
         setCheckinErrorMessage(data?.error || "Failed to check in attendee");
-        const latest = normalizeCheckinRegistration(data?.registration);
+        const latest = directTicketId ? normalizeDirectCheckinTicket(data?.ticket) : normalizeCheckinRegistration(data?.registration);
         if (latest) {
           setCheckinLatestResult(latest);
         }
@@ -8437,6 +8519,15 @@ export default function App() {
     setNewChannelConfig(channel.config || {});
   };
 
+  const handleRevealChannelAccessToken = async (channelId: string) => {
+    const res = await apiFetch(`/api/channels/${encodeURIComponent(channelId)}/access-token`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || "Failed to reveal access token");
+    }
+    return typeof data?.access_token === "string" ? data.access_token : "";
+  };
+
   const handleToggleChannel = async (channel: ChannelAccountRecord) => {
     if (!selectedEventId) return;
     const platform = channel.platform;
@@ -8458,7 +8549,7 @@ export default function App() {
           platform,
           external_id: externalId,
           display_name: displayName || externalId,
-          event_id: channel.event_id || selectedEventId,
+          event_id: selectedEventId,
           access_token: accessToken,
           config: channel.config || {},
           is_active: !channel.is_active,
@@ -8530,7 +8621,8 @@ export default function App() {
 
   const handleAssignChannelToSelectedEvent = async (channel: ChannelAccountRecord) => {
     if (!selectedEventId || !selectedEvent) return false;
-    if (channel.event_id === selectedEventId) {
+    const assignedEventIds = channelEventIds(channel);
+    if (assignedEventIds.includes(selectedEventId)) {
       selectSetupChannel(channel);
       return true;
     }
@@ -8539,12 +8631,13 @@ export default function App() {
       return false;
     }
 
-    const previousEventName = channel.event_id
-      ? eventNameById.get(channel.event_id) || channel.event_id
+    const previousEventId = assignedEventIds[0];
+    const previousEventName = previousEventId
+      ? eventNameById.get(previousEventId) || previousEventId
       : "";
-    if (channel.event_id && channel.event_id !== selectedEventId) {
+    if (channel.platform !== "facebook" && previousEventId && previousEventId !== selectedEventId) {
       const confirmed = window.confirm(
-        `Move ${channel.display_name} from ${previousEventName || "its current event"} to ${selectedEvent.name}?`,
+        `This bot connection can route to only one event at a time.\n\nMove ${channel.display_name} from ${previousEventName || "its current event"} to ${selectedEvent.name}?\n\nThe previous event will stop receiving messages from this connection.`,
       );
       if (!confirmed) return false;
     }
@@ -8563,7 +8656,7 @@ export default function App() {
       }
       await fetchChannels();
       setSetupSelectedChannelId(channel.id);
-      setEventMessage(channel.event_id ? "Channel moved to selected event" : "Channel assigned to selected event");
+      setEventMessage(channel.platform === "facebook" ? "Page linked to another event" : previousEventId ? "Channel moved to selected event" : "Channel assigned to selected event");
       window.setTimeout(() => setEventMessage(""), 2500);
       return true;
     } catch (err) {
@@ -8575,7 +8668,7 @@ export default function App() {
   };
 
   const handleUnassignChannelFromSelectedEvent = async (channel: ChannelAccountRecord) => {
-    const confirmed = window.confirm(`Remove ${channel.display_name} from the selected event?`);
+    const confirmed = window.confirm(`Remove ${channel.display_name} from ${selectedEvent?.name || "the selected event"}? Other linked events will remain connected.`);
     if (!confirmed) return false;
 
     setEventLoading(true);
@@ -8583,6 +8676,8 @@ export default function App() {
     try {
       const res = await apiFetch(`/api/channels/${encodeURIComponent(channel.id)}/unassign`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: selectedEventId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -10080,6 +10175,11 @@ export default function App() {
               />
             </motion.div>
           )}
+          {activeTab === "direct_tickets" && (
+            <motion.div key="direct-tickets" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
+              <DirectTicketingScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} />
+            </motion.div>
+          )}
           {activeTab === "checkin" && (
             <motion.div
               key="checkin"
@@ -10228,6 +10328,13 @@ export default function App() {
 
           {activeTab === "settings" && (
             <SettingsScreen
+              authUser={authUser}
+              apiFetch={apiFetch}
+              canEditSettings={canEditSettings}
+              canManageUsers={canManageUsers}
+              themeMode={themeMode}
+              onThemeModeChange={setThemeMode}
+              onOpenTeamAccess={() => setActiveTab("team")}
               settings={settings}
               onSettingsChange={setSettings}
               aiSettingsDirty={aiSettingsDirty}
@@ -10322,6 +10429,7 @@ export default function App() {
         lineChannelIdAutoResolved={lineChannelIdAutoResolved}
         newPageAccessToken={newPageAccessToken}
         onNewPageAccessTokenChange={setNewPageAccessToken}
+        onRevealChannelAccessToken={handleRevealChannelAccessToken}
         newChannelConfig={newChannelConfig}
         onNewChannelConfigFieldChange={(key, value) => setNewChannelConfig((prev) => ({ ...prev, [key]: value }))}
         channelFormMissingRequirements={channelFormMissingRequirements}

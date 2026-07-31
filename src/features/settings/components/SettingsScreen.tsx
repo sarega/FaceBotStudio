@@ -1,16 +1,20 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
   Bot,
   CheckCircle2,
   Copy,
+  Globe2,
+  History,
   Link2,
   PencilLine,
   Plus,
   Power,
   RefreshCw,
   Save,
+  ShieldCheck,
   Settings as SettingsIcon,
+  UserCircle2,
 } from "lucide-react";
 
 import {
@@ -25,7 +29,8 @@ import {
   StatusLine,
   type BannerTone,
 } from "../../../components/shared/AppUi";
-import type { ChannelAccountRecord, EventRecord, Settings } from "../../../types";
+import { RELEASE_NOTES } from "../../../lib/releaseNotes";
+import type { AuthUser, ChannelAccountRecord, EventRecord, Settings } from "../../../types";
 
 type LlmModelOption = {
   id: string;
@@ -48,6 +53,13 @@ type ChannelTokenStatusMeta = {
 };
 
 type SettingsScreenProps = {
+  authUser: AuthUser | null;
+  apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  canEditSettings: boolean;
+  canManageUsers: boolean;
+  themeMode: "light" | "dark" | "system";
+  onThemeModeChange: (mode: "light" | "dark" | "system") => void;
+  onOpenTeamAccess: () => void;
   settings: Settings;
   onSettingsChange: (nextSettings: Settings) => void;
   aiSettingsDirty: boolean;
@@ -100,6 +112,13 @@ type SettingsScreenProps = {
 };
 
 export function SettingsScreen({
+  authUser,
+  apiFetch,
+  canEditSettings,
+  canManageUsers,
+  themeMode,
+  onThemeModeChange,
+  onOpenTeamAccess,
   settings,
   onSettingsChange,
   aiSettingsDirty,
@@ -150,7 +169,49 @@ export function SettingsScreen({
   webhookSettingsDirty,
   onSaveWebhookSettings,
 }: SettingsScreenProps) {
+  const [section, setSection] = useState<"general" | "bot" | "system">("general");
+  const [preferences, setPreferences] = useState({ language: "th" as "th" | "en", timezone: "Asia/Bangkok" });
+  const [preferencesSaving, setPreferencesSaving] = useState(false);
+  const [preferencesMessage, setPreferencesMessage] = useState("");
   const [showCustomModelInput, setShowCustomModelInput] = useState(false);
+  useEffect(() => {
+    if (!authUser) return;
+    void apiFetch("/api/auth/preferences").then(async (response) => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to load preferences");
+      setPreferences({
+        language: data.language === "en" ? "en" : "th",
+        timezone: String(data.timezone || "Asia/Bangkok"),
+      });
+    }).catch((error) => setPreferencesMessage(error instanceof Error ? error.message : "Failed to load preferences"));
+  }, [authUser?.id]);
+  useEffect(() => {
+    document.documentElement.lang = preferences.language;
+  }, [preferences.language]);
+  const savePreferences = async () => {
+    setPreferencesSaving(true); setPreferencesMessage("");
+    try {
+      const response = await apiFetch("/api/auth/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(preferences),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Failed to save preferences");
+      setPreferencesMessage("Preferences saved");
+    } catch (error) {
+      setPreferencesMessage(error instanceof Error ? error.message : "Failed to save preferences");
+    } finally {
+      setPreferencesSaving(false);
+    }
+  };
+  const roleAccess = {
+    owner: ["All organization settings", "Manage admins and users", "All events and operations"],
+    admin: ["Organization and event settings", "Manage operators/checkers/viewers", "All events and operations"],
+    operator: ["Assigned event operations", "Registrations, tickets, and messages", "No user administration"],
+    checker: ["Assigned event check-in", "Read attendee status", "No settings changes"],
+    viewer: ["Read assigned event data", "View operational logs", "No data changes"],
+  }[authUser?.role || "viewer"];
   const knownEventOverrideModelIds = new Set([
     "google/gemini-3-flash-preview",
     "openrouter/auto",
@@ -163,6 +224,10 @@ export function SettingsScreen({
     selectedEventUsesCustomModel || (showCustomModelInput && !trimmedEventOverrideModel)
       ? "__custom__"
       : settings.llm_model;
+  const assignedEventIds = (channel: ChannelAccountRecord) =>
+    channel.event_ids || (channel.event_id ? [channel.event_id] : []);
+  const assignedEventNames = (channel: ChannelAccountRecord) =>
+    assignedEventIds(channel).map((eventId) => eventNameById.get(eventId) || eventId);
 
   return (
     <motion.div
@@ -172,8 +237,57 @@ export function SettingsScreen({
       exit={{ opacity: 0, y: -10 }}
       className="space-y-4"
     >
+      <div className="surface-panel rounded-2xl p-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          <button type="button" onClick={() => setSection("general")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "general" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>General & Account</button>
+          {canEditSettings && <button type="button" onClick={() => setSection("bot")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "bot" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>Bot & Channels</button>}
+          <button type="button" onClick={() => setSection("system")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "system" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>Version & Updates</button>
+          {canManageUsers && <button type="button" onClick={onOpenTeamAccess} className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">Admin & Access</button>}
+        </div>
+      </div>
+
+      {section === "general" && (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(20rem,.95fr)]">
+          <div className="surface-panel rounded-2xl p-4 sm:p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div><h2 className="flex items-center gap-2 text-lg font-semibold"><Globe2 className="h-5 w-5 text-blue-600" />General preferences</h2><p className="mt-1 text-sm text-slate-500">Personal display preferences for this account.</p></div>
+              <ActionButton onClick={() => void savePreferences()} disabled={preferencesSaving} tone="blue" active className="text-sm">{preferencesSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Save</ActionButton>
+            </div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Language<select value={preferences.language} onChange={(event) => setPreferences({ ...preferences, language: event.target.value === "en" ? "en" : "th" })} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal"><option value="th">ไทย</option><option value="en">English</option></select></label>
+              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Time zone<input list="settings-timezones" value={preferences.timezone} onChange={(event) => setPreferences({ ...preferences, timezone: event.target.value })} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal" /><datalist id="settings-timezones"><option value="Asia/Bangkok" /><option value="Asia/Singapore" /><option value="Asia/Tokyo" /><option value="Europe/London" /><option value="America/New_York" /></datalist></label>
+              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500 sm:col-span-2">Appearance<select value={themeMode} onChange={(event) => onThemeModeChange(event.target.value as "light" | "dark" | "system")} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal"><option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+            </div>
+            {preferencesMessage && <p className={`mt-4 text-sm ${/failed|valid/i.test(preferencesMessage) ? "text-rose-600" : "text-emerald-600"}`}>{preferencesMessage}</p>}
+          </div>
+
+          <div className="space-y-5">
+            <div className="surface-panel rounded-2xl p-4 sm:p-5">
+              <h2 className="flex items-center gap-2 text-lg font-semibold"><UserCircle2 className="h-5 w-5 text-violet-600" />My account</h2>
+              <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm"><dt className="text-slate-500">Name</dt><dd className="font-semibold text-slate-900">{authUser?.display_name || "—"}</dd><dt className="text-slate-500">Username</dt><dd className="font-mono text-slate-700">{authUser?.username || "—"}</dd><dt className="text-slate-500">Organization</dt><dd className="text-slate-700">{authUser?.organization_name || "—"}</dd><dt className="text-slate-500">Account type</dt><dd className="font-semibold capitalize text-blue-700">{authUser?.role || "—"}</dd><dt className="text-slate-500">Last login</dt><dd className="text-slate-700">{authUser?.last_login_at ? new Date(authUser.last_login_at).toLocaleString(preferences.language === "th" ? "th-TH" : "en-US", { timeZone: preferences.timezone }) : "—"}</dd></dl>
+            </div>
+            <div className="surface-panel rounded-2xl p-4 sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck className="h-5 w-5 text-emerald-600" />Access & permissions</h2><p className="mt-1 text-sm text-slate-500">Effective access for the current {authUser?.role || "user"} account.</p></div>{canManageUsers && <ActionButton onClick={onOpenTeamAccess} tone="neutral" className="text-sm">Manage team</ActionButton>}</div>
+              <ul className="mt-4 space-y-2">{roleAccess.map((item) => <li key={item} className="flex items-center gap-2 text-sm text-slate-700"><CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />{item}</li>)}</ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {section === "system" && (
+        <div className="space-y-5">
+          <div className="surface-panel rounded-2xl p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><History className="h-5 w-5 text-blue-600" />System version & feature log</h2><p className="mt-1 text-sm text-slate-500">Central history of deployed features and changes.</p></div><div className="flex gap-2"><StatusBadge tone="blue">v{authUser?.system_version || "—"}</StatusBadge><StatusBadge tone="neutral">{authUser?.system_revision === "local" ? "Local build" : String(authUser?.system_revision || "—").slice(0, 8)}</StatusBadge></div></div>
+          </div>
+          <div className="space-y-4">
+            {RELEASE_NOTES.map((release, index) => <article key={release.version} className="surface-panel rounded-2xl p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-2"><StatusBadge tone={index === 0 ? "emerald" : "neutral"}>v{release.version}</StatusBadge><h3 className="font-semibold text-slate-900">{release.title}</h3></div><time className="text-xs text-slate-500" dateTime={release.date}>{new Date(`${release.date}T00:00:00+07:00`).toLocaleDateString(preferences.language === "th" ? "th-TH" : "en-US", { dateStyle: "medium" })}</time></div><ul className="mt-4 space-y-2">{release.features.map((feature) => <li key={feature} className="flex gap-2 text-sm text-slate-700"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />{feature}</li>)}</ul></article>)}
+          </div>
+        </div>
+      )}
+
+      {section === "bot" && <>
       <PageBanner tone="blue" icon={<SettingsIcon className="h-4 w-4" />}>
-        AI defaults and webhook settings apply organization-wide by default. Channel credentials are now managed as shared workspace connections, then assigned explicitly to the selected event when needed.
+        Bot defaults and webhook settings apply workspace-wide. A Facebook Page can serve several events and asks each visitor to choose first.
       </PageBanner>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
         <div className="space-y-4 xl:col-span-8">
@@ -396,21 +510,25 @@ export function SettingsScreen({
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="flex items-center gap-2 text-lg font-semibold">
                     <Link2 className="h-5 w-5 text-blue-600" />
-                    Organizer Channel Library
+                    Bot Connection Library
                   </h3>
-                  <HelpPopover label="Open note for Organizer Channel Library">
-                    These are reusable channel configs owned by the same organizer as the selected event. They are shown here so you can reuse credentials safely without seeing channels from other organizers.
+                  <HelpPopover label="Open note for Bot Connection Library">
+                    These are reusable bot and channel credentials owned by the same workspace as the selected event.
                   </HelpPopover>
                 </div>
                 <p className="mt-1 text-sm text-slate-500">
-                  Same-organizer connections not currently routed to the selected event.
+                  Connections not currently routed to the selected event.
                 </p>
               </div>
             </div>
 
+            <InlineWarning tone="amber">
+              Facebook Pages can link several events. Other channel types still route to one event at a time.
+            </InlineWarning>
+
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <div className="surface-tile rounded-xl px-3 py-3">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Org configs</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Connections</p>
                 <p className="mt-1 text-lg font-bold text-slate-900">{workspaceChannelCount}</p>
               </div>
               <div className="surface-tile rounded-xl px-3 py-3">
@@ -430,8 +548,8 @@ export function SettingsScreen({
             {workspaceChannelPreview.length === 0 ? (
               <div className="surface-dashed rounded-xl border border-dashed p-4 text-sm text-slate-400">
                 {workspaceChannelCount === 0
-                  ? "No same-organizer channels have been configured yet."
-                  : "All same-organizer channels are currently routed to the selected event. Manage them in Selected Event Channels below."}
+                  ? "No bot connections have been configured yet."
+                  : "All bot connections are currently routed to the selected event. Manage them in Selected Event Channels below."}
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -466,9 +584,9 @@ export function SettingsScreen({
                             {channel.platform_label || channel.platform}
                           </p>
                           <p className="mt-1 text-[11px] text-slate-500">
-                            {channel.event_id
-                              ? `Currently routed to ${eventNameById.get(channel.event_id) || channel.event_id}`
-                              : "Same organizer · not routed to any event"}
+                            {assignedEventIds(channel).length
+                              ? `Linked to ${assignedEventNames(channel).join(", ")}`
+                              : "Not routed to any event"}
                           </p>
                           <div className="mt-3 flex flex-wrap items-center gap-2">
                             <ActionButton
@@ -492,7 +610,11 @@ export function SettingsScreen({
                               className="px-3 text-sm"
                             >
                               <Link2 className="h-3.5 w-3.5" />
-                              {channel.event_id ? "Move Route to This Event" : "Route to This Event"}
+                              {channel.platform === "facebook"
+                                ? "Add This Event"
+                                : assignedEventIds(channel).length
+                                  ? "Move Route to This Event"
+                                  : "Route to This Event"}
                             </ActionButton>
                           </div>
                         </div>
@@ -505,7 +627,7 @@ export function SettingsScreen({
 
             {workspaceOtherEventChannels.length > workspaceChannelPreview.length && (
               <p className="text-xs text-slate-500">
-                Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} same-organizer channels not currently routed to the selected event.
+                Showing {workspaceChannelPreview.length} of {workspaceOtherEventChannels.length} bot connections not currently routed to the selected event.
               </p>
             )}
           </div>
@@ -567,7 +689,7 @@ export function SettingsScreen({
 
                 {visibleSelectedEventChannels.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-400">
-                    No channels are routed to this event yet. Use New Connection to create one, or route an existing same-organizer connection from Organizer Channel Library above.
+                    No channels are routed to this event yet. Use New Connection to create one, or route an existing connection from Bot Connection Library above.
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -846,6 +968,7 @@ export function SettingsScreen({
           </div>
         </div>
       </div>
+      </>}
     </motion.div>
   );
 }

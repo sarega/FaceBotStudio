@@ -32,6 +32,19 @@ function cleanupMemoryDedup(now = Date.now()) {
   }
 }
 
+export function getInstagramWebhookEventText(webhookEvent: any) {
+  const referral = webhookEvent?.referral || webhookEvent?.message?.referral;
+  return String(
+    webhookEvent?.message?.text
+    || webhookEvent?.message?.quick_reply?.payload
+    || webhookEvent?.postback?.payload
+    || webhookEvent?.postback?.title
+    || referral?.ref
+    || referral?.ads_context_data?.ad_title
+    || (referral?.source === "ADS" ? "ผู้ใช้เปิดแชตจากโฆษณา Instagram" : ""),
+  ).trim();
+}
+
 export function buildInstagramWebhookDedupKey(webhookEvent: any, fallbackAccountId?: string) {
   const messageMid = typeof webhookEvent?.message?.mid === "string" ? webhookEvent.message.mid.trim() : "";
   if (messageMid) {
@@ -50,7 +63,7 @@ export function buildInstagramWebhookDedupKey(webhookEvent: any, fallbackAccount
 
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const accountId = String(webhookEvent?.recipient?.id || fallbackAccountId || "").trim();
-  const text = String(webhookEvent?.message?.text || webhookEvent?.postback?.payload || webhookEvent?.postback?.title || "").trim();
+  const text = getInstagramWebhookEventText(webhookEvent);
   const attachmentKey = (Array.isArray(webhookEvent?.message?.attachments) ? webhookEvent.message.attachments : [])
     .map((attachment: any) => String(attachment?.payload?.url || attachment?.type || "").trim())
     .filter(Boolean)

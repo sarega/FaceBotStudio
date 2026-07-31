@@ -137,6 +137,7 @@ export interface ChannelAccountRecord {
   display_name: string;
   organizer_id?: string | null;
   event_id?: string | null;
+  event_ids?: string[];
   is_active: boolean;
   has_access_token?: boolean;
   platform_label?: string;
@@ -358,6 +359,12 @@ export interface Settings {
   event_public_sponsors_json: string;
   event_public_sections_json: string;
   event_public_speakers_json: string;
+  direct_ticket_artwork_url: string;
+  direct_ticket_artwork_mode: string;
+  direct_ticket_primary_color: string;
+  direct_ticket_accent_color: string;
+  direct_ticket_heading: string;
+  direct_ticket_note: string;
   confirmation_email_enabled: string;
   confirmation_email_subject: string;
   email_template_registration_confirmation_subject: string;

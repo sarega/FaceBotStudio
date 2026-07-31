@@ -1,5 +1,8 @@
 export type MessageType = "incoming" | "outgoing";
 export type RegistrationStatus = "registered" | "cancelled" | "checked-in";
+export type DirectSeatStatus = "available" | "held" | "issued" | "voided";
+export type DirectTicketStatus = "held" | "issued" | "checked_in" | "voided";
+export type DirectTicketPaymentStatus = "awaiting_payment" | "proof_submitted" | "verified" | "not_required" | "rejected" | "expired" | "refunded";
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" | "archived";
 export type EventStatus = ManualEventStatus | "closed";
@@ -70,6 +73,107 @@ export interface RegistrationResult {
   content: Record<string, unknown>;
 }
 
+export interface DirectPerformanceRow {
+  id: string;
+  event_id: string;
+  code: string;
+  title: string;
+  starts_at: string;
+  ends_at: string | null;
+  seat_plan_image_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DirectSeatRow {
+  id: string;
+  event_id: string;
+  performance_id: string;
+  zone: string;
+  row_label: string;
+  seat_label: string;
+  external_seat_ref: string | null;
+  face_value: number | null;
+  x: number | null;
+  y: number | null;
+  status: DirectSeatStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DirectTicketRow {
+  id: string;
+  event_id: string;
+  performance_id: string;
+  seat_id: string;
+  ticket_class: string;
+  holder_name: string;
+  buyer_name: string;
+  phone: string;
+  email: string;
+  price_amount: number;
+  payment_status: DirectTicketPaymentStatus;
+  payment_reference: string | null;
+  payment_proof_mime: string | null;
+  payment_proof_base64: string | null;
+  payment_proof_submitted_at: string | null;
+  rejection_reason: string | null;
+  hold_expires_at: string | null;
+  source: "admin" | "public";
+  status: DirectTicketStatus;
+  issued_by_user_id: string | null;
+  payment_verified_by_user_id: string | null;
+  payment_verified_at: string | null;
+  issued_at: string | null;
+  checked_in_at: string | null;
+  voided_at: string | null;
+  created_at: string;
+  updated_at: string;
+  performance_code?: string;
+  performance_title?: string;
+  performance_starts_at?: string;
+  zone?: string;
+  row_label?: string;
+  seat_label?: string;
+}
+
+export interface UpsertDirectPerformanceInput {
+  event_id: string;
+  code: string;
+  title: string;
+  starts_at: string;
+  ends_at?: string | null;
+  seat_plan_image_url?: string | null;
+  is_active?: boolean;
+}
+
+export interface ImportDirectSeatInput {
+  zone: string;
+  row_label: string;
+  seat_label: string;
+  external_seat_ref?: string | null;
+  face_value?: number | null;
+  x?: number | null;
+  y?: number | null;
+}
+
+export interface CreateDirectTicketInput {
+  event_id: string;
+  performance_id: string;
+  seat_id: string;
+  ticket_class: string;
+  holder_name?: string | null;
+  buyer_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  price_amount?: number | null;
+  payment_required?: boolean;
+  hold_minutes?: number | null;
+  source?: "admin" | "public";
+  issued_by_user_id?: string | null;
+}
+
 export type RegistrationEmailDeliveryStatus = "queued" | "sent" | "failed";
 
 export interface RegistrationEmailDeliveryRow {
@@ -106,6 +210,13 @@ export interface AuthUserRow {
   is_active: boolean;
   created_at: string;
   last_login_at: string | null;
+}
+
+export interface UserPreferencesRow {
+  user_id: string;
+  language: "th" | "en";
+  timezone: string;
+  updated_at: string;
 }
 
 export interface AuthSessionRow {
@@ -217,6 +328,7 @@ export interface ChannelAccountRow {
   display_name: string;
   organizer_id: string;
   event_id?: string | null;
+  event_ids?: string[];
   access_token?: string | null;
   is_active: boolean;
   config_json?: string | null;
@@ -407,6 +519,25 @@ export interface AppDatabase {
   checkInRegistration(id: string): Promise<boolean>;
   updateRegistrationStatus(id: string, status: RegistrationStatus): Promise<boolean>;
   deleteRegistration(id: string): Promise<boolean>;
+  listDirectPerformances(eventId: string): Promise<DirectPerformanceRow[]>;
+  upsertDirectPerformance(input: UpsertDirectPerformanceInput): Promise<DirectPerformanceRow>;
+  listDirectSeats(eventId: string, performanceId?: string): Promise<DirectSeatRow[]>;
+  importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]): Promise<DirectSeatRow[]>;
+  listDirectTickets(eventId: string): Promise<DirectTicketRow[]>;
+  getDirectTicketById(id: string): Promise<DirectTicketRow | undefined>;
+  createDirectTicket(input: CreateDirectTicketInput): Promise<{ ticket?: DirectTicketRow; error?: "seat_unavailable" | "invalid_seat" }>;
+  updateDirectTicketPayment(
+    id: string,
+    input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null },
+  ): Promise<DirectTicketRow | undefined>;
+  submitDirectTicketPaymentProof(
+    id: string,
+    input: { payment_proof_mime: string; payment_proof_base64: string; payment_reference?: string | null },
+  ): Promise<DirectTicketRow | undefined>;
+  releaseExpiredDirectTicketHolds(eventId?: string): Promise<number>;
+  voidDirectTicket(id: string, options?: { releaseSeat?: boolean }): Promise<DirectTicketRow | undefined>;
+  reissueDirectTicket(id: string, issuedByUserId?: string | null): Promise<DirectTicketRow | undefined>;
+  checkInDirectTicket(id: string): Promise<{ ticket?: DirectTicketRow; alreadyCheckedIn: boolean }>;
   saveMessage(senderId: string, text: string, type: MessageType, eventId?: string, pageId?: string): Promise<number>;
   saveMessageAttachments(messageId: number, attachments: CreateMessageAttachmentInput[]): Promise<MessageAttachmentRow[]>;
   listMessageAttachments(messageIds: number[]): Promise<MessageAttachmentRow[]>;
@@ -450,7 +581,10 @@ export interface AppDatabase {
     input: UpsertChannelAccountInput,
   ): Promise<ChannelAccountRow>;
   assignChannelAccount(channelId: string, eventId: string): Promise<ChannelAccountRow | undefined>;
-  unassignChannelAccount(channelId: string): Promise<ChannelAccountRow | undefined>;
+  unassignChannelAccount(channelId: string, eventId?: string): Promise<ChannelAccountRow | undefined>;
+  listEventIdsForChannel(platform: ChannelPlatform, externalId: string): Promise<string[]>;
+  getChannelSenderEventSelection(channelId: string, senderId: string): Promise<string | undefined>;
+  setChannelSenderEventSelection(channelId: string, senderId: string, eventId?: string): Promise<void>;
   resolveEventIdForChannel(platform: ChannelPlatform, externalId: string): Promise<string | undefined>;
   listFacebookPages(): Promise<FacebookPageRow[]>;
   getFacebookPageByPageId(pageId: string): Promise<FacebookPageRow | undefined>;
@@ -461,6 +595,8 @@ export interface AppDatabase {
   isUserAssignedToEvent(userId: string, eventId: string): Promise<boolean>;
   getUserPasswordHash(username: string): Promise<string | undefined>;
   updateUserPasswordHash(userId: string, passwordHash: string): Promise<boolean>;
+  getUserPreferences(userId: string): Promise<UserPreferencesRow | undefined>;
+  upsertUserPreferences(userId: string, input: { language: "th" | "en"; timezone: string }): Promise<UserPreferencesRow>;
   listUsers(): Promise<AuthUserRow[]>;
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;

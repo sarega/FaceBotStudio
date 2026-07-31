@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { SqliteAppDatabase } from "./sqliteAdapter";
+
+test("direct seats cannot issue two active tickets and rejected payment releases the seat", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Direct ticket test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({
+    event_id: event.id,
+    code: "R1",
+    title: "Round 1",
+    starts_at: "2026-08-22T18:30:00+07:00",
+  });
+  const [seat] = await db.importDirectSeats(event.id, performance.id, [
+    { zone: "VIP", row_label: "A", seat_label: "01", face_value: 2500 },
+  ]);
+
+  const first = await db.createDirectTicket({
+    event_id: event.id, performance_id: performance.id, seat_id: seat.id,
+    ticket_class: "VIP", holder_name: "First guest", payment_required: true,
+  });
+  assert.ok(first.ticket);
+  assert.equal(first.ticket?.status, "held");
+
+  const duplicate = await db.createDirectTicket({
+    event_id: event.id, performance_id: performance.id, seat_id: seat.id,
+    ticket_class: "VIP", payment_required: false,
+  });
+  assert.equal(duplicate.error, "seat_unavailable");
+
+  const rejected = await db.updateDirectTicketPayment(first.ticket!.id, { payment_status: "rejected" });
+  assert.equal(rejected?.status, "voided");
+  assert.equal((await db.listDirectSeats(event.id, performance.id))[0].status, "available");
+
+  const replacement = await db.createDirectTicket({
+    event_id: event.id, performance_id: performance.id, seat_id: seat.id,
+    ticket_class: "VIP", payment_required: false,
+  });
+  assert.equal(replacement.ticket?.status, "issued");
+  const checkedIn = await db.checkInDirectTicket(replacement.ticket!.id);
+  assert.equal(checkedIn.ticket?.status, "checked_in");
+  const reissued = await db.reissueDirectTicket(replacement.ticket!.id);
+  assert.ok(reissued);
+  assert.notEqual(reissued?.id, replacement.ticket?.id);
+  assert.equal((await db.checkInDirectTicket(replacement.ticket!.id)).ticket?.status, "voided");
+  assert.equal((await db.checkInDirectTicket(reissued!.id)).ticket?.status, "checked_in");
+});
+
+test("payment proof waits for review and one bank reference cannot issue two tickets", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Payment review test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  const seats = await db.importDirectSeats(event.id, performance.id, [
+    { zone: "VIP", row_label: "A", seat_label: "01", face_value: 2500 },
+    { zone: "VIP", row_label: "A", seat_label: "02", face_value: 2500 },
+  ]);
+  const first = await db.createDirectTicket({ event_id: event.id, performance_id: performance.id, seat_id: seats[0].id, ticket_class: "VIP", payment_required: true, source: "public" });
+  assert.ok(first.ticket);
+  const proof = await db.submitDirectTicketPaymentProof(first.ticket!.id, { payment_proof_mime: "image/png", payment_proof_base64: "c2xpcA==" });
+  assert.equal(proof?.payment_status, "proof_submitted");
+  assert.equal(proof?.status, "held");
+  const issued = await db.updateDirectTicketPayment(first.ticket!.id, { payment_status: "verified", payment_reference: "BANK-001" });
+  assert.equal(issued?.status, "issued");
+
+  const second = await db.createDirectTicket({ event_id: event.id, performance_id: performance.id, seat_id: seats[1].id, ticket_class: "VIP", payment_required: true });
+  assert.ok(second.ticket);
+  await assert.rejects(() => db.updateDirectTicketPayment(second.ticket!.id, { payment_status: "verified", payment_reference: "BANK-001" }), /unique/i);
+});
+
+test("expired direct-ticket holds release their seat", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Hold expiry test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  const [seat] = await db.importDirectSeats(event.id, performance.id, [{ zone: "VIP", row_label: "A", seat_label: "01" }]);
+  const held = await db.createDirectTicket({ event_id: event.id, performance_id: performance.id, seat_id: seat.id, ticket_class: "VIP", payment_required: true });
+  const sqlite = db as unknown as { db: { prepare: (sql: string) => { run: (...params: unknown[]) => unknown } } };
+  sqlite.db.prepare("UPDATE direct_tickets SET hold_expires_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(held.ticket!.id);
+  assert.equal(await db.releaseExpiredDirectTicketHolds(event.id), 1);
+  assert.equal((await db.getDirectTicketById(held.ticket!.id))?.payment_status, "expired");
+  assert.equal((await db.listDirectSeats(event.id, performance.id))[0].status, "available");
+});

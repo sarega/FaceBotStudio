@@ -13,7 +13,7 @@ import dotenv from "dotenv";
 import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
 import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
-import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
+import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, getInstagramWebhookEventText, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
 import type { InboundImageReference } from "./backend/runtime/inboundImage";
 import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup, buildLineWebhookDedupKey, canUseLineWebhookQueue, type LineInboundJob } from "./backend/runtime/lineQueue";
 import { enqueueTelegramInboundJob, startEmbeddedTelegramWorker, acquireTelegramWebhookDedup, buildTelegramWebhookDedupKey, canUseTelegramWebhookQueue, type TelegramInboundJob } from "./backend/runtime/telegramQueue";
@@ -79,6 +79,7 @@ import {
   type ChannelAccountRow,
   type ChannelPlatform,
   type CreateMessageAttachmentInput,
+  type DirectTicketRow,
   type EventDocumentChunkEmbeddingRow,
   type EventStatus,
   type MessageAttachmentRow,
@@ -97,6 +98,12 @@ import {
   sanitizeProtectedPromoCodes,
 } from "./backend/promoGate";
 import { filterRowsAfterContextUpdate } from "./backend/conversationMemory";
+import {
+  buildEventSelectedMessage,
+  buildEventSelectionPrompt,
+  isChangeEventCommand,
+  matchEventSelection,
+} from "./backend/eventSelection";
 import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor } from "./src/lib/publicEventPageBranding";
@@ -585,9 +592,13 @@ async function assertAutomatedConversationScope(channel: string, eventId: string
     throw new ConversationScopeError(`Missing route identity for ${normalizedChannel} conversation`);
   }
 
-  const resolvedEventId = await appDb.resolveEventIdForChannel(platform, normalizedRouteId);
-  if (resolvedEventId !== normalizedEventId) {
+  const assignedEventIds = await appDb.listEventIdsForChannel(platform, normalizedRouteId);
+  if (!assignedEventIds.includes(normalizedEventId)) {
     throw new ConversationScopeError(`Conversation route ${normalizedChannel}/${normalizedRouteId} is not assigned to event ${normalizedEventId}`);
+  }
+  const assignedEvent = await appDb.getEventById(normalizedEventId);
+  if (assignedEvent?.effective_status !== "active") {
+    throw new ConversationScopeError(`Conversation event ${normalizedEventId} is no longer active`);
   }
 }
 
@@ -3029,6 +3040,13 @@ function resolvePublicPosterAbsolutePath(relativeUrl: string) {
   return path.join(PUBLIC_POSTER_UPLOAD_DIR, fileName);
 }
 
+function resolvePublicEventMediaAbsolutePath(relativeUrl: string) {
+  const normalized = String(relativeUrl || "").trim();
+  const prefix = "/uploads/event-public-assets/";
+  if (!normalized.startsWith(prefix)) return "";
+  return path.join(PUBLIC_EVENT_MEDIA_UPLOAD_DIR, path.basename(normalized));
+}
+
 function buildAbsoluteAppAssetUrl(relativeUrl: string) {
   const normalizedPath = normalizeOptionalText(relativeUrl);
   const appUrl = normalizeOptionalText(process.env.APP_URL);
@@ -3950,6 +3968,7 @@ function serializeChannelAccount(channel: ChannelAccountRow) {
     display_name: channel.display_name,
     organizer_id: channel.organizer_id,
     event_id: channel.event_id,
+    event_ids: channel.event_ids || (channel.event_id ? [channel.event_id] : []),
     is_active: channel.is_active,
     has_access_token: Boolean(channel.access_token),
     live_messaging_ready: getChannelPlatformDefinition(channel.platform)?.live_messaging_ready || false,
@@ -4192,10 +4211,15 @@ async function resolveFacebookInboundRouting(pageId?: string): Promise<FacebookI
   }
 
   const channel = await appDb.getChannelAccount("facebook", normalizedPageId);
-  const assignedEventId = normalizeOptionalText(channel?.event_id) || null;
+  const assignedEventIds = channel?.event_ids || (channel?.event_id ? [channel.event_id] : []);
+  const assignedEventId = normalizeOptionalText(assignedEventIds[0]) || null;
   const assignedEvent = assignedEventId ? await appDb.getEventById(assignedEventId) : undefined;
-  const resolvedEventId = await appDb.resolveEventIdForPage(normalizedPageId);
-  if (resolvedEventId) {
+  const activeCandidates = (await Promise.all(
+    assignedEventIds.map((eventId) => appDb.getEventById(eventId)),
+  )).filter((event) => event?.effective_status === "active");
+  const activeCandidateIds = activeCandidates.map((event) => event!.id);
+  const resolvedEventId = activeCandidateIds.length === 1 ? activeCandidateIds[0] : undefined;
+  if (activeCandidateIds.length > 0) {
     return {
       pageId: normalizedPageId,
       channel,
@@ -4203,7 +4227,7 @@ async function resolveFacebookInboundRouting(pageId?: string): Promise<FacebookI
       assignedEventStatus: assignedEvent?.effective_status || null,
       resolvedEventId,
       resolvedVia: "channel-assignment",
-      activeCandidateIds: [resolvedEventId],
+      activeCandidateIds,
     };
   }
 
@@ -4216,6 +4240,46 @@ async function resolveFacebookInboundRouting(pageId?: string): Promise<FacebookI
     resolvedVia: "none",
     activeCandidateIds: [],
   };
+}
+
+async function resolveFacebookEventForSender(
+  routing: FacebookInboundRoutingResolution,
+  senderId: string,
+  text: string,
+) {
+  const channel = routing.channel;
+  if (!channel || routing.activeCandidateIds.length === 0) return {};
+  const candidates = (await Promise.all(
+    routing.activeCandidateIds.map((eventId) => appDb.getEventById(eventId)),
+  )).filter(Boolean).map((event) => ({ id: event!.id, name: event!.name }));
+
+  if (candidates.length === 1) {
+    await appDb.setChannelSenderEventSelection(channel.id, senderId, candidates[0].id);
+    return { eventId: candidates[0].id };
+  }
+
+  if (isChangeEventCommand(text)) {
+    await appDb.setChannelSenderEventSelection(channel.id, senderId);
+    return { responseText: buildEventSelectionPrompt(candidates) };
+  }
+
+  const chosen = matchEventSelection(text, candidates);
+  if (chosen) {
+    await appDb.setChannelSenderEventSelection(channel.id, senderId, chosen.id);
+    return {
+      eventId: chosen.id,
+      responseText: buildEventSelectedMessage(chosen.name),
+      selectionCompleted: true,
+    };
+  }
+
+  const selectedEventId = await appDb.getChannelSenderEventSelection(channel.id, senderId);
+  if (selectedEventId && candidates.some((event) => event.id === selectedEventId)) {
+    return { eventId: selectedEventId };
+  }
+
+  await appDb.setChannelSenderEventSelection(channel.id, senderId);
+  return { responseText: buildEventSelectionPrompt(candidates) };
 }
 
 function extractFacebookStyleImageAttachments(webhookEvent: any) {
@@ -4348,7 +4412,8 @@ async function resolveManualOutboundTarget(
   const tryResolveChannel = async (platform: ChannelPlatform) => {
     if (platform === "facebook") {
       const facebookChannel = await appDb.getChannelAccount("facebook", normalizedExternalId);
-      if (facebookChannel && facebookChannel.is_active !== false && facebookChannel.event_id === normalizedEventId) {
+      const facebookEventIds = facebookChannel?.event_ids || (facebookChannel?.event_id ? [facebookChannel.event_id] : []);
+      if (facebookChannel && facebookChannel.is_active !== false && facebookEventIds.includes(normalizedEventId)) {
         return {
           platform: "facebook" as const,
           eventId: normalizedEventId,
@@ -4369,7 +4434,8 @@ async function resolveManualOutboundTarget(
     }
 
     const channel = await appDb.getChannelAccount(platform, normalizedExternalId);
-    if (!channel || channel.is_active === false || channel.event_id !== normalizedEventId) {
+    const assignedEventIds = channel?.event_ids || (channel?.event_id ? [channel.event_id] : []);
+    if (!channel || channel.is_active === false || !assignedEventIds.includes(normalizedEventId)) {
       return null;
     }
     return {
@@ -8520,7 +8586,181 @@ function renderTicketPngBuffer(svg: string) {
   return resvg.render().asPng();
 }
 
+function resolveDirectTicketArtworkDataUrl(settings: Record<string, string>) {
+  const configured = String(settings.direct_ticket_artwork_url || settings.event_public_poster_url || "").trim();
+  if (configured.startsWith("data:image/")) return configured;
+  const filePath = resolvePublicEventMediaAbsolutePath(configured) || resolvePublicPosterAbsolutePath(configured);
+  if (!filePath || !existsSync(filePath)) return "";
+  const extension = path.extname(filePath).toLowerCase();
+  const mime = extension === ".png" ? "image/png" : extension === ".webp" ? "image/webp" : "image/jpeg";
+  return `data:${mime};base64,${readFileSync(filePath).toString("base64")}`;
+}
+
+function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string, string>, qrDataUrl: string, artworkDataUrl = "") {
+  const eventName = escapeXml(String(settings.event_name || "Event Ticket").trim() || "Event Ticket");
+  const holder = escapeXml(ticket.holder_name || ticket.buyer_name || "Guest");
+  const performance = escapeXml(ticket.performance_title || ticket.performance_code || "Performance");
+  const seat = escapeXml([ticket.zone, ticket.row_label && `Row ${ticket.row_label}`, ticket.seat_label && `Seat ${ticket.seat_label}`].filter(Boolean).join(" · "));
+  const ticketClass = escapeXml(ticket.ticket_class || "VIP");
+  const ticketId = escapeXml(ticket.id);
+  const performanceDate = escapeXml(formatStoredDateForDisplay(ticket.performance_starts_at || "", normalizeTimeZone(settings.event_timezone)));
+  const safeColor = (value: string, fallback: string) => /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+  const primaryColor = safeColor(String(settings.direct_ticket_primary_color || ""), "#321d48");
+  const accentColor = safeColor(String(settings.direct_ticket_accent_color || ""), "#d8b66a");
+  const heading = escapeXml(String(settings.direct_ticket_heading || "DIRECT SEAT TICKET").trim().slice(0, 60) || "DIRECT SEAT TICKET");
+  const note = escapeXml(String(settings.direct_ticket_note || "").trim().slice(0, 120));
+  const artworkMode = settings.direct_ticket_artwork_mode === "background" ? "background" : "panel";
+  const artworkDefs = artworkDataUrl ? `<defs><clipPath id="ticket"><rect x="34" y="34" width="1132" height="607" rx="32"/></clipPath><clipPath id="artwork"><rect x="850" y="48" width="270" height="178" rx="18"/></clipPath></defs>` : "";
+  const backgroundArtwork = artworkDataUrl && artworkMode === "background"
+    ? `<image x="34" y="34" width="1132" height="607" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#ticket)"/><rect x="34" y="258" width="1132" height="383" fill="#fffaf0" opacity=".94"/><rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}" opacity=".82"/>`
+    : "";
+  const panelArtwork = artworkDataUrl && artworkMode === "panel"
+    ? `<image x="850" y="48" width="270" height="178" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`
+    : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+    ${artworkDefs}<rect width="1200" height="675" fill="#0b1220"/><rect x="34" y="34" width="1132" height="607" rx="32" fill="#fffaf0"/>${backgroundArtwork}
+    <path d="M34 258 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/>
+    ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="224" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="26" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
+    <text x="88" y="163" font-family="sans-serif" font-size="44" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="208" font-family="sans-serif" font-size="25" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
+    <text x="88" y="330" font-family="sans-serif" font-size="19" fill="#7a6f66">GUEST</text><text x="88" y="372" font-family="sans-serif" font-size="34" font-weight="700" fill="#251b16">${holder}</text>
+    <text x="88" y="432" font-family="sans-serif" font-size="19" fill="#7a6f66">PERFORMANCE</text><text x="88" y="466" font-family="sans-serif" font-size="25" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="496" font-family="sans-serif" font-size="18" fill="#5b5148">${performanceDate}</text>
+    <text x="88" y="526" font-family="sans-serif" font-size="19" fill="#7a6f66">YOUR SEAT</text><text x="88" y="568" font-family="sans-serif" font-size="31" font-weight="700" fill="${primaryColor}">${seat || "Assigned at door"}</text>
+    ${note ? `<text x="88" y="612" font-family="sans-serif" font-size="16" fill="#6b625b">${note}</text>` : ""}
+    <rect x="870" y="310" width="220" height="220" rx="12" fill="#fff"/><image x="885" y="325" width="190" height="190" href="${escapeXml(qrDataUrl)}"/>
+    <text x="980" y="572" text-anchor="middle" font-family="monospace" font-size="14" fill="#5b5148">${ticketId}</text>
+  </svg>`;
+}
+
+function getDirectTicketTokenSecret() {
+  const configured = String(process.env.DIRECT_TICKET_SECRET || "").trim();
+  if (configured) return configured;
+  return IS_PRODUCTION ? "" : "facebotstudio-direct-ticket-development-only";
+}
+
+function buildDirectTicketToken(scope: "view" | "checkin", ticketId: string) {
+  const secret = getDirectTicketTokenSecret();
+  if (!secret) return "";
+  return createHmac("sha256", secret).update(`${scope}:${ticketId}`).digest("base64url");
+}
+
+function verifyDirectTicketToken(scope: "view" | "checkin", ticketId: string, rawToken: unknown) {
+  const expected = buildDirectTicketToken(scope, ticketId);
+  const provided = String(rawToken || "").trim();
+  if (!expected || !provided) return false;
+  const expectedBuffer = Buffer.from(expected);
+  const providedBuffer = Buffer.from(provided);
+  return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
+}
+
+function buildDirectTicketQrValue(ticketId: string) {
+  const token = buildDirectTicketToken("checkin", ticketId);
+  return token ? `DIRECT:${ticketId}:${token}` : "";
+}
+
+function parseDirectTicketQrValue(rawValue: unknown) {
+  const match = String(rawValue || "").trim().match(/^DIRECT:(dtkt_[a-z0-9]+):([A-Za-z0-9_-]+)$/i);
+  if (!match || !verifyDirectTicketToken("checkin", match[1], match[2])) return null;
+  return { ticketId: match[1] };
+}
+
+function buildDirectTicketDelivery(ticket: DirectTicketRow) {
+  const token = buildDirectTicketToken("view", ticket.id);
+  if (!token || !["issued", "checked_in"].includes(ticket.status)) return null;
+  const query = `?token=${encodeURIComponent(token)}`;
+  return {
+    png_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.png${query}`,
+    pdf_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.pdf${query}`,
+    svg_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.svg${query}`,
+  };
+}
+
+function serializePublicDirectTicket(ticket: DirectTicketRow) {
+  return {
+    id: ticket.id,
+    performance_id: ticket.performance_id,
+    ticket_class: ticket.ticket_class,
+    holder_name: ticket.holder_name,
+    price_amount: ticket.price_amount,
+    payment_status: ticket.payment_status,
+    status: ticket.status,
+    hold_expires_at: ticket.hold_expires_at,
+    rejection_reason: ticket.rejection_reason,
+    performance_code: ticket.performance_code,
+    performance_title: ticket.performance_title,
+    performance_starts_at: ticket.performance_starts_at,
+    zone: ticket.zone,
+    row_label: ticket.row_label,
+    seat_label: ticket.seat_label,
+    delivery: buildDirectTicketDelivery(ticket),
+  };
+}
+
+function serializeAdminDirectTicket(ticket: DirectTicketRow) {
+  const { payment_proof_base64: _paymentProofBase64, ...safeTicket } = ticket;
+  return {
+    ...safeTicket,
+    has_payment_proof: Boolean(ticket.payment_proof_base64 && ticket.payment_proof_mime),
+    delivery: buildDirectTicketDelivery(ticket),
+  };
+}
+
+async function sendDirectTicketDecisionEmail(ticket: DirectTicketRow) {
+  if (!ticket.email) return;
+  const settings = await getSettingsMap(ticket.event_id);
+  const eventName = String(settings.event_name || "Event").trim() || "Event";
+  const delivery = buildDirectTicketDelivery(ticket);
+  const pngUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.png_url) : "";
+  const pdfUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.pdf_url) : "";
+  const approved = ticket.status === "issued";
+  const message = approved
+    ? `Payment verified. Your ${eventName} ticket for ${ticket.zone || ""} ${ticket.row_label || ""}-${ticket.seat_label || ""} is ready.${pngUrl ? `\nPNG: ${pngUrl}` : ""}${pdfUrl ? `\nPDF: ${pdfUrl}` : ""}`
+    : `Payment was not approved for ${eventName}. ${ticket.rejection_reason || "Please contact the organizer for help."}`;
+  try {
+    await sendTransactionalEmail({
+      to: ticket.email,
+      template: {
+        kind: approved ? "ticket_delivery" : "payment_confirmation",
+        subject: approved ? `${eventName}: your ticket is ready` : `${eventName}: payment needs attention`,
+        text: message,
+        html: `<p>${escapeXml(message).replace(/\n/g, "<br>")}</p>`,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to send direct-ticket payment decision email:", error);
+  }
+}
+
+function crc16Ccitt(payload: string) {
+  let crc = 0xffff;
+  for (const char of payload) {
+    crc ^= char.charCodeAt(0) << 8;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+  }
+  return (crc & 0xffff).toString(16).toUpperCase().padStart(4, "0");
+}
+
+function buildPromptPayPayload(receiverId: string, amount: number) {
+  const digits = receiverId.replace(/\D/g, "");
+  const account = digits.length === 10 && digits.startsWith("0") ? `01${String(`0066${digits.slice(1)}`).length.toString().padStart(2, "0")}0066${digits.slice(1)}` : digits.length === 13 ? `02${digits.length.toString().padStart(2, "0")}${digits}` : "";
+  if (!account) return null;
+  const merchant = `0016A000000677010111${account}`;
+  const amountField = Number.isFinite(amount) && amount > 0 ? `54${amount.toFixed(2).length.toString().padStart(2, "0")}${amount.toFixed(2)}` : "";
+  const payload = `00020101021229${merchant.length.toString().padStart(2, "0")}${merchant}5303764${amountField}5802TH6304`;
+  return `${payload}${crc16Ccitt(payload)}`;
+}
+
 let cachedTicketFontCssForHtml: string | null = null;
+
+function resolvePuppeteerExecutablePath() {
+  const candidates = [
+    String(process.env.PUPPETEER_EXECUTABLE_PATH || "").trim(),
+    String(process.env.CHROME_BIN || "").trim(),
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+  ].filter(Boolean);
+  return candidates.find((candidate) => existsSync(candidate));
+}
 
 function buildEmbeddedTicketFontCss() {
   if (cachedTicketFontCssForHtml) return cachedTicketFontCssForHtml;
@@ -8753,7 +8993,7 @@ async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: R
   const puppeteer = (puppeteerModule as any).default || puppeteerModule;
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_BIN || undefined,
+    executablePath: resolvePuppeteerExecutablePath(),
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   });
 
@@ -8778,6 +9018,33 @@ async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: R
   } finally {
     await browser.close();
   }
+}
+
+async function renderDirectTicketPdfBuffer(svg: string) {
+  const puppeteerModule = await import("puppeteer");
+  const puppeteer = (puppeteerModule as any).default || puppeteerModule;
+  const browser = await puppeteer.launch({ headless: true, executablePath: resolvePuppeteerExecutablePath(), args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>@page{size:154mm 111mm;margin:0}html,body{margin:0;width:154mm;height:111mm;overflow:hidden}svg{position:absolute;inset:0;display:block;width:154mm;height:111mm}</style></head><body>${svg}</body></html>`, { waitUntil: "domcontentloaded" });
+    return Buffer.from(await page.pdf({ printBackground: true, preferCSSPageSize: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
+  } finally { await browser.close(); }
+}
+
+async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
+  const puppeteerModule = await import("puppeteer");
+  const puppeteer = (puppeteerModule as any).default || puppeteerModule;
+  const browser = await puppeteer.launch({ headless: true, executablePath: resolvePuppeteerExecutablePath(), args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
+  try {
+    const page = await browser.newPage();
+    const sheets: string[] = [];
+    for (let index = 0; index < svgs.length; index += 4) {
+      const items = svgs.slice(index, index + 4).map((svg) => `<div class="ticket">${svg}</div>`).join("");
+      sheets.push(`<section class="sheet">${items}</section>`);
+    }
+    await page.setContent(`<!doctype html><html><head><style>@page{size:A4 landscape;margin:0}html,body{margin:0}.sheet{box-sizing:border-box;width:297mm;height:210mm;display:grid;grid-template-columns:repeat(2,148.5mm);grid-template-rows:repeat(2,105mm);break-after:page}.ticket{position:relative;overflow:hidden;border:.15mm dashed #777}.ticket svg{display:block;width:148.5mm;height:105mm}</style></head><body>${sheets.join("")}</body></html>`, { waitUntil: "domcontentloaded" });
+    return Buffer.from(await page.pdf({ format: "A4", landscape: true, printBackground: true, preferCSSPageSize: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
+  } finally { await browser.close(); }
 }
 
 function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, string>) {
@@ -9962,19 +10229,33 @@ async function handleIncomingFacebookText(
     runtime: APP_RUNTIME || "all",
     queue_mode: canUseFacebookWebhookQueue() ? "redis" : "inline",
   });
-  if (!routing.resolvedEventId) {
+  if (routing.activeCandidateIds.length === 0) {
     console.warn(`No active event mapping found for Facebook page ${pageId || "unknown"}; skipping automated reply`);
     return;
   }
-  const eventId = routing.resolvedEventId;
-  await saveMessage(senderId, trimmed, "incoming", eventId, pageId, attachments);
-  const conversationKey = buildInboundConversationKey("facebook", senderId, eventId, pageId);
-  markInboundConversationActivity(conversationKey);
 
   if (!(await getFacebookAccessToken(pageId))) {
     console.warn(`Facebook access token is unavailable for page ${pageId || "default"}; skipping outbound reply`);
     return;
   }
+
+  const selection = await resolveFacebookEventForSender(routing, senderId, trimmed);
+  if (selection.responseText) {
+    if (selection.eventId && selection.selectionCompleted) {
+      await saveMessage(senderId, trimmed, "incoming", selection.eventId, pageId, attachments);
+    }
+    await sendFacebookTextMessage(senderId, selection.responseText, pageId);
+    if (selection.eventId && selection.selectionCompleted) {
+      await saveMessage(senderId, selection.responseText, "outgoing", selection.eventId, pageId);
+    }
+    return;
+  }
+  if (!selection.eventId) return;
+
+  const eventId = selection.eventId;
+  await saveMessage(senderId, trimmed, "incoming", eventId, pageId, attachments);
+  const conversationKey = buildInboundConversationKey("facebook", senderId, eventId, pageId);
+  markInboundConversationActivity(conversationKey);
 
   await runSerializedInboundTask(conversationKey, async () => {
     const preparedTurn = await prepareBundledConversationTurnForSender("facebook", senderId, eventId, {
@@ -10601,12 +10882,7 @@ async function normalizeLineInboundJob(event: any, destination: string) {
 function normalizeInstagramTextEvent(webhookEvent: any, fallbackAccountId?: string) {
   const senderId = String(webhookEvent?.sender?.id || "").trim();
   const accountId = String(webhookEvent?.recipient?.id || fallbackAccountId || "").trim();
-  const text = String(
-    webhookEvent?.message?.text
-    || webhookEvent?.postback?.payload
-    || webhookEvent?.postback?.title
-    || "",
-  ).trim();
+  const text = getInstagramWebhookEventText(webhookEvent);
   const attachments = extractFacebookStyleImageAttachments(webhookEvent);
   const isEcho = Boolean(webhookEvent?.message?.is_echo);
 
@@ -11159,6 +11435,31 @@ async function startServer() {
     return res.json({ user: toPublicAuthUser(req.auth.user) });
   });
 
+  app.get("/api/auth/preferences", requireAuth, async (req: AuthenticatedRequest, res) => {
+    const preferences = await appDb.getUserPreferences(req.auth!.user.id);
+    return res.json(preferences || {
+      user_id: req.auth!.user.id,
+      language: "th",
+      timezone: "Asia/Bangkok",
+      updated_at: null,
+    });
+  });
+
+  app.post("/api/auth/preferences", requireAuth, async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const language = body.language === "en" ? "en" : body.language === "th" ? "th" : "";
+    const timezone = String(body.timezone || "").trim();
+    if (!language) return res.status(400).json({ error: "Language must be th or en" });
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    } catch {
+      return res.status(400).json({ error: "Enter a valid IANA time zone, for example Asia/Bangkok" });
+    }
+    const preferences = await appDb.upsertUserPreferences(req.auth!.user.id, { language, timezone });
+    await recordAudit(req, "auth.preferences_updated", "user", req.auth!.user.id, { language, timezone });
+    return res.json(preferences);
+  });
+
   app.get("/api/auth/users", requireRoles(["owner", "admin"]), async (_req: AuthenticatedRequest, res) => {
     try {
       const users = await appDb.listUsers();
@@ -11558,6 +11859,31 @@ async function startServer() {
     },
   );
 
+  app.post(
+    "/api/checkin-access/checkin-direct",
+    checkinAccessIpRateLimit,
+    checkinAccessCheckinRateLimit,
+    requireEventScope({ allowDefault: false, allowCheckinAccess: true, queryKey: null, bodyKey: null, paramKey: null }),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        if (!req.checkinAccess) return res.status(401).json({ error: "Check-in access session not found or expired" });
+        const parsed = parseDirectTicketQrValue(readObjectBody(req).qr_value);
+        if (!parsed) return res.status(400).json({ error: "Invalid or altered direct-ticket QR" });
+        const existing = await appDb.getDirectTicketById(parsed.ticketId);
+        if (!existing || existing.event_id !== req.checkinAccess.eventId) return res.status(404).json({ error: "Direct ticket not found" });
+        const result = await appDb.checkInDirectTicket(parsed.ticketId);
+        await appDb.touchCheckinAccessSession(req.checkinAccess.sessionId);
+        if (!result.ticket) return res.status(404).json({ error: "Direct ticket not found" });
+        if (result.ticket.status !== "checked_in" && !result.alreadyCheckedIn) return res.status(409).json({ error: "Ticket is not issued", ticket: serializeAdminDirectTicket(result.ticket) });
+        await appDb.recordAuditLog({ actor_user_id: null, action: result.alreadyCheckedIn ? "direct_ticket.checkin_repeated" : "direct_ticket.checked_in_via_token", target_type: "direct_ticket", target_id: result.ticket.id, metadata: { event_id: result.ticket.event_id, checkin_access_session_id: req.checkinAccess.sessionId, ip: getRequestIp(req) } });
+        return res.status(result.alreadyCheckedIn ? 409 : 200).json({ ...result, error: result.alreadyCheckedIn ? "Already checked in" : undefined, ticket: serializeAdminDirectTicket(result.ticket) });
+      } catch (error) {
+        console.error("Failed to check in direct ticket via token:", error);
+        return res.status(500).json({ error: "Failed to check in direct ticket" });
+      }
+    },
+  );
+
   app.get("/api/events", requireAuth, async (_req, res) => {
     try {
       const events = await appDb.listEvents();
@@ -11843,6 +12169,35 @@ async function startServer() {
     }
   });
 
+  app.get(
+    "/api/channels/:id/access-token",
+    requireRoles(["owner", "admin"]),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const channelId = String(req.params.id || "").trim();
+        const channel = (await appDb.listChannelAccounts()).find((item) => item.id === channelId);
+        if (!channel) {
+          return res.status(404).json({ error: "Channel not found" });
+        }
+        const userOrganizerId = normalizeOptionalText(req.auth?.user.organization_id) || DEFAULT_ORGANIZATION_ID;
+        const channelOrganizerId = normalizeOptionalText(channel.organizer_id) || DEFAULT_ORGANIZATION_ID;
+        if (channelOrganizerId !== userOrganizerId) {
+          return res.status(404).json({ error: "Channel not found" });
+        }
+
+        res.setHeader("Cache-Control", "no-store");
+        await recordAudit(req, "channel.access_token_viewed", "channel", channel.id, {
+          platform: channel.platform,
+          external_id: channel.external_id,
+        });
+        return res.json({ access_token: channel.access_token || "" });
+      } catch (error) {
+        console.error("Failed to reveal channel access token:", error);
+        return res.status(500).json({ error: "Failed to reveal channel access token" });
+      }
+    },
+  );
+
   app.get("/api/channel-platforms", requireAuth, async (_req, res) => {
     try {
       return res.json(ALLOWED_CHANNEL_PLATFORMS.map((platform) => CHANNEL_PLATFORM_DEFINITIONS[platform]));
@@ -12044,6 +12399,7 @@ async function startServer() {
         platform: channel.platform,
         external_id: channel.external_id,
         event_id: channel.event_id,
+        event_ids: channel.event_ids || [],
         is_active: channel.is_active,
         assignment_changed: isAssignmentChanging,
         ...(originalChannel
@@ -12106,7 +12462,7 @@ async function startServer() {
         });
       }
 
-      const previousEventId = normalizeOptionalText(existingChannel.event_id);
+      const previousEventIds = existingChannel.event_ids || (existingChannel.event_id ? [existingChannel.event_id] : []);
       const channel = await appDb.assignChannelAccount(channelId, eventId);
       if (!channel) {
         return res.status(404).json({ error: "Channel not found" });
@@ -12115,8 +12471,8 @@ async function startServer() {
       await recordAudit(req, "channel.assigned_to_event", "channel", channel.id, {
         platform: channel.platform,
         external_id: channel.external_id,
-        previous_event_id: previousEventId || null,
-        event_id: channel.event_id,
+        previous_event_ids: previousEventIds,
+        event_ids: channel.event_ids || [],
       });
 
       return res.json(serializeChannelAccount(channel));
@@ -12133,14 +12489,16 @@ async function startServer() {
     async (req: AuthenticatedRequest, res) => {
     try {
       const channelId = String(req.params.id || "").trim();
+      const body = readObjectBody(req);
+      const eventId = readOptionalString(body, "event_id", 128);
       const allChannels = await appDb.listChannelAccounts();
       const existingChannel = allChannels.find((channel) => channel.id === channelId);
       if (!existingChannel) {
         return res.status(404).json({ error: "Channel not found" });
       }
 
-      const previousEventId = normalizeOptionalText(existingChannel.event_id);
-      const channel = await appDb.unassignChannelAccount(channelId);
+      const previousEventIds = existingChannel.event_ids || (existingChannel.event_id ? [existingChannel.event_id] : []);
+      const channel = await appDb.unassignChannelAccount(channelId, eventId || undefined);
       if (!channel) {
         return res.status(404).json({ error: "Channel not found" });
       }
@@ -12148,7 +12506,9 @@ async function startServer() {
       await recordAudit(req, "channel.unassigned_from_event", "channel", channel.id, {
         platform: channel.platform,
         external_id: channel.external_id,
-        previous_event_id: previousEventId || null,
+        removed_event_id: eventId || null,
+        previous_event_ids: previousEventIds,
+        event_ids: channel.event_ids || [],
       });
 
       return res.json(serializeChannelAccount(channel));
@@ -12175,6 +12535,175 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to fetch public event page:", error);
       return res.status(500).json({ error: "Failed to load public event page" });
+    }
+  });
+
+  app.get("/api/public/events/:slug/direct-ticketing", async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+      await appDb.releaseExpiredDirectTicketHolds(match.event.id);
+      const performances = (await appDb.listDirectPerformances(match.event.id)).filter((item) => item.is_active);
+      const seats = await appDb.listDirectSeats(match.event.id);
+      return res.json({
+        performances,
+        seats: seats.map(({ external_seat_ref: _externalSeatRef, ...seat }) => seat),
+        receiver_name: String(process.env.PROMPTPAY_RECEIVER_NAME || "").trim(),
+        promptpay_ready: Boolean(buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), 1)),
+        hold_minutes: 15,
+      });
+    } catch (error) {
+      console.error("Failed to load public direct ticketing:", error);
+      return res.status(500).json({ error: "Failed to load direct tickets" });
+    }
+  });
+
+  app.post("/api/public/events/:slug/direct-orders", webChatRateLimit, async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!getDirectTicketTokenSecret()) return res.status(503).json({ error: "Direct ticket security is not configured" });
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const performanceId = readRequiredString(body, "performance_id", issues, { label: "Performance", maxLength: 128 });
+      const seatId = readRequiredString(body, "seat_id", issues, { label: "Seat", maxLength: 128 });
+      const buyerName = readRequiredString(body, "buyer_name", issues, { label: "Name", maxLength: 180 });
+      const phone = readRequiredString(body, "phone", issues, { label: "Phone", maxLength: 64 });
+      const email = readOptionalString(body, "email", 320);
+      if (email && !isLikelyEmailAddress(email)) issues.push({ field: "email", message: "email is invalid" });
+      if (issues.length) return respondValidationError(res, issues);
+      const [performance, seat] = await Promise.all([
+        appDb.listDirectPerformances(match.event.id).then((rows) => rows.find((row) => row.id === performanceId && row.is_active)),
+        appDb.listDirectSeats(match.event.id, performanceId).then((rows) => rows.find((row) => row.id === seatId)),
+      ]);
+      if (!performance || !seat) return res.status(400).json({ error: "Selected performance or seat is not available" });
+      const result = await appDb.createDirectTicket({
+        event_id: match.event.id,
+        performance_id: performance.id,
+        seat_id: seat.id,
+        ticket_class: "Special",
+        holder_name: buyerName,
+        buyer_name: buyerName,
+        phone,
+        email,
+        price_amount: Math.max(0, Number(seat.face_value || 0)),
+        payment_required: true,
+        hold_minutes: 15,
+        source: "public",
+      });
+      if (result.error || !result.ticket) return res.status(409).json({ error: result.error || "seat_unavailable" });
+      await recordAudit(req, "public.direct_ticket.held", "direct_ticket", result.ticket.id, {
+        event_id: match.event.id,
+        performance_id: performance.id,
+        seat_id: seat.id,
+      });
+      return res.status(201).json({
+        access_token: buildDirectTicketToken("view", result.ticket.id),
+        order: serializePublicDirectTicket(result.ticket),
+      });
+    } catch (error) {
+      console.error("Failed to create public direct order:", error);
+      return res.status(500).json({ error: "Failed to reserve seat" });
+    }
+  });
+
+  app.get("/api/public/direct-orders/:id", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).json({ error: "Order not found" });
+    await appDb.releaseExpiredDirectTicketHolds();
+    const ticket = await appDb.getDirectTicketById(id);
+    if (!ticket) return res.status(404).json({ error: "Order not found" });
+    return res.json({ order: serializePublicDirectTicket(ticket) });
+  });
+
+  app.get("/api/public/direct-orders/:id/payment-qr", async (req, res) => {
+    const id = String(req.params.id || "").trim();
+    if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).send("Order not found");
+    await appDb.releaseExpiredDirectTicketHolds();
+    const ticket = await appDb.getDirectTicketById(id);
+    if (!ticket || ticket.status !== "held") return res.status(409).send("Order is not awaiting payment");
+    const payload = buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), ticket.price_amount);
+    if (!payload) return res.status(503).send("PromptPay is not configured");
+    const png = await QRCode.toBuffer(payload, { width: 720, margin: 2, errorCorrectionLevel: "M" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(png);
+  });
+
+  app.post(
+    "/api/public/direct-orders/:id/payment-proof",
+    webChatRateLimit,
+    express.raw({ type: "application/octet-stream", limit: "4mb" }),
+    async (req: AuthenticatedRequest, res) => {
+      const id = String(req.params.id || "").trim();
+      if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).json({ error: "Order not found" });
+      const mime = String(req.headers["x-proof-mime"] || "").trim().toLowerCase();
+      if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) return res.status(400).json({ error: "Payment proof must be PNG, JPG, or WebP" });
+      const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (!bytes.length || bytes.length > 4 * 1024 * 1024) return res.status(400).json({ error: "Payment proof must be between 1 byte and 4 MB" });
+      const ticket = await appDb.submitDirectTicketPaymentProof(id, {
+        payment_proof_mime: mime,
+        payment_proof_base64: bytes.toString("base64"),
+        payment_reference: String(req.headers["x-payment-reference"] || "").trim().slice(0, 255) || null,
+      });
+      if (!ticket || ticket.status !== "held") return res.status(409).json({ error: "This hold has expired or is no longer payable" });
+      await recordAudit(req, "public.direct_ticket.payment_proof_submitted", "direct_ticket", id, { event_id: ticket.event_id });
+      return res.json({ order: serializePublicDirectTicket(ticket) });
+    },
+  );
+
+  app.post("/api/webhook/direct-payments", async (req: AuthenticatedRequest, res) => {
+    const secret = String(process.env.DIRECT_PAYMENT_WEBHOOK_SECRET || "").trim();
+    if (!secret) return res.status(503).json({ error: "Direct payment webhook is not configured" });
+    const providedSignature = String(req.headers["x-direct-payment-signature"] || "").trim().replace(/^sha256=/i, "");
+    const expectedSignature = createHmac("sha256", secret).update((req as RawBodyRequest).rawBody || Buffer.alloc(0)).digest("hex");
+    const expectedBuffer = Buffer.from(expectedSignature);
+    const providedBuffer = Buffer.from(providedSignature);
+    if (expectedBuffer.length !== providedBuffer.length || !timingSafeEqual(expectedBuffer, providedBuffer)) {
+      await recordSecurityEvent(req, "direct_payment.webhook_signature_rejected");
+      return res.status(401).json({ error: "Invalid webhook signature" });
+    }
+    const body = readObjectBody(req);
+    const ticketId = String(body.ticket_id || "").trim();
+    const transactionReference = String(body.transaction_reference || "").trim().slice(0, 255);
+    const ticket = ticketId ? await appDb.getDirectTicketById(ticketId) : undefined;
+    if (!ticket) return res.status(404).json({ error: "Direct ticket not found" });
+    if (ticket.status === "issued" && ticket.payment_reference === transactionReference) {
+      return res.json({ status: "already_verified", ticket_id: ticket.id });
+    }
+    const paidAt = Date.parse(String(body.paid_at || ""));
+    const createdAt = Date.parse(ticket.created_at);
+    const proofSubmittedAt = Date.parse(ticket.payment_proof_submitted_at || "");
+    const expectedReceiver = String(process.env.PROMPTPAY_ID || "").replace(/\D/g, "");
+    const receivedReceiver = String(body.receiver_id || "").replace(/\D/g, "");
+    const reasons = [
+      body.status !== "verified" ? "provider_status" : "",
+      Math.abs(Number(body.amount) - ticket.price_amount) > 0.009 ? "amount" : "",
+      !expectedReceiver || receivedReceiver !== expectedReceiver ? "receiver" : "",
+      !transactionReference ? "transaction_reference" : "",
+      !Number.isFinite(paidAt) || paidAt < createdAt - 5 * 60_000 || (Number.isFinite(proofSubmittedAt) && paidAt > proofSubmittedAt + 5 * 60_000) ? "transaction_time" : "",
+    ].filter(Boolean);
+    if (reasons.length) {
+      await recordAudit(req, "direct_payment.queued_for_review", "direct_ticket", ticket.id, { event_id: ticket.event_id, reasons });
+      return res.status(202).json({ status: "manual_review", reasons });
+    }
+    try {
+      const verified = await appDb.updateDirectTicketPayment(ticket.id, { payment_status: "verified", payment_reference: transactionReference });
+      if (!verified || verified.status !== "issued") return res.status(409).json({ error: "Ticket is no longer payable" });
+      await recordAudit(req, "direct_payment.auto_verified", "direct_ticket", verified.id, { event_id: verified.event_id, transaction_reference: transactionReference });
+      await sendDirectTicketDecisionEmail(verified);
+      return res.json({ status: "verified", ticket_id: verified.id });
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505" || /unique/i.test(String((error as Error)?.message || ""))) {
+        await recordAudit(req, "direct_payment.duplicate_reference_rejected", "direct_ticket", ticket.id, { event_id: ticket.event_id, transaction_reference: transactionReference });
+        return res.status(409).json({ error: "Transaction reference has already been used" });
+      }
+      console.error("Failed to process direct payment webhook:", error);
+      return res.status(500).json({ error: "Failed to process payment notification" });
     }
   });
 
@@ -12822,6 +13351,144 @@ async function startServer() {
     }
   });
 
+  // Direct seats are inventory explicitly withheld from Ticketmelon. These routes are
+  // intentionally admin/operator-only; public self-service checkout is a later phase.
+  app.get("/api/direct-ticketing/performances", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    return res.json(await appDb.listDirectPerformances(getRequestedEventId(req)));
+  });
+  app.post("/api/direct-ticketing/performances", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req); const issues: ValidationIssue[] = [];
+    const code = readRequiredString(body, "code", issues, { label: "Performance code", maxLength: 64 });
+    const title = readRequiredString(body, "title", issues, { label: "Performance title", maxLength: 180 });
+    const startsAt = readRequiredString(body, "starts_at", issues, { label: "Performance start", maxLength: 64 });
+    if (issues.length) return respondValidationError(res, issues);
+    const performance = await appDb.upsertDirectPerformance({ event_id: getRequestedEventId(req), code, title, starts_at: startsAt, ends_at: readOptionalString(body, "ends_at", 64), seat_plan_image_url: readOptionalString(body, "seat_plan_image_url", 2048), is_active: body.is_active !== false });
+    await recordAudit(req, "direct_performance.upserted", "direct_performance", performance.id, { event_id: performance.event_id, code });
+    return res.status(201).json(performance);
+  });
+  app.get("/api/direct-ticketing/seats", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const performanceId = typeof req.query.performance_id === "string" ? req.query.performance_id.trim() : undefined;
+    return res.json(await appDb.listDirectSeats(getRequestedEventId(req), performanceId));
+  });
+  app.post("/api/direct-ticketing/seats/import", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req); const performanceId = String(body.performance_id || "").trim(); const rawSeats = Array.isArray(body.seats) ? body.seats : [];
+    if (!performanceId || !rawSeats.length) return res.status(400).json({ error: "performance_id and at least one seat are required" });
+    const seats = rawSeats.map((row) => ({ zone: String(row?.zone || "").trim(), row_label: String(row?.row_label || "").trim(), seat_label: String(row?.seat_label || "").trim(), external_seat_ref: typeof row?.external_seat_ref === "string" ? row.external_seat_ref.trim() || null : null, face_value: Number.isFinite(Number(row?.face_value)) ? Number(row.face_value) : null, x: Number.isFinite(Number(row?.x)) ? Number(row.x) : null, y: Number.isFinite(Number(row?.y)) ? Number(row.y) : null })).filter((seat) => seat.zone && seat.row_label && seat.seat_label);
+    if (!seats.length) return res.status(400).json({ error: "Every seat needs zone, row_label, and seat_label" });
+    const imported = await appDb.importDirectSeats(getRequestedEventId(req), performanceId, seats);
+    await recordAudit(req, "direct_seats.imported", "direct_performance", performanceId, { event_id: getRequestedEventId(req), imported_count: seats.length });
+    return res.json(imported);
+  });
+  app.get("/api/direct-ticketing/tickets", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
+  app.get("/api/direct-ticketing/payment-qr", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const receiverId = String(process.env.PROMPTPAY_ID || "").trim();
+    const amount = Number(req.query.amount || 0);
+    const payload = buildPromptPayPayload(receiverId, amount);
+    if (!payload) return res.status(503).json({ error: "PromptPay is not configured. Set PROMPTPAY_ID to a Thai mobile number or national ID." });
+    const png = await QRCode.toBuffer(payload, { width: 720, margin: 2, errorCorrectionLevel: "M" });
+    res.setHeader("Content-Type", "image/png"); res.setHeader("Cache-Control", "no-store"); return res.send(png);
+  });
+  app.post("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req); const issues: ValidationIssue[] = [];
+    const performanceId = readRequiredString(body, "performance_id", issues, { label: "Performance", maxLength: 128 }); const seatId = readRequiredString(body, "seat_id", issues, { label: "Seat", maxLength: 128 }); const ticketClass = readRequiredString(body, "ticket_class", issues, { label: "Ticket class", maxLength: 80 });
+    if (issues.length) return respondValidationError(res, issues);
+    const result = await appDb.createDirectTicket({ event_id: getRequestedEventId(req), performance_id: performanceId, seat_id: seatId, ticket_class: ticketClass, holder_name: readOptionalString(body, "holder_name", 180), buyer_name: readOptionalString(body, "buyer_name", 180), phone: readOptionalString(body, "phone", 64), email: readOptionalString(body, "email", 320), price_amount: Number.isFinite(Number(body.price_amount)) ? Number(body.price_amount) : 0, payment_required: body.payment_required !== false, hold_minutes: Number(body.hold_minutes) || 15, source: "admin", issued_by_user_id: req.auth?.user.id });
+    if (result.error) return res.status(409).json({ error: result.error });
+    await recordAudit(req, "direct_ticket.created", "direct_ticket", result.ticket?.id || "", { event_id: getRequestedEventId(req), seat_id: seatId });
+    return res.status(201).json(result.ticket ? serializeAdminDirectTicket(result.ticket) : null);
+  });
+  app.post("/api/direct-ticketing/tickets/:id/payment", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req); const paymentStatus = body.payment_status === "verified" || body.payment_status === "rejected" || body.payment_status === "refunded" ? body.payment_status : null;
+    if (!paymentStatus) return res.status(400).json({ error: "payment_status must be verified, rejected, or refunded" });
+    const paymentReference = readOptionalString(body, "payment_reference", 255);
+    if (paymentStatus === "verified" && !paymentReference) return res.status(400).json({ error: "Bank transaction reference is required to verify payment" });
+    const existing = await appDb.getDirectTicketById(req.params.id);
+    if (!existing || existing.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Direct ticket not found" });
+    let ticket: DirectTicketRow | undefined;
+    try {
+      ticket = await appDb.updateDirectTicketPayment(req.params.id, { payment_status: paymentStatus, payment_reference: paymentReference, rejection_reason: readOptionalString(body, "rejection_reason", 500), verified_by_user_id: req.auth?.user.id });
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505" || /unique/i.test(String((error as Error)?.message || ""))) {
+        return res.status(409).json({ error: "This bank transaction reference has already been used" });
+      }
+      console.error("Failed to update direct-ticket payment:", error);
+      return res.status(500).json({ error: "Failed to update payment" });
+    }
+    if (!ticket) return res.status(404).json({ error: "Direct ticket not found" });
+    await recordAudit(req, "direct_ticket.payment_updated", "direct_ticket", ticket.id, { event_id: ticket.event_id, payment_status: paymentStatus, payment_reference: paymentReference });
+    if (paymentStatus !== "refunded") await sendDirectTicketDecisionEmail(ticket);
+    return res.json(serializeAdminDirectTicket(ticket));
+  });
+  app.get("/api/direct-ticketing/tickets/:id/payment-proof", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const ticket = await appDb.getDirectTicketById(req.params.id);
+    if (!ticket || ticket.event_id !== getRequestedEventId(req) || !ticket.payment_proof_base64 || !ticket.payment_proof_mime) return res.status(404).send("Payment proof not found");
+    await recordAudit(req, "direct_ticket.payment_proof_viewed", "direct_ticket", ticket.id, { event_id: ticket.event_id });
+    res.setHeader("Content-Type", ticket.payment_proof_mime);
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(Buffer.from(ticket.payment_proof_base64, "base64"));
+  });
+  app.post("/api/direct-ticketing/tickets/:id/void", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const existing = await appDb.getDirectTicketById(req.params.id);
+    if (!existing || existing.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Direct ticket not found" });
+    const body = readObjectBody(req);
+    const ticket = await appDb.voidDirectTicket(existing.id, { releaseSeat: body.release_seat !== false });
+    if (!ticket) return res.status(404).json({ error: "Direct ticket not found" });
+    await recordAudit(req, "direct_ticket.voided", "direct_ticket", ticket.id, { event_id: ticket.event_id, release_seat: body.release_seat !== false });
+    return res.json(ticket);
+  });
+  app.post("/api/direct-ticketing/tickets/:id/reissue", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const existing = await appDb.getDirectTicketById(req.params.id);
+    if (!existing || existing.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Direct ticket not found" });
+    const ticket = await appDb.reissueDirectTicket(existing.id, req.auth?.user.id);
+    if (!ticket) return res.status(409).json({ error: "Only issued or checked-in tickets can be reissued" });
+    await recordAudit(req, "direct_ticket.reissued", "direct_ticket", ticket.id, { event_id: ticket.event_id, superseded_ticket_id: existing.id });
+    return res.status(201).json(serializeAdminDirectTicket(ticket));
+  });
+  app.post("/api/direct-ticketing/tickets/:id/checkin", requireRoles(["owner", "admin", "operator", "checker"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const parsed = parseDirectTicketQrValue(readObjectBody(req).qr_value);
+    if (!parsed || parsed.ticketId !== req.params.id) return res.status(400).json({ error: "Invalid or altered direct-ticket QR" });
+    const existing = await appDb.getDirectTicketById(parsed.ticketId);
+    if (!existing || existing.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Direct ticket not found" });
+    const result = await appDb.checkInDirectTicket(parsed.ticketId); if (!result.ticket) return res.status(404).json({ error: "Direct ticket not found" });
+    if (result.ticket.status !== "checked_in" && !result.alreadyCheckedIn) return res.status(409).json({ error: "Ticket is not issued", ticket: result.ticket });
+    await recordAudit(req, result.alreadyCheckedIn ? "direct_ticket.checkin_repeated" : "direct_ticket.checked_in", "direct_ticket", result.ticket.id, { event_id: result.ticket.event_id });
+    return res.status(result.alreadyCheckedIn ? 409 : 200).json({ ...result, error: result.alreadyCheckedIn ? "Already checked in" : undefined, ticket: serializeAdminDirectTicket(result.ticket) });
+  });
+  app.get("/api/direct-ticketing/tickets/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req); const rows = await appDb.listDirectTickets(eventId);
+    const csv = new Parser({ fields: ["id", "status", "payment_status", "ticket_class", "holder_name", "buyer_name", "phone", "email", "price_amount", "performance_code", "performance_title", "zone", "row_label", "seat_label", "payment_reference", "issued_at", "checked_in_at"] }).parse(rows);
+    await recordAudit(req, "direct_ticket.exported", "event", eventId, { event_id: eventId, rows: rows.length });
+    res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment("direct-ticket-report.csv"); return res.send(`\ufeff${csv}`);
+  });
+  app.get("/api/direct-ticketing/inventory/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const [seats, tickets] = await Promise.all([appDb.listDirectSeats(eventId), appDb.listDirectTickets(eventId)]);
+    const activeBySeat = new Map(tickets.filter((ticket) => ticket.status !== "voided").map((ticket) => [ticket.seat_id, ticket]));
+    const rows = seats.map((seat) => {
+      const ticket = activeBySeat.get(seat.id);
+      return { performance_id: seat.performance_id, zone: seat.zone, row: seat.row_label, seat: seat.seat_label, external_seat_ref: seat.external_seat_ref, inventory_status: seat.status, ticket_id: ticket?.id || "", ticket_status: ticket?.status || "", payment_status: ticket?.payment_status || "", ticket_class: ticket?.ticket_class || "", holder_name: ticket?.holder_name || "", amount: ticket?.price_amount ?? "" };
+    });
+    const csv = new Parser({ fields: ["performance_id", "zone", "row", "seat", "external_seat_ref", "inventory_status", "ticket_id", "ticket_status", "payment_status", "ticket_class", "holder_name", "amount"] }).parse(rows);
+    await recordAudit(req, "direct_ticket.inventory_reconciled", "event", eventId, { event_id: eventId, rows: rows.length });
+    res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment("direct-seat-reconciliation.csv"); return res.send(`\ufeff${csv}`);
+  });
+  app.get("/api/direct-ticketing/tickets/print-a4.pdf", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const requestedIds = String(req.query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
+    const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => ["issued", "checked_in"].includes(ticket.status) && (!requestedIds.length || requestedIds.includes(ticket.id))).slice(0, 100);
+    if (!tickets.length) return res.status(404).send("No issued direct tickets found");
+    const settings = await getSettingsMap(eventId);
+    const artwork = resolveDirectTicketArtworkDataUrl(settings);
+    const svgs = await Promise.all(tickets.map(async (ticket) => {
+      const qrValue = buildDirectTicketQrValue(ticket.id);
+      if (!qrValue) throw new Error("Direct ticket security is not configured");
+      return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork);
+    }));
+    const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
+    await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
+    res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", 'inline; filename="direct-tickets-a4.pdf"'); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
+  });
+
   app.get(
     "/api/registrations/export",
     requireAuth,
@@ -12904,6 +13571,56 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to render ticket image:", error);
       res.status(500).send("Failed to render ticket");
+    }
+  });
+
+  app.get("/api/direct-tickets/:id.png", async (req, res) => {
+    try {
+      const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
+      if (!ticket || !["issued", "checked_in"].includes(ticket.status) || !verifyDirectTicketToken("view", ticket.id, req.query.token)) return res.status(404).send("Ticket not found");
+      const settings = await getSettingsMap(ticket.event_id);
+      const qrValue = buildDirectTicketQrValue(ticket.id);
+      if (!qrValue) return res.status(503).send("Direct ticket security is not configured");
+      const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "private, max-age=60");
+      return res.send(Buffer.from(renderTicketPngBuffer(renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings)))));
+    } catch (error) {
+      console.error("Failed to render direct ticket PNG:", error);
+      return res.status(500).send("Failed to render ticket PNG");
+    }
+  });
+
+  app.get("/api/direct-tickets/:id.svg", async (req, res) => {
+    try {
+      const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
+      if (!ticket || !["issued", "checked_in"].includes(ticket.status) || !verifyDirectTicketToken("view", ticket.id, req.query.token)) return res.status(404).send("Ticket not found");
+      const settings = await getSettingsMap(ticket.event_id);
+      const qrValue = buildDirectTicketQrValue(ticket.id);
+      if (!qrValue) return res.status(503).send("Direct ticket security is not configured");
+      const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
+      res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
+      res.setHeader("Cache-Control", "private, max-age=60");
+      return res.send(renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings)));
+    } catch (error) {
+      console.error("Failed to render direct ticket SVG:", error);
+      return res.status(500).send("Failed to render ticket SVG");
+    }
+  });
+
+  app.get("/api/direct-tickets/:id.pdf", async (req, res) => {
+    try {
+      const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
+      if (!ticket || !["issued", "checked_in"].includes(ticket.status) || !verifyDirectTicketToken("view", ticket.id, req.query.token)) return res.status(404).send("Ticket not found");
+      const settings = await getSettingsMap(ticket.event_id);
+      const qrValue = buildDirectTicketQrValue(ticket.id);
+      if (!qrValue) return res.status(503).send("Direct ticket security is not configured");
+      const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
+      const pdf = await renderDirectTicketPdfBuffer(renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings)));
+      res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", `inline; filename="${ticket.id}.pdf"`); res.setHeader("Cache-Control", "private, max-age=60"); return res.send(pdf);
+    } catch (error) {
+      console.error("Failed to render direct ticket PDF:", error);
+      return res.status(500).send("Failed to render ticket PDF");
     }
   });
 
@@ -13325,7 +14042,7 @@ async function startServer() {
         return res.status(404).json({ error: "Event not found" });
       }
 
-      const allowedKinds = new Set(["speaker_photo", "sponsor_logo", "cover_image", "description_image", "organizer_logo", "brand_logo", "gallery_image"]);
+      const allowedKinds = new Set(["speaker_photo", "sponsor_logo", "cover_image", "description_image", "organizer_logo", "brand_logo", "gallery_image", "ticket_artwork"]);
       const requestedKind = normalizeOptionalText(req.query.kind).toLowerCase();
       const kind = allowedKinds.has(requestedKind) ? requestedKind : "asset";
 
@@ -14092,8 +14809,8 @@ async function startServer() {
       ]);
       const channelByExternalId = new Map<string, { platform: ChannelPlatform; display_name: string }>();
       for (const channel of channels) {
-        const channelEventId = normalizeOptionalText(channel.event_id) || DEFAULT_EVENT_ID;
-        if (channelEventId !== eventId) continue;
+        const channelEventIds = channel.event_ids || (channel.event_id ? [channel.event_id] : [DEFAULT_EVENT_ID]);
+        if (!channelEventIds.includes(eventId)) continue;
         const externalId = normalizeOptionalText(channel.external_id);
         if (!externalId) continue;
         if (!channelByExternalId.has(externalId)) {

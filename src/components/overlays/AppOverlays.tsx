@@ -1,7 +1,9 @@
 import { AnimatePresence, motion } from "motion/react";
-import type { RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import {
   CircleHelp,
+  Eye,
+  EyeOff,
   RefreshCw,
   Save,
   Search,
@@ -70,6 +72,7 @@ type AppOverlaysProps = {
   lineChannelIdAutoResolved: boolean;
   newPageAccessToken: string;
   onNewPageAccessTokenChange: (value: string) => void;
+  onRevealChannelAccessToken: (channelId: string) => Promise<string>;
   newChannelConfig: Record<string, string>;
   onNewChannelConfigFieldChange: (key: string, value: string) => void;
   channelFormMissingRequirements: string[];
@@ -123,6 +126,7 @@ export function AppOverlays({
   lineChannelIdAutoResolved,
   newPageAccessToken,
   onNewPageAccessTokenChange,
+  onRevealChannelAccessToken,
   newChannelConfig,
   onNewChannelConfigFieldChange,
   channelFormMissingRequirements,
@@ -152,6 +156,36 @@ export function AppOverlays({
   onHelpOpenChange,
   isChatConsoleTab,
 }: AppOverlaysProps) {
+  const [accessTokenVisible, setAccessTokenVisible] = useState(false);
+  const [accessTokenLoading, setAccessTokenLoading] = useState(false);
+  const [accessTokenError, setAccessTokenError] = useState("");
+
+  useEffect(() => {
+    setAccessTokenVisible(false);
+    setAccessTokenLoading(false);
+    setAccessTokenError("");
+  }, [channelConfigDialogOpen, editingChannelKey]);
+
+  const toggleAccessTokenVisibility = async () => {
+    if (accessTokenVisible) {
+      setAccessTokenVisible(false);
+      return;
+    }
+    if (!newPageAccessToken && editingChannel?.has_access_token) {
+      setAccessTokenLoading(true);
+      setAccessTokenError("");
+      try {
+        onNewPageAccessTokenChange(await onRevealChannelAccessToken(editingChannel.id));
+      } catch (error) {
+        setAccessTokenError(error instanceof Error ? error.message : "Failed to reveal access token");
+        return;
+      } finally {
+        setAccessTokenLoading(false);
+      }
+    }
+    setAccessTokenVisible(true);
+  };
+
   return (
     <>
       <AnimatePresence>
@@ -305,8 +339,8 @@ export function AppOverlays({
                 )}
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                   {editingChannel
-                    ? editingChannel.event_id
-                      ? <>Current assignment: <span className="font-semibold text-slate-800">{eventNameById.get(editingChannel.event_id) || editingChannel.event_id}</span>. Use Assign/Remove actions in Organization Setup to change routing.</>
+                    ? (editingChannel.event_ids?.length || editingChannel.event_id)
+                      ? <>Linked events: <span className="font-semibold text-slate-800">{(editingChannel.event_ids || [editingChannel.event_id!]).map((eventId) => eventNameById.get(eventId) || eventId).join(", ")}</span>. Use Assign/Remove actions in Bot Setup to change routing.</>
                       : "Current assignment: unassigned. Use Assign to Selected Event when you want this connection to route into the active event."
                     : <>New connections are assigned to <span className="font-semibold text-slate-800">{selectedEventName || "the selected event"}</span> as soon as you save them.</>}
                 </div>
@@ -337,12 +371,41 @@ export function AppOverlays({
                 )}
                 {selectedChannelPlatformDefinition?.access_token_label && (
                   <>
-                    <input
-                      value={newPageAccessToken}
-                      onChange={(event) => onNewPageAccessTokenChange(event.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder={selectedChannelPlatformDefinition.access_token_label || "Channel access token"}
-                    />
+                    <div className="relative">
+                      <input
+                        value={newPageAccessToken}
+                        onChange={(event) => onNewPageAccessTokenChange(event.target.value)}
+                        type={accessTokenVisible ? "text" : "password"}
+                        autoComplete="new-password"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-4 pr-12 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder={
+                          editingChannel?.has_access_token
+                            ? "•••••••••••• (saved)"
+                            : selectedChannelPlatformDefinition.access_token_label || "Channel access token"
+                        }
+                      />
+                      {(newPageAccessToken || editingChannel?.has_access_token) && (
+                        <button
+                          type="button"
+                          onClick={() => void toggleAccessTokenVisibility()}
+                          disabled={accessTokenLoading}
+                          className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center text-slate-500 hover:text-slate-800 disabled:opacity-50"
+                          aria-label={accessTokenVisible ? "Hide access token" : "Show access token"}
+                        >
+                          {accessTokenLoading
+                            ? <RefreshCw className="h-4 w-4 animate-spin" />
+                            : accessTokenVisible
+                              ? <EyeOff className="h-4 w-4" />
+                              : <Eye className="h-4 w-4" />}
+                        </button>
+                      )}
+                    </div>
+                    {editingChannel?.has_access_token && !newPageAccessToken && (
+                      <p className="text-xs text-emerald-700">
+                        Token is saved. Leave this blank to keep it, paste a new value to replace it, or use the eye to view it.
+                      </p>
+                    )}
+                    {accessTokenError && <p className="text-xs text-rose-600">{accessTokenError}</p>}
                     {selectedChannelPlatformDefinition.access_token_help && (
                       <div className="flex justify-end">
                         <HelpPopover label={`Open note for ${selectedChannelPlatformDefinition.access_token_label}`}>

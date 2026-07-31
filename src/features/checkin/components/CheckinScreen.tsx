@@ -35,6 +35,11 @@ type RegistrationRecord = {
   email: string;
   timestamp: string;
   status: string;
+  direct_ticket?: {
+    ticket_class: string;
+    performance: string;
+    seat: string;
+  };
 };
 
 type CheckinScreenProps = {
@@ -306,15 +311,15 @@ export function CheckinScreen({
               </div>
               <div className="grid grid-cols-1 gap-2 text-sm">
                 <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Phone</p>
-                  <p className="text-slate-700">{latestCheckinRegistration.phone || "-"}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">{latestCheckinRegistration.direct_ticket ? "Ticket / Performance" : "Phone"}</p>
+                  <p className="text-slate-700">{latestCheckinRegistration.direct_ticket ? `${latestCheckinRegistration.direct_ticket.ticket_class} · ${latestCheckinRegistration.direct_ticket.performance}` : latestCheckinRegistration.phone || "-"}</p>
                 </div>
                 <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Email</p>
-                  <p className="text-slate-700 break-all">{latestCheckinRegistration.email || "-"}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">{latestCheckinRegistration.direct_ticket ? "Seat" : "Email"}</p>
+                  <p className="text-slate-700 break-all">{latestCheckinRegistration.direct_ticket?.seat || latestCheckinRegistration.email || "-"}</p>
                 </div>
               </div>
-              {!checkinAccessMode && (
+              {!checkinAccessMode && !latestCheckinRegistration.direct_ticket && (
                 <ActionButton
                   onClick={() => void onOpenRegistrations()}
                   tone="neutral"
