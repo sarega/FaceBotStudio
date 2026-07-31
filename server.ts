@@ -14088,7 +14088,7 @@ async function startServer() {
         return res.status(404).json({ error: "Event not found" });
       }
 
-      const allowedKinds = new Set(["speaker_photo", "sponsor_logo", "cover_image", "description_image", "organizer_logo", "brand_logo", "gallery_image", "ticket_artwork"]);
+      const allowedKinds = new Set(["speaker_photo", "sponsor_logo", "cover_image", "description_image", "organizer_logo", "brand_logo", "gallery_image", "ticket_artwork", "seat_map"]);
       const requestedKind = normalizeOptionalText(req.query.kind).toLowerCase();
       const kind = allowedKinds.has(requestedKind) ? requestedKind : "asset";
 
