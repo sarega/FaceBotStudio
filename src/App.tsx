@@ -31,6 +31,7 @@ import {
   LogOut,
   UserPlus,
   CalendarRange,
+  BarChart3,
   Link2,
   Lock,
   MonitorCog,
@@ -92,6 +93,7 @@ import { PublicInboxScreen } from "./features/inbox/components/PublicInboxScreen
 import { LogsScreen } from "./features/logs/components/LogsScreen";
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { RegistrationsScreen } from "./features/registrations/components/RegistrationsScreen";
+import { ReportsScreen } from "./features/reports/components/ReportsScreen";
 import { SettingsScreen } from "./features/settings/components/SettingsScreen";
 import { TestConsoleScreen } from "./features/test/components/TestConsoleScreen";
 import { TeamAccessPanel } from "./features/team/components/TeamAccessPanel";
@@ -166,7 +168,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "checkin" | "inbox";
+type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -297,6 +299,15 @@ interface HelpContent {
 }
 
 const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
+  reports: {
+    title: "Reports Help",
+    summary: "Review event performance, check-in progress, direct-ticket inventory, and payment reconciliation in one view.",
+    points: [
+      { label: "Event scope", body: "Reports always follow the event selected in the header. Confirm the selected event before exporting data." },
+      { label: "Refresh", body: "Refresh after a new registration, payment verification, ticket issue, or check-in to include the latest state." },
+      { label: "Exports", body: "Use the CSV links for detailed attendee, direct sales, and seat inventory reconciliation." },
+    ],
+  },
   direct_tickets: {
     title: "Direct Tickets Help",
     summary: "Manage the seats you have locked for direct sales separately from Ticketmelon inventory.",
@@ -738,6 +749,7 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
   team: "Team",
   registrations: "Registrations",
   direct_tickets: "Direct Tickets",
+  reports: "Reports",
   checkin: "Check-in",
   inbox: "Inbox",
 };
@@ -799,7 +811,7 @@ function readWorkspaceSession() {
   if (typeof window === "undefined") return fallback;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
-    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "direct_tickets", "checkin", "inbox"];
+    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "direct_tickets", "reports", "checkin", "inbox"];
     return {
       eventId: typeof parsed.eventId === "string" ? parsed.eventId : "",
       activeTab: validTabs.includes(parsed.activeTab as AppTab) ? parsed.activeTab as AppTab : fallback.activeTab,
@@ -3400,7 +3412,7 @@ export default function App() {
     { id: "public" as const, icon: Eye, label: "Public Page", description: "Poster, public copy, and privacy messaging" },
   ];
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
-  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
+  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const effectiveSidebarCollapsed = sidebarCollapsed;
   const primaryTabs = [
@@ -3420,6 +3432,7 @@ export default function App() {
     { id: "setup" as const, icon: SettingsIcon, label: "Runtime Setup", description: "Runtime policy and external channel setup" },
   ];
   const operationsTabs = [
+    ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: "Reports" }] : []),
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
     ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: "Direct Tickets" }] : []),
     ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: "Public Inbox" }] : []),
@@ -5362,6 +5375,7 @@ export default function App() {
       ...(canRunTest ? ["test"] : []),
       ...(canRunAgent ? ["agent"] : []),
       ...(canManageRegistrations ? ["registrations", "direct_tickets", "checkin"] : []),
+      ...(canViewLogs ? ["reports"] : []),
       ...(canViewLogs ? ["inbox"] : []),
       ...(canViewLogs ? ["logs"] : []),
       ...(authUser ? ["settings"] : []),
@@ -10183,6 +10197,11 @@ export default function App() {
                 statusUpdateLoading={statusUpdateLoading}
                 statusUpdateMessage={statusUpdateMessage}
               />
+            </motion.div>
+          )}
+          {activeTab === "reports" && (
+            <motion.div key="reports" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
+              <ReportsScreen eventId={selectedEventId} apiFetch={apiFetch} canExportDirectTickets={canManageRegistrations} />
             </motion.div>
           )}
           {activeTab === "direct_tickets" && (

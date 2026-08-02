@@ -13246,6 +13246,106 @@ async function startServer() {
     },
   );
 
+  app.get(
+    "/api/reports/summary",
+    requireAuth,
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
+      try {
+        const eventId = getRequestedEventId(req);
+        const event = await appDb.getEventById(eventId);
+        if (!event) return res.status(404).json({ error: "Event not found" });
+
+        const [registrations, seats, tickets] = await Promise.all([
+          appDb.listRegistrations(undefined, eventId),
+          appDb.listDirectSeats(eventId),
+          appDb.listDirectTickets(eventId),
+        ]);
+
+        const registrationByDay = new Map<string, { registrations: number; checked_in: number }>();
+        for (const registration of registrations) {
+          const date = new Date(registration.timestamp);
+          if (Number.isNaN(date.getTime())) continue;
+          const key = date.toISOString().slice(0, 10);
+          const current = registrationByDay.get(key) || { registrations: 0, checked_in: 0 };
+          current.registrations += 1;
+          if (registration.status === "checked-in") current.checked_in += 1;
+          registrationByDay.set(key, current);
+        }
+
+        const byPerformance = new Map<string, { id: string; label: string; tickets: number; issued: number; checked_in: number; revenue_verified: number }>();
+        const byClass = new Map<string, { label: string; tickets: number; issued: number; revenue_verified: number }>();
+        let revenueVerified = 0;
+        let revenueIssued = 0;
+        for (const ticket of tickets) {
+          const isIssued = ["issued", "checked_in"].includes(ticket.status);
+          const isVerifiedSale = isIssued && ticket.payment_status === "verified";
+          const performanceId = String(ticket.performance_id || "");
+          const performanceLabel = `${ticket.performance_code || ""}${ticket.performance_code && ticket.performance_title ? " · " : ""}${ticket.performance_title || "ไม่ระบุรอบ"}`;
+          const performance = byPerformance.get(performanceId) || { id: performanceId, label: performanceLabel, tickets: 0, issued: 0, checked_in: 0, revenue_verified: 0 };
+          performance.tickets += 1;
+          if (isIssued) performance.issued += 1;
+          if (ticket.status === "checked_in") performance.checked_in += 1;
+          if (isVerifiedSale) {
+            performance.revenue_verified += Number(ticket.price_amount || 0);
+            revenueVerified += Number(ticket.price_amount || 0);
+          }
+          if (isIssued) revenueIssued += Number(ticket.price_amount || 0);
+          byPerformance.set(performanceId, performance);
+
+          const classLabel = String(ticket.ticket_class || "ไม่ระบุประเภท");
+          const ticketClass = byClass.get(classLabel) || { label: classLabel, tickets: 0, issued: 0, revenue_verified: 0 };
+          ticketClass.tickets += 1;
+          if (isIssued) ticketClass.issued += 1;
+          if (isVerifiedSale) ticketClass.revenue_verified += Number(ticket.price_amount || 0);
+          byClass.set(classLabel, ticketClass);
+        }
+
+        const seatCounts = { total: seats.length, available: 0, held: 0, issued: 0, voided: 0 };
+        for (const seat of seats) {
+          if (seat.status in seatCounts) seatCounts[seat.status as keyof typeof seatCounts] += 1;
+        }
+        const activeRegistrations = registrations.filter((row) => row.status !== "cancelled").length;
+        const checkedInRegistrations = registrations.filter((row) => row.status === "checked-in").length;
+        const checkInRate = activeRegistrations > 0 ? Math.round((checkedInRegistrations / activeRegistrations) * 100) : 0;
+
+        return res.json({
+          generated_at: new Date().toISOString(),
+          event: { id: event.id, name: event.name, event_date: event.event_date || null, event_end_date: event.event_end_date || null },
+          registrations: {
+            total: registrations.length,
+            registered: registrations.filter((row) => row.status === "registered").length,
+            cancelled: registrations.filter((row) => row.status === "cancelled").length,
+            checked_in: checkedInRegistrations,
+            active: activeRegistrations,
+            check_in_rate: checkInRate,
+            by_day: [...registrationByDay.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-14).map(([date, values]) => ({ date, ...values })),
+          },
+          direct_tickets: {
+            seats: seatCounts,
+            total: tickets.length,
+            held: tickets.filter((ticket) => ticket.status === "held").length,
+            issued: tickets.filter((ticket) => ticket.status === "issued").length,
+            checked_in: tickets.filter((ticket) => ticket.status === "checked_in").length,
+            voided: tickets.filter((ticket) => ticket.status === "voided").length,
+            awaiting_payment: tickets.filter((ticket) => ticket.payment_status === "awaiting_payment").length,
+            proof_submitted: tickets.filter((ticket) => ticket.payment_status === "proof_submitted").length,
+            verified: tickets.filter((ticket) => ticket.payment_status === "verified").length,
+            rejected: tickets.filter((ticket) => ticket.payment_status === "rejected").length,
+            refunded: tickets.filter((ticket) => ticket.payment_status === "refunded").length,
+            revenue_verified: revenueVerified,
+            revenue_issued: revenueIssued,
+            by_performance: [...byPerformance.values()].sort((a, b) => a.label.localeCompare(b.label)),
+            by_class: [...byClass.values()].sort((a, b) => b.revenue_verified - a.revenue_verified || a.label.localeCompare(b.label)),
+          },
+        });
+      } catch (error) {
+        console.error("Failed to build report summary:", error);
+        return res.status(500).json({ error: "Failed to build report summary" });
+      }
+    },
+  );
+
   app.post(
     "/api/registrations",
     requireRoles(["owner", "admin", "operator"]),
