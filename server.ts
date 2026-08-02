@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
 import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
+import { parseOutreachCsv } from "./backend/outreachCsv";
 import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
 import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, getInstagramWebhookEventText, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
@@ -85,6 +86,10 @@ import {
   type MessageAttachmentRow,
   type MessageRow,
   type OrganizerProfileRow,
+  type OutreachDeliveryRow,
+  type OutreachCampaignRow,
+  type OutreachTargetRow,
+  type UpdateOutreachTargetInput,
   type RegistrationInput,
   type RegistrationRow,
   type RegistrationStatus,
@@ -147,6 +152,7 @@ const PENDING_CANCELLATION_INTENT_TTL_MS = Math.max(
 );
 const BOT_TEMPORARY_FAILURE_MESSAGE = "ขออภัย ระบบตอบกลับอัตโนมัติขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งภายหลัง";
 const PUBLIC_CHAT_ATTENTION_SUPPRESSION_MS = 5 * 60 * 1000;
+const OUTREACH_REPLY_WINDOW_MS = Math.max(60 * 60 * 1000, Number.parseInt(process.env.OUTREACH_REPLY_WINDOW_HOURS || "24", 10) * 60 * 60 * 1000 || 24 * 60 * 60 * 1000);
 const IS_PRODUCTION = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
 const JSON_BODY_LIMIT = String(process.env.JSON_BODY_LIMIT || "256kb").trim() || "256kb";
 const CSRF_ALLOWED_ORIGINS_RAW = String(process.env.CSRF_ALLOWED_ORIGINS || "").trim();
@@ -4471,20 +4477,15 @@ async function resolveManualOutboundTarget(
 async function sendTextToOutboundTarget(target: ManualOutboundTarget, text: string) {
   switch (target.platform) {
     case "facebook":
-      await sendFacebookTextMessage(target.senderId, text, target.externalId);
-      return;
+      return sendFacebookTextMessage(target.senderId, text, target.externalId);
     case "line_oa":
-      await sendLinePushTextMessage(target.senderId, text, target.externalId);
-      return;
+      return sendLinePushTextMessage(target.senderId, text, target.externalId);
     case "instagram":
-      await sendInstagramTextMessage(target.senderId, text, target.externalId);
-      return;
+      return sendInstagramTextMessage(target.senderId, text, target.externalId);
     case "whatsapp":
-      await sendWhatsAppTextMessage(target.senderId, text, target.externalId);
-      return;
+      return sendWhatsAppTextMessage(target.senderId, text, target.externalId);
     case "telegram":
-      await sendTelegramTextMessage(target.senderId, text, target.externalId);
-      return;
+      return sendTelegramTextMessage(target.senderId, text, target.externalId);
     case "web_chat":
       throw new Error("Manual push is not supported for web chat");
     default:
@@ -4495,20 +4496,15 @@ async function sendTextToOutboundTarget(target: ManualOutboundTarget, text: stri
 async function sendImageToOutboundTarget(target: ManualOutboundTarget, imageUrl: string) {
   switch (target.platform) {
     case "facebook":
-      await sendFacebookImageMessage(target.senderId, imageUrl, target.externalId);
-      return;
+      return sendFacebookImageMessage(target.senderId, imageUrl, target.externalId);
     case "line_oa":
-      await sendLinePushImageMessage(target.senderId, imageUrl, target.externalId);
-      return;
+      return sendLinePushImageMessage(target.senderId, imageUrl, target.externalId);
     case "instagram":
-      await sendInstagramImageMessage(target.senderId, imageUrl, target.externalId);
-      return;
+      return sendInstagramImageMessage(target.senderId, imageUrl, target.externalId);
     case "whatsapp":
-      await sendWhatsAppImageMessage(target.senderId, imageUrl, target.externalId);
-      return;
+      return sendWhatsAppImageMessage(target.senderId, imageUrl, target.externalId);
     case "telegram":
-      await sendTelegramImageMessage(target.senderId, imageUrl, target.externalId);
-      return;
+      return sendTelegramImageMessage(target.senderId, imageUrl, target.externalId);
     case "web_chat":
       throw new Error("Manual push is not supported for web chat");
     default:
@@ -8340,6 +8336,58 @@ async function recordAudit(
   });
 }
 
+function buildOutreachTargetUpdate(
+  target: OutreachTargetRow,
+  overrides: Partial<Pick<UpdateOutreachTargetInput, "status" | "delivery_mode" | "next_follow_up_at" | "outcome_note" | "assigned_user_id">> = {},
+): UpdateOutreachTargetInput {
+  return {
+    event_id: target.event_id,
+    campaign_id: target.campaign_id,
+    name: target.name,
+    facebook_page_url: target.facebook_page_url,
+    facebook_page_id: target.facebook_page_id,
+    organization_type: target.organization_type,
+    contact_person: target.contact_person,
+    email: target.email,
+    website: target.website,
+    notes: target.notes,
+    priority: target.priority,
+    status: overrides.status || target.status,
+    delivery_mode: overrides.delivery_mode || target.delivery_mode,
+    next_follow_up_at: overrides.next_follow_up_at === undefined ? target.next_follow_up_at : overrides.next_follow_up_at,
+    outcome_note: overrides.outcome_note === undefined ? target.outcome_note : overrides.outcome_note,
+    assigned_user_id: overrides.assigned_user_id === undefined ? target.assigned_user_id : overrides.assigned_user_id,
+  };
+}
+
+function getOutreachApiEligibility(target: OutreachTargetRow) {
+  const lastReplyMs = target.last_replied_at ? Date.parse(target.last_replied_at) : Number.NaN;
+  const eligibleUntilMs = Number.isFinite(lastReplyMs) ? lastReplyMs + OUTREACH_REPLY_WINDOW_MS : Number.NaN;
+  const hasIdentity = Boolean(target.bound_page_id && target.bound_sender_id);
+  const withinWindow = Number.isFinite(eligibleUntilMs) && eligibleUntilMs > Date.now();
+  const eligible = hasIdentity && withinWindow && target.delivery_mode === "api_reply_eligible" && ["replied", "follow_up", "press_kit_sent"].includes(target.status);
+  return {
+    eligible,
+    has_identity: hasIdentity,
+    last_replied_at: target.last_replied_at,
+    eligible_until: Number.isFinite(eligibleUntilMs) ? new Date(eligibleUntilMs).toISOString() : null,
+    reason: !hasIdentity
+      ? "Bind a verified Facebook Page and sender identity first."
+      : !Number.isFinite(lastReplyMs)
+      ? "API reply requires a recent inbound message from this target."
+      : !withinWindow
+      ? "The reply window has expired; use the manual fallback."
+      : "Eligible for an approved reply through the existing sender.",
+  };
+}
+
+function extractOutboundMessageId(payload: unknown) {
+  if (!payload || typeof payload !== "object") return null;
+  const value = (payload as Record<string, unknown>).message_id || (payload as Record<string, unknown>).id;
+  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
+
 function formatTicketDate(startValue: string, endValue = "", timeZone?: string) {
   return formatStoredDateRangeForDisplay(startValue, endValue, normalizeTimeZone(timeZone));
 }
@@ -9504,6 +9552,103 @@ function normalizeOpenRouterUsage(payload: any) {
   };
 }
 
+async function generateOutreachDraftText(
+  eventId: string,
+  campaign: OutreachCampaignRow,
+  target: OutreachTargetRow,
+  previousDrafts: Array<{ body: string }>,
+  additionalInstruction = "",
+  options: {
+    kind?: "initial" | "suggested_reply";
+    conversation?: Array<{ type: "incoming" | "outgoing"; text: string; timestamp?: string }>;
+    assets?: Array<{ name: string; type: string; url: string; description?: string }>;
+  } = {},
+) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not configured in .env");
+  }
+
+  const settings = await getSettingsMap(eventId);
+  const model = normalizeOptionalText(settings.llm_model) || normalizeOptionalText(settings.global_llm_model) || DEFAULT_OPENROUTER_MODEL;
+  const kind = options.kind || "initial";
+  const systemPrompt = [
+    "You are the outreach writing assistant for a press and media campaign.",
+    "Return only the message draft, with no preface, explanation, JSON, or markdown fence.",
+    kind === "suggested_reply"
+      ? "Write a concise, respectful reply to the target's latest inbound message in the same language when possible. Address the latest request first."
+      : "Write a concise, respectful first-contact message in Thai unless the target information clearly requires English.",
+    "Personalize the message for this target; never produce a generic mass-message template.",
+    "Use only facts supplied in the campaign context and target information. Do not invent dates, links, people, prices, or claims.",
+    "Do not mention internal notes, AI, prompts, or this instruction.",
+    "Do not send, schedule, or imply that the message was sent. This is a draft for human review only.",
+    kind === "suggested_reply" ? "If an asset directly answers the request, mention the asset by name and URL only when it is supplied below; do not invent attachments." : "",
+  ].join("\n");
+  const userPrompt = [
+    `Campaign: ${campaign.name}`,
+    `Objective: ${campaign.objective || "(not provided)"}`,
+    `Campaign context:\n${campaign.context || "(not provided)"}`,
+    `Default outreach instruction:\n${campaign.default_instruction || "(not provided)"}`,
+    `Target name: ${target.name}`,
+    `Organization type: ${target.organization_type}`,
+    `Contact person: ${target.contact_person || "(not provided)"}`,
+    `Website: ${target.website || "(not provided)"}`,
+    `Internal target notes (do not reveal verbatim):\n${target.notes || "(not provided)"}`,
+    options.conversation && options.conversation.length > 0
+      ? `Recent conversation:\n${options.conversation.slice(-12).map((message) => `[${message.type}] ${message.text}`).join("\n")}`
+      : "Recent conversation: none",
+    options.assets && options.assets.length > 0
+      ? `Available Press Kit assets:\n${options.assets.map((asset) => `- ${asset.name} (${asset.type}): ${asset.url}${asset.description ? ` — ${asset.description}` : ""}`).join("\n")}`
+      : "Available Press Kit assets: none",
+    previousDrafts.length > 0 ? `Previous drafts (avoid repeating them):\n${previousDrafts.slice(0, 3).map((draft, index) => `${index + 1}. ${draft.body}`).join("\n")}` : "Previous drafts: none",
+    additionalInstruction.trim() ? `Human instruction for this draft:\n${additionalInstruction.trim()}` : "",
+  ].filter(Boolean).join("\n\n");
+
+  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: openRouterHeaders(),
+    body: JSON.stringify({
+      model,
+      temperature: 0.7,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    }),
+  });
+  const payload = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) {
+    throw new Error(payload?.error?.message || "Outreach draft generation failed");
+  }
+  const content = payload?.choices?.[0]?.message?.content;
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.map((part: any) => typeof part?.text === "string" ? part.text : "").join("\n")
+      : "";
+  const draft = text.trim().replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/, "").trim();
+  if (!draft) throw new Error("Outreach draft generation returned no text");
+
+  try {
+    const usage = normalizeOpenRouterUsage(payload);
+    await appDb.recordLlmUsage({
+      event_id: eventId,
+      actor_user_id: null,
+      source: "outreach_draft",
+      provider: "openrouter",
+      model: String(payload?.model || model),
+      prompt_tokens: usage.prompt_tokens,
+      completion_tokens: usage.completion_tokens,
+      total_tokens: usage.total_tokens,
+      estimated_cost_usd: usage.estimated_cost_usd,
+      metadata: { target_id: target.id, campaign_id: campaign.id, previous_draft_count: previousDrafts.length },
+    });
+  } catch (error) {
+    console.warn("Failed to record outreach LLM usage:", error);
+  }
+
+  return draft.slice(0, 5000);
+}
+
 async function requestOpenRouterChat(
   message: string,
   history: ChatHistoryMessage[],
@@ -10253,6 +10398,73 @@ async function sendTelegramImageMessage(chatId: string, imageUrl: string, botKey
   return payload;
 }
 
+async function interceptOutreachFacebookInbound(
+  senderId: string,
+  text: string,
+  pageId: string | undefined,
+  eventIds: string[],
+  attachments: CreateMessageAttachmentInput[],
+) {
+  const normalizedPageId = normalizeOptionalText(pageId);
+  if (!normalizedPageId || eventIds.length === 0) return false;
+  const matches = await appDb.findOutreachTargetIdentityMatches(normalizedPageId, senderId, eventIds);
+  if (matches.length === 0) return false;
+
+  if (matches.length === 1) {
+    const target = matches[0];
+    await saveMessage(senderId, text, "incoming", target.event_id, normalizedPageId, attachments);
+    await appDb.markOutreachTargetReplied(target.id, target.event_id);
+    markInboundConversationActivity(buildInboundConversationKey("facebook", senderId, target.event_id, normalizedPageId));
+    await appDb.recordAuditLog({
+      actor_user_id: null,
+      action: "outreach.inbound_matched",
+      target_type: "outreach_target",
+      target_id: target.id,
+      metadata: { event_id: target.event_id, page_id: normalizedPageId, sender_id: senderId, message_preview: truncateText(text, 220) },
+    });
+    return true;
+  }
+
+  await saveMessage(senderId, text, "incoming", undefined, normalizedPageId, attachments);
+  await appDb.recordAuditLog({
+    actor_user_id: null,
+    action: "outreach.inbound_ambiguous",
+    target_type: "outreach_identity",
+    target_id: senderId,
+    metadata: {
+      event_ids: matches.map((target) => target.event_id),
+      target_ids: matches.map((target) => target.id),
+      page_id: normalizedPageId,
+      sender_id: senderId,
+      message_preview: truncateText(text, 220),
+    },
+  });
+  return true;
+}
+
+async function resolveOutreachApiTarget(target: OutreachTargetRow) {
+  const eligibility = getOutreachApiEligibility(target);
+  if (!eligibility.eligible) throw new Error(eligibility.reason);
+  if (!target.bound_sender_id || !target.bound_page_id) throw new Error("A bound Facebook sender identity is required");
+  return resolveManualOutboundTarget(target.event_id, target.bound_sender_id, target.bound_page_id, "facebook");
+}
+
+async function getOrCreateOutreachDelivery(input: Parameters<typeof appDb.createOutreachDelivery>[0]) {
+  const existing = await appDb.getOutreachDeliveryByIdempotency(input.event_id, input.idempotency_key);
+  if (existing) return existing;
+  try {
+    return await appDb.createOutreachDelivery(input);
+  } catch (error) {
+    const recovered = await appDb.getOutreachDeliveryByIdempotency(input.event_id, input.idempotency_key);
+    if (recovered) return recovered;
+    throw error;
+  }
+}
+
+function isOutreachImageAsset(asset: { type: string }) {
+  return /image|photo|poster|artwork/i.test(String(asset.type || ""));
+}
+
 async function handleIncomingFacebookText(
   senderId: string,
   text: string,
@@ -10276,6 +10488,10 @@ async function handleIncomingFacebookText(
   });
   if (routing.activeCandidateIds.length === 0) {
     console.warn(`No active event mapping found for Facebook page ${pageId || "unknown"}; skipping automated reply`);
+    return;
+  }
+
+  if (await interceptOutreachFacebookInbound(senderId, trimmed, pageId, routing.activeCandidateIds, attachments)) {
     return;
   }
 
@@ -13524,6 +13740,509 @@ async function startServer() {
       await recordAudit(req, "direct_seat_map.ai_analyzed", "event", eventId, { event_id: eventId, model, seats: seats.length, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20) : [] });
       return res.json({ model, seats, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20).map((warning: unknown) => String(warning).slice(0, 240)) : [] });
     } catch (error) { console.error("Failed to analyze direct seat map:", error); return res.status(500).json({ error: "Failed to analyze seat map" }); }
+  });
+
+  // Outreach is additive to the existing channel stack. Phase 1 intentionally stops at
+  // human-first-contact: no cold Facebook send is exposed here.
+  app.get("/api/outreach/campaigns", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    try {
+      return res.json(await appDb.listOutreachCampaigns(getRequestedEventId(req)));
+    } catch (error) {
+      console.error("Failed to list outreach campaigns:", error);
+      return res.status(500).json({ error: "Failed to load outreach campaigns" });
+    }
+  });
+
+  app.post("/api/outreach/campaigns", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const name = readRequiredString(body, "name", issues, { label: "Campaign name", maxLength: 180 });
+    const status = readEnumValue(body, "status", ["draft", "active", "paused", "completed", "archived"] as const, issues, { label: "Campaign status" }) || "draft";
+    if (issues.length) return respondValidationError(res, issues);
+    try {
+      const campaign = await appDb.createOutreachCampaign({
+        event_id: getRequestedEventId(req), name, description: readOptionalString(body, "description", 2000), objective: readOptionalString(body, "objective", 1000), context: readOptionalString(body, "context", 12000), default_instruction: readOptionalString(body, "default_instruction", 4000), start_date: readOptionalString(body, "start_date", 64) || null, end_date: readOptionalString(body, "end_date", 64) || null, status: status as any, created_by_user_id: req.auth?.user.id || null,
+      });
+      await recordAudit(req, "outreach.campaign_created", "outreach_campaign", campaign.id, { event_id: campaign.event_id });
+      return res.status(201).json(campaign);
+    } catch (error) {
+      console.error("Failed to create outreach campaign:", error);
+      return res.status(500).json({ error: "Failed to create outreach campaign" });
+    }
+  });
+
+  app.patch("/api/outreach/campaigns/:id", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const existing = await appDb.getOutreachCampaign(String(req.params.id || "").trim(), eventId);
+    if (!existing) return res.status(404).json({ error: "Outreach campaign not found" });
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const name = readRequiredString(body, "name", issues, { label: "Campaign name", maxLength: 180 });
+    const status = readEnumValue(body, "status", ["draft", "active", "paused", "completed", "archived"] as const, issues, { required: true, label: "Campaign status" });
+    if (issues.length) return respondValidationError(res, issues);
+    const campaign = await appDb.updateOutreachCampaign(existing.id, eventId, { event_id: eventId, name, description: readOptionalString(body, "description", 2000), objective: readOptionalString(body, "objective", 1000), context: readOptionalString(body, "context", 12000), default_instruction: readOptionalString(body, "default_instruction", 4000), start_date: readOptionalString(body, "start_date", 64) || null, end_date: readOptionalString(body, "end_date", 64) || null, status: status as any, created_by_user_id: existing.created_by_user_id });
+    if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
+    await recordAudit(req, "outreach.campaign_updated", "outreach_campaign", campaign.id, { event_id: eventId, status: campaign.status });
+    return res.json(campaign);
+  });
+
+  app.get("/api/outreach/campaigns/:id", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const campaign = await appDb.getOutreachCampaign(String(req.params.id || "").trim(), eventId);
+    if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
+    const [targets, assets] = await Promise.all([appDb.listOutreachTargets(eventId, campaign.id), appDb.listOutreachAssets(eventId, campaign.id)]);
+    return res.json({ campaign, targets, assets });
+  });
+
+  app.get("/api/outreach/targets", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const campaignId = typeof req.query.campaign_id === "string" ? req.query.campaign_id.trim() : "";
+    if (!campaignId) return res.status(400).json({ error: "campaign_id is required" });
+    const campaign = await appDb.getOutreachCampaign(campaignId, eventId);
+    if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
+    return res.json(await appDb.listOutreachTargets(eventId, campaignId));
+  });
+
+  app.post("/api/outreach/targets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const name = readRequiredString(body, "name", issues, { label: "Target name", maxLength: 180 });
+    const campaignId = readRequiredString(body, "campaign_id", issues, { label: "Campaign", maxLength: 128 });
+    const priority = readEnumValue(body, "priority", ["low", "normal", "high"] as const, issues, { label: "Priority" }) || "normal";
+    if (issues.length) return respondValidationError(res, issues);
+    const campaign = await appDb.getOutreachCampaign(campaignId, eventId);
+    if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
+    try {
+      const target = await appDb.createOutreachTarget({ event_id: eventId, campaign_id: campaignId, name, facebook_page_url: readOptionalString(body, "facebook_page_url", 2048), facebook_page_id: readOptionalString(body, "facebook_page_id", 128), organization_type: readOptionalString(body, "organization_type", 120) || "other", contact_person: readOptionalString(body, "contact_person", 180), email: readOptionalString(body, "email", 320), website: readOptionalString(body, "website", 2048), notes: readOptionalString(body, "notes", 4000), priority: priority as any, next_follow_up_at: readOptionalString(body, "next_follow_up_at", 64) || null, outcome_note: readOptionalString(body, "outcome_note", 2000) || null });
+      const allEventTargets = await appDb.listOutreachTargetsForEvent(eventId);
+      const campaignTargets = allEventTargets.filter((row) => row.campaign_id === campaignId);
+      const duplicateRows = allEventTargets.filter((row) => row.id !== target.id && ((target.facebook_page_url && row.facebook_page_url === target.facebook_page_url) || (target.facebook_page_id && row.facebook_page_id === target.facebook_page_id) || (target.email && row.email && row.email.toLowerCase() === target.email.toLowerCase()) || (target.bound_sender_id && row.bound_sender_id === target.bound_sender_id && target.bound_page_id === row.bound_page_id)));
+      const duplicateWarning = campaignTargets.some((row) => duplicateRows.some((duplicate) => duplicate.id === row.id));
+      const crossCampaignWarning = duplicateRows.some((row) => row.campaign_id !== campaignId);
+      await recordAudit(req, "outreach.target_created", "outreach_target", target.id, { event_id: eventId, campaign_id: campaignId, duplicate_warning: duplicateWarning, cross_campaign_warning: crossCampaignWarning });
+      return res.status(201).json({ ...target, duplicate_warning: duplicateWarning, cross_campaign_warning: crossCampaignWarning, duplicate_target_ids: duplicateRows.map((row) => row.id) });
+    } catch (error) {
+      console.error("Failed to create outreach target:", error);
+      return res.status(500).json({ error: "Failed to create outreach target" });
+    }
+  });
+
+  app.get("/api/outreach/targets/:id", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    const [campaign, drafts, deliveries, messages] = await Promise.all([
+      appDb.getOutreachCampaign(target.campaign_id, eventId),
+      appDb.listOutreachDrafts(target.id, eventId),
+      appDb.listOutreachDeliveries(target.id, eventId),
+      target.bound_sender_id && target.bound_page_id
+        ? appDb.getConversationRowsForSender(target.bound_sender_id, 80, eventId, target.bound_page_id)
+        : Promise.resolve([]),
+    ]);
+    return res.json({ target, campaign, drafts, deliveries, messages: messages.slice().sort((left, right) => Number(left.id) - Number(right.id)), eligibility: getOutreachApiEligibility(target) });
+  });
+
+  app.patch("/api/outreach/targets/:id", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const existing = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
+    if (!existing) return res.status(404).json({ error: "Outreach target not found" });
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const name = readRequiredString(body, "name", issues, { label: "Target name", maxLength: 180 });
+    const status = readEnumValue(body, "status", ["new", "drafted", "approved", "contacted", "waiting_reply", "replied", "press_kit_sent", "follow_up", "published", "declined", "no_response"] as const, issues, { required: true, label: "Target status" });
+    const deliveryMode = readEnumValue(body, "delivery_mode", ["manual_first_contact", "api_reply_eligible", "manual_only", "unavailable"] as const, issues, { required: true, label: "Delivery mode" });
+    const priority = readEnumValue(body, "priority", ["low", "normal", "high"] as const, issues, { required: true, label: "Priority" });
+    if (issues.length) return respondValidationError(res, issues);
+    const assignedUserId = readOptionalString(body, "assigned_user_id", 128);
+    const statusReason = readOptionalString(body, "status_reason", 500);
+    const outcomeNote = readOptionalString(body, "outcome_note", 2000);
+    const statusOrder: OutreachTargetRow["status"][] = ["new", "drafted", "approved", "contacted", "waiting_reply", "replied", "press_kit_sent", "follow_up", "published"];
+    const previousIndex = statusOrder.indexOf(existing.status);
+    const nextIndex = statusOrder.indexOf(status as OutreachTargetRow["status"]);
+    if (previousIndex >= 0 && nextIndex >= 0 && nextIndex < previousIndex && !statusReason) return res.status(400).json({ error: "status_reason is required when moving a target backward" });
+    if (status !== existing.status && ["declined", "no_response"].includes(status) && !statusReason && !outcomeNote) return res.status(400).json({ error: "Add an outcome note before closing a target" });
+    if (assignedUserId) {
+      const assignedUser = await appDb.getUserById(assignedUserId);
+      if (!assignedUser || !(await appDb.isUserAssignedToEvent(assignedUserId, eventId)) && assignedUser.role !== "owner" && assignedUser.role !== "admin") {
+        return res.status(400).json({ error: "assigned_user_id is not available for this event" });
+      }
+    }
+    const target = await appDb.updateOutreachTarget(existing.id, eventId, { event_id: eventId, campaign_id: existing.campaign_id, name, facebook_page_url: readOptionalString(body, "facebook_page_url", 2048), facebook_page_id: readOptionalString(body, "facebook_page_id", 128), organization_type: readOptionalString(body, "organization_type", 120) || "other", contact_person: readOptionalString(body, "contact_person", 180), email: readOptionalString(body, "email", 320), website: readOptionalString(body, "website", 2048), notes: readOptionalString(body, "notes", 4000), priority: priority as any, status: status as any, delivery_mode: deliveryMode as any, next_follow_up_at: readOptionalString(body, "next_follow_up_at", 64) || null, outcome_note: outcomeNote || null, assigned_user_id: assignedUserId || null });
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    await recordAudit(req, "outreach.target_updated", "outreach_target", target.id, { event_id: eventId, status: target.status, status_reason: statusReason, assigned_user_id: target.assigned_user_id });
+    return res.json(target);
+  });
+
+  app.post("/api/outreach/targets/:id/identity", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const pageId = readRequiredString(body, "page_id", issues, { label: "Facebook Page ID", maxLength: 128 });
+    const senderId = readRequiredString(body, "sender_id", issues, { label: "Messenger sender ID", maxLength: 255 });
+    if (issues.length) return respondValidationError(res, issues);
+    const channel = await appDb.getChannelAccount("facebook", pageId);
+    const channelEventIds = channel?.event_ids || (channel?.event_id ? [channel.event_id] : []);
+    const legacyPage = await appDb.getFacebookPageByPageId(pageId);
+    if ((!channel || channel.is_active === false || !channelEventIds.includes(eventId)) && (!legacyPage || legacyPage.is_active === false || legacyPage.event_id !== eventId)) {
+      return res.status(400).json({ error: "The Facebook Page is not active and assigned to this event" });
+    }
+    const existingMatches = await appDb.findOutreachTargetIdentityMatches(pageId, senderId, [eventId]);
+    if (existingMatches.some((row) => row.id !== String(req.params.id || "").trim())) {
+      return res.status(409).json({ error: "This Facebook sender identity is already bound to another outreach target" });
+    }
+    const target = await appDb.bindOutreachTargetIdentity(String(req.params.id || "").trim(), eventId, pageId, senderId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    await recordAudit(req, "outreach.target_identity_bound", "outreach_target", target.id, { event_id: eventId, page_id: pageId, sender_id: senderId });
+    return res.json(target);
+  });
+
+  app.get("/api/outreach/targets/:id/drafts", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    return res.json(await appDb.listOutreachDrafts(target.id, eventId));
+  });
+
+  app.post("/api/outreach/targets/:id/drafts", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    const campaign = await appDb.getOutreachCampaign(target.campaign_id, eventId);
+    if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
+    const body = readObjectBody(req);
+    const mode = body.mode === "manual" || body.mode === "suggested_reply" ? body.mode : "generate";
+    const kind = mode === "suggested_reply" || (mode === "manual" && body.kind === "suggested_reply") ? "suggested_reply" : "initial";
+    const previousDrafts = await appDb.listOutreachDrafts(target.id, eventId);
+    try {
+      let conversation: Array<{ type: "incoming" | "outgoing"; text: string; timestamp?: string }> = [];
+      let sourceMessageId: number | null = null;
+      if (mode === "suggested_reply") {
+        if (!target.bound_sender_id || !target.bound_page_id) return res.status(409).json({ error: "Bind the Facebook sender identity before generating a suggested reply" });
+        const conversationRows = await appDb.getConversationRowsForSender(target.bound_sender_id, 80, eventId, target.bound_page_id);
+        sourceMessageId = conversationRows.slice().reverse().find((row) => row.type === "incoming")?.id || null;
+        conversation = conversationRows.map((row) => ({ type: row.type, text: row.text, timestamp: row.timestamp }));
+        if (!conversation.some((row) => row.type === "incoming")) return res.status(409).json({ error: "No incoming reply is available for this target yet" });
+      }
+      const assets = await appDb.listOutreachAssets(eventId, campaign.id);
+      const draftBody = mode === "manual"
+        ? readOptionalString(body, "body", 5000)
+        : await generateOutreachDraftText(eventId, campaign, target, previousDrafts, readOptionalString(body, "instruction", 1000), { kind, conversation, assets });
+      if (!draftBody) return res.status(400).json({ error: "Draft body is required" });
+      const draft = await appDb.createOutreachDraft({ event_id: eventId, target_id: target.id, body: draftBody, kind, source_message_id: sourceMessageId, created_by_user_id: req.auth?.user.id || null });
+      if (kind === "initial" && target.status === "new") await appDb.updateOutreachTarget(target.id, eventId, buildOutreachTargetUpdate(target, { status: "drafted" }));
+      await recordAudit(req, mode === "manual" ? "outreach.draft_created" : kind === "suggested_reply" ? "outreach.suggested_reply_generated" : "outreach.draft_generated", "outreach_draft", draft.id, { event_id: eventId, campaign_id: campaign.id, target_id: target.id, revision: draft.revision, kind });
+      return res.status(201).json(draft);
+    } catch (error) {
+      console.error("Failed to create outreach draft:", error);
+      const message = error instanceof Error ? error.message : "Failed to create outreach draft";
+      return res.status(message.includes("OPENROUTER") ? 503 : 500).json({ error: message });
+    }
+  });
+
+  app.post("/api/outreach/drafts/:id/approve", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const draft = await appDb.approveOutreachDraft(String(req.params.id || "").trim(), eventId, req.auth?.user.id || "");
+    if (!draft) return res.status(404).json({ error: "Outreach draft not found" });
+    const target = await appDb.getOutreachTarget(draft.target_id, eventId);
+    if (target && draft.kind === "initial" && ["new", "drafted"].includes(target.status)) await appDb.updateOutreachTarget(target.id, eventId, buildOutreachTargetUpdate(target, { status: "approved" }));
+    await recordAudit(req, "outreach.draft_approved", "outreach_draft", draft.id, { event_id: eventId, target_id: draft.target_id, revision: draft.revision });
+    return res.json(draft);
+  });
+
+  app.get("/api/outreach/targets/:id/eligibility", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    return res.json(getOutreachApiEligibility(target));
+  });
+
+  app.post("/api/outreach/drafts/:id/send", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), manualOutboundActionRateLimit, async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const draft = await appDb.getOutreachDraft(String(req.params.id || "").trim(), eventId);
+    if (!draft) return res.status(404).json({ error: "Outreach draft not found" });
+    if (draft.kind !== "suggested_reply") return res.status(409).json({ error: "Initial-contact drafts remain manual-only" });
+    if (draft.approval_status !== "approved") return res.status(409).json({ error: "Approve this draft before sending" });
+    const latestDraft = (await appDb.listOutreachDrafts(draft.target_id, eventId))[0];
+    if (!latestDraft || latestDraft.id !== draft.id) return res.status(409).json({ error: "Approve the latest suggested reply revision before sending" });
+    const target = await appDb.getOutreachTarget(draft.target_id, eventId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+
+    let outboundTarget: ManualOutboundTarget;
+    try {
+      outboundTarget = await resolveOutreachApiTarget(target);
+    } catch (error) {
+      return res.status(409).json({ error: error instanceof Error ? error.message : "Target is not eligible for API reply", manual_fallback: true, eligibility: getOutreachApiEligibility(target) });
+    }
+
+    const idempotencyKey = `draft:${draft.id}:text`;
+    const delivery = await getOrCreateOutreachDelivery({
+      target_id: target.id,
+      campaign_id: target.campaign_id,
+      event_id: eventId,
+      draft_id: draft.id,
+      kind: "text",
+      channel_platform: outboundTarget.platform,
+      channel_external_id: outboundTarget.externalId,
+      recipient_id: outboundTarget.senderId,
+      idempotency_key: idempotencyKey,
+      status: "pending",
+      sent_by_user_id: req.auth?.user.id || null,
+    });
+    if (delivery.status === "sent") return res.json({ status: "already_sent", delivery });
+
+    try {
+      const payload = await sendTextToOutboundTarget(outboundTarget, draft.body);
+      await saveMessage(outboundTarget.senderId, draft.body, "outgoing", eventId, outboundTarget.externalId);
+      const sentDelivery = await appDb.updateOutreachDelivery(delivery.id, eventId, { status: "sent", external_message_id: extractOutboundMessageId(payload), error_message: null, sent_by_user_id: req.auth?.user.id || null });
+      const updatedTarget = await appDb.updateOutreachTarget(target.id, eventId, buildOutreachTargetUpdate(target, { status: "waiting_reply", delivery_mode: "api_reply_eligible" }));
+      await recordAudit(req, "outreach.reply_sent", "outreach_target", target.id, { event_id: eventId, draft_id: draft.id, delivery_id: delivery.id, platform: outboundTarget.platform, recipient_id: outboundTarget.senderId });
+      return res.json({ status: "sent", delivery: sentDelivery, target: updatedTarget });
+    } catch (error) {
+      const message = truncateText(error instanceof Error ? error.message : "Failed to send outreach reply", 500);
+      const failedDelivery = await appDb.updateOutreachDelivery(delivery.id, eventId, { status: "failed", error_message: message, sent_by_user_id: req.auth?.user.id || null });
+      await recordAudit(req, "outreach.reply_send_failed", "outreach_target", target.id, { event_id: eventId, draft_id: draft.id, delivery_id: delivery.id, error: message });
+      return res.status(502).json({ error: message, manual_fallback: true, delivery: failedDelivery, eligibility: getOutreachApiEligibility(target) });
+    }
+  });
+
+  app.post("/api/outreach/targets/:id/press-kit/send", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), manualOutboundActionRateLimit, async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    const body = readObjectBody(req);
+    if (body.confirm !== true) return res.status(400).json({ error: "Confirm Press Kit delivery after reviewing the selected assets" });
+    const rawAssetIds = Array.isArray(body.asset_ids) ? body.asset_ids : [];
+    const assetIds = [...new Set(rawAssetIds.map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 10);
+    if (assetIds.length === 0) return res.status(400).json({ error: "Select at least one Press Kit asset" });
+    const approvedDraftId = readOptionalString(body, "approved_draft_id", 128);
+    if (approvedDraftId) {
+      const approvedDraft = await appDb.getOutreachDraft(approvedDraftId, eventId);
+      if (!approvedDraft || approvedDraft.target_id !== target.id || approvedDraft.approval_status !== "approved") return res.status(409).json({ error: "The selected reply revision is not approved" });
+    }
+
+    let outboundTarget: ManualOutboundTarget;
+    try {
+      outboundTarget = await resolveOutreachApiTarget(target);
+    } catch (error) {
+      return res.status(409).json({ error: error instanceof Error ? error.message : "Target is not eligible for API delivery", manual_fallback: true, eligibility: getOutreachApiEligibility(target) });
+    }
+
+    const assets = await appDb.listOutreachAssets(eventId, target.campaign_id);
+    const selectedAssets = assetIds.map((assetId) => assets.find((asset) => asset.id === assetId)).filter((asset): asset is (typeof assets)[number] => Boolean(asset && asset.is_active));
+    if (selectedAssets.length !== assetIds.length) return res.status(400).json({ error: "One or more Press Kit assets are unavailable" });
+
+    const deliveries: OutreachDeliveryRow[] = [];
+    const errors: Array<{ asset_id: string; error: string }> = [];
+    for (const asset of selectedAssets) {
+      const delivery = await getOrCreateOutreachDelivery({
+        target_id: target.id,
+        campaign_id: target.campaign_id,
+        event_id: eventId,
+        asset_id: asset.id,
+        kind: "asset",
+        channel_platform: outboundTarget.platform,
+        channel_external_id: outboundTarget.externalId,
+        recipient_id: outboundTarget.senderId,
+        idempotency_key: `asset:${target.id}:${asset.id}`,
+        status: "pending",
+        sent_by_user_id: req.auth?.user.id || null,
+      });
+      if (delivery.status === "sent") {
+        deliveries.push(delivery);
+        continue;
+      }
+      try {
+        const payload = isOutreachImageAsset(asset)
+          ? await sendImageToOutboundTarget(outboundTarget, asset.url)
+          : await sendTextToOutboundTarget(outboundTarget, `${asset.name}\n${asset.url}`);
+        await saveMessage(outboundTarget.senderId, isOutreachImageAsset(asset) ? `[press-kit-image] ${asset.name}` : `[press-kit-link] ${asset.name}: ${asset.url}`, "outgoing", eventId, outboundTarget.externalId);
+        const sentDelivery = await appDb.updateOutreachDelivery(delivery.id, eventId, { status: "sent", external_message_id: extractOutboundMessageId(payload), error_message: null, sent_by_user_id: req.auth?.user.id || null });
+        if (sentDelivery) deliveries.push(sentDelivery);
+      } catch (error) {
+        const message = truncateText(error instanceof Error ? error.message : "Failed to send Press Kit asset", 500);
+        const failedDelivery = await appDb.updateOutreachDelivery(delivery.id, eventId, { status: "failed", error_message: message, sent_by_user_id: req.auth?.user.id || null });
+        errors.push({ asset_id: asset.id, error: message });
+        if (failedDelivery) deliveries.push(failedDelivery);
+      }
+    }
+
+    const sentCount = deliveries.filter((delivery) => delivery.status === "sent").length;
+    const updatedTarget = sentCount > 0 ? await appDb.updateOutreachTarget(target.id, eventId, buildOutreachTargetUpdate(target, { status: "press_kit_sent", delivery_mode: "api_reply_eligible" })) : target;
+    await recordAudit(req, errors.length > 0 ? "outreach.press_kit_partially_sent" : "outreach.press_kit_sent", "outreach_target", target.id, { event_id: eventId, asset_ids: selectedAssets.map((asset) => asset.id), sent_count: sentCount, errors });
+    return res.status(errors.length > 0 ? 207 : 200).json({ status: errors.length > 0 ? "partial" : "sent", deliveries, errors, target: updatedTarget, manual_fallback: errors.length > 0 });
+  });
+
+  app.get("/api/outreach/assets", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const campaignId = typeof req.query.campaign_id === "string" ? req.query.campaign_id.trim() : "";
+    if (!campaignId) return res.status(400).json({ error: "campaign_id is required" });
+    return res.json(await appDb.listOutreachAssets(eventId, campaignId));
+  });
+
+  app.post("/api/outreach/assets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const name = readRequiredString(body, "name", issues, { label: "Asset name", maxLength: 180 });
+    const campaignId = readRequiredString(body, "campaign_id", issues, { label: "Campaign", maxLength: 128 });
+    const url = readRequiredString(body, "url", issues, { label: "Asset URL", maxLength: 2048 });
+    if (issues.length) return respondValidationError(res, issues);
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return res.status(400).json({ error: "Asset URL must use http or https" });
+    } catch {
+      return res.status(400).json({ error: "Asset URL must be valid" });
+    }
+    if (!(await appDb.getOutreachCampaign(campaignId, eventId))) return res.status(404).json({ error: "Outreach campaign not found" });
+    const asset = await appDb.createOutreachAsset({ event_id: eventId, campaign_id: campaignId, name, url, type: readOptionalString(body, "type", 80) || "other", description: readOptionalString(body, "description", 1000), tags: readOptionalString(body, "tags", 500) });
+    await recordAudit(req, "outreach.asset_created", "outreach_asset", asset.id, { event_id: eventId, campaign_id: campaignId });
+    return res.status(201).json(asset);
+  });
+
+  app.get("/api/outreach/dashboard", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const [campaigns, targets] = await Promise.all([appDb.listOutreachCampaigns(eventId), appDb.listOutreachTargetsForEvent(eventId)]);
+    const now = Date.now();
+    const activeTarget = (target: OutreachTargetRow) => !["published", "declined", "no_response"].includes(target.status);
+    const dueTargets = targets.filter((target) => activeTarget(target) && target.next_follow_up_at && Number.isFinite(Date.parse(target.next_follow_up_at)) && Date.parse(target.next_follow_up_at) <= now);
+    const counts = {
+      total: targets.length,
+      not_contacted: targets.filter((target) => ["new", "drafted", "approved"].includes(target.status)).length,
+      waiting: targets.filter((target) => target.status === "waiting_reply").length,
+      replied: targets.filter((target) => target.status === "replied").length,
+      press_kit_sent: targets.filter((target) => target.status === "press_kit_sent").length,
+      follow_up_due: dueTargets.length,
+      published: targets.filter((target) => target.status === "published").length,
+      declined: targets.filter((target) => target.status === "declined").length,
+      no_response: targets.filter((target) => target.status === "no_response").length,
+    };
+    return res.json({ counts, campaigns, due_targets: dueTargets.slice(0, 250) });
+  });
+
+  app.get("/api/outreach/reminders", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const targets = await appDb.listOutreachTargetsForEvent(eventId);
+    const due = targets.filter((target) => !["published", "declined", "no_response"].includes(target.status) && target.next_follow_up_at && Number.isFinite(Date.parse(target.next_follow_up_at)) && Date.parse(target.next_follow_up_at) <= Date.now());
+    return res.json({ items: due.slice(0, 250), count: due.length });
+  });
+
+  app.get("/api/outreach/assignees", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const users = await appDb.listUsers();
+    const assignees = [];
+    for (const user of users) {
+      if (!user.is_active || ["checker", "viewer"].includes(user.role)) continue;
+      if (user.role === "owner" || user.role === "admin" || await appDb.isUserAssignedToEvent(user.id, eventId)) assignees.push(toPublicAuthUser(user));
+    }
+    return res.json(assignees);
+  });
+
+  app.get("/api/outreach/channel-readiness", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const channels = await appDb.listChannelAccounts();
+    const readiness = ALLOWED_CHANNEL_PLATFORMS.map((platform) => {
+      const definition = getChannelPlatformDefinition(platform);
+      const assigned = channels.filter((channel) => {
+        if (channel.platform !== platform || channel.is_active === false) return false;
+        const eventIds = channel.event_ids || (channel.event_id ? [channel.event_id] : []);
+        return eventIds.includes(eventId);
+      });
+      return {
+        platform,
+        label: definition.label,
+        live_messaging_ready: definition.live_messaging_ready,
+        assigned_accounts: assigned.length,
+        available_for_outreach: platform === "facebook" && assigned.length > 0,
+        policy_gate: platform === "facebook" ? "verified inbound reply only" : "Phase 5 requires channel-specific consent, capability and rate-limit review",
+      };
+    });
+    return res.json({ event_id: eventId, readiness, expansion_enabled: false });
+  });
+
+  app.get("/api/outreach/targets/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const campaignId = typeof req.query.campaign_id === "string" ? req.query.campaign_id.trim() : "";
+    const targets = campaignId ? await appDb.listOutreachTargets(eventId, campaignId) : await appDb.listOutreachTargetsForEvent(eventId);
+    const csv = new Parser({ fields: ["id", "campaign_id", "name", "facebook_page_url", "facebook_page_id", "organization_type", "contact_person", "email", "website", "notes", "priority", "status", "delivery_mode", "bound_sender_id", "bound_page_id", "last_contacted_at", "last_replied_at", "next_follow_up_at", "outcome_note", "assigned_user_id"] }).parse(targets);
+    await recordAudit(req, "outreach.targets_exported", "event", eventId, { event_id: eventId, campaign_id: campaignId || null, rows: targets.length });
+    res.header("Content-Type", "text/csv; charset=utf-8");
+    res.attachment("outreach-targets.csv");
+    return res.send(`\ufeff${csv}`);
+  });
+
+  const readOutreachImportRows = (body: Record<string, any>) => {
+    if (Array.isArray(body.rows)) return body.rows.slice(0, 500).map((row) => (row && typeof row === "object" ? row : {}));
+    return parseOutreachCsv(String(body.csv || "")).slice(0, 500);
+  };
+
+  const validateOutreachImport = async (eventId: string, campaignId: string, rawRows: Array<Record<string, any>>) => {
+    const existing = await appDb.listOutreachTargetsForEvent(eventId);
+    const seen = new Set<string>();
+    const valid: Array<Record<string, unknown>> = [];
+    const invalid: Array<{ row: number; errors: string[]; data: Record<string, unknown> }> = [];
+    const duplicateKeys = (row: Record<string, any>) => {
+      const pageUrl = String(row.facebook_page_url || row.page_url || "").trim().toLowerCase();
+      const pageId = String(row.facebook_page_id || row.page_id || "").trim().toLowerCase();
+      const email = String(row.email || "").trim().toLowerCase();
+      return [pageUrl ? `url:${pageUrl}` : "", pageId ? `page:${pageId}` : "", email ? `email:${email}` : ""].filter(Boolean);
+    };
+    for (const [index, row] of rawRows.entries()) {
+      const name = String(row.name || row.target || "").trim();
+      const normalized = {
+        name,
+        facebook_page_url: String(row.facebook_page_url || row.page_url || "").trim(),
+        facebook_page_id: String(row.facebook_page_id || row.page_id || "").trim(),
+        organization_type: String(row.organization_type || row.type || "other").trim(),
+        contact_person: String(row.contact_person || "").trim(),
+        email: String(row.email || "").trim(),
+        website: String(row.website || "").trim(),
+        notes: String(row.notes || "").trim(),
+        priority: ["low", "normal", "high"].includes(String(row.priority || "normal").trim()) ? String(row.priority || "normal").trim() : "normal",
+        next_follow_up_at: String(row.next_follow_up_at || row.follow_up_at || "").trim(),
+        outcome_note: String(row.outcome_note || "").trim(),
+      };
+      const errors: string[] = [];
+      if (!name) errors.push("name is required");
+      if (name.length > 180) errors.push("name is too long");
+      const keys = duplicateKeys(normalized);
+      const existingDuplicate = keys.some((key) => existing.some((target) => duplicateKeys(target as any).includes(key)));
+      if (keys.some((key) => seen.has(key)) || existingDuplicate) errors.push("duplicate target identity");
+      if (errors.length > 0) invalid.push({ row: index + 2, errors, data: normalized });
+      else {
+        valid.push(normalized);
+        for (const key of keys) seen.add(key);
+      }
+    }
+    return { valid, invalid };
+  };
+
+  app.post("/api/outreach/targets/import/preview", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const campaignId = readRequiredString(body, "campaign_id", issues, { label: "Campaign", maxLength: 128 });
+    if (issues.length > 0) return respondValidationError(res, issues);
+    const eventId = getRequestedEventId(req);
+    if (!(await appDb.getOutreachCampaign(campaignId, eventId))) return res.status(404).json({ error: "Outreach campaign not found" });
+    const result = await validateOutreachImport(eventId, campaignId, readOutreachImportRows(body));
+    return res.json({ ...result, valid_count: result.valid.length, invalid_count: result.invalid.length, campaign_id: campaignId });
+  });
+
+  app.post("/api/outreach/targets/import", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const eventId = getRequestedEventId(req);
+    const issues: ValidationIssue[] = [];
+    const campaignId = readRequiredString(body, "campaign_id", issues, { label: "Campaign", maxLength: 128 });
+    if (issues.length > 0) return respondValidationError(res, issues);
+    if (!(await appDb.getOutreachCampaign(campaignId, eventId))) return res.status(404).json({ error: "Outreach campaign not found" });
+    const result = await validateOutreachImport(eventId, campaignId, readOutreachImportRows(body));
+    if (result.invalid.length > 0 && body.allow_partial !== true) return res.status(409).json({ error: "Fix invalid or duplicate rows before importing", ...result });
+    const created = [];
+    for (const row of result.valid) {
+      created.push(await appDb.createOutreachTarget({ event_id: eventId, campaign_id: campaignId, name: String(row.name), facebook_page_url: String(row.facebook_page_url || ""), facebook_page_id: String(row.facebook_page_id || "") || null, organization_type: String(row.organization_type || "other"), contact_person: String(row.contact_person || "") || null, email: String(row.email || "") || null, website: String(row.website || "") || null, notes: String(row.notes || ""), priority: String(row.priority || "normal") as any, next_follow_up_at: String(row.next_follow_up_at || "") || null, outcome_note: String(row.outcome_note || "") || null }));
+    }
+    await recordAudit(req, "outreach.targets_imported", "outreach_campaign", campaignId, { event_id: eventId, created_count: created.length, invalid_count: result.invalid.length });
+    return res.status(201).json({ created, ...result, created_count: created.length });
   });
 
   // Direct seats are inventory explicitly withheld from Ticketmelon. These routes are

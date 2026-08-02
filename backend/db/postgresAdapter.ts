@@ -43,6 +43,18 @@ import type {
   LlmUsageTotalsRow,
   OrganizerProfileRow,
   OrganizerVerificationStatus,
+  OutreachAssetRow,
+  OutreachCampaignRow,
+  OutreachDeliveryRow,
+  OutreachDraftRow,
+  OutreachTargetRow,
+  CreateOutreachAssetInput,
+  CreateOutreachCampaignInput,
+  CreateOutreachDraftInput,
+  CreateOutreachDeliveryInput,
+  CreateOutreachTargetInput,
+  UpdateOutreachCampaignInput,
+  UpdateOutreachTargetInput,
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
@@ -392,6 +404,63 @@ function mapDirectTicketRow(row: Record<string, unknown>) {
     zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined,
     seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined,
   } satisfies DirectTicketRow;
+}
+
+function mapOutreachCampaignRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), event_id: String(row.event_id || ""), name: String(row.name || ""), description: String(row.description || ""),
+    objective: String(row.objective || ""), context: String(row.context || ""), default_instruction: String(row.default_instruction || ""),
+    start_date: row.start_date == null ? null : String(row.start_date), end_date: row.end_date == null ? null : String(row.end_date),
+    status: String(row.status || "draft") as OutreachCampaignRow["status"], created_by_user_id: row.created_by_user_id == null ? null : String(row.created_by_user_id),
+    created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
+    target_count: Number(row.target_count || 0), needs_action_count: Number(row.needs_action_count || 0), follow_up_due_count: Number(row.follow_up_due_count || 0),
+    not_contacted_count: Number(row.not_contacted_count || 0), waiting_count: Number(row.waiting_count || 0), replied_count: Number(row.replied_count || 0),
+    press_kit_sent_count: Number(row.press_kit_sent_count || 0), published_count: Number(row.published_count || 0), declined_count: Number(row.declined_count || 0), no_response_count: Number(row.no_response_count || 0),
+  } satisfies OutreachCampaignRow;
+}
+
+function mapOutreachTargetRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""), name: String(row.name || ""),
+    facebook_page_url: String(row.facebook_page_url || ""), facebook_page_id: row.facebook_page_id == null ? null : String(row.facebook_page_id),
+    organization_type: String(row.organization_type || "other"), contact_person: row.contact_person == null ? null : String(row.contact_person),
+    email: row.email == null ? null : String(row.email), website: row.website == null ? null : String(row.website), notes: String(row.notes || ""),
+    priority: String(row.priority || "normal") as OutreachTargetRow["priority"], status: String(row.status || "new") as OutreachTargetRow["status"],
+    delivery_mode: String(row.delivery_mode || "manual_first_contact") as OutreachTargetRow["delivery_mode"],
+    bound_sender_id: row.bound_sender_id == null ? null : String(row.bound_sender_id), bound_page_id: row.bound_page_id == null ? null : String(row.bound_page_id),
+    last_contacted_at: mapPostgresTimestamp(row.last_contacted_at), last_replied_at: mapPostgresTimestamp(row.last_replied_at), next_follow_up_at: mapPostgresTimestamp(row.next_follow_up_at),
+    outcome_note: row.outcome_note == null ? null : String(row.outcome_note), assigned_user_id: row.assigned_user_id == null ? null : String(row.assigned_user_id),
+    created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies OutreachTargetRow;
+}
+
+function mapOutreachDraftRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), target_id: String(row.target_id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""),
+    revision: Number(row.revision || 0), body: String(row.body || ""), kind: String(row.kind || "initial") as OutreachDraftRow["kind"], source_message_id: row.source_message_id == null ? null : Number(row.source_message_id), approval_status: String(row.approval_status || "draft") as OutreachDraftRow["approval_status"],
+    approved_by_user_id: row.approved_by_user_id == null ? null : String(row.approved_by_user_id), approved_at: mapPostgresTimestamp(row.approved_at),
+    created_by_user_id: row.created_by_user_id == null ? null : String(row.created_by_user_id), created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies OutreachDraftRow;
+}
+
+function mapOutreachDeliveryRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), target_id: String(row.target_id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""),
+    draft_id: row.draft_id == null ? null : String(row.draft_id), asset_id: row.asset_id == null ? null : String(row.asset_id),
+    kind: String(row.kind || "text") as OutreachDeliveryRow["kind"], channel_platform: String(row.channel_platform || "facebook") as OutreachDeliveryRow["channel_platform"],
+    channel_external_id: String(row.channel_external_id || ""), recipient_id: String(row.recipient_id || ""), idempotency_key: String(row.idempotency_key || ""),
+    status: String(row.status || "pending") as OutreachDeliveryRow["status"], external_message_id: row.external_message_id == null ? null : String(row.external_message_id),
+    error_message: row.error_message == null ? null : String(row.error_message), sent_by_user_id: row.sent_by_user_id == null ? null : String(row.sent_by_user_id),
+    sent_at: mapPostgresTimestamp(row.sent_at), created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies OutreachDeliveryRow;
+}
+
+function mapOutreachAssetRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""), name: String(row.name || ""), type: String(row.type || "other"),
+    description: String(row.description || ""), url: String(row.url || ""), tags: String(row.tags || ""), is_active: Boolean(row.is_active),
+    created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies OutreachAssetRow;
 }
 
 export class PostgresAppDatabase implements AppDatabase {
@@ -1253,6 +1322,196 @@ export class PostgresAppDatabase implements AppDatabase {
       [normalizedEventId],
     );
     return result.rowCount > 0;
+  }
+
+  private async outreachCampaignQuery(where: string, params: unknown[]) {
+    const result = await this.pool.query<Record<string, unknown>>(`
+      SELECT c.*,
+        COUNT(t.id)::int AS target_count,
+        COUNT(t.id) FILTER (WHERE t.status = 'replied')::int AS needs_action_count,
+        COUNT(t.id) FILTER (WHERE t.status IN ('new','drafted','approved'))::int AS not_contacted_count,
+        COUNT(t.id) FILTER (WHERE t.status = 'waiting_reply')::int AS waiting_count,
+        COUNT(t.id) FILTER (WHERE t.status = 'replied')::int AS replied_count,
+        COUNT(t.id) FILTER (WHERE t.status = 'press_kit_sent')::int AS press_kit_sent_count,
+        COUNT(t.id) FILTER (WHERE t.status = 'published')::int AS published_count,
+        COUNT(t.id) FILTER (WHERE t.status = 'declined')::int AS declined_count,
+        COUNT(t.id) FILTER (WHERE t.status = 'no_response')::int AS no_response_count,
+        COUNT(t.id) FILTER (WHERE t.next_follow_up_at IS NOT NULL AND t.next_follow_up_at <= CURRENT_TIMESTAMP AND t.status NOT IN ('published', 'declined', 'no_response'))::int AS follow_up_due_count
+      FROM outreach_campaigns c
+      LEFT JOIN outreach_targets t ON t.campaign_id = c.id
+      ${where}
+      GROUP BY c.id
+      ORDER BY c.updated_at DESC, c.id DESC
+    `, params);
+    return result.rows.map(mapOutreachCampaignRow);
+  }
+
+  async listOutreachCampaigns(eventId: string) {
+    return this.outreachCampaignQuery("WHERE c.event_id = $1", [eventId]);
+  }
+
+  async getOutreachCampaign(id: string, eventId: string) {
+    return (await this.outreachCampaignQuery("WHERE c.id = $1 AND c.event_id = $2", [id, eventId]))[0];
+  }
+
+  async createOutreachCampaign(input: CreateOutreachCampaignInput) {
+    const id = generateEntityId("ocamp");
+    await this.pool.query(`INSERT INTO outreach_campaigns (id,event_id,name,description,objective,context,default_instruction,start_date,end_date,status,created_by_user_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [
+      id, input.event_id, input.name.trim(), String(input.description || "").trim(), String(input.objective || "").trim(), String(input.context || "").trim(), String(input.default_instruction || "").trim(), input.start_date || null, input.end_date || null, input.status || "draft", input.created_by_user_id || null,
+    ]);
+    const campaign = await this.getOutreachCampaign(id, input.event_id);
+    if (!campaign) throw new Error("Outreach campaign was not created");
+    return campaign;
+  }
+
+  async updateOutreachCampaign(id: string, eventId: string, input: UpdateOutreachCampaignInput) {
+    const result = await this.pool.query(`UPDATE outreach_campaigns SET name=$1,description=$2,objective=$3,context=$4,default_instruction=$5,start_date=$6,end_date=$7,status=$8,updated_at=CURRENT_TIMESTAMP WHERE id=$9 AND event_id=$10`, [
+      input.name.trim(), String(input.description || "").trim(), String(input.objective || "").trim(), String(input.context || "").trim(), String(input.default_instruction || "").trim(), input.start_date || null, input.end_date || null, input.status, id, eventId,
+    ]);
+    return (result.rowCount || 0) > 0 ? this.getOutreachCampaign(id, eventId) : undefined;
+  }
+
+  async listOutreachTargets(eventId: string, campaignId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_targets WHERE event_id = $1 AND campaign_id = $2 ORDER BY updated_at DESC, id DESC", [eventId, campaignId]);
+    return result.rows.map(mapOutreachTargetRow);
+  }
+
+  async listOutreachTargetsForEvent(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_targets WHERE event_id = $1 ORDER BY updated_at DESC, id DESC", [eventId]);
+    return result.rows.map(mapOutreachTargetRow);
+  }
+
+  async getOutreachTarget(id: string, eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_targets WHERE id = $1 AND event_id = $2", [id, eventId]);
+    return result.rows[0] ? mapOutreachTargetRow(result.rows[0]) : undefined;
+  }
+
+  async createOutreachTarget(input: CreateOutreachTargetInput) {
+    const id = generateEntityId("otgt");
+    await this.pool.query(`INSERT INTO outreach_targets (id,campaign_id,event_id,name,facebook_page_url,facebook_page_id,organization_type,contact_person,email,website,notes,priority,status,delivery_mode,next_follow_up_at,outcome_note,assigned_user_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, [
+      id, input.campaign_id, input.event_id, input.name.trim(), String(input.facebook_page_url || "").trim(), String(input.facebook_page_id || "").trim() || null, String(input.organization_type || "other").trim(), String(input.contact_person || "").trim() || null, String(input.email || "").trim() || null, String(input.website || "").trim() || null, String(input.notes || "").trim(), input.priority || "normal", input.status || "new", input.delivery_mode || "manual_first_contact", input.next_follow_up_at || null, String(input.outcome_note || "").trim() || null,
+      input.assigned_user_id || null,
+    ]);
+    const target = await this.getOutreachTarget(id, input.event_id);
+    if (!target) throw new Error("Outreach target was not created");
+    return target;
+  }
+
+  async updateOutreachTarget(id: string, eventId: string, input: UpdateOutreachTargetInput) {
+    const result = await this.pool.query(`UPDATE outreach_targets SET name=$1,facebook_page_url=$2,facebook_page_id=$3,organization_type=$4,contact_person=$5,email=$6,website=$7,notes=$8,priority=$9,status=$10,delivery_mode=$11,next_follow_up_at=$12,outcome_note=$13,assigned_user_id=$14,last_contacted_at=CASE WHEN $10 IN ('contacted','waiting_reply') THEN COALESCE(last_contacted_at,CURRENT_TIMESTAMP) ELSE last_contacted_at END,updated_at=CURRENT_TIMESTAMP WHERE id=$15 AND event_id=$16`, [
+      input.name.trim(), String(input.facebook_page_url || "").trim(), String(input.facebook_page_id || "").trim() || null, String(input.organization_type || "other").trim(), String(input.contact_person || "").trim() || null, String(input.email || "").trim() || null, String(input.website || "").trim() || null, String(input.notes || "").trim(), input.priority, input.status, input.delivery_mode, input.next_follow_up_at || null, String(input.outcome_note || "").trim() || null, input.assigned_user_id || null, id, eventId,
+    ]);
+    return (result.rowCount || 0) > 0 ? this.getOutreachTarget(id, eventId) : undefined;
+  }
+
+  async bindOutreachTargetIdentity(id: string, eventId: string, pageId: string, senderId: string) {
+    const result = await this.pool.query("UPDATE outreach_targets SET bound_page_id=$1,bound_sender_id=$2,delivery_mode='manual_only',updated_at=CURRENT_TIMESTAMP WHERE id=$3 AND event_id=$4", [pageId.trim(), senderId.trim(), id, eventId]);
+    return (result.rowCount || 0) > 0 ? this.getOutreachTarget(id, eventId) : undefined;
+  }
+
+  async findOutreachTargetIdentityMatches(pageId: string, senderId: string, eventIds: string[] = []) {
+    const normalizedEventIds = eventIds.map((value) => String(value || "").trim()).filter(Boolean);
+    const params: unknown[] = [pageId.trim(), senderId.trim()];
+    const eventClause = normalizedEventIds.length > 0
+      ? ` AND t.event_id IN (${normalizedEventIds.map((_, index) => `$${index + 3}`).join(",")})`
+      : "";
+    params.push(...normalizedEventIds);
+    const result = await this.pool.query<Record<string, unknown>>(`
+      SELECT t.*
+      FROM outreach_targets t
+      JOIN outreach_campaigns c ON c.id = t.campaign_id AND c.event_id = t.event_id
+      WHERE t.bound_page_id = $1 AND t.bound_sender_id = $2
+        AND c.status <> 'archived'
+        AND t.status NOT IN ('declined','no_response')
+        ${eventClause}
+      ORDER BY t.updated_at DESC, t.id DESC
+    `, params);
+    return result.rows.map(mapOutreachTargetRow);
+  }
+
+  async markOutreachTargetReplied(id: string, eventId: string, repliedAt = new Date().toISOString()) {
+    const result = await this.pool.query<Record<string, unknown>>(`UPDATE outreach_targets
+      SET status='replied', delivery_mode='api_reply_eligible', last_replied_at=$1, updated_at=CURRENT_TIMESTAMP
+      WHERE id=$2 AND event_id=$3
+      RETURNING *`, [repliedAt, id, eventId]);
+    return result.rows[0] ? mapOutreachTargetRow(result.rows[0]) : undefined;
+  }
+
+  async listOutreachDrafts(targetId: string, eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_drafts WHERE target_id = $1 AND event_id = $2 ORDER BY revision DESC", [targetId, eventId]);
+    return result.rows.map(mapOutreachDraftRow);
+  }
+
+  async getOutreachDraft(id: string, eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_drafts WHERE id = $1 AND event_id = $2", [id, eventId]);
+    return result.rows[0] ? mapOutreachDraftRow(result.rows[0]) : undefined;
+  }
+
+  async createOutreachDraft(input: CreateOutreachDraftInput) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const target = await client.query<Record<string, unknown>>("SELECT campaign_id FROM outreach_targets WHERE id=$1 AND event_id=$2 FOR UPDATE", [input.target_id, input.event_id]);
+      if (!target.rows[0]) throw new Error("Outreach target was not found");
+      const latest = await client.query<{ revision: number }>("SELECT COALESCE(MAX(revision),0)::int AS revision FROM outreach_drafts WHERE target_id=$1 AND event_id=$2", [input.target_id, input.event_id]);
+      const id = generateEntityId("odrf");
+      const revision = Number(latest.rows[0]?.revision || 0) + 1;
+      const result = await client.query<Record<string, unknown>>("INSERT INTO outreach_drafts (id,target_id,campaign_id,event_id,revision,body,kind,source_message_id,approval_status,created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9) RETURNING *", [id, input.target_id, target.rows[0].campaign_id, input.event_id, revision, input.body.trim(), input.kind || "initial", input.source_message_id || null, input.created_by_user_id || null]);
+      await client.query("COMMIT");
+      return mapOutreachDraftRow(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async approveOutreachDraft(id: string, eventId: string, userId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("UPDATE outreach_drafts SET approval_status='approved',approved_by_user_id=$1,approved_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND event_id=$3 RETURNING *", [userId || null, id, eventId]);
+    return result.rows[0] ? mapOutreachDraftRow(result.rows[0]) : undefined;
+  }
+
+  async listOutreachAssets(eventId: string, campaignId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_assets WHERE event_id = $1 AND campaign_id = $2 ORDER BY is_active DESC, updated_at DESC, id DESC", [eventId, campaignId]);
+    return result.rows.map(mapOutreachAssetRow);
+  }
+
+  async createOutreachAsset(input: CreateOutreachAssetInput) {
+    const id = generateEntityId("oast");
+    const result = await this.pool.query<Record<string, unknown>>("INSERT INTO outreach_assets (id,campaign_id,event_id,name,type,description,url,tags,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *", [id, input.campaign_id, input.event_id, input.name.trim(), String(input.type || "other").trim(), String(input.description || "").trim(), input.url.trim(), String(input.tags || "").trim(), input.is_active !== false]);
+    return mapOutreachAssetRow(result.rows[0]);
+  }
+
+  async listOutreachDeliveries(targetId: string, eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_deliveries WHERE target_id=$1 AND event_id=$2 ORDER BY created_at DESC, id DESC", [targetId, eventId]);
+    return result.rows.map(mapOutreachDeliveryRow);
+  }
+
+  async getOutreachDeliveryByIdempotency(eventId: string, idempotencyKey: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM outreach_deliveries WHERE event_id=$1 AND idempotency_key=$2", [eventId, idempotencyKey]);
+    return result.rows[0] ? mapOutreachDeliveryRow(result.rows[0]) : undefined;
+  }
+
+  async createOutreachDelivery(input: CreateOutreachDeliveryInput) {
+    const id = generateEntityId("odlv");
+    const result = await this.pool.query<Record<string, unknown>>(`INSERT INTO outreach_deliveries (id,target_id,campaign_id,event_id,draft_id,asset_id,kind,channel_platform,channel_external_id,recipient_id,idempotency_key,status,external_message_id,error_message,sent_by_user_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`, [
+      id, input.target_id, input.campaign_id, input.event_id, input.draft_id || null, input.asset_id || null, input.kind, input.channel_platform, input.channel_external_id.trim(), input.recipient_id.trim(), input.idempotency_key.trim(), input.status || "pending", input.external_message_id || null, input.error_message || null, input.sent_by_user_id || null,
+    ]);
+    return mapOutreachDeliveryRow(result.rows[0]);
+  }
+
+  async updateOutreachDelivery(id: string, eventId: string, input: Partial<Pick<OutreachDeliveryRow, "status" | "external_message_id" | "error_message" | "sent_by_user_id">>) {
+    const status = input.status || "pending";
+    const result = await this.pool.query<Record<string, unknown>>(`UPDATE outreach_deliveries
+      SET status=$1, external_message_id=$2, error_message=$3, sent_by_user_id=$4,
+          sent_at=CASE WHEN $1='sent' THEN COALESCE(sent_at,CURRENT_TIMESTAMP) ELSE sent_at END,
+          updated_at=CURRENT_TIMESTAMP
+      WHERE id=$5 AND event_id=$6 RETURNING *`, [status, input.external_message_id || null, input.error_message || null, input.sent_by_user_id || null, id, eventId]);
+    return result.rows[0] ? mapOutreachDeliveryRow(result.rows[0]) : undefined;
   }
 
   private async replaceEventDocumentChunks(documentId: string, eventId: string, content: string, isActive = true) {

@@ -16,7 +16,7 @@ import { StatusBadge, type BadgeTone } from "../shared/AppUi";
 import type { AuthUser, EventRecord } from "../../types";
 
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox";
+type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type EventWorkspaceView = "setup" | "public";
 type AgentWorkspaceView = "console" | "setup";
 type TimerRef = { current: number | null };

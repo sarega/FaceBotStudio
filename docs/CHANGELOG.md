@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 - 2026-08-02
+
+- Added human-approved Press Outreach campaigns with target management, AI initial and suggested replies, and manual first-contact workflow.
+- Added verified Facebook replies and Press Kit image/link delivery with audit history, idempotency protection, and manual fallback.
+- Added outreach dashboard, reminders, assignments, CSV import/export, identity matching, and channel-readiness checks.
+
 ## 0.2.1 - 2026-08-02
 
 - Improved direct-ticket preview, print layout, readability, and Thai font output.

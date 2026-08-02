@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.3.0",
+    date: "2026-08-02",
+    title: "Human-approved press outreach",
+    features: [
+      "Press Outreach campaigns, target management, AI initial and suggested replies, and manual first-contact workflow",
+      "Verified Facebook replies and Press Kit image/link delivery with audit history, idempotency protection, and manual fallback",
+      "Outreach dashboard, reminders, assignments, CSV import/export, identity matching, and channel-readiness checks",
+    ],
+  },
+  {
     version: "0.2.1",
     date: "2026-08-02",
     title: "Direct ticketing polish",

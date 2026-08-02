@@ -9,6 +9,196 @@ export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram" | "web_chat";
 export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
 export type OrganizerVerificationStatus = "draft" | "pending_review" | "verified" | "rejected" | "needs_update";
+export type OutreachCampaignStatus = "draft" | "active" | "paused" | "completed" | "archived";
+export type OutreachTargetStatus = "new" | "drafted" | "approved" | "contacted" | "waiting_reply" | "replied" | "press_kit_sent" | "follow_up" | "published" | "declined" | "no_response";
+export type OutreachPriority = "low" | "normal" | "high";
+export type OutreachDeliveryMode = "manual_first_contact" | "api_reply_eligible" | "manual_only" | "unavailable";
+export type OutreachDraftApprovalStatus = "draft" | "approved";
+export type OutreachDraftKind = "initial" | "suggested_reply";
+export type OutreachDeliveryKind = "text" | "asset";
+export type OutreachDeliveryStatus = "pending" | "sent" | "failed";
+
+export interface OutreachCampaignRow {
+  id: string;
+  event_id: string;
+  name: string;
+  description: string;
+  objective: string;
+  context: string;
+  default_instruction: string;
+  start_date: string | null;
+  end_date: string | null;
+  status: OutreachCampaignStatus;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  target_count: number;
+  needs_action_count: number;
+  follow_up_due_count: number;
+  not_contacted_count: number;
+  waiting_count: number;
+  replied_count: number;
+  press_kit_sent_count: number;
+  published_count: number;
+  declined_count: number;
+  no_response_count: number;
+}
+
+export interface OutreachTargetRow {
+  id: string;
+  campaign_id: string;
+  event_id: string;
+  name: string;
+  facebook_page_url: string;
+  facebook_page_id: string | null;
+  organization_type: string;
+  contact_person: string | null;
+  email: string | null;
+  website: string | null;
+  notes: string;
+  priority: OutreachPriority;
+  status: OutreachTargetStatus;
+  delivery_mode: OutreachDeliveryMode;
+  bound_sender_id: string | null;
+  bound_page_id: string | null;
+  last_contacted_at: string | null;
+  last_replied_at: string | null;
+  next_follow_up_at: string | null;
+  outcome_note: string | null;
+  assigned_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutreachDraftRow {
+  id: string;
+  target_id: string;
+  campaign_id: string;
+  event_id: string;
+  revision: number;
+  body: string;
+  kind: OutreachDraftKind;
+  source_message_id: number | null;
+  approval_status: OutreachDraftApprovalStatus;
+  approved_by_user_id: string | null;
+  approved_at: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutreachDeliveryRow {
+  id: string;
+  target_id: string;
+  campaign_id: string;
+  event_id: string;
+  draft_id: string | null;
+  asset_id: string | null;
+  kind: OutreachDeliveryKind;
+  channel_platform: ChannelPlatform;
+  channel_external_id: string;
+  recipient_id: string;
+  idempotency_key: string;
+  status: OutreachDeliveryStatus;
+  external_message_id: string | null;
+  error_message: string | null;
+  sent_by_user_id: string | null;
+  sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutreachAssetRow {
+  id: string;
+  campaign_id: string;
+  event_id: string;
+  name: string;
+  type: string;
+  description: string;
+  url: string;
+  tags: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateOutreachCampaignInput {
+  event_id: string;
+  name: string;
+  description?: string | null;
+  objective?: string | null;
+  context?: string | null;
+  default_instruction?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  status?: OutreachCampaignStatus;
+  created_by_user_id?: string | null;
+}
+
+export interface UpdateOutreachCampaignInput extends CreateOutreachCampaignInput {
+  status: OutreachCampaignStatus;
+}
+
+export interface CreateOutreachTargetInput {
+  event_id: string;
+  campaign_id: string;
+  name: string;
+  facebook_page_url?: string | null;
+  facebook_page_id?: string | null;
+  organization_type?: string | null;
+  contact_person?: string | null;
+  email?: string | null;
+  website?: string | null;
+  notes?: string | null;
+  priority?: OutreachPriority;
+  status?: OutreachTargetStatus;
+  delivery_mode?: OutreachDeliveryMode;
+  next_follow_up_at?: string | null;
+  outcome_note?: string | null;
+  assigned_user_id?: string | null;
+}
+
+export interface UpdateOutreachTargetInput extends CreateOutreachTargetInput {
+  status: OutreachTargetStatus;
+  delivery_mode: OutreachDeliveryMode;
+}
+
+export interface CreateOutreachDraftInput {
+  event_id: string;
+  target_id: string;
+  body: string;
+  kind?: OutreachDraftKind;
+  source_message_id?: number | null;
+  created_by_user_id?: string | null;
+}
+
+export interface CreateOutreachAssetInput {
+  event_id: string;
+  campaign_id: string;
+  name: string;
+  type?: string | null;
+  description?: string | null;
+  url: string;
+  tags?: string | null;
+  is_active?: boolean;
+}
+
+export interface CreateOutreachDeliveryInput {
+  target_id: string;
+  campaign_id: string;
+  event_id: string;
+  draft_id?: string | null;
+  asset_id?: string | null;
+  kind: OutreachDeliveryKind;
+  channel_platform: ChannelPlatform;
+  channel_external_id: string;
+  recipient_id: string;
+  idempotency_key: string;
+  status?: OutreachDeliveryStatus;
+  external_message_id?: string | null;
+  error_message?: string | null;
+  sent_by_user_id?: string | null;
+}
 
 export interface SettingRow {
   key: string;
@@ -555,6 +745,28 @@ export interface AppDatabase {
   updateOrganizerProfile(organizationId: string, input: UpdateOrganizerProfileInput): Promise<OrganizerProfileRow | undefined>;
   getEventDeletionImpact(eventId: string): Promise<EventDeletionImpact>;
   deleteEvent(eventId: string): Promise<boolean>;
+  listOutreachCampaigns(eventId: string): Promise<OutreachCampaignRow[]>;
+  getOutreachCampaign(id: string, eventId: string): Promise<OutreachCampaignRow | undefined>;
+  createOutreachCampaign(input: CreateOutreachCampaignInput): Promise<OutreachCampaignRow>;
+  updateOutreachCampaign(id: string, eventId: string, input: UpdateOutreachCampaignInput): Promise<OutreachCampaignRow | undefined>;
+  listOutreachTargets(eventId: string, campaignId: string): Promise<OutreachTargetRow[]>;
+  listOutreachTargetsForEvent(eventId: string): Promise<OutreachTargetRow[]>;
+  getOutreachTarget(id: string, eventId: string): Promise<OutreachTargetRow | undefined>;
+  createOutreachTarget(input: CreateOutreachTargetInput): Promise<OutreachTargetRow>;
+  updateOutreachTarget(id: string, eventId: string, input: UpdateOutreachTargetInput): Promise<OutreachTargetRow | undefined>;
+  bindOutreachTargetIdentity(id: string, eventId: string, pageId: string, senderId: string): Promise<OutreachTargetRow | undefined>;
+  findOutreachTargetIdentityMatches(pageId: string, senderId: string, eventIds?: string[]): Promise<OutreachTargetRow[]>;
+  markOutreachTargetReplied(id: string, eventId: string, repliedAt?: string): Promise<OutreachTargetRow | undefined>;
+  listOutreachDrafts(targetId: string, eventId: string): Promise<OutreachDraftRow[]>;
+  getOutreachDraft(id: string, eventId: string): Promise<OutreachDraftRow | undefined>;
+  createOutreachDraft(input: CreateOutreachDraftInput): Promise<OutreachDraftRow>;
+  approveOutreachDraft(id: string, eventId: string, userId: string): Promise<OutreachDraftRow | undefined>;
+  listOutreachAssets(eventId: string, campaignId: string): Promise<OutreachAssetRow[]>;
+  createOutreachAsset(input: CreateOutreachAssetInput): Promise<OutreachAssetRow>;
+  listOutreachDeliveries(targetId: string, eventId: string): Promise<OutreachDeliveryRow[]>;
+  getOutreachDeliveryByIdempotency(eventId: string, idempotencyKey: string): Promise<OutreachDeliveryRow | undefined>;
+  createOutreachDelivery(input: CreateOutreachDeliveryInput): Promise<OutreachDeliveryRow>;
+  updateOutreachDelivery(id: string, eventId: string, input: Partial<Pick<OutreachDeliveryRow, "status" | "external_message_id" | "error_message" | "sent_by_user_id">>): Promise<OutreachDeliveryRow | undefined>;
   listEventDocuments(eventId: string): Promise<EventDocumentRow[]>;
   listEventDocumentChunks(eventId: string): Promise<EventDocumentChunkRow[]>;
   listEventDocumentChunkEmbeddings(eventId: string): Promise<EventDocumentChunkEmbeddingRow[]>;

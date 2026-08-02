@@ -40,6 +40,18 @@ import type {
   LlmUsageTotalsRow,
   OrganizerProfileRow,
   OrganizerVerificationStatus,
+  OutreachAssetRow,
+  OutreachCampaignRow,
+  OutreachDeliveryRow,
+  OutreachDraftRow,
+  OutreachTargetRow,
+  CreateOutreachAssetInput,
+  CreateOutreachCampaignInput,
+  CreateOutreachDraftInput,
+  CreateOutreachDeliveryInput,
+  CreateOutreachTargetInput,
+  UpdateOutreachCampaignInput,
+  UpdateOutreachTargetInput,
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
   RegistrationInput,
@@ -365,6 +377,66 @@ function mapDirectTicketRow(row: Record<string, unknown>) {
   return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""), ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null, payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null, rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null, source: row.source === "public" ? "public" : "admin", status: String(row.status || "held") as DirectTicketRow["status"], issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null, payment_verified_at: typeof row.payment_verified_at === "string" ? mapSqliteTimestamp(row.payment_verified_at) : null, issued_at: typeof row.issued_at === "string" ? mapSqliteTimestamp(row.issued_at) : null, checked_in_at: typeof row.checked_in_at === "string" ? mapSqliteTimestamp(row.checked_in_at) : null, voided_at: typeof row.voided_at === "string" ? mapSqliteTimestamp(row.voided_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined, zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined, seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined } satisfies DirectTicketRow;
 }
 
+function mapOutreachCampaignRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), event_id: String(row.event_id || ""), name: String(row.name || ""),
+    description: String(row.description || ""), objective: String(row.objective || ""), context: String(row.context || ""),
+    default_instruction: String(row.default_instruction || ""), start_date: typeof row.start_date === "string" ? row.start_date : null,
+    end_date: typeof row.end_date === "string" ? row.end_date : null, status: String(row.status || "draft") as OutreachCampaignRow["status"],
+    created_by_user_id: typeof row.created_by_user_id === "string" ? row.created_by_user_id : null,
+    created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at),
+    target_count: Number(row.target_count || 0), needs_action_count: Number(row.needs_action_count || 0), follow_up_due_count: Number(row.follow_up_due_count || 0),
+    not_contacted_count: Number(row.not_contacted_count || 0), waiting_count: Number(row.waiting_count || 0), replied_count: Number(row.replied_count || 0),
+    press_kit_sent_count: Number(row.press_kit_sent_count || 0), published_count: Number(row.published_count || 0), declined_count: Number(row.declined_count || 0), no_response_count: Number(row.no_response_count || 0),
+  } satisfies OutreachCampaignRow;
+}
+
+function mapOutreachTargetRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""), name: String(row.name || ""),
+    facebook_page_url: String(row.facebook_page_url || ""), facebook_page_id: typeof row.facebook_page_id === "string" ? row.facebook_page_id : null,
+    organization_type: String(row.organization_type || "other"), contact_person: typeof row.contact_person === "string" ? row.contact_person : null,
+    email: typeof row.email === "string" ? row.email : null, website: typeof row.website === "string" ? row.website : null, notes: String(row.notes || ""),
+    priority: String(row.priority || "normal") as OutreachTargetRow["priority"], status: String(row.status || "new") as OutreachTargetRow["status"],
+    delivery_mode: String(row.delivery_mode || "manual_first_contact") as OutreachTargetRow["delivery_mode"],
+    bound_sender_id: typeof row.bound_sender_id === "string" ? row.bound_sender_id : null, bound_page_id: typeof row.bound_page_id === "string" ? row.bound_page_id : null,
+    last_contacted_at: typeof row.last_contacted_at === "string" ? mapSqliteTimestamp(row.last_contacted_at) : null,
+    last_replied_at: typeof row.last_replied_at === "string" ? mapSqliteTimestamp(row.last_replied_at) : null,
+    next_follow_up_at: typeof row.next_follow_up_at === "string" ? mapSqliteTimestamp(row.next_follow_up_at) : null,
+    outcome_note: typeof row.outcome_note === "string" ? row.outcome_note : null, assigned_user_id: typeof row.assigned_user_id === "string" ? row.assigned_user_id : null,
+    created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies OutreachTargetRow;
+}
+
+function mapOutreachDraftRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), target_id: String(row.target_id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""),
+    revision: Number(row.revision || 0), body: String(row.body || ""), kind: String(row.kind || "initial") as OutreachDraftRow["kind"], source_message_id: row.source_message_id == null ? null : Number(row.source_message_id), approval_status: String(row.approval_status || "draft") as OutreachDraftRow["approval_status"],
+    approved_by_user_id: typeof row.approved_by_user_id === "string" ? row.approved_by_user_id : null, approved_at: typeof row.approved_at === "string" ? mapSqliteTimestamp(row.approved_at) : null,
+    created_by_user_id: typeof row.created_by_user_id === "string" ? row.created_by_user_id : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies OutreachDraftRow;
+}
+
+function mapOutreachDeliveryRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), target_id: String(row.target_id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""),
+    draft_id: typeof row.draft_id === "string" ? row.draft_id : null, asset_id: typeof row.asset_id === "string" ? row.asset_id : null,
+    kind: String(row.kind || "text") as OutreachDeliveryRow["kind"], channel_platform: String(row.channel_platform || "facebook") as OutreachDeliveryRow["channel_platform"],
+    channel_external_id: String(row.channel_external_id || ""), recipient_id: String(row.recipient_id || ""), idempotency_key: String(row.idempotency_key || ""),
+    status: String(row.status || "pending") as OutreachDeliveryRow["status"], external_message_id: typeof row.external_message_id === "string" ? row.external_message_id : null,
+    error_message: typeof row.error_message === "string" ? row.error_message : null, sent_by_user_id: typeof row.sent_by_user_id === "string" ? row.sent_by_user_id : null,
+    sent_at: typeof row.sent_at === "string" ? mapSqliteTimestamp(row.sent_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies OutreachDeliveryRow;
+}
+
+function mapOutreachAssetRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""), campaign_id: String(row.campaign_id || ""), event_id: String(row.event_id || ""), name: String(row.name || ""),
+    type: String(row.type || "other"), description: String(row.description || ""), url: String(row.url || ""), tags: String(row.tags || ""),
+    is_active: Boolean(row.is_active), created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies OutreachAssetRow;
+}
+
 export class SqliteAppDatabase implements AppDatabase {
   public readonly driver = "sqlite" as const;
 
@@ -622,6 +694,114 @@ export class SqliteAppDatabase implements AppDatabase {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS outreach_campaigns (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        objective TEXT NOT NULL DEFAULT '',
+        context TEXT NOT NULL DEFAULT '',
+        default_instruction TEXT NOT NULL DEFAULT '',
+        start_date TEXT,
+        end_date TEXT,
+        status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'paused', 'completed', 'archived')),
+        created_by_user_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE TABLE IF NOT EXISTS outreach_targets (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        facebook_page_url TEXT NOT NULL DEFAULT '',
+        facebook_page_id TEXT,
+        organization_type TEXT NOT NULL DEFAULT 'other',
+        contact_person TEXT,
+        email TEXT,
+        website TEXT,
+        notes TEXT NOT NULL DEFAULT '',
+        priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high')),
+        status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'drafted', 'approved', 'contacted', 'waiting_reply', 'replied', 'press_kit_sent', 'follow_up', 'published', 'declined', 'no_response')),
+        delivery_mode TEXT NOT NULL DEFAULT 'manual_first_contact' CHECK (delivery_mode IN ('manual_first_contact', 'api_reply_eligible', 'manual_only', 'unavailable')),
+        bound_sender_id TEXT,
+        bound_page_id TEXT,
+        last_contacted_at DATETIME,
+        last_replied_at DATETIME,
+        next_follow_up_at DATETIME,
+        outcome_note TEXT,
+        assigned_user_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (campaign_id) REFERENCES outreach_campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS outreach_drafts (
+        id TEXT PRIMARY KEY,
+        target_id TEXT NOT NULL,
+        campaign_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        body TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'initial' CHECK (kind IN ('initial', 'suggested_reply')),
+        source_message_id INTEGER,
+        approval_status TEXT NOT NULL DEFAULT 'draft' CHECK (approval_status IN ('draft', 'approved')),
+        approved_by_user_id TEXT,
+        approved_at DATETIME,
+        created_by_user_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (target_id, revision),
+        FOREIGN KEY (target_id) REFERENCES outreach_targets(id) ON DELETE CASCADE,
+        FOREIGN KEY (campaign_id) REFERENCES outreach_campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY (approved_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE TABLE IF NOT EXISTS outreach_assets (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'other',
+        description TEXT NOT NULL DEFAULT '',
+        url TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (campaign_id) REFERENCES outreach_campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS outreach_deliveries (
+        id TEXT PRIMARY KEY,
+        target_id TEXT NOT NULL,
+        campaign_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        draft_id TEXT,
+        asset_id TEXT,
+        kind TEXT NOT NULL CHECK (kind IN ('text', 'asset')),
+        channel_platform TEXT NOT NULL,
+        channel_external_id TEXT NOT NULL,
+        recipient_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+        external_message_id TEXT,
+        error_message TEXT,
+        sent_by_user_id TEXT,
+        sent_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (event_id, idempotency_key),
+        FOREIGN KEY (target_id) REFERENCES outreach_targets(id) ON DELETE CASCADE,
+        FOREIGN KEY (campaign_id) REFERENCES outreach_campaigns(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY (draft_id) REFERENCES outreach_drafts(id) ON DELETE SET NULL,
+        FOREIGN KEY (asset_id) REFERENCES outreach_assets(id) ON DELETE SET NULL,
+        FOREIGN KEY (sent_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
       CREATE TABLE IF NOT EXISTS event_performances (
         id TEXT PRIMARY KEY, event_id TEXT NOT NULL, code TEXT NOT NULL, title TEXT NOT NULL,
         starts_at DATETIME NOT NULL, ends_at DATETIME, is_active INTEGER NOT NULL DEFAULT 1,
@@ -683,6 +863,12 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON message_attachments (message_id, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_event_documents_event_id ON event_documents (event_id);
       CREATE INDEX IF NOT EXISTS idx_event_documents_active ON event_documents (event_id, is_active);
+      CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_event_updated ON outreach_campaigns (event_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_outreach_targets_campaign_status ON outreach_targets (campaign_id, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_outreach_targets_identity ON outreach_targets (event_id, bound_page_id, bound_sender_id);
+      CREATE INDEX IF NOT EXISTS idx_outreach_targets_follow_up ON outreach_targets (event_id, next_follow_up_at);
+      CREATE INDEX IF NOT EXISTS idx_outreach_drafts_target_revision ON outreach_drafts (target_id, revision DESC);
+      CREATE INDEX IF NOT EXISTS idx_outreach_assets_campaign ON outreach_assets (campaign_id, is_active, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_event_document_chunks_event_id ON event_document_chunks (event_id);
       CREATE INDEX IF NOT EXISTS idx_event_document_chunks_document_id ON event_document_chunks (document_id);
       CREATE INDEX IF NOT EXISTS idx_event_document_chunks_order ON event_document_chunks (document_id, chunk_index);
@@ -701,6 +887,16 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("channel_accounts", "config_json", "TEXT NOT NULL DEFAULT '{}'");
     this.ensureColumn("event_documents", "source_url", "TEXT");
     this.ensureColumn("event_documents", "content_hash", "TEXT");
+    this.ensureColumn("outreach_targets", "last_replied_at", "DATETIME");
+    this.ensureColumn("outreach_targets", "assigned_user_id", "TEXT");
+    this.ensureColumn("outreach_drafts", "kind", "TEXT NOT NULL DEFAULT 'initial'");
+    this.ensureColumn("outreach_drafts", "source_message_id", "INTEGER");
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_outreach_targets_replied ON outreach_targets (event_id, last_replied_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_outreach_targets_assignee ON outreach_targets (event_id, assigned_user_id, status);
+      CREATE INDEX IF NOT EXISTS idx_outreach_deliveries_target ON outreach_deliveries (event_id, target_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_outreach_deliveries_idempotency ON outreach_deliveries (event_id, idempotency_key);
+    `);
     this.ensureColumn("event_documents", "embedding_status", "TEXT DEFAULT 'pending'");
     this.ensureColumn("event_documents", "embedding_model", "TEXT");
     this.ensureColumn("event_documents", "last_embedded_at", "TEXT");
@@ -1583,6 +1779,184 @@ export class SqliteAppDatabase implements AppDatabase {
     const normalizedEventId = String(eventId || "").trim();
     const result = this.db.prepare("DELETE FROM events WHERE id = ? AND is_default = 0").run(normalizedEventId);
     return result.changes > 0;
+  }
+
+  private outreachCampaignQuery(where: string, params: unknown[]) {
+    return this.db.prepare(`
+      SELECT c.*,
+        COUNT(t.id) AS target_count,
+        SUM(CASE WHEN t.status = 'replied' THEN 1 ELSE 0 END) AS needs_action_count,
+        SUM(CASE WHEN t.status IN ('new','drafted','approved') THEN 1 ELSE 0 END) AS not_contacted_count,
+        SUM(CASE WHEN t.status = 'waiting_reply' THEN 1 ELSE 0 END) AS waiting_count,
+        SUM(CASE WHEN t.status = 'replied' THEN 1 ELSE 0 END) AS replied_count,
+        SUM(CASE WHEN t.status = 'press_kit_sent' THEN 1 ELSE 0 END) AS press_kit_sent_count,
+        SUM(CASE WHEN t.status = 'published' THEN 1 ELSE 0 END) AS published_count,
+        SUM(CASE WHEN t.status = 'declined' THEN 1 ELSE 0 END) AS declined_count,
+        SUM(CASE WHEN t.status = 'no_response' THEN 1 ELSE 0 END) AS no_response_count,
+        SUM(CASE WHEN t.next_follow_up_at IS NOT NULL AND julianday(t.next_follow_up_at) <= julianday('now') AND t.status NOT IN ('published', 'declined', 'no_response') THEN 1 ELSE 0 END) AS follow_up_due_count
+      FROM outreach_campaigns c
+      LEFT JOIN outreach_targets t ON t.campaign_id = c.id
+      ${where}
+      GROUP BY c.id
+      ORDER BY c.updated_at DESC, c.id DESC
+    `).all(...params).map((row) => mapOutreachCampaignRow(row as Record<string, unknown>));
+  }
+
+  private outreachTargetQuery(where: string, params: unknown[]) {
+    return this.db.prepare(`SELECT * FROM outreach_targets ${where} ORDER BY updated_at DESC, id DESC`).all(...params).map((row) => mapOutreachTargetRow(row as Record<string, unknown>));
+  }
+
+  async listOutreachCampaigns(eventId: string) {
+    return this.outreachCampaignQuery("WHERE c.event_id = ?", [eventId]);
+  }
+
+  async getOutreachCampaign(id: string, eventId: string) {
+    return this.outreachCampaignQuery("WHERE c.id = ? AND c.event_id = ?", [id, eventId])[0];
+  }
+
+  async createOutreachCampaign(input: CreateOutreachCampaignInput) {
+    const id = generateEntityId("ocamp");
+    this.db.prepare(`INSERT INTO outreach_campaigns (id,event_id,name,description,objective,context,default_instruction,start_date,end_date,status,created_by_user_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, input.event_id, input.name.trim(), String(input.description || "").trim(), String(input.objective || "").trim(), String(input.context || "").trim(),
+      String(input.default_instruction || "").trim(), input.start_date || null, input.end_date || null, input.status || "draft", input.created_by_user_id || null,
+    );
+    const campaign = await this.getOutreachCampaign(id, input.event_id);
+    if (!campaign) throw new Error("Outreach campaign was not created");
+    return campaign;
+  }
+
+  async updateOutreachCampaign(id: string, eventId: string, input: UpdateOutreachCampaignInput) {
+    const result = this.db.prepare(`UPDATE outreach_campaigns SET name=?,description=?,objective=?,context=?,default_instruction=?,start_date=?,end_date=?,status=?,updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND event_id=?`).run(
+      input.name.trim(), String(input.description || "").trim(), String(input.objective || "").trim(), String(input.context || "").trim(), String(input.default_instruction || "").trim(),
+      input.start_date || null, input.end_date || null, input.status, id, eventId,
+    );
+    return result.changes > 0 ? this.getOutreachCampaign(id, eventId) : undefined;
+  }
+
+  async listOutreachTargets(eventId: string, campaignId: string) {
+    return this.outreachTargetQuery("WHERE event_id = ? AND campaign_id = ?", [eventId, campaignId]);
+  }
+
+  async listOutreachTargetsForEvent(eventId: string) {
+    return this.outreachTargetQuery("WHERE event_id = ?", [eventId]);
+  }
+
+  async getOutreachTarget(id: string, eventId: string) {
+    return this.outreachTargetQuery("WHERE id = ? AND event_id = ?", [id, eventId])[0];
+  }
+
+  async createOutreachTarget(input: CreateOutreachTargetInput) {
+    const id = generateEntityId("otgt");
+    this.db.prepare(`INSERT INTO outreach_targets (id,campaign_id,event_id,name,facebook_page_url,facebook_page_id,organization_type,contact_person,email,website,notes,priority,status,delivery_mode,next_follow_up_at,outcome_note,assigned_user_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      id, input.campaign_id, input.event_id, input.name.trim(), String(input.facebook_page_url || "").trim(), String(input.facebook_page_id || "").trim() || null,
+      String(input.organization_type || "other").trim(), String(input.contact_person || "").trim() || null, String(input.email || "").trim() || null, String(input.website || "").trim() || null,
+      String(input.notes || "").trim(), input.priority || "normal", input.status || "new", input.delivery_mode || "manual_first_contact", input.next_follow_up_at || null, String(input.outcome_note || "").trim() || null, input.assigned_user_id || null,
+    );
+    const target = await this.getOutreachTarget(id, input.event_id);
+    if (!target) throw new Error("Outreach target was not created");
+    return target;
+  }
+
+  async updateOutreachTarget(id: string, eventId: string, input: UpdateOutreachTargetInput) {
+    const result = this.db.prepare(`UPDATE outreach_targets SET name=?,facebook_page_url=?,facebook_page_id=?,organization_type=?,contact_person=?,email=?,website=?,notes=?,priority=?,status=?,delivery_mode=?,next_follow_up_at=?,outcome_note=?,assigned_user_id=?,last_contacted_at=CASE WHEN ? IN ('contacted','waiting_reply') THEN COALESCE(last_contacted_at,CURRENT_TIMESTAMP) ELSE last_contacted_at END,updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND event_id=?`).run(
+      input.name.trim(), String(input.facebook_page_url || "").trim(), String(input.facebook_page_id || "").trim() || null, String(input.organization_type || "other").trim(),
+      String(input.contact_person || "").trim() || null, String(input.email || "").trim() || null, String(input.website || "").trim() || null, String(input.notes || "").trim(),
+      input.priority, input.status, input.delivery_mode, input.next_follow_up_at || null, String(input.outcome_note || "").trim() || null, input.assigned_user_id || null, input.status, id, eventId,
+    );
+    return result.changes > 0 ? this.getOutreachTarget(id, eventId) : undefined;
+  }
+
+  async bindOutreachTargetIdentity(id: string, eventId: string, pageId: string, senderId: string) {
+    const result = this.db.prepare("UPDATE outreach_targets SET bound_page_id=?,bound_sender_id=?,delivery_mode='manual_only',updated_at=CURRENT_TIMESTAMP WHERE id=? AND event_id=?").run(pageId.trim(), senderId.trim(), id, eventId);
+    return result.changes > 0 ? this.getOutreachTarget(id, eventId) : undefined;
+  }
+
+  async findOutreachTargetIdentityMatches(pageId: string, senderId: string, eventIds: string[] = []) {
+    const normalizedEventIds = eventIds.map((value) => String(value || "").trim()).filter(Boolean);
+    const clauses = ["t.bound_page_id = ?", "t.bound_sender_id = ?", "c.status <> 'archived'", "t.status NOT IN ('declined','no_response')"];
+    const params: unknown[] = [pageId.trim(), senderId.trim()];
+    if (normalizedEventIds.length > 0) {
+      clauses.push(`t.event_id IN (${normalizedEventIds.map(() => "?").join(",")})`);
+      params.push(...normalizedEventIds);
+    }
+    return this.db.prepare(`SELECT t.* FROM outreach_targets t JOIN outreach_campaigns c ON c.id = t.campaign_id AND c.event_id = t.event_id WHERE ${clauses.join(" AND ")} ORDER BY t.updated_at DESC, t.id DESC`).all(...params).map((row) => mapOutreachTargetRow(row as Record<string, unknown>));
+  }
+
+  async markOutreachTargetReplied(id: string, eventId: string, repliedAt = new Date().toISOString()) {
+    const result = this.db.prepare("UPDATE outreach_targets SET status='replied',delivery_mode='api_reply_eligible',last_replied_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND event_id=?").run(repliedAt, id, eventId);
+    return result.changes > 0 ? this.getOutreachTarget(id, eventId) : undefined;
+  }
+
+  async listOutreachDrafts(targetId: string, eventId: string) {
+    return this.db.prepare("SELECT * FROM outreach_drafts WHERE target_id = ? AND event_id = ? ORDER BY revision DESC").all(targetId, eventId).map((row) => mapOutreachDraftRow(row as Record<string, unknown>));
+  }
+
+  async getOutreachDraft(id: string, eventId: string) {
+    const row = this.db.prepare("SELECT * FROM outreach_drafts WHERE id = ? AND event_id = ?").get(id, eventId) as Record<string, unknown> | undefined;
+    return row ? mapOutreachDraftRow(row) : undefined;
+  }
+
+  async createOutreachDraft(input: CreateOutreachDraftInput) {
+    const draft = this.db.transaction(() => {
+      const latest = this.db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM outreach_drafts WHERE target_id = ? AND event_id = ?").get(input.target_id, input.event_id) as { revision?: number } | undefined;
+      const id = generateEntityId("odrf");
+      const revision = Number(latest?.revision || 0) + 1;
+      this.db.prepare("INSERT INTO outreach_drafts (id,target_id,campaign_id,event_id,revision,body,kind,source_message_id,approval_status,created_by_user_id) SELECT ?,?,campaign_id,event_id,?,?,?,?,?,? FROM outreach_targets WHERE id=? AND event_id=?")
+        .run(id, input.target_id, revision, input.body.trim(), input.kind || "initial", input.source_message_id || null, "draft", input.created_by_user_id || null, input.target_id, input.event_id);
+      return this.db.prepare("SELECT * FROM outreach_drafts WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    })();
+    if (!draft) throw new Error("Outreach target was not found");
+    return mapOutreachDraftRow(draft);
+  }
+
+  async approveOutreachDraft(id: string, eventId: string, userId: string) {
+    const result = this.db.prepare("UPDATE outreach_drafts SET approval_status='approved',approved_by_user_id=?,approved_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND event_id=?").run(userId || null, id, eventId);
+    return result.changes > 0 ? mapOutreachDraftRow(this.db.prepare("SELECT * FROM outreach_drafts WHERE id = ?").get(id) as Record<string, unknown>) : undefined;
+  }
+
+  async listOutreachAssets(eventId: string, campaignId: string) {
+    return this.db.prepare("SELECT * FROM outreach_assets WHERE event_id = ? AND campaign_id = ? ORDER BY is_active DESC, updated_at DESC, id DESC").all(eventId, campaignId).map((row) => mapOutreachAssetRow(row as Record<string, unknown>));
+  }
+
+  async createOutreachAsset(input: CreateOutreachAssetInput) {
+    const id = generateEntityId("oast");
+    this.db.prepare("INSERT INTO outreach_assets (id,campaign_id,event_id,name,type,description,url,tags,is_active) VALUES (?,?,?,?,?,?,?,?,?)").run(
+      id, input.campaign_id, input.event_id, input.name.trim(), String(input.type || "other").trim(), String(input.description || "").trim(), input.url.trim(), String(input.tags || "").trim(), input.is_active !== false ? 1 : 0,
+    );
+    const row = this.db.prepare("SELECT * FROM outreach_assets WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new Error("Outreach asset was not created");
+    return mapOutreachAssetRow(row);
+  }
+
+  async listOutreachDeliveries(targetId: string, eventId: string) {
+    return this.db.prepare("SELECT * FROM outreach_deliveries WHERE target_id = ? AND event_id = ? ORDER BY created_at DESC, id DESC").all(targetId, eventId).map((row) => mapOutreachDeliveryRow(row as Record<string, unknown>));
+  }
+
+  async getOutreachDeliveryByIdempotency(eventId: string, idempotencyKey: string) {
+    const row = this.db.prepare("SELECT * FROM outreach_deliveries WHERE event_id = ? AND idempotency_key = ?").get(eventId, idempotencyKey) as Record<string, unknown> | undefined;
+    return row ? mapOutreachDeliveryRow(row) : undefined;
+  }
+
+  async createOutreachDelivery(input: CreateOutreachDeliveryInput) {
+    const id = generateEntityId("odlv");
+    this.db.prepare("INSERT INTO outreach_deliveries (id,target_id,campaign_id,event_id,draft_id,asset_id,kind,channel_platform,channel_external_id,recipient_id,idempotency_key,status,external_message_id,error_message,sent_by_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      id, input.target_id, input.campaign_id, input.event_id, input.draft_id || null, input.asset_id || null, input.kind, input.channel_platform, input.channel_external_id.trim(), input.recipient_id.trim(), input.idempotency_key.trim(), input.status || "pending", input.external_message_id || null, input.error_message || null, input.sent_by_user_id || null,
+    );
+    const row = this.db.prepare("SELECT * FROM outreach_deliveries WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!row) throw new Error("Outreach delivery was not created");
+    return mapOutreachDeliveryRow(row);
+  }
+
+  async updateOutreachDelivery(id: string, eventId: string, input: Partial<Pick<OutreachDeliveryRow, "status" | "external_message_id" | "error_message" | "sent_by_user_id">>) {
+    const status = input.status || "pending";
+    const result = this.db.prepare("UPDATE outreach_deliveries SET status=?,external_message_id=?,error_message=?,sent_by_user_id=?,sent_at=CASE WHEN ?='sent' THEN COALESCE(sent_at,CURRENT_TIMESTAMP) ELSE sent_at END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND event_id=?").run(
+      status, input.external_message_id || null, input.error_message || null, input.sent_by_user_id || null, status, id, eventId,
+    );
+    return result.changes > 0 ? mapOutreachDeliveryRow(this.db.prepare("SELECT * FROM outreach_deliveries WHERE id = ?").get(id) as Record<string, unknown>) : undefined;
   }
 
   private replaceEventDocumentChunks(documentId: string, eventId: string, content: string, isActive = true) {

@@ -90,6 +90,7 @@ import { EventWorkspaceScreen } from "./features/event/components/EventWorkspace
 import { EventWorkspacePanel } from "./features/event-workspace/components/EventWorkspacePanel";
 import { EventMailScreen } from "./features/mail/components/EventMailScreen";
 import { PublicInboxScreen } from "./features/inbox/components/PublicInboxScreen";
+import { OutreachScreen } from "./features/outreach/components/OutreachScreen";
 import { LogsScreen } from "./features/logs/components/LogsScreen";
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { RegistrationsScreen } from "./features/registrations/components/RegistrationsScreen";
@@ -168,7 +169,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox";
+type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -496,6 +497,15 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       },
     ],
   },
+  outreach: {
+    title: "Outreach Help",
+    summary: "Prepare, match, review, and track press outreach without allowing unapproved or cold automated sends.",
+    points: [
+      { label: "Human approval", body: "AI only prepares drafts. A person reviews every first contact and every reply before delivery." },
+      { label: "Campaign context", body: "Keep campaign facts here so they stay separate from the event's customer Auto Reply prompt." },
+      { label: "Follow-up", body: "Use target statuses, reply counts, and follow-up dates to keep the outreach queue actionable." },
+    ],
+  },
   logs: {
     title: "Logs Help",
     summary: "Use logs to inspect live conversations, traces, and failures without editing the underlying event setup.",
@@ -752,6 +762,7 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
   reports: "Reports",
   checkin: "Check-in",
   inbox: "Inbox",
+  outreach: "Outreach",
 };
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
@@ -811,7 +822,7 @@ function readWorkspaceSession() {
   if (typeof window === "undefined") return fallback;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
-    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "direct_tickets", "reports", "checkin", "inbox"];
+    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "direct_tickets", "reports", "checkin", "inbox", "outreach"];
     return {
       eventId: typeof parsed.eventId === "string" ? parsed.eventId : "",
       activeTab: validTabs.includes(parsed.activeTab as AppTab) ? parsed.activeTab as AppTab : fallback.activeTab,
@@ -3412,7 +3423,7 @@ export default function App() {
     { id: "public" as const, icon: Eye, label: "Public Page", description: "Poster, public copy, and privacy messaging" },
   ];
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
-  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
+  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs" || activeTab === "outreach";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const effectiveSidebarCollapsed = sidebarCollapsed;
   const primaryTabs = [
@@ -3432,6 +3443,7 @@ export default function App() {
     { id: "setup" as const, icon: SettingsIcon, label: "Runtime Setup", description: "Runtime policy and external channel setup" },
   ];
   const operationsTabs = [
+    ...(canViewLogs ? [{ id: "outreach" as const, icon: Send, label: "Outreach" }] : []),
     ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: "Reports" }] : []),
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
     ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: "Direct Tickets" }] : []),
@@ -5377,7 +5389,7 @@ export default function App() {
       ...(canManageRegistrations ? ["registrations", "direct_tickets", "checkin"] : []),
       ...(canViewLogs ? ["reports"] : []),
       ...(canViewLogs ? ["inbox"] : []),
-      ...(canViewLogs ? ["logs"] : []),
+      ...(canViewLogs ? ["logs", "outreach"] : []),
       ...(authUser ? ["settings"] : []),
       ...(canManageUsers ? ["team"] : []),
     ] as AppTab[];
@@ -10197,6 +10209,11 @@ export default function App() {
                 statusUpdateLoading={statusUpdateLoading}
                 statusUpdateMessage={statusUpdateMessage}
               />
+            </motion.div>
+          )}
+          {activeTab === "outreach" && (
+            <motion.div key="outreach" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
+              <OutreachScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} />
             </motion.div>
           )}
           {activeTab === "reports" && (
