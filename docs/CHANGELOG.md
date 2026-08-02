@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 - 2026-08-02
+
+- Improved direct-ticket preview, print layout, readability, and Thai font output.
+- Added class-specific ticket designs, multiple-seat issuing, and direct-seat recovery tools.
+- Added seat-map import review, draft persistence, and check-in readiness for direct tickets.
+
+## 0.2.0 - 2026-07-31
+
+- Added VIP and direct-seat allocation with manual payment verification.
+- Added Ticket Designer graphics, live preview, PNG, A6 PDF, and A4 printing.
+- Added Central Settings for account preferences, access, system version, and feature updates.
+
 ## 0.1.2 - 2026-07-11
 
 - Reworked workspace visual hierarchy with fewer container borders and distinct tonal sections in light and dark themes.
