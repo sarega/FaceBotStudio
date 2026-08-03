@@ -20,6 +20,7 @@ import {
   StatusLine,
   type BadgeTone,
 } from "../../../components/shared/AppUi";
+import { translate, type AppLanguage } from "../../../lib/i18n";
 
 type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 
@@ -78,6 +79,7 @@ type RegistrationsScreenProps = {
   onUpdateRegistrationStatus: (registrationId: string, status: RegistrationStatus) => unknown;
   statusUpdateLoading: boolean;
   statusUpdateMessage: string;
+  language: AppLanguage;
 };
 
 export function RegistrationsScreen({
@@ -112,36 +114,40 @@ export function RegistrationsScreen({
   onUpdateRegistrationStatus,
   statusUpdateLoading,
   statusUpdateMessage,
+  language,
 }: RegistrationsScreenProps) {
+  const t = (key: string, fallback: string) => translate(language, `registrations.${key}`, fallback);
+  const statusLabel = (status: string) => t(`status.${status}`, status);
+  const formatDate = (value: string) => new Date(value).toLocaleString(language === "th" ? "th-TH" : "en-US");
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)]">
       <div className="space-y-4">
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="flex flex-col gap-2 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-base font-semibold">Registered Attendees</h2>
+              <h2 className="text-base font-semibold">{t("title", "Registered Attendees")}</h2>
               <StatusLine
                 className="mt-0.5"
                 items={[
-                  `${filteredRegistrations.length} results`,
+                  `${filteredRegistrations.length} ${t("results", "results")}`,
                   registrationAvailability.label,
                 ]}
               />
               <p className="text-xs text-slate-500">
                 {registrationCapacity.limit === null
-                  ? `${activeAttendeeCount} active attendees. Search fast, then progressively load more rows when this event gets large.`
+                  ? `${activeAttendeeCount} ${t("activeAttendees", "active attendees")}. ${t("searchProgressive", "Search fast, then progressively load more rows when this event gets large.")}`
                   : registrationCapacity.remaining === 0
-                  ? `Capacity is full. ${activeAttendeeCount} of ${registrationCapacity.limit} seats are occupied, so new registrations are blocked.`
-                  : `${activeAttendeeCount} of ${registrationCapacity.limit} seats filled. ${registrationCapacity.remaining} seats remaining before registration closes for capacity.`}
+                  ? `${t("capacityFull", "Capacity is full.")} ${activeAttendeeCount} ${t("of", "of")} ${registrationCapacity.limit} ${t("seatsOccupied", "seats are occupied, so new registrations are blocked.")}`
+                  : `${activeAttendeeCount} ${t("of", "of")} ${registrationCapacity.limit} ${t("seatsFilled", "seats filled.")} ${registrationCapacity.remaining} ${t("seatsRemaining", "seats remaining before registration closes for capacity.")}`}
               </p>
             </div>
-            <InlineActionsMenu label="Actions" tone="neutral">
+            <InlineActionsMenu label={t("actions", "Actions")} tone="neutral">
               <MenuActionLink
                 href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}
                 tone="neutral"
               >
                 <Download className="h-3.5 w-3.5" />
-                <span className="font-medium">Export CSV</span>
+                <span className="font-medium">{t("exportCsv", "Export CSV")}</span>
               </MenuActionLink>
             </InlineActionsMenu>
           </div>
@@ -152,13 +158,13 @@ export function RegistrationsScreen({
                 value={registrationListQuery}
                 onChange={(event) => onRegistrationListQueryChange(event.target.value)}
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Search by name, registration ID, phone, or email"
+                placeholder={t("searchPlaceholder", "Search by name, registration ID, phone, or email")}
               />
               {registrationListQuery && (
                 <button
                   onClick={() => onRegistrationListQueryChange("")}
                   className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
-                  aria-label="Clear registration search"
+                  aria-label={t("clearSearch", "Clear registration search")}
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -168,7 +174,7 @@ export function RegistrationsScreen({
           <div className="max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden">
             {filteredRegistrations.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
+                {deferredRegistrationListQuery ? t("noMatch", "No attendees match this search.") : t("noRegistrations", "No registrations yet.")}
               </div>
             ) : (
               visibleRegistrations.map((registration) => (
@@ -187,15 +193,15 @@ export function RegistrationsScreen({
                       <p className="truncate text-sm font-semibold text-slate-900">{registration.first_name} {registration.last_name}</p>
                       <p className="mt-0.5 font-mono text-[11px] font-bold text-blue-600">{registration.id}</p>
                       <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                        {registration.phone || registration.email || "No contact info"}
+                        {registration.phone || registration.email || t("noContact", "No contact info")}
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                      <StatusBadge tone={getRegistrationStatusTone(registration.status)}>{registration.status}</StatusBadge>
+                      <StatusBadge tone={getRegistrationStatusTone(registration.status)}>{statusLabel(registration.status)}</StatusBadge>
                       {selectedRegistrationId === registration.id && <SelectionMarker />}
                     </div>
                   </div>
-                  <p className="mt-1 text-[10px] text-slate-500">{new Date(registration.timestamp).toLocaleString()}</p>
+                        <p className="mt-1 text-[10px] text-slate-500">{formatDate(registration.timestamp)}</p>
                 </button>
               ))
             )}
@@ -205,16 +211,16 @@ export function RegistrationsScreen({
               <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                 <tr>
                   <th className="px-4 py-2.5">ID</th>
-                  <th className="px-4 py-2.5">Name</th>
-                  <th className="px-4 py-2.5">Contact</th>
-                  <th className="px-4 py-2.5">Status</th>
+                  <th className="px-4 py-2.5">{t("name", "Name")}</th>
+                  <th className="px-4 py-2.5">{t("contact", "Contact")}</th>
+                  <th className="px-4 py-2.5">{t("status", "Status")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRegistrations.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-4 py-10 text-center text-slate-400 italic">
-                      {deferredRegistrationListQuery ? "No attendees match this search." : "No registrations yet."}
+                      {deferredRegistrationListQuery ? t("noMatch", "No attendees match this search.") : t("noRegistrations", "No registrations yet.")}
                     </td>
                   </tr>
                 ) : (
@@ -234,7 +240,7 @@ export function RegistrationsScreen({
                       </td>
                       <td className="px-4 py-2.5">
                         <p className="text-sm font-medium">{registration.first_name} {registration.last_name}</p>
-                        <p className="text-[10px] text-slate-400">{new Date(registration.timestamp).toLocaleString()}</p>
+                        <p className="text-[10px] text-slate-400">{formatDate(registration.timestamp)}</p>
                       </td>
                       <td className="px-4 py-2.5">
                         <p className="text-[11px]">{registration.phone}</p>
@@ -242,10 +248,10 @@ export function RegistrationsScreen({
                       </td>
                       <td className="px-4 py-2.5">
                         <StatusBadge tone={getRegistrationStatusTone(registration.status)}>
-                          {registration.status}
+                          {statusLabel(registration.status)}
                         </StatusBadge>
                         {selectedRegistrationId === registration.id && (
-                          <p className="mt-1 text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Selected</p>
+                          <p className="mt-1 text-[10px] font-semibold text-blue-600 uppercase tracking-wider">{t("selected", "Selected")}</p>
                         )}
                       </td>
                     </tr>
@@ -256,7 +262,7 @@ export function RegistrationsScreen({
           </div>
           <div className="flex flex-col gap-2 border-t border-slate-100 px-3 py-2.5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-4">
             <p>
-              Showing {visibleRegistrations.length} of {filteredRegistrations.length} attendees
+              {t("showing", "Showing")} {visibleRegistrations.length} {t("of", "of")} {filteredRegistrations.length} {t("attendees", "attendees")}
             </p>
             {hasMoreRegistrations && (
               <ActionButton
@@ -264,7 +270,7 @@ export function RegistrationsScreen({
                 tone="neutral"
                 className="w-full text-sm sm:w-auto"
               >
-                Load 120 More
+                {t("loadMore", "Load 120 More")}
               </ActionButton>
             )}
           </div>
@@ -277,9 +283,9 @@ export function RegistrationsScreen({
             <div>
               <h3 className="text-sm font-semibold flex items-center gap-2">
                 <Activity className="w-4 h-4 text-blue-600" />
-                Event Stats
+                {t("eventStats", "Event Stats")}
               </h3>
-              <p className="hidden text-xs text-slate-500 sm:block">Glanceable live totals for this event.</p>
+              <p className="hidden text-xs text-slate-500 sm:block">{t("eventStatsHint", "Glanceable live totals for this event.")}</p>
             </div>
             <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
           </div>
@@ -287,21 +293,21 @@ export function RegistrationsScreen({
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Seat Capacity</p>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("seatCapacity", "Seat Capacity")}</p>
                   <p className="mt-1 text-2xl font-bold text-slate-900">
                     {registrationCapacity.limit === null ? activeAttendeeCount : `${activeAttendeeCount}/${registrationCapacity.limit}`}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     {registrationCapacity.limit === null
-                      ? "No hard capacity limit is configured for this event."
+                      ? t("noCapacityLimit", "No hard capacity limit is configured for this event.")
                       : registrationCapacity.remaining === 0
-                      ? "No seats remaining. Registration now stops at capacity."
-                      : `${registrationCapacity.remaining} seats remain before registration auto-closes for capacity.`}
+                      ? t("noSeatsRemaining", "No seats remaining. Registration now stops at capacity.")
+                      : `${registrationCapacity.remaining} ${t("seatsAutoClose", "seats remain before registration auto-closes for capacity.")}`}
                   </p>
                 </div>
                 {registrationCapacity.limit !== null && (
                   <div className="text-right">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Filled</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("filled", "Filled")}</p>
                     <p className="mt-1 text-lg font-bold text-slate-900">{registrationCapacity.fillPercent}%</p>
                   </div>
                 )}
@@ -320,26 +326,26 @@ export function RegistrationsScreen({
 
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Total</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("total", "Total")}</p>
                 <p className="mt-1 text-base font-bold text-slate-900">{registrationsCount}</p>
               </div>
               <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Registered</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">{t("registered", "Registered")}</p>
                 <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
               </div>
               <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">Checked</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">{t("checked", "Checked")}</p>
                 <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Cancelled</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("cancelled", "Cancelled")}</p>
                 <p className="mt-1 text-base font-bold text-slate-700">{cancelledCount}</p>
               </div>
             </div>
 
             <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Check-in Rate</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("checkInRate", "Check-in Rate")}</p>
                 <p className="mt-1 text-xs text-slate-500">{registrationAvailability.helper}</p>
               </div>
               <p className="text-lg font-bold text-violet-700">{checkInRate}%</p>
@@ -350,19 +356,19 @@ export function RegistrationsScreen({
         <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h3 className="text-base font-semibold">Selected Ticket</h3>
-              <p className="text-xs text-slate-500">Click a registration row to preview, download, and edit status.</p>
+              <h3 className="text-base font-semibold">{t("selectedTicket", "Selected Ticket")}</h3>
+              <p className="text-xs text-slate-500">{t("selectedTicketHint", "Click a registration row to preview, download, and edit status.")}</p>
             </div>
             {selectedRegistration && (
               <StatusBadge tone={getRegistrationStatusTone(selectedRegistration.status)}>
-                {selectedRegistration.status}
+                {statusLabel(selectedRegistration.status)}
               </StatusBadge>
             )}
           </div>
 
           {!selectedRegistration ? (
             <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-              No attendee selected yet.
+              {t("noAttendeeSelected", "No attendee selected yet.")}
             </div>
           ) : (
             <div className="space-y-3">
@@ -378,16 +384,16 @@ export function RegistrationsScreen({
                   className="inline-flex min-h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-xl border border-blue-600 bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)] transition-colors sm:flex-none"
                 >
                   <ExternalLink className="w-4 h-4" />
-                  Open PNG Ticket
+                  {t("openPng", "Open PNG Ticket")}
                 </a>
-                <InlineActionsMenu label="Ticket Actions" tone="neutral">
+                <InlineActionsMenu label={t("ticketActions", "Ticket Actions")} tone="neutral">
                   <MenuActionLink
                     href={selectedTicketPngUrl}
                     download={`${selectedRegistration.id}.png`}
                     tone="neutral"
                   >
                     <Download className="h-3.5 w-3.5" />
-                    <span className="font-medium">Download PNG</span>
+                    <span className="font-medium">{t("downloadPng", "Download PNG")}</span>
                   </MenuActionLink>
                   <MenuActionLink
                     href={selectedTicketSvgUrl}
@@ -397,7 +403,7 @@ export function RegistrationsScreen({
                     className="mt-1"
                   >
                     <QrCode className="h-3.5 w-3.5" />
-                    <span className="font-medium">Open SVG Preview</span>
+                    <span className="font-medium">{t("openSvg", "Open SVG Preview")}</span>
                   </MenuActionLink>
                   {canChangeRegistrationStatus && (
                     <MenuActionItem
@@ -407,7 +413,7 @@ export function RegistrationsScreen({
                       className="mt-1"
                     >
                       {deleteRegistrationLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                      <span className="font-medium">Delete Registration</span>
+                      <span className="font-medium">{t("deleteRegistration", "Delete Registration")}</span>
                     </MenuActionItem>
                   )}
                 </InlineActionsMenu>
@@ -415,7 +421,7 @@ export function RegistrationsScreen({
 
               {canChangeRegistrationStatus && (
                 <div className="border-t border-slate-100 pt-3">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Admin Status Override</p>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">{t("adminStatusOverride", "Admin Status Override")}</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     {(["registered", "checked-in", "cancelled"] as RegistrationStatus[]).map((statusOption) => {
                       const active = selectedRegistration.status === statusOption;
@@ -435,10 +441,10 @@ export function RegistrationsScreen({
                           className="w-full text-sm"
                         >
                           {statusOption === "registered"
-                            ? "Mark Registered"
+                            ? t("markRegistered", "Mark Registered")
                             : statusOption === "checked-in"
-                            ? "Mark Checked In"
-                            : "Mark Cancelled"}
+                            ? t("markCheckedIn", "Mark Checked In")
+                            : t("markCancelled", "Mark Cancelled")}
                         </ActionButton>
                       );
                     })}

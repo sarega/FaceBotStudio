@@ -10230,6 +10230,7 @@ export default function App() {
               className="space-y-6"
             >
               <RegistrationsScreen
+                language={language}
                 filteredRegistrations={filteredRegistrations}
                 registrationAvailability={registrationAvailability}
                 registrationCapacity={registrationCapacity}
@@ -10284,12 +10285,12 @@ export default function App() {
           )}
           {activeTab === "reports" && (
             <motion.div key="reports" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <ReportsScreen eventId={selectedEventId} apiFetch={apiFetch} canExportDirectTickets={canManageRegistrations} />
+              <ReportsScreen eventId={selectedEventId} apiFetch={apiFetch} canExportDirectTickets={canManageRegistrations} language={language} />
             </motion.div>
           )}
           {activeTab === "direct_tickets" && (
             <motion.div key="direct-tickets" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <DirectTicketingScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} />
+              <DirectTicketingScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} language={language} />
             </motion.div>
           )}
           {activeTab === "checkin" && (
@@ -10301,6 +10302,7 @@ export default function App() {
               className="space-y-4"
             >
               <CheckinScreen
+                language={language}
                 selectedEvent={selectedEvent}
                 getEventStatusLabel={getEventStatusLabel}
                 getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
@@ -10363,6 +10365,7 @@ export default function App() {
               className="space-y-6"
             >
               <PublicInboxScreen
+                language={language}
                 counts={publicInboxCounts}
                 totalConversationCount={publicInboxConversations.length}
                 deferredQuery={deferredPublicInboxQuery}

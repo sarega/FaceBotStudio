@@ -99,3 +99,27 @@ test("resetting a performance removes its test tickets and seats", async () => {
   assert.equal((await db.listDirectTickets(event.id)).length, 0);
   assert.equal((await db.listDirectPerformances(event.id)).length, 1);
 });
+
+test("editing updates a performance and deleting protects performances with tickets", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Edit and delete test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  const updated = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1 updated", starts_at: "2026-08-22T19:30:00+07:00" });
+  assert.equal(updated.id, performance.id);
+  assert.equal(updated.title, "Round 1 updated");
+  assert.equal((await db.listDirectPerformances(event.id)).length, 1);
+
+  const [seat] = await db.importDirectSeats(event.id, performance.id, [{ zone: "VIP", row_label: "A", seat_label: "01" }]);
+  assert.deepEqual(await db.deleteDirectPerformance(event.id, performance.id), { status: "deleted", tickets: 0, seats: 1 });
+  assert.equal((await db.listDirectPerformances(event.id)).length, 0);
+  assert.equal((await db.listDirectSeats(event.id, performance.id)).length, 0);
+
+  const protectedPerformance = await db.upsertDirectPerformance({ event_id: event.id, code: "R2", title: "Round 2", starts_at: "2026-08-23T18:30:00+07:00" });
+  const [protectedSeat] = await db.importDirectSeats(event.id, protectedPerformance.id, [{ zone: "VIP", row_label: "A", seat_label: "01" }]);
+  const ticket = await db.createDirectTicket({ event_id: event.id, performance_id: protectedPerformance.id, seat_id: protectedSeat.id, ticket_class: "VIP", payment_required: false });
+  assert.ok(ticket.ticket);
+  assert.deepEqual(await db.deleteDirectPerformance(event.id, protectedPerformance.id), { status: "blocked", tickets: 1, seats: 1 });
+  assert.equal((await db.listDirectPerformances(event.id)).length, 1);
+  assert.equal((await db.listDirectSeats(event.id, protectedPerformance.id)).length, 1);
+});

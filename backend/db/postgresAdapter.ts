@@ -877,6 +877,35 @@ export class PostgresAppDatabase implements AppDatabase {
     return mapDirectPerformanceRow(result.rows[0]);
   }
 
+  async deleteDirectPerformance(eventId: string, performanceId: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const performance = await client.query("SELECT id FROM event_performances WHERE id=$1 AND event_id=$2 FOR UPDATE", [performanceId, eventId]);
+      if (!performance.rows[0]) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const ticketCount = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM direct_tickets WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
+      const seatCount = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM direct_seats WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
+      const tickets = Number(ticketCount.rows[0]?.count || 0);
+      const seats = Number(seatCount.rows[0]?.count || 0);
+      if (tickets > 0) {
+        await client.query("COMMIT");
+        return { status: "blocked" as const, tickets, seats };
+      }
+      await client.query("DELETE FROM direct_seats WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
+      await client.query("DELETE FROM event_performances WHERE id=$1 AND event_id=$2", [performanceId, eventId]);
+      await client.query("COMMIT");
+      return { status: "deleted" as const, tickets, seats };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async resetDirectPerformance(eventId: string, performanceId: string) {
     const client = await this.pool.connect();
     try {

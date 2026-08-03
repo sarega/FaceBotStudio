@@ -14620,6 +14620,19 @@ async function startServer() {
     await recordAudit(req, "direct_performance.upserted", "direct_performance", performance.id, { event_id: performance.event_id, code });
     return res.status(201).json(performance);
   });
+  app.delete("/api/direct-ticketing/performances/:id", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const result = await appDb.deleteDirectPerformance(eventId, String(req.params.id || "").trim());
+      if (!result) return res.status(404).json({ error: "Performance not found" });
+      if (result.status === "blocked") return res.status(409).json({ error: "Performance has tickets", ...result });
+      await recordAudit(req, "direct_performance.deleted", "direct_performance", String(req.params.id || "").trim(), { event_id: eventId, deleted_tickets: result.tickets, deleted_seats: result.seats });
+      return res.json(result);
+    } catch (error) {
+      console.error("Failed to delete direct performance:", error);
+      return res.status(500).json({ error: "Failed to delete performance" });
+    }
+  });
   app.post("/api/direct-ticketing/performances/:id/reset", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);

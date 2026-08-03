@@ -1364,6 +1364,20 @@ export class SqliteAppDatabase implements AppDatabase {
     return mapDirectPerformanceRow(this.db.prepare("SELECT * FROM event_performances WHERE id = ?").get(id) as Record<string, unknown>);
   }
 
+  async deleteDirectPerformance(eventId: string, performanceId: string) {
+    const result = this.db.transaction(() => {
+      const performance = this.db.prepare("SELECT id FROM event_performances WHERE id = ? AND event_id = ?").get(performanceId, eventId);
+      if (!performance) return undefined;
+      const tickets = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_tickets WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
+      const seats = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_seats WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
+      if (tickets > 0) return { status: "blocked" as const, tickets, seats };
+      this.db.prepare("DELETE FROM direct_seats WHERE performance_id = ? AND event_id = ?").run(performanceId, eventId);
+      this.db.prepare("DELETE FROM event_performances WHERE id = ? AND event_id = ?").run(performanceId, eventId);
+      return { status: "deleted" as const, tickets, seats };
+    });
+    return result();
+  }
+
   async resetDirectPerformance(eventId: string, performanceId: string) {
     const reset = this.db.transaction(() => {
       const performance = this.db.prepare("SELECT id FROM event_performances WHERE id = ? AND event_id = ?").get(performanceId, eventId);

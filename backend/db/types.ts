@@ -276,6 +276,12 @@ export interface DirectPerformanceRow {
   updated_at: string;
 }
 
+export interface DirectPerformanceDeleteResult {
+  status: "deleted" | "blocked";
+  tickets: number;
+  seats: number;
+}
+
 export interface DirectSeatRow {
   id: string;
   event_id: string;
@@ -712,6 +718,7 @@ export interface AppDatabase {
   deleteRegistration(id: string): Promise<boolean>;
   listDirectPerformances(eventId: string): Promise<DirectPerformanceRow[]>;
   upsertDirectPerformance(input: UpsertDirectPerformanceInput): Promise<DirectPerformanceRow>;
+  deleteDirectPerformance(eventId: string, performanceId: string): Promise<DirectPerformanceDeleteResult | undefined>;
   resetDirectPerformance(eventId: string, performanceId: string): Promise<{ tickets: number; seats: number } | undefined>;
   listDirectSeats(eventId: string, performanceId?: string): Promise<DirectSeatRow[]>;
   importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]): Promise<DirectSeatRow[]>;
