@@ -5,6 +5,7 @@ type Performance = { id: string; code: string; title: string; starts_at: string;
 type Seat = { id: string; performance_id: string; zone: string; section_label?: string | null; row_label: string; seat_label: string; external_seat_ref?: string | null; status: string; allocation_status?: "allocated" | "not_allocated"; source_status?: "available" | "sold" | "generated" | "blocked" | "unknown"; face_value: number | null; x?: number | null; y?: number | null };
 type SeatDraft = { zone: string; section_label: string; row_label: string; seat_label: string; external_seat_ref: string; face_value: string; x: string; y: string; allocation_status: "allocated" | "not_allocated"; source_status: "available" | "sold" | "generated" | "blocked" | "unknown" };
 type SeatMapReview = { rows: SeatDraft[]; added: number; removed: number; changed: number; unchanged: number; protectedCount: number; sourceNames: string[] };
+type ProcessingState = { phase: "analyzing" | "preparing" | "saving"; completed: number; total: number; label: string; startedAt: number };
 type Ticket = { id: string; performance_id: string; ticket_class: string; holder_name: string; buyer_name: string; price_amount: number; payment_status: string; status: string; hold_expires_at?: string | null; has_payment_proof?: boolean; performance_title?: string; zone?: string; row_label?: string; seat_label?: string; delivery?: { png_url: string; pdf_url: string } | null };
 type TicketClassPreset = { id: string; name: string; price_amount: number; payment_required: boolean; primary_color: string; accent_color: string };
 type TicketDesign = { event_name: string; direct_ticket_artwork_url: string; direct_ticket_artwork_mode: "panel" | "background"; direct_ticket_artwork_opacity: string; direct_ticket_primary_color: string; direct_ticket_accent_color: string; direct_ticket_heading: string; direct_ticket_note: string };
@@ -82,6 +83,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const [seatDrafts, setSeatDrafts] = useState<SeatDraft[]>([blankSeatDraft()]);
   const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatMapZone, setSeatMapZone] = useState(""); const [availableSeatZone, setAvailableSeatZone] = useState(""); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState("");
   const [seatMapReview, setSeatMapReview] = useState<SeatMapReview | null>(null); const [rescanPending, setRescanPending] = useState(false);
+  const [processing, setProcessing] = useState<ProcessingState | null>(null); const [processingElapsed, setProcessingElapsed] = useState(0);
   const [design, setDesign] = useState<TicketDesign>(DEFAULT_TICKET_DESIGN);
   const load = async () => {
     if (!eventId) return;
@@ -140,6 +142,13 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     }
   };
   useEffect(() => { setSeatMapFile(null); setSeatMapSourceNames([]); setSeatMapReview(null); setRescanPending(false); setSeatMapImageUrl(selectedPerformance?.seat_plan_image_url || ""); setSeatMapZone(""); }, [performanceId, selectedPerformance?.seat_plan_image_url]);
+  useEffect(() => {
+    if (!processing) { setProcessingElapsed(0); return; }
+    const update = () => setProcessingElapsed(Math.max(0, Math.floor((Date.now() - processing.startedAt) / 1000)));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [processing?.startedAt]);
   const availableSeats = useMemo(() => seats.filter((seat) => seat.status === "available" && seat.allocation_status !== "not_allocated"), [seats]);
   const seatMapZones = useMemo(() => Array.from(new Set((seats.length ? seats : normalizeSeatDrafts(seatDrafts)).map((seat) => seat.zone).filter(Boolean))).sort(naturalLabelCompare), [seats, seatDrafts]);
   const filteredAvailableSeats = useMemo(() => availableSeatZone ? availableSeats.filter((seat) => seat.zone === availableSeatZone) : availableSeats, [availableSeatZone, availableSeats]);
@@ -202,19 +211,26 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     const sources = files.filter((file) => file !== overview);
     const analyzeFiles = sources.length ? sources : files;
     const primary = overview || files[0];
-    setSeatMapFile(primary); setSeatMapSourceNames(files.map((file) => file.name)); setSeatMapImageUrl(URL.createObjectURL(primary)); setBusy(true); setMessage(`${t("analyzingSeatMapBundle", "Analyzing seat-plan bundle with Gemini")} (0/${analyzeFiles.length})`);
+    const totalSteps = analyzeFiles.length + 1;
+    const startedAt = Date.now();
+    setSeatMapFile(primary); setSeatMapSourceNames(files.map((file) => file.name)); setSeatMapImageUrl(URL.createObjectURL(primary)); setBusy(true); setProcessing({ phase: "analyzing", completed: 0, total: totalSteps, label: `${t("analyzingSeatMapBundle", "Analyzing seat-plan bundle with Gemini")} (0/${analyzeFiles.length})`, startedAt }); setMessage(`${t("analyzingSeatMapBundle", "Analyzing seat-plan bundle with Gemini")} (0/${analyzeFiles.length})`);
     try {
       const combined: SeatDraft[] = [];
       const warnings: string[] = [];
       for (let index = 0; index < analyzeFiles.length; index += 1) {
         const file = analyzeFiles[index]; const context = seatMapContextFromFilename(file.name);
-        setMessage(`${t("analyzingSeatMapBundle", "Analyzing seat-plan bundle with Gemini")} (${index + 1}/${analyzeFiles.length}) — ${file.name}`);
+        const progressLabel = `${t("analyzingSeatMapBundle", "Analyzing seat-plan bundle with Gemini")} (${index + 1}/${analyzeFiles.length}) — ${file.name}`;
+        setProcessing({ phase: "analyzing", completed: index, total: totalSteps, label: progressLabel, startedAt });
+        setMessage(progressLabel);
         const response = await apiFetch(`/api/direct-ticketing/seat-map/analyze?event_id=${encodeURIComponent(eventId)}`, { method: "POST", headers: { "Content-Type": file.type }, body: file });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(`${file.name}: ${data.error || t("couldNotAnalyzeSeatMap", "Could not analyze seat map")}`);
         if (Array.isArray(data.warnings)) warnings.push(...data.warnings.map((warning: unknown) => `${file.name}: ${String(warning)}`));
         if (Array.isArray(data.seats)) data.seats.forEach((row: any) => { const sourceStatus = ["available", "sold", "generated", "blocked", "unknown"].includes(String(row.source_status || "")) ? String(row.source_status) as SeatDraft["source_status"] : "unknown"; combined.push({ zone: String(row.zone || context.zone), section_label: String(row.section_label || context.section_label || ""), row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""), external_seat_ref: String(row.external_seat_ref || ""), face_value: row.face_value == null || Number(row.face_value) === 0 ? (context.price == null ? "" : String(context.price)) : String(row.face_value), x: row.x == null ? "" : String(row.x), y: row.y == null ? "" : String(row.y), allocation_status: row.allocation_status === "not_allocated" ? "not_allocated" : "allocated", source_status: sourceStatus }); });
+        setProcessing({ phase: "analyzing", completed: index + 1, total: totalSteps, label: `${file.name} ${t("analysisComplete", "analyzed")}`, startedAt });
       }
+      setProcessing({ phase: "preparing", completed: analyzeFiles.length, total: totalSteps, label: t("preparingSeatMap", "Preparing seat map and rescan changes"), startedAt });
+      setMessage(t("preparingSeatMap", "Preparing seat map and rescan changes"));
       const unique = new Map<string, SeatDraft>();
       combined.filter((row) => row.zone && row.row_label && row.seat_label).forEach((row) => unique.set(seatDraftKey(row), row));
       const rows = Array.from(unique.values());
@@ -228,8 +244,9 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
       setSeatMapReview({ rows, added, removed, changed, unchanged: rows.length - added - changed, protectedCount, sourceNames: files.map((file) => file.name) });
       setRescanPending(true);
       setSeatDrafts(rows.length ? rows : [blankSeatDraft()]); setSeatMapZone(rows[0]?.zone || "");
+      setProcessing(null);
       setMessage(`${rows.length} ${t("seatNodesDetected", "seat nodes detected (red seats allocated to Meetrix)")} from ${analyzeFiles.length} ${t("zoneCharts", "zone charts")}${warnings.length ? ` — ${warnings.length} ${t("warningsReview", "warnings; review, then click Save all changes")}` : ` — ${t("reviewAndSave", "review then click Save all changes")}`}`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : t("couldNotAnalyzeSeatMap", "Could not analyze seat map")); } finally { setBusy(false); }
+    } catch (error) { setProcessing(null); setMessage(error instanceof Error ? error.message : t("couldNotAnalyzeSeatMap", "Could not analyze seat map")); } finally { setBusy(false); }
   };
   const analyzeSeatMap = async (file?: File) => { if (file) await analyzeSeatMapBundle([file]); };
   const importDrafts = async () => { if (!performanceId) return; const rows = normalizeSeatDrafts(seatDrafts); if (!rows.length) { setMessage(t("addSeatRow", "Add at least one row with zone, row, and seat")); return; } const data = await submit("/api/direct-ticketing/seats/import", { event_id: eventId, performance_id: performanceId, seats: rows }); if (data) setMessage(`${rows.length} ${t("seatsImported", "seats imported")}`); };
@@ -273,13 +290,15 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   };
   const saveAll = async () => {
     if (!canManage || busy) return;
-    setBusy(true); setMessage("");
+    const startedAt = Date.now();
+    setBusy(true); setProcessing({ phase: "saving", completed: 0, total: 3, label: t("savingDesign", "Saving ticket design"), startedAt }); setMessage(t("savingDesign", "Saving ticket design"));
     try {
       const seatMapUrl = (await uploadSeatMap()) || performanceForm.seat_plan_image_url.trim() || null;
       const { event_name: _eventName, ...designPayload } = design;
       const settingsResponse = await apiFetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, ...designPayload, direct_ticket_classes_json: JSON.stringify(ticketClasses) }) });
       const settingsData = await settingsResponse.json().catch(() => ({}));
       if (!settingsResponse.ok) throw new Error(settingsData.error || t("couldNotSaveSettings", "Could not save page settings"));
+      setProcessing({ phase: "saving", completed: 1, total: 3, label: t("savingPerformance", "Saving performance"), startedAt });
 
       let targetPerformanceId = performanceId;
       const hasPerformanceDraft = Object.values(performanceForm).some((value) => value.trim());
@@ -292,6 +311,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
         targetPerformanceId = String(performanceData.id || targetPerformanceId);
         setPerformanceId(targetPerformanceId);
       }
+      setProcessing({ phase: "saving", completed: 2, total: 3, label: t("savingSeats", "Saving seat map"), startedAt });
       const rows = normalizeSeatDrafts(seatDrafts);
       if (targetPerformanceId && rows.length) {
         const seatsResponse = await apiFetch("/api/direct-ticketing/seats/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, performance_id: targetPerformanceId, seats: rows, replace_missing: rescanPending }) });
@@ -300,13 +320,14 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
       }
       setSeatMapFile(null);
       setSeatMapReview(null); setRescanPending(false);
+      setProcessing(null);
       await load();
       if (targetPerformanceId) {
         const refreshed = await apiFetch(`/api/direct-ticketing/seats?event_id=${encodeURIComponent(eventId)}&performance_id=${encodeURIComponent(targetPerformanceId)}`);
         setSeats(await refreshed.json());
       }
       setMessage(`${t("savedAllChanges", "Saved all changes")}${rows.length ? ` — ${rows.length} ${t("seats", "seats")}` : ""}`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : t("couldNotSaveAllChanges", "Could not save all changes")); }
+    } catch (error) { setProcessing(null); setMessage(error instanceof Error ? error.message : t("couldNotSaveAllChanges", "Could not save all changes")); }
     finally { setBusy(false); }
   };
   const addTicketClass = () => {
@@ -332,6 +353,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const batchPricingPanel = canManage && seatDrafts.some((row) => row.zone && row.row_label && row.seat_label) ? <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-violet-600">{t("batchPricing", "Batch pricing")}</p><h3 className="mt-1 text-lg font-bold text-slate-900">{t("batchPricingTitle", "Set price for a zone or section")}</h3><p className="mt-1 text-sm text-slate-500">{t("batchPricingHint", "Use this when the source chart did not provide a reliable price. Individual rows can still be edited below.")}</p></div></div><div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_160px_auto] sm:items-end"><label className="text-xs font-bold text-slate-600">{t("zone", "Zone")} / {t("section", "Section")}<select value={batchPriceSection} onChange={(event) => setBatchPriceSection(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">{t("allScannedSeats", "All scanned seats")}</option>{Array.from(new Set(seatDrafts.filter((row) => row.zone && row.row_label && row.seat_label).map((row) => `${row.zone} · ${row.section_label}`))).sort(naturalLabelCompare).map((key) => <option key={key} value={key}>{key}</option>)}</select></label><label className="text-xs font-bold text-slate-600">{t("price", "Price")} (THB)<input type="number" min="0" value={batchPrice} onChange={(event) => setBatchPrice(event.target.value)} placeholder="1500" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label><button type="button" onClick={applyBatchPrice} className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-bold text-white">{t("applyPrice", "Apply price")}</button><span className="text-xs text-slate-500">{t("batchPriceSaveNote", "Not saved until Save all changes")}</span></div></section> : null;
   const seatMapLegend = seatDrafts.some((row) => row.zone && row.row_label && row.seat_label) ? <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-600"><span>{t("mapLegend", "Seat map legend")}</span><span className="inline-flex items-center gap-1.5"><i className="h-3 w-3 rounded-full bg-rose-600" />{t("blockedAllocation", "Red / Blocked = Meetrix allocation")}</span><span className="inline-flex items-center gap-1.5"><i className="h-3 w-3 rounded-full bg-sky-500" />{t("soldSource", "Blue = Ticketmelon sold/generated")}</span><span className="inline-flex items-center gap-1.5"><i className="h-3 w-3 rounded-full border-2 border-emerald-500" />{t("availableSource", "Green outline = Ticketmelon available, not ours")}</span></div> : null;
   const seatMapReviewPanel = seatMapReview ? <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-sm sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-amber-800">{t("rescanReview", "Rescan review")}</p><h3 className="mt-1 text-lg font-bold text-amber-950">{t("rescanReviewTitle", "Review the new seat map before saving")}</h3><p className="mt-1 text-sm text-amber-900">{seatMapReview.sourceNames.length} {t("sourceImages", "source images")} · {t("rescanSafeNote", "Existing held or issued tickets are protected during import.")}</p></div><button type="button" onClick={() => setSeatMapReview(null)} className="rounded-lg border border-amber-400 px-3 py-2 text-xs font-bold text-amber-900">{t("dismissReview", "Dismiss review")}</button></div><div className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-5"><span><strong className="block text-lg text-emerald-800">{seatMapReview.added}</strong>{t("added", "Added")}</span><span><strong className="block text-lg text-rose-800">{seatMapReview.removed}</strong>{t("removed", "Removed")}</span><span><strong className="block text-lg text-amber-800">{seatMapReview.changed}</strong>{t("changed", "Changed")}</span><span><strong className="block text-lg text-slate-800">{seatMapReview.unchanged}</strong>{t("unchanged", "Unchanged")}</span><span><strong className="block text-lg text-violet-800">{seatMapReview.protectedCount}</strong>{t("protected", "Protected")}</span></div><p className="mt-3 text-xs font-semibold text-amber-900">{t("rescanSaveNote", "The scan is in the editor now. Click Save all changes to commit it; dismissing this notice does not discard the editor changes.")}</p></section> : null;
+  const processingPanel = processing ? (() => { const percent = processing.total ? Math.min(100, Math.max(processing.completed ? 0 : 4, Math.round((processing.completed / processing.total) * 100))) : 0; const title = processing.phase === "analyzing" ? t("processingAnalysis", "Scanning seat-plan images") : processing.phase === "preparing" ? t("processingPrepare", "Preparing seat map") : t("processingSave", "Saving changes"); return <section role="status" aria-live="polite" className="rounded-xl border border-violet-300 bg-violet-50 p-4 shadow-sm"><div className="flex items-start gap-3"><span aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-violet-200 border-t-violet-700" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="font-bold text-violet-950">{title}</h3><span className="text-xs font-bold tabular-nums text-violet-800">{percent}% · {processingElapsed}s</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-violet-200"><div className="h-full rounded-full bg-violet-700 transition-[width] duration-500" style={{ width: `${percent}%` }} /></div><p className="mt-2 truncate text-sm text-violet-900">{processing.label}</p><p className="mt-1 text-xs text-violet-700">{processing.completed}/{processing.total} {t("processingSteps", "steps complete")} · {t("processingWait", "Please keep this page open while Gemini responds.")}</p></div></div></section>; })() : null;
   const previewClass = ticketClasses.find((item) => item.name === previewTicketClass) || ticketClasses[0];
   const previewPrimaryColor = previewClass?.primary_color || design.direct_ticket_primary_color;
   const previewAccentColor = previewClass?.accent_color || design.direct_ticket_accent_color;
@@ -341,6 +363,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
       {canManage && <div className="flex flex-wrap items-center gap-2"><button type="button" disabled={busy} onClick={() => void saveAll()} className="rounded-lg bg-violet-700 px-4 py-2 text-xs font-extrabold text-white shadow-md shadow-violet-700/20 disabled:cursor-not-allowed disabled:opacity-50">{t("saveAll", "Save all changes")}</button>{performanceId && <button type="button" disabled={busy} onClick={() => void resetPerformance()} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50">{t("resetPerformance", "Reset performance")}</button>}</div>}
     </div>
     {message && <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-700">{message}</div>}
+    {processingPanel}
     {batchPricingPanel}
     {seatMapLegend}
     {seatMapReviewPanel}
