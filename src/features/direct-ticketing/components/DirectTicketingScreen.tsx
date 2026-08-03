@@ -84,6 +84,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatMapZone, setSeatMapZone] = useState(""); const [availableSeatZone, setAvailableSeatZone] = useState(""); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState("");
   const [seatMapReview, setSeatMapReview] = useState<SeatMapReview | null>(null); const [rescanPending, setRescanPending] = useState(false);
   const [processing, setProcessing] = useState<ProcessingState | null>(null); const [processingElapsed, setProcessingElapsed] = useState(0);
+  const [showTicketSettings, setShowTicketSettings] = useState(false);
   const [design, setDesign] = useState<TicketDesign>(DEFAULT_TICKET_DESIGN);
   const load = async () => {
     if (!eventId) return;
@@ -186,7 +187,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     });
   };
   const submit = async (path: string, body: unknown) => { setBusy(true); setMessage(""); try { const response = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || t("requestFailed", "Request failed")); await load(); if (performanceId) { const refreshed = await apiFetch(`/api/direct-ticketing/seats?event_id=${encodeURIComponent(eventId)}&performance_id=${encodeURIComponent(performanceId)}`); setSeats(await refreshed.json()); } return data; } catch (error) { setMessage(error instanceof Error ? error.message : t("requestFailed", "Request failed")); return null; } finally { setBusy(false); } };
-  const createPerformance = async (event: React.FormEvent) => { event.preventDefault(); const data = await submit("/api/direct-ticketing/performances", { event_id: eventId, ...performanceForm }); if (data) { setPerformanceForm({ code: "", title: "", starts_at: "", seat_plan_image_url: "" }); setEditingPerformanceId(null); setPerformanceId(data.id); setMessage(t("performanceSaved", "Performance saved")); } };
+  const createPerformance = async (event: React.FormEvent) => { event.preventDefault(); const data = await submit("/api/direct-ticketing/performances", { event_id: eventId, ...performanceForm }); if (data) { const createdPerformanceId = String(data.id || ""); setPerformanceForm({ code: "", title: "", starts_at: "", seat_plan_image_url: "" }); setEditingPerformanceId(null); setPerformanceId(createdPerformanceId); setMessage(t("performanceSavedReadyToScan", "Performance saved and selected. You can now upload or scan its seat-plan images.")); } };
   const resetPerformance = async () => {
     if (!performanceId || !selectedPerformance || busy) return;
     if (!window.confirm(`${t("resetConfirm", "Reset performance")}: ${selectedPerformance.code} — ${selectedPerformance.title}? ${t("resetWarning", "This permanently removes its imported seats and all test tickets.")}`)) return;
@@ -202,7 +203,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     setSeatDrafts(next); setMessage(`${t("batchPriceApplied", "Price applied to")} ${changed} ${t("seats", "seats")} — ${t("saveHintShort", "click Save all changes to persist")}`);
   };
   const analyzeSeatMapBundle = async (input?: FileList | File[]) => {
-    if (!performanceId) return;
+    if (!performanceId) { setMessage(t("scanNeedsPerformance", "Create or choose a performance before uploading or scanning seat-plan images.")); return; }
     const files = Array.from(input || []);
     if (!files.length) return;
     const invalid = files.find((file) => !["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 4 * 1024 * 1024);
@@ -222,7 +223,8 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
         const progressLabel = `${t("analyzingSeatMapBundle", "Analyzing seat-plan bundle with Gemini")} (${index + 1}/${analyzeFiles.length}) — ${file.name}`;
         setProcessing({ phase: "analyzing", completed: index, total: totalSteps, label: progressLabel, startedAt });
         setMessage(progressLabel);
-        const response = await apiFetch(`/api/direct-ticketing/seat-map/analyze?event_id=${encodeURIComponent(eventId)}`, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+        const query = new URLSearchParams({ event_id: eventId, performance_id: performanceId });
+        const response = await apiFetch(`/api/direct-ticketing/seat-map/analyze?${query.toString()}`, { method: "POST", headers: { "Content-Type": file.type }, body: file });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(`${file.name}: ${data.error || t("couldNotAnalyzeSeatMap", "Could not analyze seat map")}`);
         if (Array.isArray(data.warnings)) warnings.push(...data.warnings.map((warning: unknown) => `${file.name}: ${String(warning)}`));
@@ -366,10 +368,10 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const previewClass = ticketClasses.find((item) => item.name === previewTicketClass) || ticketClasses[0];
   const previewPrimaryColor = previewClass?.primary_color || design.direct_ticket_primary_color;
   const previewAccentColor = previewClass?.accent_color || design.direct_ticket_accent_color;
-  return <div className="direct-ticketing-page space-y-6">
+  return <div className={`direct-ticketing-page space-y-6 ${showTicketSettings ? "" : "ticket-settings-collapsed"}`}>
     <div className="direct-ticketing-page-header sticky top-0 z-30 -mx-2 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-2 sm:-mx-4 sm:px-4">
       <div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-violet-600">{t("pageLabel", "Direct allocation")}</p><h2 className="text-lg font-bold leading-tight text-slate-900 sm:text-xl">{t("title", "VIP & Direct Tickets")}</h2><p className="mt-0.5 text-xs text-slate-500">{t("description", "Only import seats already locked for your allocation in Ticketmelon.")}</p></div>
-      {canManage && <div className="flex flex-wrap items-center gap-2"><button type="button" disabled={busy} onClick={() => void saveAll()} className="rounded-lg bg-violet-700 px-4 py-2 text-xs font-extrabold text-white shadow-md shadow-violet-700/20 disabled:cursor-not-allowed disabled:opacity-50">{t("saveAll", "Save all changes")}</button>{performanceId && <button type="button" disabled={busy} onClick={() => void resetPerformance()} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50">{t("resetPerformance", "Reset performance")}</button>}</div>}
+      {canManage && <div className="flex flex-wrap items-center gap-2"><button type="button" disabled={busy} onClick={() => void saveAll()} className="rounded-lg bg-violet-700 px-4 py-2 text-xs font-extrabold text-white shadow-md shadow-violet-700/20 disabled:cursor-not-allowed disabled:opacity-50">{t("saveAll", "Save all changes")}</button><button type="button" aria-expanded={showTicketSettings} onClick={() => setShowTicketSettings((value) => !value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700">{showTicketSettings ? t("hideTicketSettings", "Hide ticket settings") : t("showTicketSettings", "Show ticket settings")}</button>{performanceId && <button type="button" disabled={busy} onClick={() => void resetPerformance()} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 disabled:cursor-not-allowed disabled:opacity-50">{t("resetPerformance", "Reset performance")}</button>}</div>}
     </div>
     {message && <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-700">{message}</div>}
     {processingPanel}
@@ -377,6 +379,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     {seatMapLegend}
     {seatMapReviewPanel}
     {pendingScanNotice}
+    {canManage && !performanceId && <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"><strong>{t("scanNeedsPerformanceTitle", "Create a performance first")}</strong><p className="mt-1">{t("scanNeedsPerformance", "Create or choose a performance before uploading or scanning seat-plan images. The image scan is stored under the selected performance.")}</p></div>}
     {canManage && <section className="rounded-2xl border border-violet-200 bg-violet-50 p-4 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-violet-700">{t("seatPlanBundle", "Performance seat-plan bundle")}</p><p className="mt-1 text-sm text-violet-950">{t("seatPlanBundleHint", "Select the overview and all Zone charts together. AI reads every visible seat, keeps the source status, and makes only red Blocked seats available for your allocation. Upload the same bundle again to rescan.")}</p></div><label className={`cursor-pointer rounded-lg bg-violet-700 px-3 py-2 text-xs font-extrabold text-white ${!performanceId || busy ? "pointer-events-none opacity-40" : ""}`}>{t("uploadBundle", "Upload / rescan bundle")}{<input disabled={!performanceId || busy} multiple type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => { void analyzeSeatMapBundle(e.target.files || undefined); e.currentTarget.value = ""; }} className="hidden" />}</label></div>{seatMapSourceNames.length > 0 && <p className="mt-2 text-xs text-violet-800">{seatMapSourceNames.length} {t("sourceImages", "source images selected")} · {seatMapSourceNames.join(" · ")}</p>}</section>}
     <section className="direct-ticketing-section direct-ticketing-designer rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">

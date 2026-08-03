@@ -14090,6 +14090,10 @@ async function startServer() {
       const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       if (!bytes.length || bytes.length > PUBLIC_EVENT_MEDIA_MAX_BYTES) return res.status(400).json({ error: "Seat map image is required and must be 4 MB or smaller" });
       const eventId = getRequestedEventId(req);
+      const performanceId = String(req.query.performance_id || "").trim();
+      if (!performanceId) return res.status(400).json({ error: "Create or choose a performance before analyzing a seat map" });
+      const performance = (await appDb.listDirectPerformances(eventId)).find((item) => item.id === performanceId);
+      if (!performance) return res.status(404).json({ error: "Selected performance was not found for this event" });
       const settings = await getSettingsMap(eventId);
       const model = String(settings.llm_model || settings.global_llm_model || DEFAULT_OPENROUTER_MODEL).trim() || DEFAULT_OPENROUTER_MODEL;
       const prompt = [
@@ -14118,7 +14122,7 @@ async function startServer() {
         return { zone: String(seat?.zone || "").trim().slice(0, 80), section_label: String(seat?.section_label || "").trim().slice(0, 80), row_label: String(seat?.row_label || "").trim().slice(0, 40), seat_label: String(seat?.seat_label || "").trim().slice(0, 40), external_seat_ref: String(seat?.external_seat_ref || "").trim().slice(0, 120), face_value: Number.isFinite(Number(seat?.face_value)) ? Number(seat.face_value) : null, x: Number.isFinite(Number(seat?.x)) ? Number(seat.x) : null, y: Number.isFinite(Number(seat?.y)) ? Number(seat.y) : null, source_status: sourceStatus, allocation_status: allocationStatus, confidence: Math.min(1, Math.max(0, Number(seat?.confidence) || 0)) };
       }).filter((seat: any) => seat.row_label && seat.seat_label).slice(0, 4000);
       const warnings = [...modelWarnings, ...(Array.isArray(parsed.warnings) ? parsed.warnings : [])].slice(0, 20).map((warning: unknown) => String(warning).slice(0, 240));
-      await recordAudit(req, "direct_seat_map.ai_analyzed", "event", eventId, { event_id: eventId, model, seats: seats.length, warnings });
+      await recordAudit(req, "direct_seat_map.ai_analyzed", "event", eventId, { event_id: eventId, performance_id: performanceId, model, seats: seats.length, warnings });
       return res.json({ model, seats, warnings });
     } catch (error) { console.error("Failed to analyze direct seat map:", error); return res.status(500).json({ error: "Failed to analyze seat map" }); }
   });

@@ -266,6 +266,11 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     border-color: #cbd5e1;
   }
 
+  .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-designer,
+  .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-classes {
+    display: none;
+  }
+
   html.theme-dark .direct-ticketing-page-header {
     background-color: rgba(2, 6, 23, 0.96) !important;
     border-color: #334155 !important;
