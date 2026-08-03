@@ -14097,16 +14097,18 @@ async function startServer() {
         "Return JSON only. Read EVERY visible seat button, not only the red seats. The chart legend normally identifies Sold (light blue), Generated (dark blue), Blocked (red), and Available (green outline).",
         "For each visible seat, set source_status to exactly one of available, sold, generated, blocked, unknown. Set allocation_status to allocated ONLY for visibly red Blocked seats; set it to not_allocated for sold, generated, available, or unknown seats. Red blocked seats are the organiser's reserved allocation; every other seat must remain unavailable to this system.",
         "Read the visible row label and seat number. A seat label is usually row letters + number; split it into row_label and seat_label. Preserve labels such as AA, BB, or C exactly.",
+        "Process the complete chart from top to bottom. Do not stop after the first rows or return only red seats; include every visible row and every visible seat, even when the JSON response is large.",
         "Never invent a seat number or fill a missing gap. If a label is unclear, omit that seat and add a warning. Do not infer seats outside the visible chart.",
-        "Use this exact shape: {\"seats\":[{\"zone\":\"ZONE 2\",\"section_label\":\"Premium\",\"row_label\":\"L\",\"seat_label\":\"13\",\"external_seat_ref\":\"\",\"face_value\":null,\"x\":123,\"y\":456,\"source_status\":\"blocked\",\"allocation_status\":\"allocated\",\"confidence\":0.98}],\"warnings\":[\"...\"]}.",
+        "Keep the JSON compact and return this exact shape: {\"seats\":[{\"zone\":\"ZONE 2\",\"section_label\":\"Premium\",\"row_label\":\"L\",\"seat_label\":\"13\",\"external_seat_ref\":\"\",\"face_value\":null,\"x\":123,\"y\":456,\"source_status\":\"blocked\",\"allocation_status\":\"allocated\",\"confidence\":0.98}],\"warnings\":[\"...\"]}.",
         "x and y are pixel coordinates of the seat center in the uploaded image. Keep confidence between 0 and 1. If the zone is visible, use it; otherwise use an empty string and warn.",
       ].join("\n");
-      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: openRouterHeaders(), body: JSON.stringify({ model, temperature: 0, response_format: { type: "json_object" }, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mime};base64,${bytes.toString("base64")}` } }] }] }) });
+      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: openRouterHeaders(), body: JSON.stringify({ model, temperature: 0, max_tokens: 20000, response_format: { type: "json_object" }, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mime};base64,${bytes.toString("base64")}` } }] }] }) });
       const payload = await upstream.json().catch(() => ({}));
       if (!upstream.ok) return res.status(502).json({ error: payload?.error?.message || "Vision model request failed" });
       const raw = payload?.choices?.[0]?.message?.content;
       const parsed = parseModelJson(typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => part?.text || "").join("\n") : "");
       if (!parsed || !Array.isArray(parsed.seats)) return res.status(502).json({ error: "Vision model returned invalid seat data" });
+      const modelWarnings = payload?.choices?.[0]?.finish_reason === "length" ? ["Vision model output was truncated; upload the complete zone chart again."] : [];
       const seats = parsed.seats.map((seat: any) => {
         const sourceStatus = ["available", "sold", "generated", "blocked", "unknown"].includes(String(seat?.source_status || "")) ? String(seat.source_status) : "unknown";
         // Vision output is advisory. Only an explicit red/Blocked source state
@@ -14115,8 +14117,9 @@ async function startServer() {
         const allocationStatus = sourceStatus === "blocked" ? "allocated" : "not_allocated";
         return { zone: String(seat?.zone || "").trim().slice(0, 80), section_label: String(seat?.section_label || "").trim().slice(0, 80), row_label: String(seat?.row_label || "").trim().slice(0, 40), seat_label: String(seat?.seat_label || "").trim().slice(0, 40), external_seat_ref: String(seat?.external_seat_ref || "").trim().slice(0, 120), face_value: Number.isFinite(Number(seat?.face_value)) ? Number(seat.face_value) : null, x: Number.isFinite(Number(seat?.x)) ? Number(seat.x) : null, y: Number.isFinite(Number(seat?.y)) ? Number(seat.y) : null, source_status: sourceStatus, allocation_status: allocationStatus, confidence: Math.min(1, Math.max(0, Number(seat?.confidence) || 0)) };
       }).filter((seat: any) => seat.row_label && seat.seat_label).slice(0, 4000);
-      await recordAudit(req, "direct_seat_map.ai_analyzed", "event", eventId, { event_id: eventId, model, seats: seats.length, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20) : [] });
-      return res.json({ model, seats, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20).map((warning: unknown) => String(warning).slice(0, 240)) : [] });
+      const warnings = [...modelWarnings, ...(Array.isArray(parsed.warnings) ? parsed.warnings : [])].slice(0, 20).map((warning: unknown) => String(warning).slice(0, 240));
+      await recordAudit(req, "direct_seat_map.ai_analyzed", "event", eventId, { event_id: eventId, model, seats: seats.length, warnings });
+      return res.json({ model, seats, warnings });
     } catch (error) { console.error("Failed to analyze direct seat map:", error); return res.status(500).json({ error: "Failed to analyze seat map" }); }
   });
 
