@@ -112,8 +112,18 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     if (!window.confirm(`${t("deleteConfirm", "Delete performance")} ${selectedPerformance.code} — ${selectedPerformance.title}? ${t("deleteWarning", "This removes the performance and its imported seats. Tickets must be cleared first.")}`)) return;
     setBusy(true); setMessage("");
     try {
-      const response = await apiFetch(`/api/direct-ticketing/performances/${encodeURIComponent(selectedPerformance.id)}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId }) });
-      const data = await response.json().catch(() => ({}));
+      const deletePath = `/api/direct-ticketing/performances/${encodeURIComponent(selectedPerformance.id)}`;
+      let response = await apiFetch(deletePath, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId }) });
+      let data = await response.json().catch(() => ({}));
+      if (response.status === 409) {
+        const ticketCount = Number(data.tickets || 0);
+        if (!window.confirm(`${t("deleteHasTickets", "This test performance still has tickets.")} ${ticketCount} ${t("tickets", "tickets")}. ${t("resetAndDeleteConfirm", "Reset will permanently remove the test tickets and seats, then delete the performance. Continue?")}`)) return;
+        const resetResponse = await apiFetch(`/api/direct-ticketing/performances/${encodeURIComponent(selectedPerformance.id)}/reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId }) });
+        const resetData = await resetResponse.json().catch(() => ({}));
+        if (!resetResponse.ok) throw new Error(resetData.error || t("couldNotResetPerformance", "Could not reset performance"));
+        response = await apiFetch(deletePath, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId }) });
+        data = await response.json().catch(() => ({}));
+      }
       if (!response.ok) {
         setMessage(response.status === 409 ? t("deleteBlockedTickets", "Delete the tickets first, or reset this performance before deleting it.") : data.error || t("couldNotDeletePerformance", "Could not delete performance"));
         return;
