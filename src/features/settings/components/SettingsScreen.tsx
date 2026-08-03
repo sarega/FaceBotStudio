@@ -31,6 +31,7 @@ import {
 } from "../../../components/shared/AppUi";
 import { RELEASE_NOTES } from "../../../lib/releaseNotes";
 import type { AuthUser, ChannelAccountRecord, EventRecord, Settings } from "../../../types";
+import { translate, type AppLanguage } from "../../../lib/i18n";
 
 type LlmModelOption = {
   id: string;
@@ -53,6 +54,8 @@ type ChannelTokenStatusMeta = {
 };
 
 type SettingsScreenProps = {
+  language: AppLanguage;
+  onLanguageChange: (language: AppLanguage) => void;
   authUser: AuthUser | null;
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   canEditSettings: boolean;
@@ -112,6 +115,8 @@ type SettingsScreenProps = {
 };
 
 export function SettingsScreen({
+  language,
+  onLanguageChange,
   authUser,
   apiFetch,
   canEditSettings,
@@ -170,10 +175,14 @@ export function SettingsScreen({
   onSaveWebhookSettings,
 }: SettingsScreenProps) {
   const [section, setSection] = useState<"general" | "bot" | "system">("general");
-  const [preferences, setPreferences] = useState({ language: "th" as "th" | "en", timezone: "Asia/Bangkok" });
+  const [preferences, setPreferences] = useState({ language, timezone: "Asia/Bangkok" });
   const [preferencesSaving, setPreferencesSaving] = useState(false);
   const [preferencesMessage, setPreferencesMessage] = useState("");
   const [showCustomModelInput, setShowCustomModelInput] = useState(false);
+  const label = (key: string, fallback: string) => translate(language, key, fallback);
+  useEffect(() => {
+    setPreferences((current) => ({ ...current, language }));
+  }, [language]);
   useEffect(() => {
     if (!authUser) return;
     void apiFetch("/api/auth/preferences").then(async (response) => {
@@ -183,6 +192,7 @@ export function SettingsScreen({
         language: data.language === "en" ? "en" : "th",
         timezone: String(data.timezone || "Asia/Bangkok"),
       });
+      onLanguageChange(data.language === "en" ? "en" : "th");
     }).catch((error) => setPreferencesMessage(error instanceof Error ? error.message : "Failed to load preferences"));
   }, [authUser?.id]);
   useEffect(() => {
@@ -239,10 +249,10 @@ export function SettingsScreen({
     >
       <div className="surface-panel rounded-2xl p-2">
         <div className="grid grid-cols-2 gap-2 sm:flex">
-          <button type="button" onClick={() => setSection("general")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "general" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>General & Account</button>
-          {canEditSettings && <button type="button" onClick={() => setSection("bot")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "bot" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>Bot & Channels</button>}
-          <button type="button" onClick={() => setSection("system")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "system" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>Version & Updates</button>
-          {canManageUsers && <button type="button" onClick={onOpenTeamAccess} className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">Admin & Access</button>}
+        <button type="button" onClick={() => setSection("general")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "general" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.general", "General & Account")}</button>
+          {canEditSettings && <button type="button" onClick={() => setSection("bot")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "bot" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.bot", "Bot & Channels")}</button>}
+          <button type="button" onClick={() => setSection("system")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "system" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.system", "Version & Updates")}</button>
+          {canManageUsers && <button type="button" onClick={onOpenTeamAccess} className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">{label("settings.access", "Admin & Access")}</button>}
         </div>
       </div>
 
@@ -250,24 +260,24 @@ export function SettingsScreen({
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(20rem,.95fr)]">
           <div className="surface-panel rounded-2xl p-4 sm:p-5">
             <div className="flex items-start justify-between gap-3">
-              <div><h2 className="flex items-center gap-2 text-lg font-semibold"><Globe2 className="h-5 w-5 text-blue-600" />General preferences</h2><p className="mt-1 text-sm text-slate-500">Personal display preferences for this account.</p></div>
-              <ActionButton onClick={() => void savePreferences()} disabled={preferencesSaving} tone="blue" active className="text-sm">{preferencesSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Save</ActionButton>
+              <div><h2 className="flex items-center gap-2 text-lg font-semibold"><Globe2 className="h-5 w-5 text-blue-600" />{label("settings.generalTitle", "General preferences")}</h2><p className="mt-1 text-sm text-slate-500">{label("settings.generalDescription", "Personal display preferences for this account.")}</p></div>
+              <ActionButton onClick={() => void savePreferences()} disabled={preferencesSaving} tone="blue" active className="text-sm">{preferencesSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{label("settings.save", "Save")}</ActionButton>
             </div>
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Language<select value={preferences.language} onChange={(event) => setPreferences({ ...preferences, language: event.target.value === "en" ? "en" : "th" })} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal"><option value="th">ไทย</option><option value="en">English</option></select></label>
-              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">Time zone<input list="settings-timezones" value={preferences.timezone} onChange={(event) => setPreferences({ ...preferences, timezone: event.target.value })} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal" /><datalist id="settings-timezones"><option value="Asia/Bangkok" /><option value="Asia/Singapore" /><option value="Asia/Tokyo" /><option value="Europe/London" /><option value="America/New_York" /></datalist></label>
-              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500 sm:col-span-2">Appearance<select value={themeMode} onChange={(event) => onThemeModeChange(event.target.value as "light" | "dark" | "system")} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal"><option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">{label("settings.language", "Language")}<select value={preferences.language} onChange={(event) => { const nextLanguage = event.target.value === "en" ? "en" : "th"; setPreferences({ ...preferences, language: nextLanguage }); onLanguageChange(nextLanguage); }} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal"><option value="th">ไทย</option><option value="en">English</option></select></label>
+              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500">{label("settings.timezone", "Time zone")}<input list="settings-timezones" value={preferences.timezone} onChange={(event) => setPreferences({ ...preferences, timezone: event.target.value })} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal" /><datalist id="settings-timezones"><option value="Asia/Bangkok" /><option value="Asia/Singapore" /><option value="Asia/Tokyo" /><option value="Europe/London" /><option value="America/New_York" /></datalist></label>
+              <label className="text-xs font-bold uppercase tracking-[.12em] text-slate-500 sm:col-span-2">{label("settings.appearance", "Appearance")}<select value={themeMode} onChange={(event) => onThemeModeChange(event.target.value as "light" | "dark" | "system")} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal normal-case tracking-normal"><option value="system">{label("settings.systemSetting", "Use system setting")}</option><option value="light">{label("user.light", "Light")}</option><option value="dark">{label("user.dark", "Dark")}</option></select></label>
             </div>
             {preferencesMessage && <p className={`mt-4 text-sm ${/failed|valid/i.test(preferencesMessage) ? "text-rose-600" : "text-emerald-600"}`}>{preferencesMessage}</p>}
           </div>
 
           <div className="space-y-5">
             <div className="surface-panel rounded-2xl p-4 sm:p-5">
-              <h2 className="flex items-center gap-2 text-lg font-semibold"><UserCircle2 className="h-5 w-5 text-violet-600" />My account</h2>
-              <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm"><dt className="text-slate-500">Name</dt><dd className="font-semibold text-slate-900">{authUser?.display_name || "—"}</dd><dt className="text-slate-500">Username</dt><dd className="font-mono text-slate-700">{authUser?.username || "—"}</dd><dt className="text-slate-500">Organization</dt><dd className="text-slate-700">{authUser?.organization_name || "—"}</dd><dt className="text-slate-500">Account type</dt><dd className="font-semibold capitalize text-blue-700">{authUser?.role || "—"}</dd><dt className="text-slate-500">Last login</dt><dd className="text-slate-700">{authUser?.last_login_at ? new Date(authUser.last_login_at).toLocaleString(preferences.language === "th" ? "th-TH" : "en-US", { timeZone: preferences.timezone }) : "—"}</dd></dl>
+              <h2 className="flex items-center gap-2 text-lg font-semibold"><UserCircle2 className="h-5 w-5 text-violet-600" />{label("settings.myAccount", "My account")}</h2>
+              <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm"><dt className="text-slate-500">{label("settings.name", "Name")}</dt><dd className="font-semibold text-slate-900">{authUser?.display_name || "—"}</dd><dt className="text-slate-500">{label("settings.username", "Username")}</dt><dd className="font-mono text-slate-700">{authUser?.username || "—"}</dd><dt className="text-slate-500">{label("settings.organization", "Organization")}</dt><dd className="text-slate-700">{authUser?.organization_name || "—"}</dd><dt className="text-slate-500">{label("settings.accountType", "Account type")}</dt><dd className="font-semibold capitalize text-blue-700">{authUser?.role || "—"}</dd><dt className="text-slate-500">{label("settings.lastLogin", "Last login")}</dt><dd className="text-slate-700">{authUser?.last_login_at ? new Date(authUser.last_login_at).toLocaleString(preferences.language === "th" ? "th-TH" : "en-US", { timeZone: preferences.timezone }) : "—"}</dd></dl>
             </div>
             <div className="surface-panel rounded-2xl p-4 sm:p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck className="h-5 w-5 text-emerald-600" />Access & permissions</h2><p className="mt-1 text-sm text-slate-500">Effective access for the current {authUser?.role || "user"} account.</p></div>{canManageUsers && <ActionButton onClick={onOpenTeamAccess} tone="neutral" className="text-sm">Manage team</ActionButton>}</div>
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck className="h-5 w-5 text-emerald-600" />{label("settings.permissions", "Access & permissions")}</h2><p className="mt-1 text-sm text-slate-500">{label("settings.effectiveAccess", "Effective access for the current {role} account.").replace("{role}", authUser?.role || "user")}</p></div>{canManageUsers && <ActionButton onClick={onOpenTeamAccess} tone="neutral" className="text-sm">{label("settings.manageTeam", "Manage team")}</ActionButton>}</div>
               <ul className="mt-4 space-y-2">{roleAccess.map((item) => <li key={item} className="flex items-center gap-2 text-sm text-slate-700"><CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />{item}</li>)}</ul>
             </div>
           </div>

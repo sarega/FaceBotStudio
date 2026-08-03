@@ -403,7 +403,7 @@ export function AgentConsoleScreen({
             <MonitorCog className="h-10 w-10" />
             <div className="space-y-2">
               <p className="max-w-xs text-sm">
-                Ask the agent to create or update events, change status or context, manage registrations, message users, or search across the system within the enabled policy scope.
+                Ask the agent to create or update events, research public pages for Press Outreach, manage registrations, message users, or search across the system within the enabled policy scope.
               </p>
               <p className="text-xs">
                 CLI shortcuts: <span className="font-medium">list events</span>, <span className="font-medium">list events status:pending</span>, <span className="font-medium">/event evt_xxx get_event_overview</span>

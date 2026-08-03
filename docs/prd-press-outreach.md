@@ -36,7 +36,7 @@ FaceBotStudio มี webhook, conversation storage, manual messaging และ A
 - ระบบส่ง cold outreach อัตโนมัติ
 - bulk send หรือ scheduled mass messaging
 - autonomous agent ที่ตัดสินใจและส่งข้อความเอง
-- การ scrape Facebook Page หรือดึงรายชื่อ target อัตโนมัติ
+- การเข้าถึงข้อมูลส่วนตัวหรือการ login เพื่อ scrape Facebook Page
 - CRM สำหรับงานขายทั่วไป
 - social listening หรือ media monitoring เต็มรูปแบบ
 - การรับประกันว่า Facebook Page URL หรือ Page ID ใช้เป็น Messenger recipient ID ได้
@@ -172,6 +172,17 @@ Target ต้องมีอย่างน้อย:
 - outcome note
 
 ระบบต้องเตือนเมื่อ campaign เดียวกันมี Page URL, public Page ID, email หรือ bound sender identity ซ้ำ และต้องแสดงประวัติการติดต่อเดิมก่อนส่ง
+
+### 10.2.1 Agent web research
+
+เมื่อผู้ใช้ส่งรายชื่อเพจหรือขอคำแนะนำ Agent สามารถค้นข้อมูลสาธารณะผ่าน web-search tool แล้วเตรียม target rows ให้ตรวจสอบก่อนบันทึก โดยต้อง:
+
+- เก็บชื่อเพจ, URL, ประเภทองค์กร, contact person, email และ website เฉพาะข้อมูลที่มีแหล่งอ้างอิง;
+- เก็บ source URL ไว้ใน notes และแสดงแหล่งข้อมูลในคำตอบ;
+- เว้น public Page ID ว่างถ้าแหล่งข้อมูลไม่ได้ระบุไว้อย่างชัดเจน ห้ามเดาจาก URL;
+- จำกัดจำนวนผลค้นหาต่อรอบและแบ่งงานเป็น batch เมื่อรายชื่อมีจำนวนมาก;
+- สร้าง/เติม rows หลังผู้ใช้ยืนยันเท่านั้น และให้ดาวน์โหลด CSV ของ campaign ได้;
+- ไม่เข้าถึง private profile, ไม่ login และไม่ส่งข้อความจากขั้นตอน research.
 
 ### 10.3 AI Draft
 

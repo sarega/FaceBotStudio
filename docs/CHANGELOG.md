@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.1 - 2026-08-03
+
+- Reflowed the Event Information header for constrained 13-inch screens.
+- Kept event status details on one readable line while action buttons wrap cleanly.
+
+## 0.5.0 - 2026-08-03
+
+- Added optional OpenRouter web research for public press-page recommendations and target enrichment.
+- Added source-aware target notes and a downloadable outreach CSV after Agent confirmation.
+- Added bounded search usage and rules to leave unsupported Page IDs or contact details blank.
+
+## 0.4.0 - 2026-08-03
+
+- Added conversational Admin Agent setup for Press Outreach campaigns, targets, and Press Kit assets.
+- Added an explicit confirmation step before saving and duplicate/URL validation; setup never sends messages or binds identities.
+
 ## 0.3.0 - 2026-08-02
 
 - Added human-approved Press Outreach campaigns with target management, AI initial and suggested replies, and manual first-contact workflow.

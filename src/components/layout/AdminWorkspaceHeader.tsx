@@ -10,10 +10,12 @@ import {
 
 import { StatusBadge, type BadgeTone } from "../shared/AppUi";
 import type { EventRecord } from "../../types";
+import { translate, type AppLanguage } from "../../lib/i18n";
 
 type BooleanStateSetter = (value: boolean | ((current: boolean) => boolean)) => void;
 
 type AdminWorkspaceHeaderProps = {
+  language: AppLanguage;
   isAgentMobileFocusMode: boolean;
   sidebarCollapsed: boolean;
   onToggleSidebarCollapsed: () => void;
@@ -35,6 +37,7 @@ type AdminWorkspaceHeaderProps = {
 };
 
 export function AdminWorkspaceHeader({
+  language,
   isAgentMobileFocusMode,
   sidebarCollapsed,
   onToggleSidebarCollapsed,
@@ -54,6 +57,7 @@ export function AdminWorkspaceHeader({
   globalSearchOpen,
   setGlobalSearchOpen,
 }: AdminWorkspaceHeaderProps) {
+  const label = (key: string, fallback: string) => translate(language, key, fallback);
   return (
     <header
       className={`app-header-surface sticky top-0 z-30 border-b border-slate-200 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:pt-0 ${
@@ -68,7 +72,7 @@ export function AdminWorkspaceHeader({
                 type="button"
                 onClick={onToggleMobileSidebar}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 lg:hidden"
-                aria-label={mobileSidebarOpen ? "Close navigation" : "Open navigation"}
+                aria-label={mobileSidebarOpen ? label("nav.closeNavigation", "Close navigation") : label("nav.openNavigation", "Open navigation")}
                 aria-expanded={mobileSidebarOpen}
               >
                 {mobileSidebarOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
@@ -77,7 +81,7 @@ export function AdminWorkspaceHeader({
                 type="button"
                 onClick={onToggleSidebarCollapsed}
                 className="hidden h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 lg:inline-flex"
-                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                aria-label={sidebarCollapsed ? label("nav.expandSidebar", "Expand sidebar") : label("nav.collapseSidebar", "Collapse sidebar")}
               >
                 {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
               </button>
@@ -113,7 +117,7 @@ export function AdminWorkspaceHeader({
                     ? "border-blue-200 bg-blue-50 text-blue-700"
                     : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700"
                 }`}
-                aria-label="Open global search"
+                aria-label={label("nav.openSearch", "Open global search")}
               >
                 <Search className="h-4 w-4" />
               </button>
@@ -128,7 +132,7 @@ export function AdminWorkspaceHeader({
                 ? "border-blue-200 bg-blue-50 text-blue-700"
                 : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white"
             }`}
-            aria-label="Open global search"
+            aria-label={label("nav.openSearch", "Open global search")}
           >
             <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${
               globalSearchOpen ? "bg-white text-blue-600" : "bg-white text-slate-500"
@@ -136,7 +140,7 @@ export function AdminWorkspaceHeader({
               <Search className="h-4 w-4" />
             </span>
             <p className="min-w-0 flex-1 truncate text-sm font-semibold leading-none text-slate-900">
-              Search events, registrations
+              {label("nav.search", "Search events, registrations")}
             </p>
             <span className="hidden rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:inline-flex">
               {searchShortcutLabel}
@@ -145,7 +149,7 @@ export function AdminWorkspaceHeader({
 
           <div className="lg:w-[min(21rem,100%)] lg:max-w-[21rem]">
             <label htmlFor="event-selector" className="sr-only">
-              Workspace switcher
+              {label("nav.workspaceSwitcher", "Workspace switcher")}
             </label>
             <div className="flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] lg:min-h-0">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-white text-slate-500">

@@ -12,6 +12,14 @@ import { createRequire } from "module";
 import dotenv from "dotenv";
 import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
 import { parseOutreachCsv } from "./backend/outreachCsv";
+import {
+  formatAdminAgentOutreachDraftSummary,
+  getAdminAgentOutreachIdentityKeys,
+  isAdminAgentCancellation,
+  isAdminAgentConfirmation,
+  normalizeAdminAgentOutreachDraft,
+  type AdminAgentOutreachDraft,
+} from "./backend/adminAgentOutreach";
 import { enqueueEmbeddingJob, startEmbeddedEmbeddingWorker, canUseEmbeddingQueue, type EmbeddingJob } from "./backend/runtime/embeddingQueue";
 import { enqueueFacebookInboundJob, startEmbeddedFacebookWorker, acquireFacebookWebhookDedup, buildFacebookWebhookDedupKey, canUseFacebookWebhookQueue, type FacebookInboundJob } from "./backend/runtime/facebookQueue";
 import { enqueueInstagramInboundJob, startEmbeddedInstagramWorker, acquireInstagramWebhookDedup, buildInstagramWebhookDedupKey, canUseInstagramWebhookQueue, getInstagramWebhookEventText, type InstagramInboundJob } from "./backend/runtime/instagramQueue";
@@ -224,6 +232,7 @@ type AdminAgentActionName =
   | "update_event_setup"
   | "update_event_status"
   | "update_event_context"
+  | "configure_outreach"
   | "create_registration"
   | "find_event"
   | "search_system"
@@ -245,6 +254,7 @@ type AdminAgentPolicy = {
   manageEventSetup: boolean;
   manageEventStatus: boolean;
   manageEventContext: boolean;
+  manageOutreach: boolean;
   readRegistration: boolean;
   manageRegistration: boolean;
   messageUser: boolean;
@@ -260,6 +270,7 @@ type AdminAgentToolCall = {
 type AdminAgentPlannerResult = {
   toolCall: AdminAgentToolCall | null;
   assistantText: string;
+  webSources?: Array<{ title: string; url: string }>;
   meta?: {
     model?: string;
     provider?: string;
@@ -383,6 +394,9 @@ const pendingCancellationIntents = new Map<string, PendingCancellationIntent>();
 const ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES = 120;
 const ADMIN_AGENT_SHARED_HISTORY_DEFAULT_SCOPE = "global";
 const adminAgentSharedHistoryByScope = new Map<string, ChatHistoryMessage[]>();
+const ADMIN_AGENT_OUTREACH_DRAFT_TTL_MS = 30 * 60 * 1000;
+// ponytail: keep the short-lived confirmation draft in memory; persist per-user if multi-instance handoff is needed.
+const adminAgentPendingOutreachByScope = new Map<string, { draft: AdminAgentOutreachDraft; createdAt: number }>();
 
 function parseRegistrationLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
@@ -1591,6 +1605,7 @@ const ADMIN_AGENT_ACTION_SET = new Set<AdminAgentActionName>([
   "update_event_setup",
   "update_event_status",
   "update_event_context",
+  "configure_outreach",
   "create_registration",
   "find_event",
   "search_system",
@@ -1613,6 +1628,7 @@ const ADMIN_AGENT_ACTION_POLICY_LABEL: Record<AdminAgentActionName, string> = {
   update_event_setup: "update event setup",
   update_event_status: "update event status",
   update_event_context: "update event context",
+  configure_outreach: "configure outreach",
   create_registration: "create registration",
   find_event: "find event",
   search_system: "search system",
@@ -1636,6 +1652,7 @@ function parseAdminAgentPolicy(settings: Record<string, any>): AdminAgentPolicy 
     manageEventSetup: isTruthySetting(settings.admin_agent_policy_manage_event_setup ?? "0"),
     manageEventStatus: isTruthySetting(settings.admin_agent_policy_manage_event_status ?? "0"),
     manageEventContext: isTruthySetting(settings.admin_agent_policy_manage_event_context ?? "0"),
+    manageOutreach: isTruthySetting(settings.admin_agent_policy_manage_outreach ?? "1"),
     readRegistration: isTruthySetting(settings.admin_agent_policy_read_registration ?? "1"),
     manageRegistration: isTruthySetting(settings.admin_agent_policy_manage_registration ?? "1"),
     messageUser: isTruthySetting(settings.admin_agent_policy_message_user ?? "1"),
@@ -1661,6 +1678,9 @@ function getAllowedAdminAgentActions(policy: AdminAgentPolicy): AdminAgentAction
   }
   if (policy.manageEventContext) {
     allowed.add("update_event_context");
+  }
+  if (policy.manageOutreach) {
+    allowed.add("configure_outreach");
   }
   if (policy.readRegistration) {
     allowed.add("find_registration");
@@ -1947,6 +1967,112 @@ function appendAdminAgentSharedHistory(scopeKey: string | null | undefined, role
     ...existing,
     candidate,
   ].slice(-ADMIN_AGENT_SHARED_HISTORY_MAX_MESSAGES));
+}
+
+function getPendingAdminAgentOutreach(scopeKey: string) {
+  const pending = adminAgentPendingOutreachByScope.get(scopeKey);
+  if (!pending) return null;
+  if (Date.now() - pending.createdAt > ADMIN_AGENT_OUTREACH_DRAFT_TTL_MS) {
+    adminAgentPendingOutreachByScope.delete(scopeKey);
+    return null;
+  }
+  return pending;
+}
+
+async function applyAdminAgentOutreachDraft(draft: AdminAgentOutreachDraft, actorUserId?: string | null) {
+  const campaign = await appDb.createOutreachCampaign({
+    event_id: draft.event_id,
+    name: draft.campaign.name,
+    description: draft.campaign.description || null,
+    objective: draft.campaign.objective || null,
+    context: draft.campaign.context || null,
+    default_instruction: draft.campaign.default_instruction || null,
+    start_date: draft.campaign.start_date || null,
+    end_date: draft.campaign.end_date || null,
+    status: draft.campaign.status,
+    created_by_user_id: actorUserId || null,
+  });
+
+  const existingTargets = await appDb.listOutreachTargetsForEvent(draft.event_id);
+  const occupiedIdentityKeys = new Set(existingTargets.flatMap((target) => getAdminAgentOutreachIdentityKeys(target)));
+  const seenIdentityKeys = new Set<string>();
+  let skippedTargetCount = 0;
+  let createdTargetCount = 0;
+  for (const target of draft.targets) {
+    const identityKeys = getAdminAgentOutreachIdentityKeys(target);
+    if (identityKeys.some((key) => occupiedIdentityKeys.has(key) || seenIdentityKeys.has(key))) {
+      skippedTargetCount += 1;
+      continue;
+    }
+    identityKeys.forEach((key) => seenIdentityKeys.add(key));
+    await appDb.createOutreachTarget({
+      event_id: draft.event_id,
+      campaign_id: campaign.id,
+      name: target.name,
+      facebook_page_url: target.facebook_page_url || null,
+      facebook_page_id: target.facebook_page_id || null,
+      organization_type: target.organization_type || "other",
+      contact_person: target.contact_person || null,
+      email: target.email || null,
+      website: target.website || null,
+      notes: target.notes || null,
+      priority: target.priority,
+      next_follow_up_at: target.next_follow_up_at || null,
+    });
+    createdTargetCount += 1;
+  }
+
+  const seenAssetKeys = new Set<string>();
+  let skippedAssetCount = 0;
+  let createdAssetCount = 0;
+  for (const asset of draft.assets) {
+    const assetKey = `${asset.url.toLocaleLowerCase()}|${asset.name.toLocaleLowerCase()}`;
+    if (seenAssetKeys.has(assetKey)) {
+      skippedAssetCount += 1;
+      continue;
+    }
+    seenAssetKeys.add(assetKey);
+    await appDb.createOutreachAsset({
+      event_id: draft.event_id,
+      campaign_id: campaign.id,
+      name: asset.name,
+      type: asset.type || "other",
+      description: asset.description || null,
+      url: asset.url,
+      tags: asset.tags || null,
+    });
+    createdAssetCount += 1;
+  }
+
+  try {
+    await appDb.recordAuditLog({
+      actor_user_id: actorUserId || null,
+      action: "admin_agent.outreach_configured",
+      target_type: "outreach_campaign",
+      target_id: campaign.id,
+      metadata: {
+        event_id: draft.event_id,
+        created_target_count: createdTargetCount,
+        skipped_target_count: skippedTargetCount,
+        created_asset_count: createdAssetCount,
+        skipped_asset_count: skippedAssetCount,
+        source: "admin_agent",
+      },
+    });
+  } catch (error) {
+    console.warn("Failed to record Admin Agent outreach audit:", error);
+  }
+
+  return {
+    event_id: draft.event_id,
+    campaign_id: campaign.id,
+    campaign_name: campaign.name,
+    download_url: `/api/outreach/targets/export?event_id=${encodeURIComponent(draft.event_id)}&campaign_id=${encodeURIComponent(campaign.id)}`,
+    created_target_count: createdTargetCount,
+    skipped_target_count: skippedTargetCount,
+    created_asset_count: createdAssetCount,
+    skipped_asset_count: skippedAssetCount,
+  };
 }
 
 function normalizeRegistrationId(value: unknown) {
@@ -6307,6 +6433,35 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
   };
 }
 
+function shouldUseAdminAgentWebSearch(message: string, history: ChatHistoryMessage[], allowedActions: Set<AdminAgentActionName>) {
+  if (!allowedActions.has("configure_outreach")) return false;
+  const searchableText = [message, ...history.slice(-4).map((item) => item.parts.map((part) => part.text || "").join(" "))].join(" ");
+  const normalized = normalizeComparableText(searchableText);
+  return /เพจ|สื่อ|facebook|media|ค้นเว็บ|ค้นหา|แนะนำ|recommend|research|internet|search|website|contact|รายชื่อ|target list/.test(normalized);
+}
+
+function extractAdminAgentWebSources(message: any) {
+  const annotations = Array.isArray(message?.annotations) ? message.annotations : [];
+  const sources: Array<{ title: string; url: string }> = [];
+  for (const annotation of annotations) {
+    const citation = annotation?.url_citation;
+    const url = normalizeOptionalText(citation?.url);
+    if (!url || !/^https?:\/\//i.test(url)) continue;
+    const title = normalizeOptionalText(citation?.title) || url;
+    if (!sources.some((source) => source.url === url)) sources.push({ title: truncateText(title, 180), url });
+  }
+  return sources.slice(0, 40);
+}
+
+function appendAdminAgentWebSources(reply: string, sources: Array<{ title: string; url: string }>) {
+  if (sources.length === 0) return reply;
+  return [
+    reply,
+    "แหล่งข้อมูลสาธารณะที่ใช้ค้น:",
+    ...sources.slice(0, 8).map((source) => `- ${source.title}: ${source.url}`),
+  ].join("\n");
+}
+
 async function requestAdminAgentPlan(
   message: string,
   currentMessageParts: ChatPart[],
@@ -6334,6 +6489,9 @@ async function requestAdminAgentPlan(
   if (allowedActionSet.size === 0) {
     throw new Error("No Admin Agent actions are allowed by current policy");
   }
+  const webSearchEnabled = isTruthySetting(
+    settings.admin_agent_web_search_enabled ?? process.env.ADMIN_AGENT_WEB_SEARCH_ENABLED ?? "1",
+  ) && shouldUseAdminAgentWebSearch(message, history, allowedActionSet);
   const allowedActionText = [...allowedActionSet].join(", ");
   const basePlannerPrompt = [
     "You are the Admin Agent planner for an event registration operations system.",
@@ -6360,6 +6518,18 @@ async function requestAdminAgentPlan(
     "Use update_event_setup to fill event detail/rules fields after event creation.",
     "Use update_event_status for live/inactive/pending/cancelled/archived updates.",
     "Use update_event_context for writing event context notes from admin instructions.",
+    "Use configure_outreach when the admin asks to set up a Press Outreach campaign, media targets, or Press Kit assets.",
+    "configure_outreach only prepares campaign records; it never sends messages, makes first contact, or binds a Facebook identity.",
+    "The server will show a setup summary and require the admin to type an explicit confirmation before writing anything.",
+    "Ask one short clarification in Thai when the campaign name or a target name is missing. Do not invent page IDs, URLs, contacts, or asset links.",
+    webSearchEnabled
+      ? "For page recommendations or target enrichment, use the web search tool before configure_outreach. Search only public sources and return only facts supported by a source. Put the source URL in each target's source_url or notes, and leave unknown fields blank.":
+      "Web research is not enabled for this request; do not claim that you searched the internet.",
+    webSearchEnabled
+      ? "Use web_fetch only for promising public pages when the search result does not contain enough contact or organization detail; do not fetch private or login-gated pages."
+      : "",
+    "Never infer a Facebook public Page ID from a URL or guess a contact. Only record a Page ID or contact detail when a public source explicitly supports it.",
+    "If the admin provides many pages, work in batches of up to 20 targets and say how many were found and how many still need research. Never claim that a page was researched if no supporting result was found.",
     "Use find_event when asked to check whether an event exists, or when event name is partial.",
     "Use search_system only when admin asks to search across the whole system.",
     "Use get_event_overview when asked for event status/time/place/map/description/travel/registration-rules summary.",
@@ -6397,6 +6567,23 @@ async function requestAdminAgentPlan(
         },
       ],
       tools: [
+        ...(webSearchEnabled ? [{
+          type: "openrouter:web_search",
+          parameters: {
+            engine: "auto",
+            max_results: 5,
+            max_total_results: 40,
+            max_uses: 10,
+            search_context_size: "medium",
+          },
+        }, {
+          type: "openrouter:web_fetch",
+          parameters: {
+            engine: "auto",
+            max_uses: 10,
+            max_content_tokens: 10000,
+          },
+        }] : []),
         {
           type: "function",
           function: {
@@ -6504,6 +6691,65 @@ async function requestAdminAgentPlan(
                 text: { type: "string" },
                 mode: { type: "string", enum: ["replace", "append"] },
               },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "configure_outreach",
+            description: "Prepare a Press Outreach campaign with targets and Press Kit assets. The server asks for confirmation before saving and never sends messages.",
+            parameters: {
+              type: "object",
+              properties: {
+                event_id: { type: "string" },
+                campaign_name: { type: "string" },
+                name: { type: "string" },
+                description: { type: "string" },
+                objective: { type: "string" },
+                context: { type: "string" },
+                default_instruction: { type: "string" },
+                start_date: { type: "string" },
+                end_date: { type: "string" },
+                status: { type: "string", enum: ["draft", "active", "paused", "completed", "archived"] },
+                targets: {
+                  type: "array",
+                  maxItems: 500,
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      facebook_page_url: { type: "string" },
+                      facebook_page_id: { type: "string" },
+                      organization_type: { type: "string" },
+                      contact_person: { type: "string" },
+                      email: { type: "string" },
+                      website: { type: "string" },
+                      notes: { type: "string" },
+                      source_url: { type: "string" },
+                      priority: { type: "string", enum: ["low", "normal", "high"] },
+                      next_follow_up_at: { type: "string" },
+                    },
+                    required: ["name"],
+                  },
+                },
+                assets: {
+                  type: "array",
+                  maxItems: 50,
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      type: { type: "string" },
+                      description: { type: "string" },
+                      url: { type: "string" },
+                      tags: { type: "string" },
+                    },
+                    required: ["name", "url"],
+                  },
+                },
+              },
+              required: ["campaign_name"],
             },
           },
         },
@@ -6823,11 +7069,13 @@ async function requestAdminAgentPlan(
           },
         },
       ].filter((tool) => {
+        if (String((tool as { type?: string }).type || "") !== "function") return true;
         const name = String((tool as { function?: { name?: string } }).function?.name || "") as AdminAgentActionName;
         return allowedActionSet.has(name);
       }),
       tool_choice: "auto",
       parallel_tool_calls: false,
+      ...(webSearchEnabled ? { max_tool_calls: 20 } : {}),
     }),
   });
 
@@ -6839,6 +7087,7 @@ async function requestAdminAgentPlan(
   const usage = normalizeOpenRouterUsage(payload);
   const assistantMessage = payload?.choices?.[0]?.message || {};
   const assistantText = extractAssistantText(assistantMessage.content).trim();
+  const webSources = extractAdminAgentWebSources(assistantMessage);
   const firstToolCall = Array.isArray(assistantMessage.tool_calls) ? assistantMessage.tool_calls[0] : null;
   const callName = String(firstToolCall?.function?.name || "").trim() as AdminAgentActionName;
   const callArgs = parseToolArgs(firstToolCall?.function?.arguments);
@@ -6874,6 +7123,7 @@ async function requestAdminAgentPlan(
         }
       : null,
     assistantText,
+    webSources,
     meta: {
       model: payload?.model || model,
       provider: "openrouter",
@@ -6886,7 +7136,7 @@ async function executeAdminAgentToolCall(
   eventId: string,
   call: AdminAgentToolCall,
   rawMessage: string,
-  options: { policy: AdminAgentPolicy },
+  options: { policy: AdminAgentPolicy; historyScopeKey?: string | null; actorUserId?: string | null },
 ) {
   switch (call.name) {
     case "create_event": {
@@ -7008,6 +7258,49 @@ async function executeAdminAgentToolCall(
           context_chars: nextContext.length,
         },
         targetType: "event",
+        targetId: targetEventId,
+      };
+    }
+    case "configure_outreach": {
+      const explicitEventId = normalizeOptionalText(call.args.event_id);
+      const targetEventId = explicitEventId || eventId;
+      if (!options.policy.searchAllEvents && explicitEventId && explicitEventId !== eventId) {
+        throw new Error(`Cross-event outreach setup is disabled by policy. Current event: ${eventId}`);
+      }
+      const targetEvent = await appDb.getEventById(targetEventId);
+      if (!targetEvent) {
+        throw new Error(`Event ${targetEventId} was not found`);
+      }
+      const normalized = normalizeAdminAgentOutreachDraft(call.args, targetEventId);
+      if (!normalized.draft) {
+        const fields = normalized.errors.slice(0, 8).join(", ");
+        return {
+          reply: `ขอข้อมูลเพิ่มก่อนตั้งค่า Outreach: ${fields || "campaign_name"}`,
+          result: {
+            event_id: targetEventId,
+            pending_confirmation: false,
+            missing_fields: normalized.errors,
+          },
+          targetType: "event",
+          targetId: targetEventId,
+        };
+      }
+
+      const scopeKey = normalizeAdminAgentHistoryScopeKey(options.historyScopeKey);
+      adminAgentPendingOutreachByScope.set(scopeKey, {
+        draft: normalized.draft,
+        createdAt: Date.now(),
+      });
+      return {
+        reply: formatAdminAgentOutreachDraftSummary(normalized.draft),
+        result: {
+          event_id: targetEventId,
+          pending_confirmation: true,
+          campaign_name: normalized.draft.campaign.name,
+          target_count: normalized.draft.targets.length,
+          asset_count: normalized.draft.assets.length,
+        },
+        targetType: "outreach_campaign",
         targetId: targetEventId,
       };
     }
@@ -8042,6 +8335,62 @@ async function runAdminAgentCommand(options: {
     throw new Error("Admin Agent has no allowed actions. Enable at least one action in Advanced Policy.");
   }
   const allowedActionSet = new Set<AdminAgentActionName>(allowedActions);
+  const pendingOutreach = getPendingAdminAgentOutreach(historyScopeKey);
+  if (pendingOutreach && isAdminAgentCancellation(message)) {
+    adminAgentPendingOutreachByScope.delete(historyScopeKey);
+    const reply = "ยกเลิกการตั้งค่า Outreach แล้ว ยังไม่มีการบันทึกข้อมูล";
+    appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
+    appendAdminAgentSharedHistory(historyScopeKey, "model", reply);
+    return {
+      reply,
+      action: null as AdminAgentToolCall | null,
+      result: {
+        event_id: pendingOutreach.draft.event_id,
+        pending_confirmation: false,
+        cancelled: true,
+      },
+      meta: { model: "rule-based", provider: "rule" },
+      eventId: pendingOutreach.draft.event_id,
+      targetType: "outreach_campaign",
+      targetId: pendingOutreach.draft.event_id,
+    };
+  }
+  if (pendingOutreach && isAdminAgentConfirmation(message)) {
+    if (!allowedActionSet.has("configure_outreach")) {
+      throw new Error("Outreach setup is disabled by Agent policy");
+    }
+    if (!policy.searchAllEvents && pendingOutreach.draft.event_id !== scopedEventId) {
+      throw new Error(`Cross-event outreach setup is disabled by policy. Current event: ${scopedEventId}`);
+    }
+    const configured = await applyAdminAgentOutreachDraft(pendingOutreach.draft, options.actorUserId);
+    adminAgentPendingOutreachByScope.delete(historyScopeKey);
+    const reply = [
+      `บันทึก Outreach เรียบร้อย: ${configured.campaign_name}`,
+      `Targets สร้างใหม่ ${configured.created_target_count} รายการ${configured.skipped_target_count ? ` (ข้ามซ้ำ ${configured.skipped_target_count})` : ""}`,
+      `Press Kit สร้างใหม่ ${configured.created_asset_count} รายการ${configured.skipped_asset_count ? ` (ข้ามซ้ำ ${configured.skipped_asset_count})` : ""}`,
+      "ยังไม่มีการส่งข้อความหรือผูก Facebook identity",
+    ].join("\n");
+    const action: AdminAgentToolCall = {
+      name: "configure_outreach",
+      args: {
+        event_id: configured.event_id,
+        campaign_name: configured.campaign_name,
+        confirm: true,
+      },
+      source: "rule",
+    };
+    appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
+    appendAdminAgentSharedHistory(historyScopeKey, "model", `[${action.name}] ${reply}`);
+    return {
+      reply,
+      action,
+      result: configured,
+      meta: { model: "rule-based", provider: "rule" },
+      eventId: configured.event_id,
+      targetType: "outreach_campaign",
+      targetId: configured.campaign_id,
+    };
+  }
   const ruleToolCall = inferAdminAgentRuleToolCall(message, allowedActionSet);
   if (ruleToolCall) {
     const actionUsesEventScope = !new Set<AdminAgentActionName>(["find_event", "search_system", "create_event"]).has(ruleToolCall.name);
@@ -8064,6 +8413,8 @@ async function runAdminAgentCommand(options: {
       : ruleToolCall;
     const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
       policy,
+      historyScopeKey,
+      actorUserId: options.actorUserId,
     });
     appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
     appendAdminAgentSharedHistory(historyScopeKey, "model", `[${action.name}] ${execution.reply}`);
@@ -8144,13 +8495,22 @@ async function runAdminAgentCommand(options: {
 
   const execution = await executeAdminAgentToolCall(executionEventId, action, message, {
     policy,
+    historyScopeKey,
+    actorUserId: options.actorUserId,
   });
+  const webSources = Array.isArray(plan.webSources) ? plan.webSources : [];
+  const executionReply = action.name === "configure_outreach"
+    ? appendAdminAgentWebSources(execution.reply, webSources)
+    : execution.reply;
+  const executionResult = execution.result && typeof execution.result === "object" && webSources.length > 0 && action.name === "configure_outreach"
+    ? { ...(execution.result as Record<string, unknown>), web_sources: webSources }
+    : execution.result;
   appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
-  appendAdminAgentSharedHistory(historyScopeKey, "model", action ? `[${action.name}] ${execution.reply}` : execution.reply);
+  appendAdminAgentSharedHistory(historyScopeKey, "model", action ? `[${action.name}] ${executionReply}` : executionReply);
   return {
-    reply: execution.reply,
+    reply: executionReply,
     action,
-    result: execution.result as Record<string, unknown>,
+    result: executionResult as Record<string, unknown>,
     meta: plan.meta,
     eventId: actionUsesEventScope ? executionEventId : scopedEventId,
     targetType: execution.targetType || "event",
@@ -16325,7 +16685,9 @@ async function startServer() {
 
         await recordAudit(
           req,
-          execution.action ? "admin_agent.action_executed" : "admin_agent.clarification_requested",
+          execution.result && (execution.result as Record<string, unknown>).pending_confirmation === true
+            ? "admin_agent.action_planned"
+            : execution.action ? "admin_agent.action_executed" : "admin_agent.clarification_requested",
           execution.targetType || "event",
           execution.targetId || effectiveEventId,
           {
@@ -16455,6 +16817,7 @@ async function startServer() {
             "- resend ticket REG-XXXXXX",
             "- resend email REG-XXXXXX",
             "- retry bot sender 123456",
+            "- ส่งรายชื่อเพจ/ขอคำแนะนำให้ Agent ค้นเว็บ แล้วพิมพ์ ยืนยันเพื่อเติม Outreach CSV",
             "- /event evt_xxx แล้วตามด้วยคำสั่ง",
           ].join("\n");
           await sendTelegramTextWithBotToken(settings.telegramBotToken, normalized.chatId, helpMessage);

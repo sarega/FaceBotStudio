@@ -229,6 +229,16 @@ export function AgentSetupScreen({
                 <label className="flex items-start gap-2">
                   <input
                     type="checkbox"
+                    checked={settings.admin_agent_policy_manage_outreach !== "0"}
+                    onChange={(event) => onSettingsChange({ ...settings, admin_agent_policy_manage_outreach: event.target.checked ? "1" : "0" })}
+                    disabled={!canEditSettings}
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span><span className="font-medium">Outreach Setup</span> <span className="text-xs text-slate-500">create campaign, targets, and Press Kit records — never sends messages</span></span>
+                </label>
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
                     checked={settings.admin_agent_policy_read_registration !== "0"}
                     onChange={(event) => onSettingsChange({ ...settings, admin_agent_policy_read_registration: event.target.checked ? "1" : "0" })}
                     disabled={!canEditSettings}

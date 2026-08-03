@@ -296,6 +296,7 @@ export interface Settings {
   admin_agent_policy_manage_event_setup: string;
   admin_agent_policy_manage_event_status: string;
   admin_agent_policy_manage_event_context: string;
+  admin_agent_policy_manage_outreach: string;
   admin_agent_policy_read_registration: string;
   admin_agent_policy_manage_registration: string;
   admin_agent_policy_message_user: string;

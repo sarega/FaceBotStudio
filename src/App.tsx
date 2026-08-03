@@ -105,6 +105,7 @@ import { splitContextForEditor } from "./lib/contextEditor";
 import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor, serializePublicSponsorEntries } from "./lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries, serializePublicEventSections, serializePublicSpeakerEntries } from "./lib/publicEventPageLayout";
+import { translate, type AppLanguage } from "./lib/i18n";
 
 interface Registration {
   id: string;
@@ -721,6 +722,13 @@ const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
     keywords: ["context", "update", "event", "details"],
   },
   {
+    id: "configure-outreach",
+    label: "Set Up Press Outreach",
+    command: "ช่วยตั้งค่า Press Outreach ให้ผม ถามข้อมูลที่จำเป็นทีละข้อ สรุป campaign, targets และ Press Kit ให้ผมยืนยันก่อนบันทึก และห้ามส่งข้อความอัตโนมัติ",
+    note: "ส่งรายชื่อเพจหรือขอคำแนะนำให้ Agent ค้นเว็บ เก็บข้อมูล แล้วพิมพ์ ยืนยันเพื่อเติมรายการและดาวน์โหลด CSV",
+    keywords: ["outreach", "press", "campaign", "target", "media", "setup"],
+  },
+  {
     id: "event-override",
     label: "Cross-Event Scope",
     command: "/event evt_xxx get_event_overview",
@@ -729,6 +737,7 @@ const ADMIN_AGENT_COMMAND_TEMPLATES: AdminAgentCommandTemplate[] = [
   },
 ];
 const ADMIN_AGENT_CONSOLE_QUICK_TEMPLATE_IDS = [
+  "configure-outreach",
   "list-events",
   "list-events-operational",
   "list-events-pending",
@@ -856,6 +865,11 @@ function getStoredThemeMode(): ThemeMode {
   if (typeof window === "undefined") return "system";
   const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
   return raw === "light" || raw === "dark" || raw === "system" ? raw : "system";
+}
+
+function getStoredLanguage(): AppLanguage {
+  if (typeof window === "undefined") return "th";
+  return window.localStorage.getItem("meetrix-language") === "en" ? "en" : "th";
 }
 
 function getPublicEventChatSenderStorageKey(slug: string) {
@@ -1544,20 +1558,20 @@ function describeEventTiming(settings: Settings) {
   };
 }
 
-function getEventStatusLabel(status: EventStatus) {
+function getEventStatusLabel(status: EventStatus, language: AppLanguage = "en") {
   switch (status) {
     case "pending":
-      return "READY";
+      return translate(language, "status.ready", "READY");
     case "active":
-      return "LIVE";
+      return translate(language, "status.live", "LIVE");
     case "inactive":
-      return "STOPPED";
+      return translate(language, "status.stopped", "STOPPED");
     case "closed":
-      return "FINISHED";
+      return translate(language, "status.finished", "FINISHED");
     case "cancelled":
-      return "CANCELLED";
+      return translate(language, "status.cancelled", "CANCELLED");
     case "archived":
-      return "ARCHIVED";
+      return translate(language, "status.archived", "ARCHIVED");
     default:
       return status;
   }
@@ -1738,18 +1752,18 @@ function getRegistrationAvailabilityTone(status: RegistrationAvailabilityUiState
   return getRegistrationWindowTone(status);
 }
 
-function getRegistrationAvailabilityLabel(status: RegistrationAvailabilityUiState | null | undefined) {
+function getRegistrationAvailabilityLabel(status: RegistrationAvailabilityUiState | null | undefined, language: AppLanguage = "en") {
   switch (status) {
     case "full":
-      return "full";
+      return translate(language, "availability.full", "full");
     case "not_started":
-      return "not open";
+      return translate(language, "availability.notStarted", "not open");
     case "closed":
-      return "reg closed";
+      return translate(language, "availability.closed", "reg closed");
     case "invalid":
-      return "schedule error";
+      return translate(language, "availability.invalid", "schedule error");
     default:
-      return "open";
+      return translate(language, "availability.open", "open");
   }
 }
 
@@ -2029,6 +2043,7 @@ const RECOMMENDED_ADMIN_AGENT_PROMPT = [
   "Use prior chat turns as working memory for follow-up questions in the same session.",
   "When asked for event details, include schedule, location, map, description, travel notes, and registration rules (capacity/open/close/unique-name).",
   "When policy allows, you can create event, update event setup/status/context, and update registration status.",
+  "When asked to set up Press Outreach, use the outreach setup action to prepare campaign, media targets, and Press Kit records. Show the plan and wait for the admin to type an explicit confirmation before saving. Never send messages, make first contact, or bind a Facebook identity automatically.",
   "When asked to message a user by sender ID, execute the send-message action and report delivery target.",
   "Prioritize safety and accuracy:",
   "- Ask one short clarification when required fields are missing.",
@@ -2051,6 +2066,7 @@ const INITIAL_SETTINGS: Settings = {
   admin_agent_policy_manage_event_setup: "0",
   admin_agent_policy_manage_event_status: "0",
   admin_agent_policy_manage_event_context: "0",
+  admin_agent_policy_manage_outreach: "1",
   admin_agent_policy_read_registration: "1",
   admin_agent_policy_manage_registration: "1",
   admin_agent_policy_message_user: "1",
@@ -2424,6 +2440,7 @@ const AGENT_SETTINGS_KEYS = [
   "admin_agent_policy_manage_event_setup",
   "admin_agent_policy_manage_event_status",
   "admin_agent_policy_manage_event_context",
+  "admin_agent_policy_manage_outreach",
   "admin_agent_policy_read_registration",
   "admin_agent_policy_manage_registration",
   "admin_agent_policy_message_user",
@@ -2481,6 +2498,10 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.admin_agent_policy_manage_event_context === "string" && data.admin_agent_policy_manage_event_context.trim()
         ? data.admin_agent_policy_manage_event_context.trim()
         : previous.admin_agent_policy_manage_event_context,
+    admin_agent_policy_manage_outreach:
+      typeof data.admin_agent_policy_manage_outreach === "string" && data.admin_agent_policy_manage_outreach.trim()
+        ? data.admin_agent_policy_manage_outreach.trim()
+        : previous.admin_agent_policy_manage_outreach,
     admin_agent_policy_read_registration:
       typeof data.admin_agent_policy_read_registration === "string" && data.admin_agent_policy_read_registration.trim()
         ? data.admin_agent_policy_read_registration.trim()
@@ -2996,6 +3017,8 @@ export default function App() {
   const [emailTestSending, setEmailTestSending] = useState(false);
   const [emailTestMessage, setEmailTestMessage] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
+  const [language, setLanguage] = useState<AppLanguage>(() => getStoredLanguage());
+  const [userTimezone, setUserTimezone] = useState(DEFAULT_TIMEZONE);
   const [publicEventPage, setPublicEventPage] = useState<PublicEventPageResponse | null>(null);
   const [publicEventLoading, setPublicEventLoading] = useState(false);
   const [publicEventError, setPublicEventError] = useState("");
@@ -3355,6 +3378,7 @@ export default function App() {
     manageEventSetup: settings.admin_agent_policy_manage_event_setup === "1",
     manageEventStatus: settings.admin_agent_policy_manage_event_status === "1",
     manageEventContext: settings.admin_agent_policy_manage_event_context === "1",
+    manageOutreach: settings.admin_agent_policy_manage_outreach !== "0",
     readRegistration: settings.admin_agent_policy_read_registration !== "0",
     manageRegistration: settings.admin_agent_policy_manage_registration !== "0",
     messageUser: settings.admin_agent_policy_message_user !== "0",
@@ -3365,6 +3389,7 @@ export default function App() {
     adminAgentPolicy.manageEventSetup ? "event-setup-write" : "",
     adminAgentPolicy.manageEventStatus ? "event-status-write" : "",
     adminAgentPolicy.manageEventContext ? "event-context-write" : "",
+    adminAgentPolicy.manageOutreach ? "outreach-setup" : "",
     adminAgentPolicy.readRegistration ? "registration-read" : "",
     adminAgentPolicy.manageRegistration ? "registration-write" : "",
     adminAgentPolicy.messageUser ? "message-send/retry" : "",
@@ -3374,7 +3399,7 @@ export default function App() {
   const adminAgentGuardLabel = settings.admin_agent_enabled === "1" ? "live actions" : "disabled";
   const adminAgentGuardBody =
     settings.admin_agent_enabled === "1"
-      ? `Agent mode executes only enabled policy scopes (${adminAgentEnabledPolicies.length}/8): ${adminAgentEnabledPolicies.join(", ") || "none"}.`
+      ? `Agent mode executes only enabled policy scopes (${adminAgentEnabledPolicies.length}/9): ${adminAgentEnabledPolicies.join(", ") || "none"}.`
       : "Enable Admin Agent in setup before running commands from UI or Telegram.";
   const isAgentMobileFocusMode = activeTab === "agent" && agentWorkspaceView === "console" && agentMobileFocusMode;
   const selectedAdminAgentDashboardEvent = adminAgentDashboard?.events.find((event) => event.is_selected) || null;
@@ -3418,38 +3443,41 @@ export default function App() {
     typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
       ? "Cmd K"
       : "Ctrl K";
+  const localizedEventStatusLabel = (status: EventStatus) => getEventStatusLabel(status, language);
+  const localizedRegistrationAvailabilityLabel = (status: RegistrationAvailabilityUiState | null | undefined) =>
+    getRegistrationAvailabilityLabel(status, language);
   const eventWorkspaceTabs = [
-    { id: "setup" as const, icon: CalendarRange, label: "Event Setup", description: "Operational event details and registration rules" },
-    { id: "public" as const, icon: Eye, label: "Public Page", description: "Poster, public copy, and privacy messaging" },
+    { id: "setup" as const, icon: CalendarRange, label: translate(language, "nav.eventSetup", "Event Setup"), description: translate(language, "nav.eventSetupDescription", "Operational event details and registration rules") },
+    { id: "public" as const, icon: Eye, label: translate(language, "nav.publicPage", "Public Page"), description: translate(language, "nav.publicPageDescription", "Poster, public copy, and privacy messaging") },
   ];
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
   const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs" || activeTab === "outreach";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const effectiveSidebarCollapsed = sidebarCollapsed;
   const primaryTabs = [
-    ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: "Event" }] : []),
-    ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: "Mail" }] : []),
-    ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: "Context" }] : []),
-    ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: "Test" }] : []),
-    ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: "Agent" }] : []),
+    ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: translate(language, "nav.event", "Event") }] : []),
+    ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: translate(language, "nav.mail", "Mail") }] : []),
+    ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: translate(language, "nav.context", "Context") }] : []),
+    ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: translate(language, "nav.test", "Test") }] : []),
+    ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: translate(language, "nav.agent", "Agent") }] : []),
   ];
   const setupTabs = [
-    ...(authUser ? [{ id: "settings" as const, icon: SettingsIcon, label: "Settings Center" }] : []),
-    ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: "Team Access" }] : []),
+    ...(authUser ? [{ id: "settings" as const, icon: SettingsIcon, label: translate(language, "nav.settings", "Settings Center") }] : []),
+    ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: translate(language, "nav.team", "Team Access") }] : []),
   ];
   const selectedSetupTab = setupTabs.find((tab) => tab.id === activeTab) || setupTabs[0] || null;
   const agentWorkspaceTabs = [
-    { id: "console" as const, icon: MonitorCog, label: "Agent Chat", description: "Operational command chat" },
-    { id: "setup" as const, icon: SettingsIcon, label: "Runtime Setup", description: "Runtime policy and external channel setup" },
+    { id: "console" as const, icon: MonitorCog, label: translate(language, "nav.agentChat", "Agent Chat"), description: translate(language, "nav.agentChatDescription", "Operational command chat") },
+    { id: "setup" as const, icon: SettingsIcon, label: translate(language, "nav.runtimeSetup", "Runtime Setup"), description: translate(language, "nav.runtimeSetupDescription", "Runtime policy and external channel setup") },
   ];
   const operationsTabs = [
-    ...(canViewLogs ? [{ id: "outreach" as const, icon: Send, label: "Outreach" }] : []),
-    ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: "Reports" }] : []),
-    ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: "Registrations" }] : []),
-    ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: "Direct Tickets" }] : []),
-    ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: "Public Inbox" }] : []),
-    ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: "Check-in" }] : []),
-    ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: "Logs" }] : []),
+    ...(canViewLogs ? [{ id: "outreach" as const, icon: Send, label: translate(language, "nav.outreach", "Outreach") }] : []),
+    ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: translate(language, "nav.reports", "Reports") }] : []),
+    ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: translate(language, "nav.registrations", "Registrations") }] : []),
+    ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: translate(language, "nav.directTickets", "Direct Tickets") }] : []),
+    ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: translate(language, "nav.inbox", "Public Inbox") }] : []),
+    ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: translate(language, "nav.checkin", "Check-in") }] : []),
+    ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: translate(language, "nav.logs", "Logs") }] : []),
   ];
   const helpContent = TAB_HELP_CONTENT[activeTab];
   const selectedTicketPngUrl = selectedRegistration
@@ -3760,10 +3788,10 @@ export default function App() {
     selectedEvent && selectorEvents.some((event) => event.id === selectedEvent.id),
   );
   const selectorPlaceholderLabel = selectorEvents.length === 0
-    ? "No live, pending, or inactive workspaces"
+    ? translate(language, "nav.noWorkspace", "No live, pending, or inactive workspaces")
     : selectedEvent
-      ? "Historical workspace selected. Choose a live, pending, or inactive workspace."
-      : "Select a live, pending, or inactive workspace";
+      ? translate(language, "nav.historicalWorkspace", "Historical workspace selected. Choose a live, pending, or inactive workspace.")
+      : translate(language, "nav.selectWorkspace", "Select a live, pending, or inactive workspace");
   const eventStatusToggle = (() => {
     if (!selectedEvent) {
       return {
@@ -4072,6 +4100,19 @@ export default function App() {
     return res;
   };
 
+  const handleLanguageChange = async (nextLanguage: AppLanguage) => {
+    setLanguage(nextLanguage);
+    try {
+      await apiFetch("/api/auth/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: nextLanguage, timezone: userTimezone }),
+      });
+    } catch {
+      // The local switch still works; Settings can retry saving the preference.
+    }
+  };
+
   const normalizeAuditLogEntry = (value: unknown): AuditLogEntry | null => {
     if (!value || typeof value !== "object") return null;
     const row = value as Record<string, unknown>;
@@ -4136,6 +4177,20 @@ export default function App() {
     }
     const data = await res.json();
     return data.user as AuthUser;
+  };
+
+  const loadUserPreferences = async () => {
+    try {
+      const res = await fetch("/api/auth/preferences");
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      setLanguage(data.language === "en" ? "en" : "th");
+      if (typeof data.timezone === "string" && data.timezone.trim()) {
+        setUserTimezone(data.timezone.trim());
+      }
+    } catch {
+      // Keep the locally cached language when preferences are unavailable.
+    }
   };
 
   const normalizeCheckinRegistration = (value: any): Registration | null => {
@@ -4471,6 +4526,11 @@ export default function App() {
       media.removeEventListener?.("change", handleChange);
     };
   }, [themeMode]);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+    window.localStorage.setItem("meetrix-language", language);
+  }, [language]);
 
   useEffect(() => {
     if (!adminAgentChatStorageKey) {
@@ -4873,6 +4933,7 @@ export default function App() {
         if (cancelled) return;
         setAuthUser(user);
         setAuthStatus("authenticated");
+        void loadUserPreferences();
       } catch {
         if (cancelled) return;
         setAuthStatus("unauthenticated");
@@ -6996,6 +7057,7 @@ export default function App() {
     "admin_agent_policy_manage_event_setup",
     "admin_agent_policy_manage_event_status",
     "admin_agent_policy_manage_event_context",
+    "admin_agent_policy_manage_outreach",
     "admin_agent_policy_read_registration",
     "admin_agent_policy_manage_registration",
     "admin_agent_policy_message_user",
@@ -8298,6 +8360,7 @@ export default function App() {
       const loggedInUser = data.user as AuthUser;
       setAuthUser(loggedInUser);
       setAuthStatus("authenticated");
+      void loadUserPreferences();
       setActiveTab(getDefaultTabForRole(loggedInUser.role));
       setLoginPassword("");
       setTeamMessage("");
@@ -9689,6 +9752,7 @@ export default function App() {
         canEditSettings={canEditSettings}
         header={(
           <AdminWorkspaceHeader
+            language={language}
             isAgentMobileFocusMode={isAgentMobileFocusMode}
             sidebarCollapsed={effectiveSidebarCollapsed}
             onToggleSidebarCollapsed={handleToggleSidebarCollapsed}
@@ -9696,8 +9760,8 @@ export default function App() {
             onToggleMobileSidebar={handleToggleMobileSidebar}
             selectedEvent={selectedEvent}
             getEventStatusTone={getEventStatusTone}
-            getEventStatusLabel={getEventStatusLabel}
-            getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+            getEventStatusLabel={localizedEventStatusLabel}
+            getRegistrationAvailabilityLabel={localizedRegistrationAvailabilityLabel}
             selectedEventAvailableInSelector={selectedEventAvailableInSelector}
             selectedEventId={selectedEventId}
             selectorEvents={selectorEvents}
@@ -9711,6 +9775,7 @@ export default function App() {
         )}
         sidebar={(
           <AdminWorkspaceSidebar
+            language={language}
             isAgentMobileFocusMode={isAgentMobileFocusMode}
             collapsed={effectiveSidebarCollapsed}
             mobileOpen={mobileSidebarOpen}
@@ -9719,13 +9784,14 @@ export default function App() {
             userMenuOpen={userMenuOpen}
             setUserMenuOpen={setUserMenuOpen}
             authUser={authUser}
+            onLanguageChange={handleLanguageChange}
             themeMode={themeMode}
             setThemeMode={setThemeMode}
             onLogout={handleLogout}
             selectedEvent={selectedEvent}
             getEventStatusTone={getEventStatusTone}
-            getEventStatusLabel={getEventStatusLabel}
-            getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
+            getEventStatusLabel={localizedEventStatusLabel}
+            getRegistrationAvailabilityLabel={localizedRegistrationAvailabilityLabel}
             primaryTabs={primaryTabs}
             activeTab={activeTab}
             hoverDropdownEnabled={hoverDropdownEnabled}
@@ -10213,7 +10279,7 @@ export default function App() {
           )}
           {activeTab === "outreach" && (
             <motion.div key="outreach" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <OutreachScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} />
+              <OutreachScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} language={language} />
             </motion.div>
           )}
           {activeTab === "reports" && (
@@ -10374,6 +10440,8 @@ export default function App() {
 
           {activeTab === "settings" && (
             <SettingsScreen
+              language={language}
+              onLanguageChange={setLanguage}
               authUser={authUser}
               apiFetch={apiFetch}
               canEditSettings={canEditSettings}

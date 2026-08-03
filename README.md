@@ -59,6 +59,7 @@ Recommended for low-traffic demos with SQLite:
    - `EMAIL_FROM`
    - `EMAIL_REPLY_TO`
    - `OPENROUTER_DEFAULT_MODEL=your-supported-model-id`
+   - `ADMIN_AGENT_WEB_SEARCH_ENABLED=1` (optional; set `0` to disable public web research for Outreach setup)
    - `OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small` (optional, for queued document vectors + retrieval)
    - `EMBEDDING_HOOK_URL=https://your-worker-or-api.example.com/embeddings` (optional, receives a copy of embedding jobs after local vectors are stored)
    - `SESSION_TTL_DAYS=14`

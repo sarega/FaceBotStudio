@@ -1,5 +1,34 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.5.1",
+    date: "2026-08-03",
+    title: "Compact workspace layout",
+    features: [
+      "Reflowed the Event Information header for constrained 13-inch screens",
+      "Kept event status details on one readable line while action buttons wrap cleanly",
+    ],
+  },
+  {
+    version: "0.5.0",
+    date: "2026-08-03",
+    title: "Web research for outreach targets",
+    features: [
+      "Admin Agent can search public web sources for press-page recommendations and target enrichment",
+      "Source URLs are retained in target notes and the confirmed target list can be downloaded as CSV",
+      "Bounded search usage and no guessing of unsupported Page IDs or contact details",
+    ],
+  },
+  {
+    version: "0.4.0",
+    date: "2026-08-03",
+    title: "Conversational outreach setup",
+    features: [
+      "Admin Agent can prepare Press Outreach campaigns, targets, and Press Kit assets from chat",
+      "Explicit confirmation, duplicate checks, and URL validation before saving",
+      "Setup never sends messages or binds a Facebook identity automatically",
+    ],
+  },
+  {
     version: "0.3.0",
     date: "2026-08-02",
     title: "Human-approved press outreach",

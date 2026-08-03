@@ -14,6 +14,7 @@ import {
 
 import { StatusBadge, type BadgeTone } from "../shared/AppUi";
 import type { AuthUser, EventRecord } from "../../types";
+import { translate, type AppLanguage } from "../../lib/i18n";
 
 type ThemeMode = "light" | "dark" | "system";
 type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
@@ -45,6 +46,7 @@ type AgentWorkspaceTab = {
 };
 
 type AdminWorkspaceSidebarProps = {
+  language: AppLanguage;
   isAgentMobileFocusMode: boolean;
   collapsed: boolean;
   mobileOpen: boolean;
@@ -53,6 +55,7 @@ type AdminWorkspaceSidebarProps = {
   userMenuOpen: boolean;
   setUserMenuOpen: BooleanStateSetter;
   authUser: AuthUser | null;
+  onLanguageChange: (language: AppLanguage) => void | Promise<void>;
   themeMode: ThemeMode;
   setThemeMode: ThemeModeSetter;
   onLogout: () => void | Promise<void>;
@@ -235,6 +238,7 @@ function SidebarMenuItem({
 }
 
 export function AdminWorkspaceSidebar({
+  language,
   isAgentMobileFocusMode,
   collapsed,
   mobileOpen,
@@ -243,6 +247,7 @@ export function AdminWorkspaceSidebar({
   userMenuOpen,
   setUserMenuOpen,
   authUser,
+  onLanguageChange,
   themeMode,
   setThemeMode,
   onLogout,
@@ -296,6 +301,7 @@ export function AdminWorkspaceSidebar({
   onOpenEventWorkspaceView,
   onForceScrollAdminAgentToBottom,
 }: AdminWorkspaceSidebarProps) {
+  const label = (key: string, fallback: string) => translate(language, key, fallback);
   const allowHoverFlyout = collapsed && hoverDropdownEnabled;
   const selectedAgentWorkspaceTab = agentWorkspaceTabs.find((tab) => tab.id === agentWorkspaceView) || agentWorkspaceTabs[0];
 
@@ -387,14 +393,14 @@ export function AdminWorkspaceSidebar({
             <Bot className="h-5 w-5" />
           </span>
           <div>
-            <p className="text-sm font-semibold text-slate-900">Navigation</p>
+            <p className="text-sm font-semibold text-slate-900">{label("nav.navigation", "Navigation")}</p>
           </div>
         </div>
         <button
           type="button"
           onClick={onCloseMobileSidebar}
           className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50"
-          aria-label="Close navigation"
+          aria-label={label("nav.closeNavigation", "Close navigation")}
         >
           <X className="h-4.5 w-4.5" />
         </button>
@@ -402,7 +408,7 @@ export function AdminWorkspaceSidebar({
 
       {!collapsed && selectedEvent && (
         <div className="workspace-rail-card rounded-[1.25rem] px-3 py-2 text-white shadow-[0_22px_44px_rgba(15,23,42,0.2)]">
-          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">Active workspace</p>
+        <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">{label("nav.activeWorkspace", "Active workspace")}</p>
           <p className="mt-1 line-clamp-2 text-[0.9rem] font-semibold leading-5">{selectedEvent.name}</p>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)} className="border-white/10 bg-white/10 text-white">
@@ -441,7 +447,7 @@ export function AdminWorkspaceSidebar({
                     collapsed={collapsed}
                     active={activeTab === "event" || eventWorkspaceMenuOpen}
                     icon={selectedEventWorkspaceTab.icon}
-                    label="Event Workspace"
+                    label={label("nav.eventWorkspace", "Event Workspace")}
                     subtitle={selectedEventWorkspaceTab.label}
                     indicator={eventWorkspaceDirty}
                     trailing={
@@ -484,8 +490,8 @@ export function AdminWorkspaceSidebar({
                     collapsed={collapsed}
                     active={activeTab === "agent" || agentWorkspaceMenuOpen}
                     icon={selectedAgentWorkspaceTab.icon}
-                    label="Agent"
-                    subtitle={selectedAgentWorkspaceTab?.label || "Agent Chat"}
+                    label={label("nav.agent", "Agent")}
+                    subtitle={selectedAgentWorkspaceTab?.label || label("nav.agentChat", "Agent Chat")}
                     indicator={agentSettingsDirty}
                     trailing={
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${agentWorkspaceMenuOpen ? "rotate-180" : ""}`} />
@@ -537,8 +543,8 @@ export function AdminWorkspaceSidebar({
                 collapsed={collapsed}
                 active={isOperationsTab || operationsMenuOpen}
                 icon={Users}
-                label="Operations"
-                subtitle="Regs, inbox, check-in, logs"
+                label={label("nav.operations", "Operations")}
+                subtitle={label("nav.operationsDescription", "Regs, inbox, check-in, logs")}
                 trailing={
                   <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
                 }
@@ -574,8 +580,8 @@ export function AdminWorkspaceSidebar({
                 collapsed={collapsed}
                 active={isSetupTab || setupMenuOpen}
                 icon={selectedSetupTab.icon}
-                label="Workspace Setup"
-                subtitle="Organization settings"
+                label={label("nav.workspaceSetup", "Workspace Setup")}
+                subtitle={label("nav.workspaceSetupDescription", "Organization settings")}
                 indicator={workspaceSetupDirty}
                 trailing={
                   <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
@@ -610,7 +616,7 @@ export function AdminWorkspaceSidebar({
           }`}
           aria-expanded={userMenuOpen}
           aria-haspopup="menu"
-          aria-label="Open user menu"
+          aria-label={label("user.openMenu", "Open user menu")}
         >
           <span className={`flex shrink-0 items-center justify-center bg-slate-100 text-slate-600 ${
             collapsed ? "h-9 w-9 rounded-xl" : "h-10 w-10 rounded-xl"
@@ -643,14 +649,38 @@ export function AdminWorkspaceSidebar({
             </div>
             <div className="mt-3">
               <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+                {label("settings.language", "Language")}
+              </div>
+              <div className="grid grid-cols-2 gap-1 rounded-2xl bg-slate-100 p-1">
+                {([{ id: "th", label: "ไทย" }, { id: "en", label: "English" }] as const).map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => {
+                      void onLanguageChange(option.id);
+                      setUserMenuOpen(false);
+                    }}
+                    className={`rounded-xl px-2 py-2 text-xs font-semibold transition-colors ${
+                      language === option.id
+                        ? "bg-white text-blue-600 shadow-sm"
+                        : "text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
                 <MonitorCog className="h-3.5 w-3.5" />
-                Theme
+                {label("user.theme", "Theme")}
               </div>
               <div className="grid grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1">
                 {([
-                  { id: "light", label: "Light" },
-                  { id: "dark", label: "Dark" },
-                  { id: "system", label: "System" },
+                  { id: "light", label: label("user.light", "Light") },
+                  { id: "dark", label: label("user.dark", "Dark") },
+                  { id: "system", label: label("user.system", "System") },
                 ] as Array<{ id: ThemeMode; label: string }>).map((mode) => (
                   <button
                     key={mode.id}
@@ -681,7 +711,7 @@ export function AdminWorkspaceSidebar({
               role="menuitem"
             >
               <LogOut className="h-4 w-4" />
-              Logout
+              {label("user.logout", "Logout")}
             </button>
           </div>
         )}
@@ -713,7 +743,7 @@ export function AdminWorkspaceSidebar({
             type="button"
             onClick={onCloseMobileSidebar}
             className="absolute inset-0 bg-slate-950/35 backdrop-blur-[1px]"
-            aria-label="Close navigation drawer"
+            aria-label={label("nav.closeNavigation", "Close navigation drawer")}
           />
           <div className="absolute inset-y-0 left-0 w-[min(22rem,calc(100vw-0.75rem))] pb-[calc(0.5rem+env(safe-area-inset-bottom))] pl-2 pr-0.5 pt-[calc(0.5rem+env(safe-area-inset-top))]">
             <div className="workspace-rail-surface h-full overflow-hidden rounded-[1.5rem] border border-slate-200 shadow-[0_26px_70px_rgba(15,23,42,0.22)]">
