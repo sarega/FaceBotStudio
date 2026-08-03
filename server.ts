@@ -1397,7 +1397,29 @@ function openRouterHeaders() {
 function parseModelJson(value: unknown) {
   const text = typeof value === "string" ? value.trim() : "";
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1] || text;
-  try { return JSON.parse(fenced); } catch { const start = fenced.indexOf("{"); const end = fenced.lastIndexOf("}"); if (start >= 0 && end > start) { try { return JSON.parse(fenced.slice(start, end + 1)); } catch { return null; } } return null; }
+  const candidates = [fenced];
+  const start = fenced.indexOf("{"); const end = fenced.lastIndexOf("}");
+  if (start >= 0 && end > start) candidates.push(fenced.slice(start, end + 1));
+  for (const candidate of candidates) {
+    try { return JSON.parse(candidate); } catch {
+      try { return JSON.parse(candidate.replace(/,\s*([}\]])/g, "$1")); } catch { /* try the next candidate */ }
+    }
+  }
+  return null;
+}
+
+function modelContentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map((part) => modelContentText(part)).filter(Boolean).join("\n");
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  return modelContentText(record.text || record.content || record.output || "");
+}
+
+function parseVisionSeatPayload(payload: any) {
+  const content = payload?.choices?.[0]?.message?.content;
+  if (content && typeof content === "object" && !Array.isArray(content) && Array.isArray(content.seats)) return content;
+  return parseModelJson(modelContentText(content));
 }
 
 function extractJsonObject(text: string) {
@@ -14106,13 +14128,30 @@ async function startServer() {
         "Keep the JSON compact and return this exact shape: {\"seats\":[{\"zone\":\"ZONE 2\",\"section_label\":\"Premium\",\"row_label\":\"L\",\"seat_label\":\"13\",\"external_seat_ref\":\"\",\"face_value\":null,\"x\":123,\"y\":456,\"source_status\":\"blocked\",\"allocation_status\":\"allocated\",\"confidence\":0.98}],\"warnings\":[\"...\"]}.",
         "x and y are pixel coordinates of the seat center in the uploaded image. Keep confidence between 0 and 1. If the zone is visible, use it; otherwise use an empty string and warn.",
       ].join("\n");
-      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: openRouterHeaders(), body: JSON.stringify({ model, temperature: 0, max_tokens: 20000, response_format: { type: "json_object" }, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mime};base64,${bytes.toString("base64")}` } }] }] }) });
-      const payload = await upstream.json().catch(() => ({}));
+      const imageUrl = `data:${mime};base64,${bytes.toString("base64")}`;
+      const requestVision = (instruction: string, maxTokens: number, structured: boolean) => fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: openRouterHeaders(), body: JSON.stringify({ model, temperature: 0, max_tokens: maxTokens, ...(structured ? { response_format: { type: "json_object" } } : {}), messages: [{ role: "user", content: [{ type: "text", text: instruction }, { type: "image_url", image_url: { url: imageUrl } }] }] }) });
+      let upstream = await requestVision(prompt, 20000, true);
+      let payload = await upstream.json().catch(() => ({}));
       if (!upstream.ok) return res.status(502).json({ error: payload?.error?.message || "Vision model request failed" });
-      const raw = payload?.choices?.[0]?.message?.content;
-      const parsed = parseModelJson(typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => part?.text || "").join("\n") : "");
+      let parsed = parseVisionSeatPayload(payload);
+      let usedRetry = false;
+      if (!parsed || !Array.isArray(parsed.seats)) {
+        usedRetry = true;
+        const retryPrompt = [
+          "Retry reading this same seating-chart image.",
+          "Return one compact JSON object only, with no markdown or explanation.",
+          "Use exactly {\"seats\":[...],\"warnings\":[]}. Include every visible seat, with keys zone, section_label, row_label, seat_label, source_status, face_value, x, and y.",
+          "source_status must be available, sold, generated, blocked, or unknown. Red Blocked seats are the only Meetrix allocation; do not invent seats or numbers.",
+        ].join("\n");
+        const retry = await requestVision(retryPrompt, 12000, false);
+        const retryPayload = await retry.json().catch(() => ({}));
+        if (retry.ok) { payload = retryPayload; parsed = parseVisionSeatPayload(retryPayload); }
+      }
       if (!parsed || !Array.isArray(parsed.seats)) return res.status(502).json({ error: "Vision model returned invalid seat data" });
-      const modelWarnings = payload?.choices?.[0]?.finish_reason === "length" ? ["Vision model output was truncated; upload the complete zone chart again."] : [];
+      const modelWarnings = [
+        ...(payload?.choices?.[0]?.finish_reason === "length" ? ["Vision model output was truncated; retrying with a compact response is recommended."] : []),
+        ...(usedRetry ? ["The first vision response was invalid; a compact retry was used."] : []),
+      ];
       const seats = parsed.seats.map((seat: any) => {
         const sourceStatus = ["available", "sold", "generated", "blocked", "unknown"].includes(String(seat?.source_status || "")) ? String(seat.source_status) : "unknown";
         // Vision output is advisory. Only an explicit red/Blocked source state

@@ -218,6 +218,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     try {
       const combined: SeatDraft[] = [];
       const warnings: string[] = [];
+      let failedFiles = 0;
       for (let index = 0; index < analyzeFiles.length; index += 1) {
         const file = analyzeFiles[index]; const context = seatMapContextFromFilename(file.name);
         const progressLabel = `${t("analyzingSeatMapBundle", "Analyzing seat-plan bundle with Gemini")} (${index + 1}/${analyzeFiles.length}) — ${file.name}`;
@@ -226,9 +227,10 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
         const query = new URLSearchParams({ event_id: eventId, performance_id: performanceId });
         const response = await apiFetch(`/api/direct-ticketing/seat-map/analyze?${query.toString()}`, { method: "POST", headers: { "Content-Type": file.type }, body: file });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(`${file.name}: ${data.error || t("couldNotAnalyzeSeatMap", "Could not analyze seat map")}`);
+        if (!response.ok) { failedFiles += 1; warnings.push(`${file.name}: ${data.error || t("couldNotAnalyzeSeatMap", "Could not analyze seat map")}`); setMessage(`${file.name}: ${t("scanFileSkipped", "skipped; continuing with the other images")}`); continue; }
         if (Array.isArray(data.warnings)) warnings.push(...data.warnings.map((warning: unknown) => `${file.name}: ${String(warning)}`));
         if (Array.isArray(data.seats)) data.seats.forEach((row: any) => { const sourceStatus = ["available", "sold", "generated", "blocked", "unknown"].includes(String(row.source_status || "")) ? String(row.source_status) as SeatDraft["source_status"] : "unknown"; combined.push({ zone: String(row.zone || context.zone), section_label: String(row.section_label || context.section_label || ""), row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""), external_seat_ref: String(row.external_seat_ref || ""), face_value: row.face_value == null || Number(row.face_value) === 0 ? (context.price == null ? "" : String(context.price)) : String(row.face_value), x: row.x == null ? "" : String(row.x), y: row.y == null ? "" : String(row.y), allocation_status: row.allocation_status === "not_allocated" ? "not_allocated" : "allocated", source_status: sourceStatus }); });
+        if (!Array.isArray(data.seats) || !data.seats.length) { failedFiles += 1; warnings.push(`${file.name}: ${t("scanNoSeats", "no seat rows returned")}`); }
         setProcessing({ phase: "analyzing", completed: index + 1, total: totalSteps, label: `${file.name} ${t("analysisComplete", "analyzed")}`, startedAt });
       }
       setProcessing({ phase: "preparing", completed: analyzeFiles.length, total: totalSteps, label: t("preparingSeatMap", "Preparing seat map and rescan changes"), startedAt });
@@ -236,6 +238,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
       const unique = new Map<string, SeatDraft>();
       combined.filter((row) => row.zone && row.row_label && row.seat_label).forEach((row) => unique.set(seatDraftKey(row), row));
       const rows = Array.from(unique.values());
+      if (!rows.length) throw new Error(warnings[0] || t("couldNotAnalyzeSeatMap", "Could not analyze seat map"));
       const previous = seatDrafts.filter((row) => row.zone && row.row_label && row.seat_label);
       const previousByKey = new Map(previous.map((row) => [seatDraftKey(row), row]));
       const nextByKey = new Map(rows.map((row) => [seatDraftKey(row), row]));
@@ -247,7 +250,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
       setRescanPending(true);
       setSeatDrafts(rows.length ? rows : [blankSeatDraft()]); setSeatMapZone(rows[0]?.zone || "");
       setProcessing(null);
-      setMessage(`${rows.length} ${t("seatNodesDetected", "seat nodes detected (red seats allocated to Meetrix)")} from ${analyzeFiles.length} ${t("zoneCharts", "zone charts")}${warnings.length ? ` — ${warnings.length} ${t("warningsReview", "warnings; review, then click Save all changes")}` : ` — ${t("reviewAndSave", "review then click Save all changes")}`}`);
+      setMessage(`${rows.length} ${t("seatNodesDetected", "seat nodes detected (red seats allocated to Meetrix)")} from ${analyzeFiles.length} ${t("zoneCharts", "zone charts")}${failedFiles ? ` — ${failedFiles} ${t("scanFilesFailed", "image(s) failed; review warnings")}` : warnings.length ? ` — ${warnings.length} ${t("warningsReview", "warnings; review, then click Save all changes")}` : ` — ${t("reviewAndSave", "review then click Save all changes")}`}`);
     } catch (error) { setProcessing(null); setMessage(error instanceof Error ? error.message : t("couldNotAnalyzeSeatMap", "Could not analyze seat map")); } finally { setBusy(false); }
   };
   const analyzeSeatMap = async (file?: File) => { if (file) await analyzeSeatMapBundle([file]); };
