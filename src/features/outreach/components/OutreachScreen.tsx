@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Check, Copy, ExternalLink, Megaphone, Plus, RefreshCw, Save, Sparkles } from "lucide-react";
+import { parseOutreachCsv } from "../../../../backend/outreachCsv";
 
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type CampaignStatus = "draft" | "active" | "paused" | "completed" | "archived";
@@ -64,6 +65,18 @@ type Delivery = { id: string; asset_id: string | null; draft_id: string | null; 
 type ConversationMessage = { id: number; type: "incoming" | "outgoing"; text: string; timestamp: string };
 type Eligibility = { eligible: boolean; has_identity: boolean; last_replied_at: string | null; eligible_until: string | null; reason: string };
 type Assignee = { id: string; display_name: string; username: string; role: string };
+type TargetImportDraft = {
+  name: string;
+  facebook_page_url: string;
+  facebook_page_id: string;
+  organization_type: string;
+  contact_person: string;
+  email: string;
+  website: string;
+  notes: string;
+  priority: Priority;
+  next_follow_up_at: string;
+};
 
 type Props = { eventId: string; apiFetch: ApiFetch; canManage: boolean };
 
@@ -76,6 +89,28 @@ const campaignStatusLabels: Record<CampaignStatus, string> = { draft: "Draft", a
 const emptyCampaign = { name: "", description: "", objective: "", context: "", default_instruction: "", start_date: "", end_date: "", status: "draft" as CampaignStatus };
 const emptyTarget = { name: "", facebook_page_url: "", facebook_page_id: "", organization_type: "media", contact_person: "", email: "", website: "", notes: "", priority: "normal" as Priority, next_follow_up_at: "" };
 const emptyAsset = { name: "", type: "press_release", description: "", url: "", tags: "" };
+const blankTargetImportDraft = (): TargetImportDraft => ({ name: "", facebook_page_url: "", facebook_page_id: "", organization_type: "media", contact_person: "", email: "", website: "", notes: "", priority: "normal", next_follow_up_at: "" });
+const hasTargetImportData = (row: TargetImportDraft) => [row.name, row.facebook_page_url, row.facebook_page_id, row.contact_person, row.email, row.website, row.notes, row.next_follow_up_at].some((value) => value.trim());
+const targetImportDraftFromRow = (row: Record<string, string>): TargetImportDraft => ({
+  name: row.name || row.target || "",
+  facebook_page_url: row.facebook_page_url || row.page_url || "",
+  facebook_page_id: row.facebook_page_id || row.page_id || "",
+  organization_type: row.organization_type || row.type || "media",
+  contact_person: row.contact_person || "",
+  email: row.email || "",
+  website: row.website || "",
+  notes: row.notes || "",
+  priority: ["low", "normal", "high"].includes(row.priority) ? row.priority as Priority : "normal",
+  next_follow_up_at: row.next_follow_up_at || row.follow_up_at || "",
+});
+const csvCell = (value: string) => {
+  const text = String(value || "");
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+};
+const targetImportCsv = (rows: TargetImportDraft[]) => {
+  const fields: Array<keyof TargetImportDraft> = ["name", "facebook_page_url", "facebook_page_id", "organization_type", "contact_person", "email", "website", "notes", "priority", "next_follow_up_at"];
+  return [fields.join(","), ...rows.filter(hasTargetImportData).map((row) => fields.map((field) => csvCell(row[field])).join(","))].join("\n");
+};
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "—";
@@ -129,7 +164,7 @@ export function OutreachScreen({ eventId, apiFetch, canManage }: Props) {
   const [showTargetForm, setShowTargetForm] = useState(false);
   const [showAssetForm, setShowAssetForm] = useState(false);
   const [showImportForm, setShowImportForm] = useState(false);
-  const [importCsv, setImportCsv] = useState("");
+  const [importRows, setImportRows] = useState<TargetImportDraft[]>([blankTargetImportDraft()]);
   const [importPreview, setImportPreview] = useState<{ valid_count: number; invalid_count: number; invalid?: Array<{ row: number; errors: string[] }> } | null>(null);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -308,13 +343,41 @@ export function OutreachScreen({ eventId, apiFetch, canManage }: Props) {
     if (data?.id) { setTargets((current) => current.map((target) => target.id === data.id ? data as Target : target)); }
   };
 
+  const updateImportRow = (index: number, field: keyof TargetImportDraft, value: string) => {
+    setImportRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: field === "priority" ? value as Priority : value } : row));
+    setImportPreview(null);
+  };
+
+  const loadImportCsv = async (file?: File) => {
+    if (!file) return;
+    const rows = parseOutreachCsv(await file.text()).map(targetImportDraftFromRow);
+    if (!rows.length) {
+      setMessage("CSV has no rows to load");
+      return;
+    }
+    setImportRows(rows);
+    setImportPreview(null);
+    setMessage(`${rows.length} rows loaded — review, then click Preview & import`);
+  };
+
   const importTargets = async () => {
-    if (!canManage || !selectedCampaignId || !importCsv.trim()) return;
-    const preview = await request("/api/outreach/targets/import/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, campaign_id: selectedCampaignId, csv: importCsv }) }, "Import preview ready");
+    const rows = importRows.filter(hasTargetImportData);
+    if (!canManage || !selectedCampaignId || !rows.length) return;
+    const preview = await request("/api/outreach/targets/import/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, campaign_id: selectedCampaignId, rows }) }, "Import preview ready");
     if (preview) setImportPreview(preview);
     if (!preview || preview.invalid_count > 0) return;
-    const data = await request("/api/outreach/targets/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, campaign_id: selectedCampaignId, csv: importCsv }) }, "Targets imported");
-    if (data) { setImportCsv(""); setImportPreview(null); setShowImportForm(false); await loadCampaignDetail(selectedCampaignId); await loadCampaigns(selectedCampaignId); }
+    const data = await request("/api/outreach/targets/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, campaign_id: selectedCampaignId, rows }) }, "Targets imported");
+    if (data) { setImportRows([blankTargetImportDraft()]); setImportPreview(null); setShowImportForm(false); await loadCampaignDetail(selectedCampaignId); await loadCampaigns(selectedCampaignId); }
+  };
+
+  const exportImportCsv = () => {
+    const blob = new Blob([targetImportCsv(importRows)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "outreach-targets-draft.csv";
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const exportTargets = () => {
@@ -366,7 +429,14 @@ export function OutreachScreen({ eventId, apiFetch, canManage }: Props) {
         <div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setShowCampaignForm(false)} className="rounded-lg px-3 py-2 text-xs font-bold text-slate-600">Cancel</button><button disabled={busy} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white">Create campaign</button></div>
       </form>}
 
-      {showImportForm && canManage && selectedCampaign && <div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-sm font-bold text-slate-900">Import targets</p><p className="mt-1 text-xs text-slate-500">Paste CSV with at least a <code>name</code> column. Duplicate identities are rejected in preview.</p><textarea value={importCsv} onChange={(event) => { setImportCsv(event.target.value); setImportPreview(null); }} rows={5} className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-mono" placeholder="name,facebook_page_url,email,organization_type\nArts Desk,https://facebook.com/artsdesk,desk@example.com,arts media" />{importPreview && <div className={`mt-2 rounded-lg px-3 py-2 text-xs ${importPreview.invalid_count > 0 ? "bg-rose-50 text-rose-800" : "bg-emerald-50 text-emerald-800"}`}>Preview: {importPreview.valid_count} valid · {importPreview.invalid_count} invalid{importPreview.invalid?.length ? ` · rows ${importPreview.invalid.map((row) => row.row).join(", ")}` : ""}</div>}<div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setShowImportForm(false)} className="rounded-lg px-3 py-2 text-xs font-bold text-slate-500">Cancel</button><button type="button" disabled={busy || !importCsv.trim()} onClick={() => void importTargets()} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">Preview & import</button></div></div>}
+      {showImportForm && canManage && selectedCampaign && <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-sm font-bold text-slate-900">Import targets</p><p className="mt-1 text-xs text-slate-500">กรอกในตาราง หรือเลือก CSV มาแก้ต่อได้เลย Duplicate identities จะถูกแจ้งใน preview</p></div><div className="flex gap-2"><button type="button" onClick={exportImportCsv} className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-bold text-slate-700">Export draft CSV</button><label className="cursor-pointer rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-bold text-slate-700">Load CSV<input type="file" accept=".csv,text/csv" onChange={(event) => { void loadImportCsv(event.target.files?.[0]); event.currentTarget.value = ""; }} className="hidden" /></label></div></div>
+        <p className="mt-3 text-[11px] text-slate-500"><code>name,facebook_page_url,facebook_page_id,organization_type,contact_person,email,website,notes,priority,next_follow_up_at</code></p>
+        <div className="mt-2 max-h-72 overflow-auto rounded-xl border border-slate-200 bg-slate-50"><div className="min-w-[1500px]"><div className="grid grid-cols-[1.2fr_1.6fr_1.1fr_1fr_1.1fr_1.2fr_1.2fr_1.5fr_100px_160px_28px] gap-1 border-b border-slate-300 bg-slate-100 p-2 text-center text-[10px] font-bold uppercase text-slate-600"><span>Name *</span><span>Facebook URL</span><span>Page ID</span><span>Type</span><span>Contact</span><span>Email</span><span>Website</span><span>Notes</span><span>Priority</span><span>Follow-up</span><span /></div>{importRows.map((row, index) => <div key={index} className="grid grid-cols-[1.2fr_1.6fr_1.1fr_1fr_1.1fr_1.2fr_1.2fr_1.5fr_100px_160px_28px] gap-1 border-t border-slate-200 p-2"><input aria-label={`Target name ${index + 1}`} value={row.name} onChange={(event) => updateImportRow(index, "name", event.target.value)} placeholder="Target name" className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><input aria-label={`Facebook URL ${index + 1}`} value={row.facebook_page_url} onChange={(event) => updateImportRow(index, "facebook_page_url", event.target.value)} placeholder="https://facebook.com/..." className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><input aria-label={`Facebook Page ID ${index + 1}`} value={row.facebook_page_id} onChange={(event) => updateImportRow(index, "facebook_page_id", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><input aria-label={`Organization type ${index + 1}`} value={row.organization_type} onChange={(event) => updateImportRow(index, "organization_type", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><input aria-label={`Contact person ${index + 1}`} value={row.contact_person} onChange={(event) => updateImportRow(index, "contact_person", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><input aria-label={`Email ${index + 1}`} value={row.email} onChange={(event) => updateImportRow(index, "email", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><input aria-label={`Website ${index + 1}`} value={row.website} onChange={(event) => updateImportRow(index, "website", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><input aria-label={`Notes ${index + 1}`} value={row.notes} onChange={(event) => updateImportRow(index, "notes", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><select aria-label={`Priority ${index + 1}`} value={row.priority} onChange={(event) => updateImportRow(index, "priority", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs"><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><input aria-label={`Follow-up ${index + 1}`} type="datetime-local" value={row.next_follow_up_at} onChange={(event) => updateImportRow(index, "next_follow_up_at", event.target.value)} className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs" /><button type="button" aria-label={`Remove row ${index + 1}`} onClick={() => setImportRows((current) => current.length > 1 ? current.filter((_, rowIndex) => rowIndex !== index) : [blankTargetImportDraft()])} className="text-lg leading-none text-rose-600">×</button></div>)}</div></div>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2"><button type="button" onClick={() => { setImportRows((current) => [...current, blankTargetImportDraft()]); setImportPreview(null); }} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-700">+ Add row</button><span className="text-[11px] text-slate-500">{importRows.filter(hasTargetImportData).length} rows ready</span></div>
+        {importPreview && <div className={`mt-2 rounded-lg px-3 py-2 text-xs ${importPreview.invalid_count > 0 ? "bg-rose-50 text-rose-800" : "bg-emerald-50 text-emerald-800"}`}>Preview: {importPreview.valid_count} valid · {importPreview.invalid_count} invalid{importPreview.invalid?.length ? ` · rows ${importPreview.invalid.map((row) => row.row).join(", ")}` : ""}</div>}
+        <div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => setShowImportForm(false)} className="rounded-lg px-3 py-2 text-xs font-bold text-slate-500">Cancel</button><button type="button" disabled={busy || !importRows.some(hasTargetImportData)} onClick={() => void importTargets()} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Preview & import</button></div>
+      </div>}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-7">
         {[{ label: "Targets", value: counts.total }, { label: "Not contacted", value: counts.new }, { label: "Waiting", value: counts.waiting }, { label: "Replied", value: counts.replied }, { label: "Press Kit sent", value: counts.pressKit }, { label: "Follow-up due", value: counts.due }, { label: "Published", value: counts.published }].map((item) => <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-slate-400">{item.label}</p><p className="mt-1 text-xl font-bold text-slate-900">{item.value}</p></div>)}
