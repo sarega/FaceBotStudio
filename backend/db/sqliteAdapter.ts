@@ -370,7 +370,7 @@ function mapDirectPerformanceRow(row: Record<string, unknown>) {
 }
 
 function mapDirectSeatRow(row: Record<string, unknown>) {
-  return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), zone: String(row.zone || ""), row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""), external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null, face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y), status: String(row.status || "available") as DirectSeatRow["status"], created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at) } satisfies DirectSeatRow;
+  return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), zone: String(row.zone || ""), section_label: typeof row.section_label === "string" ? row.section_label : null, row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""), external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null, face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y), status: String(row.status || "available") as DirectSeatRow["status"], allocation_status: String(row.allocation_status || "allocated") as DirectSeatRow["allocation_status"], source_status: String(row.source_status || "unknown") as DirectSeatRow["source_status"], created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at) } satisfies DirectSeatRow;
 }
 
 function mapDirectTicketRow(row: Record<string, unknown>) {
@@ -810,8 +810,9 @@ export class SqliteAppDatabase implements AppDatabase {
       );
       CREATE TABLE IF NOT EXISTS direct_seats (
         id TEXT PRIMARY KEY, event_id TEXT NOT NULL, performance_id TEXT NOT NULL, zone TEXT NOT NULL,
-        row_label TEXT NOT NULL, seat_label TEXT NOT NULL, external_seat_ref TEXT, face_value REAL,
-        x REAL, y REAL, status TEXT NOT NULL DEFAULT 'available', created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        row_label TEXT NOT NULL, seat_label TEXT NOT NULL, section_label TEXT, external_seat_ref TEXT, face_value REAL,
+        x REAL, y REAL, status TEXT NOT NULL DEFAULT 'available', allocation_status TEXT NOT NULL DEFAULT 'allocated',
+        source_status TEXT NOT NULL DEFAULT 'unknown', created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE (performance_id, zone, row_label, seat_label),
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
         FOREIGN KEY (performance_id) REFERENCES event_performances(id) ON DELETE CASCADE
@@ -923,6 +924,9 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("organizations", "updated_at", "DATETIME");
     this.ensureColumn("checkin_sessions", "exchanged_at", "DATETIME");
     this.ensureColumn("event_performances", "seat_plan_image_url", "TEXT");
+    this.ensureColumn("direct_seats", "allocation_status", "TEXT NOT NULL DEFAULT 'allocated'");
+    this.ensureColumn("direct_seats", "source_status", "TEXT NOT NULL DEFAULT 'unknown'");
+    this.ensureColumn("direct_seats", "section_label", "TEXT");
     this.ensureColumn("direct_tickets", "hold_expires_at", "DATETIME");
     this.ensureColumn("direct_tickets", "payment_proof_mime", "TEXT");
     this.ensureColumn("direct_tickets", "payment_proof_base64", "TEXT");
@@ -1397,10 +1401,16 @@ export class SqliteAppDatabase implements AppDatabase {
     return rows.map((row) => mapDirectSeatRow(row as Record<string, unknown>));
   }
 
-  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]) {
-    const insert = this.db.prepare(`INSERT INTO direct_seats (id,event_id,performance_id,zone,row_label,seat_label,external_seat_ref,face_value,x,y)
-      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET external_seat_ref=excluded.external_seat_ref,face_value=excluded.face_value,x=excluded.x,y=excluded.y,updated_at=CURRENT_TIMESTAMP`);
-    this.db.transaction((items: ImportDirectSeatInput[]) => items.forEach((seat) => insert.run(generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null)))(seats);
+  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean }) {
+    const insert = this.db.prepare(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,allocation_status,source_status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=excluded.section_label,external_seat_ref=excluded.external_seat_ref,face_value=excluded.face_value,x=excluded.x,y=excluded.y,allocation_status=excluded.allocation_status,source_status=excluded.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`);
+    this.db.transaction((items: ImportDirectSeatInput[]) => items.forEach((seat) => insert.run(generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated", seat.source_status || "unknown")))(seats);
+    if (options?.replaceMissing && seats.length) {
+      const keep = seats.map(() => "(zone=? AND row_label=? AND seat_label=?)").join(" OR ");
+      const keepParams = seats.flatMap((seat) => [String(seat.zone).trim(), String(seat.row_label).trim(), String(seat.seat_label).trim()]);
+      this.db.prepare(`UPDATE direct_seats SET allocation_status='not_allocated',source_status='unknown',status='voided',updated_at=CURRENT_TIMESTAMP WHERE event_id=? AND performance_id=? AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in')) AND NOT (${keep})`).run(eventId, performanceId, ...keepParams);
+    }
+    this.db.prepare("UPDATE direct_seats SET status=CASE WHEN allocation_status='not_allocated' THEN 'voided' WHEN allocation_status='allocated' AND status='voided' THEN 'available' ELSE status END, updated_at=CURRENT_TIMESTAMP WHERE event_id=? AND performance_id=? AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))").run(eventId, performanceId);
     return this.listDirectSeats(eventId, performanceId);
   }
 
@@ -1416,7 +1426,7 @@ export class SqliteAppDatabase implements AppDatabase {
     const create = this.db.transaction(() => {
       const seat = this.db.prepare("SELECT * FROM direct_seats WHERE id=? AND event_id=? AND performance_id=?").get(input.seat_id, input.event_id, input.performance_id) as Record<string, unknown> | undefined;
       if (!seat) return { error: "invalid_seat" as const };
-      if (seat.status !== "available") return { error: "seat_unavailable" as const };
+      if (seat.status !== "available" || seat.allocation_status !== "allocated") return { error: "seat_unavailable" as const };
       const paymentStatus = input.payment_required === false ? "not_required" : "awaiting_payment";
       const status = paymentStatus === "not_required" ? "issued" : "held";
       const id = generateEntityId("dtkt");

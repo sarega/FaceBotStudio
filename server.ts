@@ -9521,6 +9521,13 @@ function isTruthySetting(value: unknown) {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+// Direct allocation is an internal workflow until the public seat-selection
+// experience is explicitly enabled for an event and the deployment.
+function isPublicDirectTicketingEnabled(settings?: Record<string, string>) {
+  return isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")
+    && isTruthySetting(settings?.direct_ticketing_public_enabled ?? "0");
+}
+
 function looksLikeEmailAddress(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
@@ -13162,7 +13169,7 @@ async function startServer() {
   app.get("/api/public/events/:slug/direct-ticketing", async (req, res) => {
     try {
       const match = await resolvePublicEventBySlug(req.params.slug);
-      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0") || !isPublicDirectTicketingEnabled(match.settings)) {
         return res.status(404).json({ error: "Public event page unavailable" });
       }
       await appDb.releaseExpiredDirectTicketHolds(match.event.id);
@@ -13185,7 +13192,7 @@ async function startServer() {
     try {
       if (!getDirectTicketTokenSecret()) return res.status(503).json({ error: "Direct ticket security is not configured" });
       const match = await resolvePublicEventBySlug(req.params.slug);
-      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0") || !isPublicDirectTicketingEnabled(match.settings)) {
         return res.status(404).json({ error: "Public event page unavailable" });
       }
       const body = readObjectBody(req);
@@ -13233,6 +13240,7 @@ async function startServer() {
   });
 
   app.get("/api/public/direct-orders/:id", async (req, res) => {
+    if (!isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")) return res.status(404).json({ error: "Order not found" });
     const id = String(req.params.id || "").trim();
     if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).json({ error: "Order not found" });
     await appDb.releaseExpiredDirectTicketHolds();
@@ -13242,6 +13250,7 @@ async function startServer() {
   });
 
   app.get("/api/public/direct-orders/:id/payment-qr", async (req, res) => {
+    if (!isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")) return res.status(404).send("Order not found");
     const id = String(req.params.id || "").trim();
     if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).send("Order not found");
     await appDb.releaseExpiredDirectTicketHolds();
@@ -13260,6 +13269,7 @@ async function startServer() {
     webChatRateLimit,
     express.raw({ type: "application/octet-stream", limit: "4mb" }),
     async (req: AuthenticatedRequest, res) => {
+      if (!isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")) return res.status(404).json({ error: "Order not found" });
       const id = String(req.params.id || "").trim();
       if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).json({ error: "Order not found" });
       const mime = String(req.headers["x-proof-mime"] || "").trim().toLowerCase();
@@ -14084,10 +14094,11 @@ async function startServer() {
       const model = String(settings.llm_model || settings.global_llm_model || DEFAULT_OPENROUTER_MODEL).trim() || DEFAULT_OPENROUTER_MODEL;
       const prompt = [
         "Analyze this Ticketmelon seating-chart image for an event operator.",
-        "Return JSON only. Identify ONLY seats that are visibly blocked in red (the legend may say Blocked or Block Seat). Do not include sold, generated, available, or unreadable seats.",
-        "Read the visible row letter and seat number. A seat label is usually row letter + number; split it into row_label and seat_label.",
-        "Never invent a seat number. If a label is unclear, omit that seat and add a warning.",
-        "Use this exact shape: {\"seats\":[{\"zone\":\"ZONE 2\",\"row_label\":\"L\",\"seat_label\":\"13\",\"external_seat_ref\":\"\",\"face_value\":null,\"x\":123,\"y\":456,\"confidence\":0.98}],\"warnings\":[\"...\"]}.",
+        "Return JSON only. Read EVERY visible seat button, not only the red seats. The chart legend normally identifies Sold (light blue), Generated (dark blue), Blocked (red), and Available (green outline).",
+        "For each visible seat, set source_status to exactly one of available, sold, generated, blocked, unknown. Set allocation_status to allocated ONLY for visibly red Blocked seats; set it to not_allocated for sold, generated, available, or unknown seats. Red blocked seats are the organiser's reserved allocation; every other seat must remain unavailable to this system.",
+        "Read the visible row label and seat number. A seat label is usually row letters + number; split it into row_label and seat_label. Preserve labels such as AA, BB, or C exactly.",
+        "Never invent a seat number or fill a missing gap. If a label is unclear, omit that seat and add a warning. Do not infer seats outside the visible chart.",
+        "Use this exact shape: {\"seats\":[{\"zone\":\"ZONE 2\",\"section_label\":\"Premium\",\"row_label\":\"L\",\"seat_label\":\"13\",\"external_seat_ref\":\"\",\"face_value\":null,\"x\":123,\"y\":456,\"source_status\":\"blocked\",\"allocation_status\":\"allocated\",\"confidence\":0.98}],\"warnings\":[\"...\"]}.",
         "x and y are pixel coordinates of the seat center in the uploaded image. Keep confidence between 0 and 1. If the zone is visible, use it; otherwise use an empty string and warn.",
       ].join("\n");
       const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: openRouterHeaders(), body: JSON.stringify({ model, temperature: 0, response_format: { type: "json_object" }, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mime};base64,${bytes.toString("base64")}` } }] }] }) });
@@ -14096,7 +14107,14 @@ async function startServer() {
       const raw = payload?.choices?.[0]?.message?.content;
       const parsed = parseModelJson(typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map((part: any) => part?.text || "").join("\n") : "");
       if (!parsed || !Array.isArray(parsed.seats)) return res.status(502).json({ error: "Vision model returned invalid seat data" });
-      const seats = parsed.seats.map((seat: any) => ({ zone: String(seat?.zone || "").trim().slice(0, 80), row_label: String(seat?.row_label || "").trim().slice(0, 40), seat_label: String(seat?.seat_label || "").trim().slice(0, 40), external_seat_ref: String(seat?.external_seat_ref || "").trim().slice(0, 120), face_value: Number.isFinite(Number(seat?.face_value)) ? Number(seat.face_value) : null, x: Number.isFinite(Number(seat?.x)) ? Number(seat.x) : null, y: Number.isFinite(Number(seat?.y)) ? Number(seat.y) : null, confidence: Math.min(1, Math.max(0, Number(seat?.confidence) || 0)) })).filter((seat: any) => seat.row_label && seat.seat_label).slice(0, 2000);
+      const seats = parsed.seats.map((seat: any) => {
+        const sourceStatus = ["available", "sold", "generated", "blocked", "unknown"].includes(String(seat?.source_status || "")) ? String(seat.source_status) : "unknown";
+        // Vision output is advisory. Only an explicit red/Blocked source state
+        // can open a seat for Meetrix; never trust a free-form allocation flag
+        // from the model by itself.
+        const allocationStatus = sourceStatus === "blocked" ? "allocated" : "not_allocated";
+        return { zone: String(seat?.zone || "").trim().slice(0, 80), section_label: String(seat?.section_label || "").trim().slice(0, 80), row_label: String(seat?.row_label || "").trim().slice(0, 40), seat_label: String(seat?.seat_label || "").trim().slice(0, 40), external_seat_ref: String(seat?.external_seat_ref || "").trim().slice(0, 120), face_value: Number.isFinite(Number(seat?.face_value)) ? Number(seat.face_value) : null, x: Number.isFinite(Number(seat?.x)) ? Number(seat.x) : null, y: Number.isFinite(Number(seat?.y)) ? Number(seat.y) : null, source_status: sourceStatus, allocation_status: allocationStatus, confidence: Math.min(1, Math.max(0, Number(seat?.confidence) || 0)) };
+      }).filter((seat: any) => seat.row_label && seat.seat_label).slice(0, 4000);
       await recordAudit(req, "direct_seat_map.ai_analyzed", "event", eventId, { event_id: eventId, model, seats: seats.length, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20) : [] });
       return res.json({ model, seats, warnings: Array.isArray(parsed.warnings) ? parsed.warnings.slice(0, 20).map((warning: unknown) => String(warning).slice(0, 240)) : [] });
     } catch (error) { console.error("Failed to analyze direct seat map:", error); return res.status(500).json({ error: "Failed to analyze seat map" }); }
@@ -14652,9 +14670,9 @@ async function startServer() {
   app.post("/api/direct-ticketing/seats/import", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const body = readObjectBody(req); const performanceId = String(body.performance_id || "").trim(); const rawSeats = Array.isArray(body.seats) ? body.seats : [];
     if (!performanceId || !rawSeats.length) return res.status(400).json({ error: "performance_id and at least one seat are required" });
-    const seats = rawSeats.map((row) => ({ zone: String(row?.zone || "").trim(), row_label: String(row?.row_label || "").trim(), seat_label: String(row?.seat_label || "").trim(), external_seat_ref: typeof row?.external_seat_ref === "string" ? row.external_seat_ref.trim() || null : null, face_value: Number.isFinite(Number(row?.face_value)) ? Number(row.face_value) : null, x: Number.isFinite(Number(row?.x)) ? Number(row.x) : null, y: Number.isFinite(Number(row?.y)) ? Number(row.y) : null })).filter((seat) => seat.zone && seat.row_label && seat.seat_label);
+    const seats = rawSeats.map((row) => ({ zone: String(row?.zone || "").trim(), section_label: typeof row?.section_label === "string" ? row.section_label.trim() || null : null, row_label: String(row?.row_label || "").trim(), seat_label: String(row?.seat_label || "").trim(), external_seat_ref: typeof row?.external_seat_ref === "string" ? row.external_seat_ref.trim() || null : null, face_value: Number.isFinite(Number(row?.face_value)) ? Number(row.face_value) : null, x: Number.isFinite(Number(row?.x)) ? Number(row.x) : null, y: Number.isFinite(Number(row?.y)) ? Number(row.y) : null, allocation_status: row?.allocation_status === "not_allocated" ? "not_allocated" as const : "allocated" as const, source_status: ["available", "sold", "generated", "blocked", "unknown"].includes(String(row?.source_status || "")) ? String(row.source_status) as "available" | "sold" | "generated" | "blocked" | "unknown" : "unknown" as const })).filter((seat) => seat.zone && seat.row_label && seat.seat_label);
     if (!seats.length) return res.status(400).json({ error: "Every seat needs zone, row_label, and seat_label" });
-    const imported = await appDb.importDirectSeats(getRequestedEventId(req), performanceId, seats);
+    const imported = await appDb.importDirectSeats(getRequestedEventId(req), performanceId, seats, { replaceMissing: body.replace_missing === true });
     await recordAudit(req, "direct_seats.imported", "direct_performance", performanceId, { event_id: getRequestedEventId(req), imported_count: seats.length });
     return res.json(imported);
   });
@@ -14745,9 +14763,9 @@ async function startServer() {
     const activeBySeat = new Map(tickets.filter((ticket) => ticket.status !== "voided").map((ticket) => [ticket.seat_id, ticket]));
     const rows = seats.map((seat) => {
       const ticket = activeBySeat.get(seat.id);
-      return { performance_id: seat.performance_id, zone: seat.zone, row: seat.row_label, seat: seat.seat_label, external_seat_ref: seat.external_seat_ref, inventory_status: seat.status, ticket_id: ticket?.id || "", ticket_status: ticket?.status || "", payment_status: ticket?.payment_status || "", ticket_class: ticket?.ticket_class || "", holder_name: ticket?.holder_name || "", amount: ticket?.price_amount ?? "" };
+      return { performance_id: seat.performance_id, zone: seat.zone, section_label: seat.section_label, row: seat.row_label, seat: seat.seat_label, external_seat_ref: seat.external_seat_ref, face_value: seat.face_value ?? "", source_status: seat.source_status, allocation_status: seat.allocation_status, inventory_status: seat.status, ticket_id: ticket?.id || "", ticket_status: ticket?.status || "", payment_status: ticket?.payment_status || "", ticket_class: ticket?.ticket_class || "", holder_name: ticket?.holder_name || "", amount: ticket?.price_amount ?? "" };
     });
-    const csv = new Parser({ fields: ["performance_id", "zone", "row", "seat", "external_seat_ref", "inventory_status", "ticket_id", "ticket_status", "payment_status", "ticket_class", "holder_name", "amount"] }).parse(rows);
+    const csv = new Parser({ fields: ["performance_id", "zone", "section_label", "row", "seat", "external_seat_ref", "face_value", "source_status", "allocation_status", "inventory_status", "ticket_id", "ticket_status", "payment_status", "ticket_class", "holder_name", "amount"] }).parse(rows);
     await recordAudit(req, "direct_ticket.inventory_reconciled", "event", eventId, { event_id: eventId, rows: rows.length });
     res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment("direct-seat-reconciliation.csv"); return res.send(`\ufeff${csv}`);
   });

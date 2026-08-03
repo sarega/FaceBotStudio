@@ -123,3 +123,29 @@ test("editing updates a performance and deleting protects performances with tick
   assert.equal((await db.listDirectPerformances(event.id)).length, 1);
   assert.equal((await db.listDirectSeats(event.id, protectedPerformance.id)).length, 1);
 });
+
+test("seat-map statuses keep non-allocation seats unavailable and protect active tickets during rescan", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Seat map status test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  const seats = await db.importDirectSeats(event.id, performance.id, [
+    { zone: "ZONE 1", row_label: "A", seat_label: "1", face_value: 100, allocation_status: "allocated", source_status: "blocked" },
+    { zone: "ZONE 1", row_label: "A", seat_label: "2", face_value: 800, allocation_status: "not_allocated", source_status: "available" },
+    { zone: "ZONE 1", row_label: "A", seat_label: "3", face_value: 100, allocation_status: "allocated", source_status: "blocked" },
+  ]);
+  const ticket = await db.createDirectTicket({ event_id: event.id, performance_id: performance.id, seat_id: seats[0].id, ticket_class: "VIP", payment_required: false });
+  assert.ok(ticket.ticket);
+
+  await db.importDirectSeats(event.id, performance.id, [
+    { zone: "ZONE 1", row_label: "A", seat_label: "1", face_value: 999, allocation_status: "not_allocated", source_status: "available" },
+  ], { replaceMissing: true });
+  const refreshed = await db.listDirectSeats(event.id, performance.id);
+  const active = refreshed.find((seat) => seat.seat_label === "1");
+  const removed = refreshed.filter((seat) => ["2", "3"].includes(seat.seat_label));
+  assert.equal(active?.status, "issued");
+  assert.equal(active?.allocation_status, "allocated");
+  assert.equal(active?.face_value, 100);
+  assert.equal(removed.length, 2);
+  assert.ok(removed.every((seat) => seat.status === "voided" && seat.allocation_status === "not_allocated"));
+});

@@ -369,10 +369,12 @@ function mapDirectPerformanceRow(row: Record<string, unknown>) {
 function mapDirectSeatRow(row: Record<string, unknown>) {
   return {
     id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""),
-    zone: String(row.zone || ""), row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""),
+    zone: String(row.zone || ""), section_label: typeof row.section_label === "string" ? row.section_label : null, row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""),
     external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null,
     face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y),
     status: String(row.status || "available") as DirectSeatRow["status"],
+    allocation_status: String(row.allocation_status || "allocated") as DirectSeatRow["allocation_status"],
+    source_status: String(row.source_status || "unknown") as DirectSeatRow["source_status"],
     created_at: String(row.created_at || ""), updated_at: String(row.updated_at || ""),
   } satisfies DirectSeatRow;
 }
@@ -929,13 +931,27 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async listDirectSeats(eventId: string, performanceId?: string) {
     await this.releaseExpiredDirectTicketHolds(eventId);
-    const result = await this.pool.query<Record<string, unknown>>(`SELECT id,event_id,performance_id,zone,row_label,seat_label,external_seat_ref,face_value,x,y,status,created_at::text,updated_at::text FROM direct_seats WHERE event_id=$1 ${performanceId ? "AND performance_id=$2" : ""} ORDER BY zone,row_label,seat_label`, performanceId ? [eventId, performanceId] : [eventId]);
+    const result = await this.pool.query<Record<string, unknown>>(`SELECT id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,status,allocation_status,source_status,created_at::text,updated_at::text FROM direct_seats WHERE event_id=$1 ${performanceId ? "AND performance_id=$2" : ""} ORDER BY zone,row_label,seat_label`, performanceId ? [eventId, performanceId] : [eventId]);
     return result.rows.map(mapDirectSeatRow);
   }
 
-  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]) {
+  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean }) {
     const client = await this.pool.connect();
-    try { await client.query("BEGIN"); for (const seat of seats) await client.query(`INSERT INTO direct_seats (id,event_id,performance_id,zone,row_label,seat_label,external_seat_ref,face_value,x,y) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET external_seat_ref=EXCLUDED.external_seat_ref,face_value=EXCLUDED.face_value,x=EXCLUDED.x,y=EXCLUDED.y,updated_at=CURRENT_TIMESTAMP`, [generateEntityId("seat"),eventId,performanceId,String(seat.zone).trim(),String(seat.row_label).trim(),String(seat.seat_label).trim(),seat.external_seat_ref || null,seat.face_value ?? null,seat.x ?? null,seat.y ?? null]); await client.query("COMMIT"); } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+    try {
+      await client.query("BEGIN");
+      for (const seat of seats) {
+        const allocationStatus = seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated";
+        const sourceStatus = seat.source_status || "unknown";
+        await client.query(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,allocation_status,source_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=EXCLUDED.section_label,external_seat_ref=EXCLUDED.external_seat_ref,face_value=EXCLUDED.face_value,x=EXCLUDED.x,y=EXCLUDED.y,allocation_status=EXCLUDED.allocation_status,source_status=EXCLUDED.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`, [generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, allocationStatus, sourceStatus]);
+      }
+      if (options?.replaceMissing && seats.length) {
+        const keep = seats.map((_, index) => `(zone=$${index * 3 + 3} AND row_label=$${index * 3 + 4} AND seat_label=$${index * 3 + 5})`).join(" OR ");
+        const keepParams = seats.flatMap((seat) => [String(seat.zone).trim(), String(seat.row_label).trim(), String(seat.seat_label).trim()]);
+        await client.query(`UPDATE direct_seats SET allocation_status='not_allocated',source_status='unknown',status='voided',updated_at=CURRENT_TIMESTAMP WHERE event_id=$1 AND performance_id=$2 AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in')) AND NOT (${keep})`, [eventId, performanceId, ...keepParams]);
+      }
+      await client.query("UPDATE direct_seats SET status=CASE WHEN allocation_status='not_allocated' THEN 'voided' WHEN allocation_status='allocated' AND status='voided' THEN 'available' ELSE status END,updated_at=CURRENT_TIMESTAMP WHERE event_id=$1 AND performance_id=$2 AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))", [eventId, performanceId]);
+      await client.query("COMMIT");
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
     return this.listDirectSeats(eventId, performanceId);
   }
 
@@ -949,7 +965,7 @@ export class PostgresAppDatabase implements AppDatabase {
   async createDirectTicket(input: CreateDirectTicketInput) {
     await this.releaseExpiredDirectTicketHolds(input.event_id);
     const client = await this.pool.connect();
-    try { await client.query("BEGIN"); const seat = await client.query<Record<string, unknown>>("SELECT * FROM direct_seats WHERE id=$1 AND event_id=$2 AND performance_id=$3 FOR UPDATE", [input.seat_id,input.event_id,input.performance_id]); if (!seat.rows[0]) { await client.query("ROLLBACK"); return { error: "invalid_seat" as const }; } if (seat.rows[0].status !== "available") { await client.query("ROLLBACK"); return { error: "seat_unavailable" as const }; } const paymentStatus = input.payment_required === false ? "not_required" : "awaiting_payment"; const status = paymentStatus === "not_required" ? "issued" : "held"; const id=generateEntityId("dtkt"); const holdMinutes=Math.min(120,Math.max(5,Math.round(Number(input.hold_minutes)||15))); await client.query(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $12='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN $12='held' THEN CURRENT_TIMESTAMP + ($14 * INTERVAL '1 minute') END,$15)`,[id,input.event_id,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,holdMinutes,input.source === "public" ? "public" : "admin"]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[status,input.seat_id]); await client.query("COMMIT"); return { ticket: await this.getDirectTicketById(id) }; } catch (error) { await client.query("ROLLBACK"); if ((error as { code?: string }).code === "23505") return { error: "seat_unavailable" as const }; throw error; } finally { client.release(); }
+    try { await client.query("BEGIN"); const seat = await client.query<Record<string, unknown>>("SELECT * FROM direct_seats WHERE id=$1 AND event_id=$2 AND performance_id=$3 FOR UPDATE", [input.seat_id,input.event_id,input.performance_id]); if (!seat.rows[0]) { await client.query("ROLLBACK"); return { error: "invalid_seat" as const }; } if (seat.rows[0].status !== "available" || seat.rows[0].allocation_status !== "allocated") { await client.query("ROLLBACK"); return { error: "seat_unavailable" as const }; } const paymentStatus = input.payment_required === false ? "not_required" : "awaiting_payment"; const status = paymentStatus === "not_required" ? "issued" : "held"; const id=generateEntityId("dtkt"); const holdMinutes=Math.min(120,Math.max(5,Math.round(Number(input.hold_minutes)||15))); await client.query(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $12='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN $12='held' THEN CURRENT_TIMESTAMP + ($14 * INTERVAL '1 minute') END,$15)`,[id,input.event_id,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,holdMinutes,input.source === "public" ? "public" : "admin"]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[status,input.seat_id]); await client.query("COMMIT"); return { ticket: await this.getDirectTicketById(id) }; } catch (error) { await client.query("ROLLBACK"); if ((error as { code?: string }).code === "23505") return { error: "seat_unavailable" as const }; throw error; } finally { client.release(); }
   }
 
   async updateDirectTicketPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {

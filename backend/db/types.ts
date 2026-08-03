@@ -1,6 +1,8 @@
 export type MessageType = "incoming" | "outgoing";
 export type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 export type DirectSeatStatus = "available" | "held" | "issued" | "voided";
+export type DirectSeatAllocationStatus = "allocated" | "not_allocated";
+export type DirectSeatSourceStatus = "available" | "sold" | "generated" | "blocked" | "unknown";
 export type DirectTicketStatus = "held" | "issued" | "checked_in" | "voided";
 export type DirectTicketPaymentStatus = "awaiting_payment" | "proof_submitted" | "verified" | "not_required" | "rejected" | "expired" | "refunded";
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
@@ -287,6 +289,7 @@ export interface DirectSeatRow {
   event_id: string;
   performance_id: string;
   zone: string;
+  section_label: string | null;
   row_label: string;
   seat_label: string;
   external_seat_ref: string | null;
@@ -294,6 +297,8 @@ export interface DirectSeatRow {
   x: number | null;
   y: number | null;
   status: DirectSeatStatus;
+  allocation_status: DirectSeatAllocationStatus;
+  source_status: DirectSeatSourceStatus;
   created_at: string;
   updated_at: string;
 }
@@ -347,12 +352,15 @@ export interface UpsertDirectPerformanceInput {
 
 export interface ImportDirectSeatInput {
   zone: string;
+  section_label?: string | null;
   row_label: string;
   seat_label: string;
   external_seat_ref?: string | null;
   face_value?: number | null;
   x?: number | null;
   y?: number | null;
+  allocation_status?: DirectSeatAllocationStatus;
+  source_status?: DirectSeatSourceStatus;
 }
 
 export interface CreateDirectTicketInput {
@@ -721,7 +729,7 @@ export interface AppDatabase {
   deleteDirectPerformance(eventId: string, performanceId: string): Promise<DirectPerformanceDeleteResult | undefined>;
   resetDirectPerformance(eventId: string, performanceId: string): Promise<{ tickets: number; seats: number } | undefined>;
   listDirectSeats(eventId: string, performanceId?: string): Promise<DirectSeatRow[]>;
-  importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[]): Promise<DirectSeatRow[]>;
+  importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean }): Promise<DirectSeatRow[]>;
   listDirectTickets(eventId: string): Promise<DirectTicketRow[]>;
   getDirectTicketById(id: string): Promise<DirectTicketRow | undefined>;
   createDirectTicket(input: CreateDirectTicketInput): Promise<{ ticket?: DirectTicketRow; error?: "seat_unavailable" | "invalid_seat" }>;
