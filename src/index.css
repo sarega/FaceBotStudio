@@ -266,6 +266,48 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     border-color: #cbd5e1;
   }
 
+  /* Keep the zone selector beside the seat table while the long page scrolls. */
+  .direct-ticketing-seat-map > div:first-child {
+    position: sticky;
+    top: 3.5rem;
+    z-index: 20;
+    margin: -0.5rem -0.5rem 0;
+    padding: 0.5rem;
+    border-bottom: 1px solid #cbd5e1;
+    background-color: rgba(255, 255, 255, 0.96);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+  }
+
+  .direct-ticketing-zone-overview-grid {
+    align-items: stretch;
+  }
+
+  .direct-ticketing-zone-overview-card {
+    min-width: 0;
+  }
+
+  .direct-ticketing-zone-overview-zone5 {
+    min-width: 0;
+  }
+
+  @media (min-width: 1024px) {
+    .direct-ticketing-zone-overview-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(3, auto);
+    }
+
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 1"] { grid-column: 1; grid-row: 1; }
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 2"] { grid-column: 2; grid-row: 1; }
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 3"] { grid-column: 3; grid-row: 1; }
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 4"] { grid-column: 1; grid-row: 2; }
+    .direct-ticketing-zone-overview-zone5 { grid-column: 2; grid-row: 2; }
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 6"] { grid-column: 3; grid-row: 2; }
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 7"] { grid-column: 1; grid-row: 3; }
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 8"] { grid-column: 2; grid-row: 3; }
+    .direct-ticketing-zone-overview-card[data-zone="ZONE 9"] { grid-column: 3; grid-row: 3; }
+  }
+
   .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-designer,
   .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-classes {
     display: none;
@@ -274,6 +316,11 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   html.theme-dark .direct-ticketing-page-header {
     background-color: rgba(2, 6, 23, 0.96) !important;
     border-color: #334155 !important;
+  }
+
+  html.theme-dark .direct-ticketing-seat-map > div:first-child {
+    border-bottom-color: #334155;
+    background-color: rgba(2, 6, 23, 0.96);
   }
 
   html.theme-dark .bg-slate-50 {
