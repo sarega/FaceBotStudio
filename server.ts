@@ -14864,11 +14864,16 @@ async function startServer() {
       if (!tickets.length) return res.status(404).send("No issued direct tickets found");
       const settings = await getSettingsMap(eventId);
       const artwork = resolveDirectTicketArtworkDataUrl(settings);
-      const svgs = await Promise.all(tickets.map(async (ticket) => {
+      const svgs: string[] = [];
+      for (const ticket of tickets) {
         const qrValue = buildDirectTicketQrValue(ticket.id);
         if (!qrValue) throw new Error("Direct ticket security is not configured");
-        return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork, false);
-      }));
+        svgs.push(renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork, false));
+      }
+      if (tickets.length > 200) {
+        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, output: "browser_print_fallback" });
+        res.setHeader("Content-Type", "text/html; charset=utf-8"); res.setHeader("Cache-Control", "private, no-store"); return res.send(renderDirectTicketsA4Html(svgs));
+      }
       try {
         const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
         await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
