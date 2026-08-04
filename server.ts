@@ -9557,6 +9557,22 @@ function renderDirectTicketsA4HtmlEnd() {
   return "</body></html>";
 }
 
+function parseDirectTicketZones(rawValue: unknown) {
+  return String(rawValue || "").split(",").map((zone) => zone.trim().toLocaleLowerCase()).filter(Boolean);
+}
+
+function directTicketMatchesZones(ticketZone: unknown, requestedZones: string[]) {
+  if (!requestedZones.length) return true;
+  const value = String(ticketZone || "").trim().toLocaleLowerCase();
+  return requestedZones.some((zone) => value === zone || value.startsWith(`${zone} `));
+}
+
+function directTicketZoneFilenameSuffix(requestedZones: string[]) {
+  if (!requestedZones.length) return "";
+  const zoneNumbers = requestedZones.map((zone) => zone.match(/^zone\s+(\d+)$/)?.[1]);
+  return zoneNumbers.every(Boolean) ? `-zones-${zoneNumbers.join("-")}` : "-filtered-zones";
+}
+
 function renderDirectTicketsA4Html(svgs: string[]) {
   const sheets: string[] = [];
   for (let index = 0; index < svgs.length; index += 4) sheets.push(renderDirectTicketsA4HtmlSheet(svgs.slice(index, index + 4)));
@@ -14839,10 +14855,10 @@ async function startServer() {
     return res.status(result.alreadyCheckedIn ? 409 : 200).json({ ...result, error: result.alreadyCheckedIn ? "Already checked in" : undefined, ticket: serializeAdminDirectTicket(result.ticket) });
   });
   app.get("/api/direct-ticketing/tickets/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
-    const eventId = getRequestedEventId(req); const rows = await appDb.listDirectTickets(eventId);
+    const eventId = getRequestedEventId(req); const requestedZones = parseDirectTicketZones(req.query.zones); const rows = (await appDb.listDirectTickets(eventId)).filter((ticket) => directTicketMatchesZones(ticket.zone, requestedZones));
     const csv = new Parser({ fields: ["id", "status", "payment_status", "ticket_class", "holder_name", "buyer_name", "phone", "email", "price_amount", "performance_code", "performance_title", "zone", "row_label", "seat_label", "payment_reference", "issued_at", "checked_in_at"] }).parse(rows);
-    await recordAudit(req, "direct_ticket.exported", "event", eventId, { event_id: eventId, rows: rows.length });
-    res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment("direct-ticket-report.csv"); return res.send(`\ufeff${csv}`);
+    await recordAudit(req, "direct_ticket.exported", "event", eventId, { event_id: eventId, rows: rows.length, zones: requestedZones });
+    res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment(`direct-ticket-report${directTicketZoneFilenameSuffix(requestedZones)}.csv`); return res.send(`\ufeff${csv}`);
   });
   app.get("/api/direct-ticketing/inventory/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
@@ -14863,11 +14879,13 @@ async function startServer() {
       const requestedStatus = String(req.query.status || "").trim();
       const requestedPerformanceId = String(req.query.performance_id || "").trim();
       const requestedSearch = String(req.query.search || "").trim().toLocaleLowerCase();
+      const requestedZones = parseDirectTicketZones(req.query.zones);
       const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => {
         if (!["issued", "checked_in"].includes(ticket.status)) return false;
         if (requestedIds.length && !requestedIds.includes(ticket.id)) return false;
         if (requestedStatus && requestedStatus !== "all" && ticket.status !== requestedStatus) return false;
         if (requestedPerformanceId && requestedPerformanceId !== "all" && ticket.performance_id !== requestedPerformanceId) return false;
+        if (!directTicketMatchesZones(ticket.zone, requestedZones)) return false;
         if (requestedSearch && ![ticket.id, ticket.holder_name, ticket.buyer_name, ticket.ticket_class, ticket.performance_title, ticket.zone, ticket.row_label, ticket.seat_label].filter(Boolean).join(" ").toLocaleLowerCase().includes(requestedSearch)) return false;
         return true;
       });
@@ -14880,7 +14898,7 @@ async function startServer() {
         return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork, false);
       };
       if (tickets.length > 200) {
-        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, output: "browser_print_fallback" });
+        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones, output: "browser_print_fallback" });
         res.setHeader("Content-Type", "text/html; charset=utf-8"); res.setHeader("Cache-Control", "private, no-store");
         res.write(renderDirectTicketsA4HtmlStart());
         for (let index = 0; index < tickets.length; index += 4) {
@@ -14893,11 +14911,11 @@ async function startServer() {
       for (const ticket of tickets) svgs.push(await renderSvg(ticket));
       try {
         const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
-        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
-        res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", 'inline; filename="direct-tickets-a4.pdf"'); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
+        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones });
+        res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", `inline; filename="direct-tickets${directTicketZoneFilenameSuffix(requestedZones)}.pdf"`); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
       } catch (error) {
         console.error("Failed to render direct tickets A4 PDF; serving browser-print fallback:", error);
-        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, output: "browser_print_fallback" });
+        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones, output: "browser_print_fallback" });
         res.setHeader("Content-Type", "text/html; charset=utf-8"); res.setHeader("Cache-Control", "private, no-store"); return res.send(renderDirectTicketsA4Html(svgs));
       }
     } catch (error) {

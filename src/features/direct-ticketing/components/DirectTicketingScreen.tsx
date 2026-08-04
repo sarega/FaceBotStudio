@@ -25,6 +25,19 @@ const normalizeSeatDrafts = (rows: SeatDraft[]) => rows.filter((row) => row.zone
 const seatDraftKey = (row: Pick<SeatDraft, "zone" | "section_label" | "row_label" | "seat_label">) => `${row.zone}\u0000${row.section_label}\u0000${row.row_label}\u0000${row.seat_label}`;
 const seatDraftFingerprint = (row: SeatDraft) => [row.section_label, row.external_seat_ref, row.face_value, row.x, row.y, row.allocation_status, row.source_status].join("\u0000");
 const naturalLabelCompare = (left: string, right: string) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+const DIRECT_TICKET_ZONE_GROUPS: Record<string, string[]> = {
+  all: [],
+  "zones-1-6": Array.from({ length: 6 }, (_, index) => `ZONE ${index + 1}`),
+  "zones-7-9": Array.from({ length: 3 }, (_, index) => `ZONE ${index + 7}`),
+};
+const ticketMatchesZones = (ticketZone: string | undefined, requestedZones: string[]) => {
+  if (!requestedZones.length) return true;
+  const value = String(ticketZone || "").trim().toLocaleLowerCase();
+  return requestedZones.some((zone) => {
+    const requested = zone.trim().toLocaleLowerCase();
+    return value === requested || value.startsWith(`${requested} `);
+  });
+};
 const seatMapContextFromFilename = (filename: string) => {
   const zoneMatch = filename.match(/zone\s*([0-9]+)/i);
   const price = /premium/i.test(filename) ? 1500 : /standard\s*plus/i.test(filename) ? 1000 : /standard/i.test(filename) ? 800 : null;
@@ -84,7 +97,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const [previewTicketClass, setPreviewTicketClass] = useState("VIP");
   const [newClass, setNewClass] = useState({ name: "", price_amount: "", payment_required: true, primary_color: "#1d4ed8", accent_color: "#bfdbfe" });
   const [seatDrafts, setSeatDrafts] = useState<SeatDraft[]>([blankSeatDraft()]);
-  const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatTableZoom, setSeatTableZoom] = useState("0.75"); const [seatMapZone, setSeatMapZone] = useState(""); const [seatMapView, setSeatMapView] = useState<"map" | "table">("map"); const [showSeatMapImage, setShowSeatMapImage] = useState(false); const [utilityPaneWidth, setUtilityPaneWidth] = useState("380"); const [zoneOverviewMode, setZoneOverviewMode] = useState<"docked" | "floating">("docked"); const [zoneOverviewWidth, setZoneOverviewWidth] = useState("380"); const [zoneOverviewOffset, setZoneOverviewOffset] = useState({ x: 16, y: 80 }); const [zoneLayoutOrder, setZoneLayoutOrder] = useState<string[]>([]); const [zoneLayoutPositions, setZoneLayoutPositions] = useState<Record<string, { row: number; col: number }>>({}); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState(""); const [ticketSearch, setTicketSearch] = useState(""); const [ticketStatusFilter, setTicketStatusFilter] = useState("all"); const [ticketPerformanceFilter, setTicketPerformanceFilter] = useState("all");
+  const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatTableZoom, setSeatTableZoom] = useState("0.75"); const [seatMapZone, setSeatMapZone] = useState(""); const [seatMapView, setSeatMapView] = useState<"map" | "table">("map"); const [showSeatMapImage, setShowSeatMapImage] = useState(false); const [utilityPaneWidth, setUtilityPaneWidth] = useState("380"); const [zoneOverviewMode, setZoneOverviewMode] = useState<"docked" | "floating">("docked"); const [zoneOverviewWidth, setZoneOverviewWidth] = useState("380"); const [zoneOverviewOffset, setZoneOverviewOffset] = useState({ x: 16, y: 80 }); const [zoneLayoutOrder, setZoneLayoutOrder] = useState<string[]>([]); const [zoneLayoutPositions, setZoneLayoutPositions] = useState<Record<string, { row: number; col: number }>>({}); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState(""); const [ticketSearch, setTicketSearch] = useState(""); const [ticketStatusFilter, setTicketStatusFilter] = useState("all"); const [ticketPerformanceFilter, setTicketPerformanceFilter] = useState("all"); const [ticketExportZoneGroup, setTicketExportZoneGroup] = useState("all");
   const zoneOverviewDragRef = useRef<{ pointerX: number; pointerY: number; x: number; y: number } | null>(null);
   const [seatMapReview, setSeatMapReview] = useState<SeatMapReview | null>(null); const [rescanPending, setRescanPending] = useState(false);
   const [processing, setProcessing] = useState<ProcessingState | null>(null); const [processingElapsed, setProcessingElapsed] = useState(0);
@@ -182,12 +195,18 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     });
     return Array.from(groups.values()).sort((left, right) => right.total - left.total || naturalLabelCompare(left.name, right.name));
   }, [filteredTickets]);
-  const printableTicketIds = filteredTickets.filter((ticket) => ["issued", "checked_in"].includes(ticket.status)).map((ticket) => ticket.id);
+  const selectedExportZones = DIRECT_TICKET_ZONE_GROUPS[ticketExportZoneGroup] || [];
+  const exportFilteredTickets = useMemo(() => filteredTickets.filter((ticket) => ticketMatchesZones(ticket.zone, selectedExportZones)), [filteredTickets, selectedExportZones]);
+  const printableTicketIds = useMemo(() => exportFilteredTickets.filter((ticket) => ["issued", "checked_in"].includes(ticket.status)).map((ticket) => ticket.id), [exportFilteredTickets]);
   const printA4Params = new URLSearchParams({ event_id: eventId });
   if (ticketStatusFilter !== "all") printA4Params.set("status", ticketStatusFilter);
   if (ticketPerformanceFilter !== "all") printA4Params.set("performance_id", ticketPerformanceFilter);
   if (ticketSearch.trim()) printA4Params.set("search", ticketSearch.trim());
+  if (selectedExportZones.length) printA4Params.set("zones", selectedExportZones.join(","));
   const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?${printA4Params.toString()}`;
+  const ticketExportParams = new URLSearchParams({ event_id: eventId });
+  if (selectedExportZones.length) ticketExportParams.set("zones", selectedExportZones.join(","));
+  const ticketExportHref = `/api/direct-ticketing/tickets/export?${ticketExportParams.toString()}`;
   useEffect(() => { if (!seatMapZone && seatMapZones.length) setSeatMapZone(seatMapZones[0]); }, [seatMapZone, seatMapZones]);
   const zoneColor = (zone: string, section = "") => {
     const value = `${zone} ${section}`.toLowerCase();
@@ -617,13 +636,13 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
           <p className="mt-1 text-xs text-slate-500">{formatNumber(filteredTickets.length)} {t("matchingTickets", "matching tickets")} · {formatNumber(printableTicketIds.length)} {t("printableTickets", "ready to print")}</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <a href={printableTicketIds.length ? printA4Href : undefined} aria-disabled={!printableTicketIds.length} target="_blank" rel="noreferrer" className={"text-sm font-bold " + (printableTicketIds.length ? "text-violet-700" : "pointer-events-none text-slate-400")}>{t("printFilteredA4", "Print filtered A4")} ({formatNumber(printableTicketIds.length)})</a>
+          <a href={printableTicketIds.length ? printA4Href : undefined} aria-disabled={!printableTicketIds.length} target="_blank" rel="noreferrer" className={"text-sm font-bold " + (printableTicketIds.length ? "text-violet-700" : "pointer-events-none text-slate-400")}>{t("printFilteredA4", "Print selected A4")} ({formatNumber(printableTicketIds.length)})</a>
           <a href={"/api/direct-ticketing/tickets/print-a4.pdf?event_id=" + encodeURIComponent(eventId)} target="_blank" rel="noreferrer" className="text-sm font-bold text-violet-700">{t("printA4", "Print all A4")}</a>
           <a href={"/api/direct-ticketing/inventory/export?event_id=" + encodeURIComponent(eventId)} className="text-sm font-bold text-violet-700">{t("reconcileSeats", "Reconcile seats")}</a>
-          <a href={"/api/direct-ticketing/tickets/export?event_id=" + encodeURIComponent(eventId)} className="text-sm font-bold text-violet-700">{t("salesCsv", "Sales CSV")}</a>
+          <a href={ticketExportHref} className="text-sm font-bold text-violet-700">{t("salesCsv", "Sales CSV")} ({t("selectedExportGroup", "selected group")})</a>
         </div>
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_220px_auto]">
+      <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_220px_180px_auto]">
         <input aria-label={t("searchTickets", "Search tickets")} placeholder={t("searchTicketsPlaceholder", "Search recipient, buyer, ticket ID, seat…")} value={ticketSearch} onChange={(event) => setTicketSearch(event.target.value)} className="min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
         <select aria-label={t("filterStatus", "Filter status")} value={ticketStatusFilter} onChange={(event) => setTicketStatusFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
           <option value="all">{t("allStatuses", "All statuses")}</option>
@@ -636,7 +655,12 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
           <option value="all">{t("allPerformances", "All performances")}</option>
           {performances.map((performance) => <option key={performance.id} value={performance.id}>{performance.code} — {performance.title}</option>)}
         </select>
-        <button type="button" onClick={() => { setTicketSearch(""); setTicketStatusFilter("all"); setTicketPerformanceFilter("all"); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-700">{t("clearTicketFilters", "Clear")}</button>
+        <select aria-label={t("exportZones", "Export zones")} value={ticketExportZoneGroup} onChange={(event) => setTicketExportZoneGroup(event.target.value)} className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900">
+          <option value="all">{t("allZoneGroup", "All zones")}</option>
+          <option value="zones-1-6">{t("zones1to6", "Zones 1–6")}</option>
+          <option value="zones-7-9">{t("zones7to9", "Zones 7–9")}</option>
+        </select>
+        <button type="button" onClick={() => { setTicketSearch(""); setTicketStatusFilter("all"); setTicketPerformanceFilter("all"); setTicketExportZoneGroup("all"); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-700">{t("clearTicketFilters", "Clear")}</button>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
         <div className="rounded-lg bg-slate-100 px-3 py-2"><p className="text-[10px] font-bold uppercase text-slate-500">{t("totalTickets", "Total")}</p><p className="text-lg font-extrabold text-slate-900">{formatNumber(filteredTickets.length)}</p></div>
