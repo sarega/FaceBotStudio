@@ -140,10 +140,10 @@ function SidebarActionButton({
         active
           ? "bg-blue-50 text-blue-700"
           : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-      } ${collapsed ? "mx-auto h-11 w-11 justify-center rounded-[1.2rem] px-0 py-0" : "rounded-xl px-2 py-0"}`}
+      } ${collapsed ? "mx-auto h-11 w-11 justify-center rounded-[1.2rem] px-0 py-0" : "rounded-xl px-2 py-1"}`}
     >
       <span className={`flex shrink-0 items-center justify-center ${
-        collapsed ? "h-9 w-9 rounded-xl" : "h-7 w-7 rounded-lg"
+        collapsed ? "h-9 w-9 rounded-xl" : "h-8 w-8 rounded-lg"
       } ${active ? "text-blue-600" : "text-slate-500 group-hover:text-blue-600"}`}
       >
         <Icon className="h-4 w-4" />
@@ -427,7 +427,7 @@ export function AdminWorkspaceSidebar({
       )}
 
       <nav className={`min-h-0 flex-1 ${collapsed ? "overflow-visible pr-0" : "overflow-y-auto pr-1"}`}>
-        <div className="space-y-0">
+        <div className="space-y-0.5">
           {primaryTabs.map((tab) => {
             if (tab.id === "event") {
               return (

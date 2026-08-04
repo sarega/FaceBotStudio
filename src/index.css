@@ -281,7 +281,7 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
 
   .direct-ticketing-zone-overview-grid {
     align-items: stretch;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .direct-ticketing-zone-group {
@@ -298,6 +298,47 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     width: 5.5rem;
   }
 
+  .direct-ticketing-section-switcher {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.35rem;
+    padding: 0.25rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.85rem;
+    background: #f8fafc;
+  }
+
+  .direct-ticketing-section-tab {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border-radius: 0.65rem;
+    padding: 0.45rem 0.55rem;
+    color: #475569;
+    font-size: 0.72rem;
+    font-weight: 800;
+    text-align: center;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+
+  .direct-ticketing-section-tab > span {
+    display: inline-flex;
+    height: 1.25rem;
+    width: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: #e2e8f0;
+    font-size: 0.65rem;
+  }
+
+  .direct-ticketing-section-tab:hover:not(:disabled) { background: #e2e8f0; color: #0f172a; }
+  .direct-ticketing-section-tab.is-active { background: #4c1d95; color: #fff; box-shadow: 0 4px 12px rgb(76 29 149 / 18%); }
+  .direct-ticketing-section-tab.is-active > span { background: rgb(255 255 255 / 18%); }
+  .direct-ticketing-section-tab.is-disabled { cursor: not-allowed; opacity: 0.45; }
+
   .direct-ticketing-source-map {
     max-height: calc(100vh - 5rem);
   }
@@ -312,27 +353,70 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     gap: 0.75rem;
   }
 
+  .direct-ticketing-zone-overview-floating {
+    position: fixed !important;
+    z-index: 40;
+    max-height: calc(100vh - 5rem);
+    min-width: 280px;
+    min-height: 160px;
+    overflow: auto;
+    resize: both;
+    box-shadow: 0 22px 60px rgb(15 23 42 / 28%);
+  }
+
+  .direct-ticketing-zone-overview-floating .direct-ticketing-zone-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @media (max-width: 720px) {
+    .direct-ticketing-zone-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  @media (max-width: 460px) {
+    .direct-ticketing-zone-overview-grid,
+    .direct-ticketing-zone-overview-floating .direct-ticketing-zone-overview-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .direct-ticketing-page[data-direct-section="settings"] .direct-ticketing-import-section,
+  .direct-ticketing-page[data-direct-section="settings"] .direct-ticketing-manage-section,
+  .direct-ticketing-page[data-direct-section="settings"] .direct-ticketing-tickets,
+  .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-settings-section,
+  .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-manage-section,
+  .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-tickets,
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-settings-section,
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-import-section,
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-tickets {
+    display: none;
+  }
+
+  .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-setup-grid {
+    grid-column: 1 / -1;
+  }
+
   @media (min-width: 1180px) {
     .direct-ticketing-workspace {
       grid-template-columns: minmax(0, 1fr) minmax(320px, var(--direct-pane-width, 380px));
     }
 
-    .direct-ticketing-setup-grid { grid-column: 1; grid-row: 1; }
-    .direct-ticketing-zone-overview { grid-column: 2; grid-row: 1; }
+    .direct-ticketing-zone-overview { grid-column: 1 / -1; grid-row: 1; }
     .direct-ticketing-seat-map { grid-column: 1; grid-row: 2; min-width: 0; }
     .direct-ticketing-availability { grid-column: 2; grid-row: 2; grid-template-columns: minmax(0, 1fr) !important; }
-  }
-
-  .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-designer,
-  .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-classes,
-  .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-settings-panel {
-    display: none;
   }
 
   html.theme-dark .direct-ticketing-page-header {
     background-color: rgba(2, 6, 23, 0.96) !important;
     border-color: #334155 !important;
   }
+
+  html.theme-dark .direct-ticketing-section-switcher {
+    border-color: #334155;
+    background: #0f172a;
+  }
+
+  html.theme-dark .direct-ticketing-section-tab { color: #cbd5e1; }
+  html.theme-dark .direct-ticketing-section-tab > span { background: #1e293b; }
+  html.theme-dark .direct-ticketing-section-tab:hover:not(:disabled) { background: #1e293b; color: #f8fafc; }
+  html.theme-dark .direct-ticketing-section-tab.is-active { background: #6d28d9; color: #fff; }
 
   html.theme-dark .direct-ticketing-seat-map > div:first-child {
     border-bottom-color: #334155;
