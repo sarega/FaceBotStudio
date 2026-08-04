@@ -935,14 +935,15 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows.map(mapDirectSeatRow);
   }
 
-  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean }) {
+  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      const layoutUpdate = options?.replaceLayout ? "x=EXCLUDED.x,y=EXCLUDED.y" : "x=COALESCE(direct_seats.x,EXCLUDED.x),y=COALESCE(direct_seats.y,EXCLUDED.y)";
       for (const seat of seats) {
         const allocationStatus = seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated";
         const sourceStatus = seat.source_status || "unknown";
-        await client.query(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,allocation_status,source_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=EXCLUDED.section_label,external_seat_ref=EXCLUDED.external_seat_ref,face_value=EXCLUDED.face_value,x=EXCLUDED.x,y=EXCLUDED.y,allocation_status=EXCLUDED.allocation_status,source_status=EXCLUDED.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`, [generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, allocationStatus, sourceStatus]);
+        await client.query(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,allocation_status,source_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=EXCLUDED.section_label,external_seat_ref=EXCLUDED.external_seat_ref,face_value=EXCLUDED.face_value,${layoutUpdate},allocation_status=EXCLUDED.allocation_status,source_status=EXCLUDED.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`, [generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, allocationStatus, sourceStatus]);
       }
       if (options?.replaceMissing && seats.length) {
         const keep = seats.map((_, index) => `(zone=$${index * 3 + 3} AND row_label=$${index * 3 + 4} AND seat_label=$${index * 3 + 5})`).join(" OR ");

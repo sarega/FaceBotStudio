@@ -149,3 +149,31 @@ test("seat-map statuses keep non-allocation seats unavailable and protect active
   assert.equal(removed.length, 2);
   assert.ok(removed.every((seat) => seat.status === "voided" && seat.allocation_status === "not_allocated"));
 });
+
+test("seat rescans preserve an existing spatial layout unless replacement is explicit", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Spatial layout test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  await db.importDirectSeats(event.id, performance.id, [
+    { zone: "ZONE 3", row_label: "J", seat_label: "23", x: 10, y: 20 },
+    { zone: "ZONE 3", row_label: "J", seat_label: "24" },
+  ]);
+
+  await db.importDirectSeats(event.id, performance.id, [
+    { zone: "ZONE 3", row_label: "J", seat_label: "23", x: 99, y: 98 },
+    { zone: "ZONE 3", row_label: "J", seat_label: "24", x: 30, y: 40 },
+  ]);
+  let refreshed = await db.listDirectSeats(event.id, performance.id);
+  assert.equal(refreshed.find((seat) => seat.seat_label === "23")?.x, 10);
+  assert.equal(refreshed.find((seat) => seat.seat_label === "23")?.y, 20);
+  assert.equal(refreshed.find((seat) => seat.seat_label === "24")?.x, 30);
+  assert.equal(refreshed.find((seat) => seat.seat_label === "24")?.y, 40);
+
+  await db.importDirectSeats(event.id, performance.id, [
+    { zone: "ZONE 3", row_label: "J", seat_label: "23", x: 99, y: 98 },
+  ], { replaceLayout: true });
+  refreshed = await db.listDirectSeats(event.id, performance.id);
+  assert.equal(refreshed.find((seat) => seat.seat_label === "23")?.x, 99);
+  assert.equal(refreshed.find((seat) => seat.seat_label === "23")?.y, 98);
+});

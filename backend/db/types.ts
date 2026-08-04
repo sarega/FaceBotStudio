@@ -729,7 +729,7 @@ export interface AppDatabase {
   deleteDirectPerformance(eventId: string, performanceId: string): Promise<DirectPerformanceDeleteResult | undefined>;
   resetDirectPerformance(eventId: string, performanceId: string): Promise<{ tickets: number; seats: number } | undefined>;
   listDirectSeats(eventId: string, performanceId?: string): Promise<DirectSeatRow[]>;
-  importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean }): Promise<DirectSeatRow[]>;
+  importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean }): Promise<DirectSeatRow[]>;
   listDirectTickets(eventId: string): Promise<DirectTicketRow[]>;
   getDirectTicketById(id: string): Promise<DirectTicketRow | undefined>;
   createDirectTicket(input: CreateDirectTicketInput): Promise<{ ticket?: DirectTicketRow; error?: "seat_unavailable" | "invalid_seat" }>;

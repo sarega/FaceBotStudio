@@ -398,6 +398,45 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .direct-ticketing-spatial-map-panel {
+    min-width: 0;
+  }
+
+  .direct-ticketing-spatial-map {
+    position: relative;
+    min-width: 520px;
+    min-height: 320px;
+    overflow: hidden;
+    background-color: #f8fafc;
+    background-image: linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(90deg, #e2e8f0 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  .direct-ticketing-spatial-seat {
+    position: absolute;
+    min-width: 2.7rem;
+    min-height: 2.1rem;
+    transform: translate(-50%, -50%);
+    border-radius: 0.6rem;
+    padding: 0.25rem 0.35rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+
+  .direct-ticketing-spatial-seat:not(:disabled):hover {
+    z-index: 2;
+    transform: translate(-50%, -50%) scale(1.08);
+    box-shadow: 0 4px 12px rgb(15 23 42 / 20%);
+  }
+
+  .direct-ticketing-spatial-seat.is-available { border: 1px solid #059669; background: #fff; color: #047857; }
+  .direct-ticketing-spatial-seat.is-blocked { border: 1px solid #e11d48; background: #e11d48; color: #fff; }
+  .direct-ticketing-spatial-seat.is-sold { border: 1px solid #0ea5e9; background: #0ea5e9; color: #fff; }
+  .direct-ticketing-spatial-seat.is-unknown { border: 1px solid #94a3b8; background: #e2e8f0; color: #475569; }
+  .direct-ticketing-spatial-seat.is-selected { border: 2px solid #6d28d9; background: #7c3aed; color: #fff; }
+
   @media (max-width: 720px) {
     .direct-ticketing-zone-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
@@ -471,6 +510,17 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   html.theme-dark .direct-ticketing-zone-grid-cell.is-empty:hover {
     border-color: #8b5cf6;
     background: #1e1b4b;
+  }
+
+  html.theme-dark .direct-ticketing-spatial-map {
+    background-color: #0f172a;
+    background-image: linear-gradient(#1e293b 1px, transparent 1px), linear-gradient(90deg, #1e293b 1px, transparent 1px);
+  }
+
+  html.theme-dark .direct-ticketing-spatial-map-panel,
+  html.theme-dark .direct-ticketing-spatial-map-scroll {
+    border-color: #334155;
+    background-color: #0f172a;
   }
 
   html.theme-dark .direct-ticketing-zone-card-accent {
