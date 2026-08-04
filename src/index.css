@@ -528,6 +528,7 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
 
   html.theme-dark .direct-ticketing-zone-card-ratio {
     background-color: #1e293b !important;
+    color: #f8fafc !important;
   }
 
   html.theme-dark .direct-ticketing-source-map {
@@ -660,6 +661,16 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   html.theme-dark .text-violet-700,
   html.theme-dark .text-violet-600 {
     color: #c4b5fd !important;
+  }
+
+  html.theme-dark .text-violet-950,
+  html.theme-dark .text-violet-900 {
+    color: #ede9fe !important;
+  }
+
+  html.theme-dark .text-amber-950,
+  html.theme-dark .text-amber-900 {
+    color: #fef3c7 !important;
   }
 
   html.theme-dark input:not([type="checkbox"]):not([type="radio"]),
