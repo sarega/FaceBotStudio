@@ -9054,7 +9054,8 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const eventName = text(String(settings.event_name || "Event Ticket").trim() || "Event Ticket", 30);
   const holder = text(ticket.holder_name || ticket.buyer_name || "Guest", 28);
   const performance = text(ticket.performance_title || ticket.performance_code || "Performance", 48, 38);
-  const seatZoneRow = escapeXml([ticket.zone, ticket.row_label && `Row ${ticket.row_label}`].filter(Boolean).join(" · "));
+  const seatZone = escapeXml(ticket.zone || "Assigned at door");
+  const rowLabel = escapeXml(ticket.row_label || "-");
   const seatNumber = escapeXml(ticket.seat_label || "-");
   const ticketClass = escapeXml(ticket.ticket_class || "VIP");
   const ticketId = escapeXml(ticket.id);
@@ -9063,7 +9064,8 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const eventTime = performanceEnd ? `${performanceDate} – ${performanceEnd}` : performanceDate;
   const venue = escapeXml(String(settings.event_venue_name || settings.event_location || "").trim());
   const entryCode = escapeXml(ticket.id.replace(/^dtkt_/i, "").slice(-8).toUpperCase());
-  const price = ticket.price_amount > 0 ? `${ticket.price_amount.toLocaleString("en-US")} THB` : "Complimentary";
+  const hasPrice = ticket.price_amount > 0;
+  const price = hasPrice ? `${ticket.price_amount.toLocaleString("en-US")} THB` : "";
   const { primaryColor, accentColor } = resolveDirectTicketClassColors(settings, ticket.ticket_class || "VIP");
   const heading = escapeXml(String(settings.direct_ticket_heading || "DIRECT SEAT TICKET").trim().slice(0, 60) || "DIRECT SEAT TICKET");
   const note = escapeXml(String(settings.direct_ticket_note || "").trim().slice(0, 120));
@@ -9083,10 +9085,8 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
     <text x="88" y="158" font-family="sans-serif" font-size="40" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="250" font-family="sans-serif" font-size="24" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
     <text x="88" y="350" font-family="sans-serif" font-size="22" fill="#7a6f66">GUEST</text><text x="88" y="392" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${holder}</text>
     <text x="88" y="460" font-family="sans-serif" font-size="22" fill="#7a6f66">PERFORMANCE</text><text x="88" y="500" font-family="sans-serif" font-size="32" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="570" font-family="sans-serif" font-size="23" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="604" font-family="sans-serif" font-size="21" fill="#6b625b">${venue}</text>` : ""}
-    <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${ticketClass}</text>
-    <text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>
-    <text x="570" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">ZONE / ROW</text><text x="570" y="700" font-family="sans-serif" font-size="27" font-weight="700" fill="${primaryColor}">${seatZoneRow || "Assigned at door"}</text>
-    <text x="760" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">SEAT</text><text x="760" y="702" font-family="sans-serif" font-size="36" font-weight="800" fill="${primaryColor}">${seatNumber}</text>
+    <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${ticketClass}</text>${hasPrice ? `<text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>` : ""}
+    <rect x="490" y="622" width="320" height="174" rx="16" fill="${primaryColor}" opacity=".1" stroke="${primaryColor}" stroke-width="3"/><text x="515" y="653" font-family="sans-serif" font-size="21" font-weight="700" fill="${primaryColor}">${seatZone}</text><text x="515" y="686" font-family="sans-serif" font-size="18" font-weight="700" fill="#7a6f66">ROW</text><text x="515" y="774" font-family="sans-serif" font-size="92" font-weight="800" fill="${primaryColor}">${rowLabel}</text><text x="660" y="686" font-family="sans-serif" font-size="18" font-weight="700" fill="#7a6f66">SEAT</text><text x="660" y="776" font-family="sans-serif" font-size="108" font-weight="800" fill="${primaryColor}">${seatNumber}</text>
     ${note ? `<text x="88" y="758" font-family="sans-serif" font-size="15" fill="#6b625b">${note}</text>` : ""}
     <rect x="840" y="300" width="326" height="516" fill="#f1e7d6" opacity=".58"/><path d="M840 300 V816" stroke="#8e7d68" stroke-width="3" stroke-dasharray="4 10"/>
     <text x="1003" y="330" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="700" letter-spacing="2" fill="${primaryColor}">CHECK-IN AREA</text><text x="1003" y="352" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#6b625b">PUNCH / MARK WHEN USED</text>
