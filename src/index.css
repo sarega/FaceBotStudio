@@ -284,8 +284,38 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .direct-ticketing-zone-grid-cell {
+    min-width: 0;
+    min-height: 4.5rem;
+    border: 1px dashed #cbd5e1;
+    border-radius: 0.75rem;
+    padding: 0.25rem;
+    background: rgb(248 250 252 / 55%);
+    transition: border-color 120ms ease, background-color 120ms ease;
+  }
+
+  .direct-ticketing-zone-grid-cell.is-filled {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .direct-ticketing-zone-grid-cell.is-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #94a3b8;
+    font-size: 0.62rem;
+    font-weight: 700;
+  }
+
+  .direct-ticketing-zone-grid-cell.is-empty:hover {
+    border-color: #8b5cf6;
+    background: #f5f3ff;
+  }
+
   .direct-ticketing-zone-group {
     display: grid;
+    height: 100%;
     min-width: 0;
     gap: 0.25rem;
   }
@@ -365,7 +395,7 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   }
 
   .direct-ticketing-zone-overview-floating .direct-ticketing-zone-overview-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   @media (max-width: 720px) {
@@ -426,6 +456,21 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   html.theme-dark .direct-ticketing-zone-overview-card {
     background-color: #111a2f !important;
     color: #e2e8f0;
+  }
+
+  html.theme-dark .direct-ticketing-zone-grid-cell {
+    border-color: #334155;
+    background: rgb(15 23 42 / 55%);
+  }
+
+  html.theme-dark .direct-ticketing-zone-grid-cell.is-filled {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  html.theme-dark .direct-ticketing-zone-grid-cell.is-empty:hover {
+    border-color: #8b5cf6;
+    background: #1e1b4b;
   }
 
   html.theme-dark .direct-ticketing-zone-card-accent {

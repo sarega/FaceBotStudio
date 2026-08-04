@@ -82,7 +82,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const [previewTicketClass, setPreviewTicketClass] = useState("VIP");
   const [newClass, setNewClass] = useState({ name: "", price_amount: "", payment_required: true, primary_color: "#1d4ed8", accent_color: "#bfdbfe" });
   const [seatDrafts, setSeatDrafts] = useState<SeatDraft[]>([blankSeatDraft()]);
-  const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatTableZoom, setSeatTableZoom] = useState("0.75"); const [seatMapZone, setSeatMapZone] = useState(""); const [showSeatMapImage, setShowSeatMapImage] = useState(false); const [utilityPaneWidth, setUtilityPaneWidth] = useState("380"); const [zoneOverviewMode, setZoneOverviewMode] = useState<"docked" | "floating">("docked"); const [zoneOverviewWidth, setZoneOverviewWidth] = useState("380"); const [zoneOverviewOffset, setZoneOverviewOffset] = useState({ x: 16, y: 80 }); const [zoneLayoutOrder, setZoneLayoutOrder] = useState<string[]>([]); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState("");
+  const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatTableZoom, setSeatTableZoom] = useState("0.75"); const [seatMapZone, setSeatMapZone] = useState(""); const [showSeatMapImage, setShowSeatMapImage] = useState(false); const [utilityPaneWidth, setUtilityPaneWidth] = useState("380"); const [zoneOverviewMode, setZoneOverviewMode] = useState<"docked" | "floating">("docked"); const [zoneOverviewWidth, setZoneOverviewWidth] = useState("380"); const [zoneOverviewOffset, setZoneOverviewOffset] = useState({ x: 16, y: 80 }); const [zoneLayoutOrder, setZoneLayoutOrder] = useState<string[]>([]); const [zoneLayoutPositions, setZoneLayoutPositions] = useState<Record<string, { row: number; col: number }>>({}); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState("");
   const zoneOverviewDragRef = useRef<{ pointerX: number; pointerY: number; x: number; y: number } | null>(null);
   const [seatMapReview, setSeatMapReview] = useState<SeatMapReview | null>(null); const [rescanPending, setRescanPending] = useState(false);
   const [processing, setProcessing] = useState<ProcessingState | null>(null); const [processingElapsed, setProcessingElapsed] = useState(0);
@@ -174,10 +174,29 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const zoneLayoutStorageKey = `meetrix:direct-ticket-zone-layout:${eventId}:${performanceId || "draft"}`;
   const zoneOverviewStorageKey = `meetrix:direct-ticket-zone-overview:${eventId}`;
   useEffect(() => {
-    let saved: string[] = [];
-    try { saved = JSON.parse(window.localStorage.getItem(zoneLayoutStorageKey) || "[]"); } catch { saved = []; }
-    const valid = saved.filter((zone) => zoneNames.includes(zone));
-    setZoneLayoutOrder([...valid, ...zoneNames.filter((zone) => !valid.includes(zone))]);
+    let saved: unknown = null;
+    try { saved = JSON.parse(window.localStorage.getItem(zoneLayoutStorageKey) || "null"); } catch { saved = null; }
+    const savedRecord = saved && typeof saved === "object" && !Array.isArray(saved) ? saved as Record<string, unknown> : null;
+    const savedOrder = Array.isArray(saved) ? saved : Array.isArray(savedRecord?.order) ? savedRecord.order : [];
+    const validOrder = savedOrder.filter((zone): zone is string => typeof zone === "string" && zoneNames.includes(zone));
+    const nextOrder = [...validOrder, ...zoneNames.filter((zone) => !validOrder.includes(zone))];
+    const savedPositions = savedRecord?.positions && typeof savedRecord.positions === "object" ? savedRecord.positions as Record<string, { row?: unknown; col?: unknown }> : {};
+    const nextPositions: Record<string, { row: number; col: number }> = {};
+    const occupied = new Set<string>();
+    nextOrder.forEach((zone, index) => {
+      const candidate = savedPositions[zone];
+      const row = Number(candidate?.row);
+      const col = Number(candidate?.col);
+      if (Number.isInteger(row) && row >= 0 && Number.isInteger(col) && col >= 0 && col < 3 && !occupied.has(`${row}:${col}`)) {
+        nextPositions[zone] = { row, col }; occupied.add(`${row}:${col}`); return;
+      }
+      let fallbackIndex = index;
+      while (occupied.has(`${Math.floor(fallbackIndex / 3)}:${fallbackIndex % 3}`)) fallbackIndex += 1;
+      const fallback = { row: Math.floor(fallbackIndex / 3), col: fallbackIndex % 3 };
+      nextPositions[zone] = fallback; occupied.add(`${fallback.row}:${fallback.col}`);
+    });
+    setZoneLayoutOrder(nextOrder);
+    setZoneLayoutPositions(nextPositions);
   }, [zoneLayoutStorageKey, zoneNames]);
   useEffect(() => {
     try {
@@ -208,23 +227,37 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     if (zoneOverviewMode !== "floating" || (event.target as HTMLElement).closest("button, input, select")) return;
     zoneOverviewDragRef.current = { pointerX: event.clientX, pointerY: event.clientY, ...zoneOverviewOffset };
   };
+  const zoneGridColumns = 3;
+  const zonePositionFor = (zone: string) => {
+    const saved = zoneLayoutPositions[zone];
+    if (saved) return saved;
+    const fallbackOrder = zoneLayoutOrder.length ? zoneLayoutOrder : zoneNames;
+    const index = Math.max(0, fallbackOrder.indexOf(zone));
+    return { row: Math.floor(index / zoneGridColumns), col: index % zoneGridColumns };
+  };
   const zoneSummaryGroups = useMemo(() => {
     const grouped = new Map<string, (typeof zoneSummary)[number][]>();
     zoneSummary.forEach((item) => grouped.set(item.zone, [...(grouped.get(item.zone) || []), item]));
     return Array.from(grouped.entries()).map(([zone, items]) => ({ zone, items })).sort((left, right) => {
-      const leftIndex = zoneLayoutOrder.indexOf(left.zone); const rightIndex = zoneLayoutOrder.indexOf(right.zone);
-      return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex) || naturalLabelCompare(left.zone, right.zone);
+      const leftPosition = zonePositionFor(left.zone); const rightPosition = zonePositionFor(right.zone);
+      return leftPosition.row - rightPosition.row || leftPosition.col - rightPosition.col || naturalLabelCompare(left.zone, right.zone);
     });
-  }, [zoneLayoutOrder, zoneSummary]);
-  const moveZoneGroup = (source: string, target: string) => {
-    if (!source || source === target) return;
-    setZoneLayoutOrder((current) => {
-      const next = current.filter((zone) => zone !== source);
-      next.splice(Math.max(0, next.indexOf(target)), 0, source);
-      try { window.localStorage.setItem(zoneLayoutStorageKey, JSON.stringify(next)); } catch { /* Browser storage is optional; the layout still works for this session. */ }
-      return next;
-    });
+  }, [zoneLayoutOrder, zoneLayoutPositions, zoneNames, zoneSummary]);
+  const moveZoneGroup = (source: string, targetPosition: { row: number; col: number }) => {
+    if (!source) return;
+    const sourcePosition = zonePositionFor(source);
+    const targetZone = zoneSummaryGroups.find((group) => {
+      const position = zonePositionFor(group.zone);
+      return position.row === targetPosition.row && position.col === targetPosition.col;
+    })?.zone;
+    if (targetZone === source) return;
+    const nextPositions = { ...zoneLayoutPositions, [source]: targetPosition };
+    if (targetZone) nextPositions[targetZone] = sourcePosition;
+    setZoneLayoutPositions(nextPositions);
+    try { window.localStorage.setItem(zoneLayoutStorageKey, JSON.stringify({ order: zoneLayoutOrder, positions: nextPositions })); } catch { /* Browser storage is optional; the layout still works for this session. */ }
   };
+  const zoneGridRows = Math.max(4, Math.ceil(zoneSummaryGroups.length / zoneGridColumns) + 1, ...zoneSummaryGroups.map((group) => zonePositionFor(group.zone).row + 1));
+  const zoneGroupsByPosition = new Map(zoneSummaryGroups.map((group) => { const position = zonePositionFor(group.zone); return [`${position.row}:${position.col}`, group] as const; }));
   const seatMapGrid = useMemo(() => {
     const byRow = new Map<string, Map<string, SeatDraft>>();
     seatDrafts.filter((row) => (!seatMapZone || row.zone === seatMapZone) && row.row_label.trim() && row.seat_label.trim()).forEach((row) => {
@@ -504,7 +537,13 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     {zoneSummary.length > 0 && <section className={`direct-ticketing-manage-section direct-ticketing-zone-overview direct-ticketing-section rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 ${zoneOverviewMode === "floating" ? "direct-ticketing-zone-overview-floating" : ""}`} style={zoneOverviewMode === "floating" ? { width: `${zoneOverviewWidth}px`, left: `${zoneOverviewOffset.x}px`, top: `${zoneOverviewOffset.y}px` } : undefined}>
       <div className={`flex flex-wrap items-center justify-between gap-2 ${zoneOverviewMode === "floating" ? "cursor-move" : ""}`} onPointerDown={beginZoneOverviewDrag}><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-violet-600">{t("zoneOverview", "Zone overview")}</p><h3 className="text-sm font-bold text-slate-900">{t("zoneOverviewTitle", "Seat inventory by zone")}</h3></div><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[10px] font-semibold text-slate-500">{seatDrafts.filter((row) => row.zone && row.row_label && row.seat_label).length} {t("mappedSeats", "mapped seats")} · {t("dragToArrange", "drag to arrange")}</span><button type="button" onClick={() => setZoneOverviewMode((mode) => mode === "docked" ? "floating" : "docked")} className="rounded-md border border-slate-300 px-2 py-1 text-[10px] font-bold text-slate-700">{zoneOverviewMode === "docked" ? t("floatZoneOverview", "Float") : t("dockZoneOverview", "Dock")}</button>{zoneOverviewMode === "floating" && <label className="direct-ticketing-pane-size-control flex items-center gap-1 text-[10px] font-semibold text-slate-500"><span>{t("panelWidth", "Panel")}</span><input aria-label={t("panelWidth", "Panel width")} type="range" min="280" max="560" step="10" value={zoneOverviewWidth} onChange={(event) => setZoneOverviewWidth(event.target.value)} /><output className="w-10 text-right tabular-nums">{zoneOverviewWidth}px</output></label>}</div></div>
       <div className="direct-ticketing-zone-overview-grid mt-2 grid gap-1.5">
-        {zoneSummaryGroups.map((group) => <div key={group.zone} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", group.zone); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveZoneGroup(event.dataTransfer.getData("text/plain"), group.zone); }} className="direct-ticketing-zone-group cursor-grab rounded-lg active:cursor-grabbing">{group.items.map(renderZoneOverviewCard)}</div>)}
+        {Array.from({ length: zoneGridRows * zoneGridColumns }, (_, index) => {
+          const row = Math.floor(index / zoneGridColumns); const col = index % zoneGridColumns;
+          const group = zoneGroupsByPosition.get(`${row}:${col}`);
+          return <div key={`${row}:${col}`} className={`direct-ticketing-zone-grid-cell ${group ? "is-filled" : "is-empty"}`} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); moveZoneGroup(event.dataTransfer.getData("text/plain"), { row, col }); }}>
+            {group ? <div draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", group.zone); }} className="direct-ticketing-zone-group cursor-grab rounded-lg active:cursor-grabbing">{group.items.map(renderZoneOverviewCard)}</div> : <span className="direct-ticketing-zone-empty-slot">{t("emptyZoneSlot", "Empty slot")}</span>}
+          </div>;
+        })}
       </div>
     </section>}
     {(seatMapImageUrl || seatMapGrid.rows.length > 0) && <section className="direct-ticketing-manage-section direct-ticketing-seat-map rounded-2xl border border-slate-300 bg-white p-3 shadow-sm">

@@ -420,6 +420,7 @@ const THAI_LABELS: Record<string, string> = {
   "directTickets.dockZoneOverview": "ตรึงแผงโซน",
   "directTickets.panelWidth": "ความกว้างแผง",
   "directTickets.inspectorWidth": "แผงจัดการ",
+  "directTickets.emptyZoneSlot": "ช่องว่าง",
   "directTickets.showTicketSettings": "แสดงการตั้งค่าบัตร",
   "directTickets.hideTicketSettings": "ซ่อนการตั้งค่าบัตร",
   "directTickets.designer": "ผู้ออกแบบบัตร",
