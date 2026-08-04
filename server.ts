@@ -9048,7 +9048,7 @@ function resolveDirectTicketClassColors(settings: Record<string, string>, ticket
   }
 }
 
-function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string, string>, qrDataUrl: string, artworkDataUrl = "") {
+function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string, string>, qrDataUrl: string, artworkDataUrl = "", embedFonts = true) {
   const wrap = (value: string, max: number) => { const words = value.trim().split(/\s+/); const lines: string[] = []; let line = ""; for (const word of words) { if ((line + " " + word).trim().length > max && line) { lines.push(line); line = word; } else line = (line + " " + word).trim(); } if (line) lines.push(line); return lines.slice(0, 2); };
   const text = (value: string, max: number, lineDy = 42) => wrap(value, max).map((line, index) => `<tspan x="88" dy="${index ? lineDy : 0}">${escapeXml(line)}</tspan>`).join("");
   const eventName = text(String(settings.event_name || "Event Ticket").trim() || "Event Ticket", 30);
@@ -9076,7 +9076,7 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const panelArtwork = artworkDataUrl && artworkMode === "panel"
     ? `<rect x="742" y="46" width="384" height="200" rx="22" fill="${accentColor}" opacity=".32"/><image x="748" y="52" width="372" height="188" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`
     : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850"><style>${buildEmbeddedTicketFontCss()} text{font-family:"TicketNoto",sans-serif!important}</style>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850"><style>${embedFonts ? buildEmbeddedTicketFontCss() : ""} text{font-family:"TicketThai","TicketLatin",sans-serif!important}</style>
     ${artworkDefs}<rect width="1200" height="850" fill="#0b1220"/><rect x="34" y="34" width="1132" height="782" rx="32" fill="#fffaf0"/>${backgroundArtwork}
     <path d="M34 300 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/><path d="M62 74 Q62 62 74 62 M1138 74 Q1138 62 1126 62" fill="none" stroke="${accentColor}" stroke-width="2" opacity=".8"/>
     ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="266" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="29" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
@@ -9229,6 +9229,30 @@ function resolvePuppeteerExecutablePath() {
   return candidates.find((candidate) => existsSync(candidate));
 }
 
+async function launchTicketBrowser() {
+  const puppeteerModule = await import("puppeteer");
+  const puppeteer = (puppeteerModule as any).default || puppeteerModule;
+  let bundledPath = "";
+  try {
+    bundledPath = typeof puppeteer.executablePath === "function" ? String(puppeteer.executablePath() || "").trim() : "";
+  } catch {
+    bundledPath = "";
+  }
+  const candidates = [resolvePuppeteerExecutablePath() || "", bundledPath && existsSync(bundledPath) ? bundledPath : "", ""]
+    .filter((candidate, index, all) => all.indexOf(candidate) === index);
+  let lastError: unknown;
+  for (const executablePath of candidates) {
+    const launchOptions: Record<string, unknown> = { headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] };
+    if (executablePath) launchOptions.executablePath = executablePath;
+    try {
+      return { puppeteer, browser: await puppeteer.launch(launchOptions) };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("No usable Chromium executable found");
+}
+
 function buildEmbeddedTicketFontCss() {
   if (cachedTicketFontCssForHtml) return cachedTicketFontCssForHtml;
 
@@ -9237,9 +9261,10 @@ function buildEmbeddedTicketFontCss() {
       const ext = path.extname(fontPath).replace(".", "").toLowerCase();
       const format = ext === "woff2" ? "woff2" : "woff";
       const weight = /-700-/.test(fontPath) ? 700 : /-400-/.test(fontPath) ? 400 : 400;
+      const family = /-thai-/.test(fontPath) ? "TicketThai" : "TicketLatin";
       const bytes = readFileSync(fontPath);
       const base64 = bytes.toString("base64");
-      return `@font-face { font-family: "TicketNoto"; src: url(data:font/${format};base64,${base64}) format("${format}"); font-weight: ${weight}; font-style: normal; font-display: block; }`;
+      return `@font-face { font-family: "${family}"; src: url(data:font/${format};base64,${base64}) format("${format}"); font-weight: ${weight}; font-style: normal; font-display: block; }`;
     })
     .join("\n");
 
@@ -9271,7 +9296,7 @@ function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<st
       width: 420px;
       padding: 8px;
       background: #e7edf5;
-      font-family: "TicketNoto", system-ui, sans-serif;
+      font-family: "TicketThai", "TicketLatin", system-ui, sans-serif;
       color: #0f172a;
     }
     .ticket {
@@ -9456,13 +9481,7 @@ function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<st
 
 async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: Record<string, string>, qrDataUrl: string) {
   const html = renderTicketHtmlForScreenshot(reg, settings, qrDataUrl);
-  const puppeteerModule = await import("puppeteer");
-  const puppeteer = (puppeteerModule as any).default || puppeteerModule;
-  const browser = await puppeteer.launch({
-    headless: true,
-    executablePath: resolvePuppeteerExecutablePath(),
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
+  const { puppeteer, browser } = await launchTicketBrowser();
 
   try {
     const page = await browser.newPage();
@@ -9488,9 +9507,7 @@ async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: R
 }
 
 async function renderDirectTicketPdfBuffer(svg: string) {
-  const puppeteerModule = await import("puppeteer");
-  const puppeteer = (puppeteerModule as any).default || puppeteerModule;
-  const browser = await puppeteer.launch({ headless: true, executablePath: resolvePuppeteerExecutablePath(), args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
+  const { browser } = await launchTicketBrowser();
   try {
     const page = await browser.newPage();
     await page.setContent(`<!doctype html><html><head><style>@page{size:148.5mm 105mm;margin:0}html,body{margin:0;width:148.5mm;height:105mm;overflow:hidden}svg{position:absolute;inset:0;display:block;width:148.5mm;height:105mm}</style></head><body>${svg}</body></html>`, { waitUntil: "domcontentloaded" });
@@ -9503,9 +9520,7 @@ async function renderDirectTicketPdfBuffer(svg: string) {
 }
 
 async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
-  const puppeteerModule = await import("puppeteer");
-  const puppeteer = (puppeteerModule as any).default || puppeteerModule;
-  const browser = await puppeteer.launch({ headless: true, executablePath: resolvePuppeteerExecutablePath(), args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] });
+  const { browser } = await launchTicketBrowser();
   try {
     const page = await browser.newPage();
     const sheets: string[] = [];
@@ -9513,7 +9528,7 @@ async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
       const items = svgs.slice(index, index + 4).map((svg) => `<div class="ticket">${svg}</div>`).join("");
       sheets.push(`<section class="sheet">${items}</section>`);
     }
-    await page.setContent(`<!doctype html><html><head><style>@page{size:A4 landscape;margin:0}html,body{margin:0}.sheet{box-sizing:border-box;width:297mm;height:210mm;display:grid;grid-template-columns:repeat(2,148.5mm);grid-template-rows:repeat(2,105mm);break-after:page}.ticket{position:relative;overflow:hidden;border:.15mm dashed #777}.ticket svg{display:block;width:148.5mm;height:105mm}</style></head><body>${sheets.join("")}</body></html>`, { waitUntil: "domcontentloaded" });
+    await page.setContent(`<!doctype html><html><head><style>${buildEmbeddedTicketFontCss()}@page{size:A4 landscape;margin:0}html,body{margin:0}.sheet{box-sizing:border-box;width:297mm;height:210mm;display:grid;grid-template-columns:repeat(2,148.5mm);grid-template-rows:repeat(2,105mm);break-after:page}.sheet:last-child{break-after:auto}.ticket{position:relative;overflow:hidden;border:.15mm dashed #777}.ticket svg{display:block;width:148.5mm;height:105mm}</style></head><body>${sheets.join("")}</body></html>`, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await page.evaluate(async () => {
       const fonts = (document as any).fonts;
       if (fonts?.ready) await fonts.ready;
@@ -14826,7 +14841,7 @@ async function startServer() {
       const svgs = await Promise.all(tickets.map(async (ticket) => {
         const qrValue = buildDirectTicketQrValue(ticket.id);
         if (!qrValue) throw new Error("Direct ticket security is not configured");
-        return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork);
+        return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork, false);
       }));
       const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
       await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
