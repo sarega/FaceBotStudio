@@ -3,6 +3,7 @@ import helmet from "helmet";
 import { createServer as createViteServer } from "vite";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
+import { PDFDocument, rgb } from "pdf-lib";
 import QRCode from "qrcode";
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
@@ -9008,7 +9009,7 @@ function resolveTicketFontPaths() {
   return cachedTicketFontPaths;
 }
 
-function renderTicketPngBuffer(svg: string) {
+function renderTicketPngBuffer(svg: string, width?: number) {
   const fontFiles = resolveTicketFontPaths();
   const resvg = new Resvg(svg, {
     background: "rgba(0,0,0,0)",
@@ -9017,6 +9018,7 @@ function renderTicketPngBuffer(svg: string) {
       loadSystemFonts: true,
       defaultFontFamily: "Noto Sans Thai",
     },
+    ...(width ? { fitTo: { mode: "width" as const, value: width } } : {}),
   });
 
   return resvg.render().asPng();
@@ -9520,16 +9522,23 @@ async function renderDirectTicketPdfBuffer(svg: string) {
 }
 
 async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
-  const { browser } = await launchTicketBrowser();
-  try {
-    const page = await browser.newPage();
-    await page.setContent(renderDirectTicketsA4Html(svgs), { waitUntil: "domcontentloaded", timeout: 120_000 });
-    await page.evaluate(async () => {
-      const fonts = (document as any).fonts;
-      if (fonts?.ready) await fonts.ready;
-    });
-    return Buffer.from(await page.pdf({ format: "A4", landscape: true, printBackground: true, preferCSSPageSize: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
-  } finally { await browser.close(); }
+  const pdf = await PDFDocument.create();
+  const pageWidth = 297 / 25.4 * 72;
+  const pageHeight = 210 / 25.4 * 72;
+  const ticketWidth = pageWidth / 2;
+  const ticketHeight = pageHeight / 2;
+  for (let index = 0; index < svgs.length; index += 4) {
+    const page = pdf.addPage([pageWidth, pageHeight]);
+    for (const [offset, svg] of svgs.slice(index, index + 4).entries()) {
+      const image = await pdf.embedPng(renderTicketPngBuffer(svg, 1000));
+      const column = offset % 2;
+      const row = Math.floor(offset / 2);
+      page.drawImage(image, { x: column * ticketWidth, y: pageHeight - (row + 1) * ticketHeight, width: ticketWidth, height: ticketHeight });
+    }
+    page.drawLine({ start: { x: ticketWidth, y: 0 }, end: { x: ticketWidth, y: pageHeight }, thickness: 1, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x: 0, y: ticketHeight }, end: { x: pageWidth, y: ticketHeight }, thickness: 1, color: rgb(0, 0, 0) });
+  }
+  return Buffer.from(await pdf.save());
 }
 
 function renderDirectTicketsA4Html(svgs: string[]) {
@@ -14838,7 +14847,7 @@ async function startServer() {
     try {
       const eventId = getRequestedEventId(req);
       const requestedIds = String(req.query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
-      const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => ["issued", "checked_in"].includes(ticket.status) && (!requestedIds.length || requestedIds.includes(ticket.id))).slice(0, 100);
+      const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => ["issued", "checked_in"].includes(ticket.status) && (!requestedIds.length || requestedIds.includes(ticket.id))).slice(0, 600);
       if (!tickets.length) return res.status(404).send("No issued direct tickets found");
       const settings = await getSettingsMap(eventId);
       const artwork = resolveDirectTicketArtworkDataUrl(settings);
