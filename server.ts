@@ -14850,7 +14850,17 @@ async function startServer() {
     try {
       const eventId = getRequestedEventId(req);
       const requestedIds = String(req.query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
-      const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => ["issued", "checked_in"].includes(ticket.status) && (!requestedIds.length || requestedIds.includes(ticket.id))).slice(0, 600);
+      const requestedStatus = String(req.query.status || "").trim();
+      const requestedPerformanceId = String(req.query.performance_id || "").trim();
+      const requestedSearch = String(req.query.search || "").trim().toLocaleLowerCase();
+      const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => {
+        if (!["issued", "checked_in"].includes(ticket.status)) return false;
+        if (requestedIds.length && !requestedIds.includes(ticket.id)) return false;
+        if (requestedStatus && requestedStatus !== "all" && ticket.status !== requestedStatus) return false;
+        if (requestedPerformanceId && requestedPerformanceId !== "all" && ticket.performance_id !== requestedPerformanceId) return false;
+        if (requestedSearch && ![ticket.id, ticket.holder_name, ticket.buyer_name, ticket.ticket_class, ticket.performance_title, ticket.zone, ticket.row_label, ticket.seat_label].filter(Boolean).join(" ").toLocaleLowerCase().includes(requestedSearch)) return false;
+        return true;
+      });
       if (!tickets.length) return res.status(404).send("No issued direct tickets found");
       const settings = await getSettingsMap(eventId);
       const artwork = resolveDirectTicketArtworkDataUrl(settings);

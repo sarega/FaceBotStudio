@@ -183,7 +183,11 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     return Array.from(groups.values()).sort((left, right) => right.total - left.total || naturalLabelCompare(left.name, right.name));
   }, [filteredTickets]);
   const printableTicketIds = filteredTickets.filter((ticket) => ["issued", "checked_in"].includes(ticket.status)).map((ticket) => ticket.id);
-  const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?event_id=${encodeURIComponent(eventId)}${printableTicketIds.length ? `&ids=${encodeURIComponent(printableTicketIds.join(","))}` : ""}`;
+  const printA4Params = new URLSearchParams({ event_id: eventId });
+  if (ticketStatusFilter !== "all") printA4Params.set("status", ticketStatusFilter);
+  if (ticketPerformanceFilter !== "all") printA4Params.set("performance_id", ticketPerformanceFilter);
+  if (ticketSearch.trim()) printA4Params.set("search", ticketSearch.trim());
+  const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?${printA4Params.toString()}`;
   useEffect(() => { if (!seatMapZone && seatMapZones.length) setSeatMapZone(seatMapZones[0]); }, [seatMapZone, seatMapZones]);
   const zoneColor = (zone: string, section = "") => {
     const value = `${zone} ${section}`.toLowerCase();
