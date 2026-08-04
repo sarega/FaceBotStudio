@@ -269,7 +269,7 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   /* Keep the zone selector beside the seat table while the long page scrolls. */
   .direct-ticketing-seat-map > div:first-child {
     position: sticky;
-    top: 3.5rem;
+    top: 2.75rem;
     z-index: 20;
     margin: -0.5rem -0.5rem 0;
     padding: 0.5rem;
@@ -283,29 +283,31 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     align-items: stretch;
   }
 
+  .direct-ticketing-zone-group {
+    display: grid;
+    min-width: 0;
+    gap: 0.25rem;
+  }
+
   .direct-ticketing-zone-overview-card {
     min-width: 0;
   }
 
-  .direct-ticketing-zone-overview-zone5 {
-    min-width: 0;
+  .direct-ticketing-workspace {
+    display: grid;
+    align-items: start;
+    gap: 0.75rem;
   }
 
-  @media (min-width: 1024px) {
-    .direct-ticketing-zone-overview-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      grid-template-rows: repeat(3, auto);
+  @media (min-width: 1180px) {
+    .direct-ticketing-workspace {
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
     }
 
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 1"] { grid-column: 1; grid-row: 1; }
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 2"] { grid-column: 2; grid-row: 1; }
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 3"] { grid-column: 3; grid-row: 1; }
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 4"] { grid-column: 1; grid-row: 2; }
-    .direct-ticketing-zone-overview-zone5 { grid-column: 2; grid-row: 2; }
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 6"] { grid-column: 3; grid-row: 2; }
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 7"] { grid-column: 1; grid-row: 3; }
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 8"] { grid-column: 2; grid-row: 3; }
-    .direct-ticketing-zone-overview-card[data-zone="ZONE 9"] { grid-column: 3; grid-row: 3; }
+    .direct-ticketing-setup-grid { grid-column: 1; grid-row: 1; }
+    .direct-ticketing-zone-overview { grid-column: 2; grid-row: 1; }
+    .direct-ticketing-seat-map { grid-column: 1; grid-row: 2; min-width: 0; }
+    .direct-ticketing-availability { grid-column: 2; grid-row: 2; grid-template-columns: minmax(0, 1fr) !important; }
   }
 
   .direct-ticketing-page.ticket-settings-collapsed .direct-ticketing-designer,
