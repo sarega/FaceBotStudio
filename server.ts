@@ -9242,7 +9242,7 @@ async function launchTicketBrowser() {
     .filter((candidate, index, all) => all.indexOf(candidate) === index);
   let lastError: unknown;
   for (const executablePath of candidates) {
-    const launchOptions: Record<string, unknown> = { headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] };
+    const launchOptions: Record<string, unknown> = { headless: true, timeout: 12_000, args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] };
     if (executablePath) launchOptions.executablePath = executablePath;
     try {
       return { puppeteer, browser: await puppeteer.launch(launchOptions) };
@@ -9523,18 +9523,22 @@ async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
   const { browser } = await launchTicketBrowser();
   try {
     const page = await browser.newPage();
-    const sheets: string[] = [];
-    for (let index = 0; index < svgs.length; index += 4) {
-      const items = svgs.slice(index, index + 4).map((svg) => `<div class="ticket">${svg}</div>`).join("");
-      sheets.push(`<section class="sheet">${items}</section>`);
-    }
-    await page.setContent(`<!doctype html><html><head><style>${buildEmbeddedTicketFontCss()}@page{size:A4 landscape;margin:0}html,body{margin:0}.sheet{box-sizing:border-box;width:297mm;height:210mm;display:grid;grid-template-columns:repeat(2,148.5mm);grid-template-rows:repeat(2,105mm);break-after:page}.sheet:last-child{break-after:auto}.ticket{position:relative;overflow:hidden;border:.15mm dashed #777}.ticket svg{display:block;width:148.5mm;height:105mm}</style></head><body>${sheets.join("")}</body></html>`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+    await page.setContent(renderDirectTicketsA4Html(svgs), { waitUntil: "domcontentloaded", timeout: 120_000 });
     await page.evaluate(async () => {
       const fonts = (document as any).fonts;
       if (fonts?.ready) await fonts.ready;
     });
     return Buffer.from(await page.pdf({ format: "A4", landscape: true, printBackground: true, preferCSSPageSize: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
   } finally { await browser.close(); }
+}
+
+function renderDirectTicketsA4Html(svgs: string[]) {
+  const sheets: string[] = [];
+  for (let index = 0; index < svgs.length; index += 4) {
+    const items = svgs.slice(index, index + 4).map((svg) => `<div class="ticket">${svg}</div>`).join("");
+    sheets.push(`<section class="sheet">${items}</section>`);
+  }
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Direct tickets A4</title><style>${buildEmbeddedTicketFontCss()}@page{size:A4 landscape;margin:0}html,body{margin:0;background:#1f2937}.sheet{box-sizing:border-box;width:297mm;height:210mm;display:grid;grid-template-columns:repeat(2,148.5mm);grid-template-rows:repeat(2,105mm);break-after:page;background:#fff}.sheet:last-child{break-after:auto}.ticket{position:relative;overflow:hidden;border:.15mm dashed #777}.ticket svg{display:block;width:148.5mm;height:105mm}.print-actions{display:none}@media screen{.print-actions{position:sticky;top:0;z-index:1;display:flex;gap:12px;align-items:center;padding:12px 18px;background:#111827;color:#fff;font:14px sans-serif}.print-actions button{border:0;border-radius:6px;padding:8px 14px;background:#6d28d9;color:#fff;font-weight:700;cursor:pointer}}@media print{html,body{background:#fff}.print-actions{display:none}}</style></head><body><div class="print-actions">Server PDF is unavailable. Use Print / Save PDF in this browser.<button onclick="window.print()">Print / Save PDF</button></div>${sheets.join("")}</body></html>`;
 }
 
 function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, string>) {
@@ -14843,9 +14847,15 @@ async function startServer() {
         if (!qrValue) throw new Error("Direct ticket security is not configured");
         return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork, false);
       }));
-      const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
-      await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
-      res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", 'inline; filename="direct-tickets-a4.pdf"'); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
+      try {
+        const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
+        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length });
+        res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", 'inline; filename="direct-tickets-a4.pdf"'); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
+      } catch (error) {
+        console.error("Failed to render direct tickets A4 PDF; serving browser-print fallback:", error);
+        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, output: "browser_print_fallback" });
+        res.setHeader("Content-Type", "text/html; charset=utf-8"); res.setHeader("Cache-Control", "private, no-store"); return res.send(renderDirectTicketsA4Html(svgs));
+      }
     } catch (error) {
       console.error("Failed to render direct tickets A4 PDF:", error);
       return res.status(503).json({ error: "Direct ticket A4 PDF is temporarily unavailable" });

@@ -12,7 +12,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "postinstall": "PUPPETEER_CACHE_DIR=.puppeteer-cache PUPPETEER_SKIP_DOWNLOAD=false node node_modules/puppeteer/install.mjs"
+  },
+  "puppeteer": {
+    "cacheDirectory": ".puppeteer-cache"
   },
   "dependencies": {
     "@fontsource/noto-sans-thai": "^5.2.8",
