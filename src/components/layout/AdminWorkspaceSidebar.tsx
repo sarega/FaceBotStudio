@@ -136,14 +136,14 @@ function SidebarActionButton({
       type="button"
       onClick={onClick}
       title={collapsed ? label : undefined}
-      className={`group relative flex w-full items-center gap-2.5 text-left transition-colors ${
+      className={`group relative flex w-full items-center gap-2 text-left transition-colors ${
         active
           ? "bg-blue-50 text-blue-700"
           : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-      } ${collapsed ? "mx-auto h-11 w-11 justify-center rounded-[1.2rem] px-0 py-0" : "rounded-[1.2rem] px-2 py-2"}`}
+      } ${collapsed ? "mx-auto h-11 w-11 justify-center rounded-[1.2rem] px-0 py-0" : "rounded-xl px-2 py-0"}`}
     >
       <span className={`flex shrink-0 items-center justify-center ${
-        collapsed ? "h-9 w-9 rounded-xl" : "h-9 w-9 rounded-xl"
+        collapsed ? "h-9 w-9 rounded-xl" : "h-7 w-7 rounded-lg"
       } ${active ? "text-blue-600" : "text-slate-500 group-hover:text-blue-600"}`}
       >
         <Icon className="h-4 w-4" />
@@ -151,10 +151,10 @@ function SidebarActionButton({
       {!collapsed && (
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-semibold">{label}</p>
+            <p className="truncate text-sm font-semibold leading-4">{label}</p>
             {indicator && <span className="h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
           </div>
-          {subtitle && <p className="truncate text-[10px] text-slate-500">{subtitle}</p>}
+          {subtitle && <p className="truncate text-[10px] leading-3 text-slate-500">{subtitle}</p>}
         </div>
       )}
       {collapsed && indicator && (
@@ -190,7 +190,7 @@ function SidebarMenuPanel({
   }
 
   return (
-    <div className="mt-1.5 space-y-1 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-1.5">
+    <div className="mt-0.5 space-y-0.5 rounded-xl border border-slate-200 bg-slate-50 p-1">
       {children}
     </div>
   );
@@ -215,23 +215,23 @@ function SidebarMenuItem({
     <button
       type="button"
       onClick={onClick}
-      className={`group flex w-full items-center gap-2.5 rounded-[1.1rem] px-2.5 py-2 text-left transition-colors ${
+      className={`group flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors ${
         active
           ? "bg-blue-50 text-blue-700"
           : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
       }`}
     >
-      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
         active ? "text-blue-600" : "text-slate-500 group-hover:text-blue-600"
       }`}>
         <Icon className="h-4 w-4" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-semibold">{label}</p>
+          <p className="truncate text-sm font-semibold leading-4">{label}</p>
           {indicator && <span className="h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
         </div>
-        {description && <p className={`truncate text-[10px] ${active ? "text-blue-600/75" : "text-slate-500 group-hover:text-slate-600"}`}>{description}</p>}
+        {description && <p className={`truncate text-[10px] leading-3 ${active ? "text-blue-600/75" : "text-slate-500 group-hover:text-slate-600"}`}>{description}</p>}
       </div>
     </button>
   );
@@ -386,7 +386,7 @@ export function AdminWorkspaceSidebar({
   };
 
   const sidebarContent = (
-    <div className={`flex h-full flex-col gap-2.5 ${collapsed ? "px-1.5 py-2.5" : "px-3 py-3"}`}>
+    <div className={`flex h-full flex-col gap-1.5 ${collapsed ? "px-1.5 py-2.5" : "px-3 py-3"}`}>
       <div className="flex items-center justify-between lg:hidden">
         <div className="flex items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-[0_10px_24px_rgba(37,99,235,0.18)]">
@@ -427,7 +427,7 @@ export function AdminWorkspaceSidebar({
       )}
 
       <nav className={`min-h-0 flex-1 ${collapsed ? "overflow-visible pr-0" : "overflow-y-auto pr-1"}`}>
-        <div className="space-y-2">
+        <div className="space-y-0">
           {primaryTabs.map((tab) => {
             if (tab.id === "event") {
               return (
