@@ -453,9 +453,8 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-manage-section,
   .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-tickets,
   .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-settings-section,
-  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-import-section,
-  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-tickets {
-    display: none;
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-import-section {
+    display: none !important;
   }
 
   .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-setup-grid {
