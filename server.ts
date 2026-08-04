@@ -8991,12 +8991,14 @@ function resolveTicketFontPaths() {
     .map((v) => (path.isAbsolute(v) ? v : path.join(__dirname, v)));
 
   const defaults = [
+    path.join(__dirname, "assets", "fonts", "NotoSansThai-Variable.ttf"),
     "@fontsource/noto-sans-thai/files/noto-sans-thai-thai-400-normal.woff",
     "@fontsource/noto-sans-thai/files/noto-sans-thai-thai-700-normal.woff",
     "@fontsource/noto-sans-thai/files/noto-sans-thai-latin-400-normal.woff",
     "@fontsource/noto-sans-thai/files/noto-sans-thai-latin-700-normal.woff",
   ]
     .map((pkgPath) => {
+      if (path.isAbsolute(pkgPath)) return existsSync(pkgPath) ? pkgPath : "";
       try {
         return require.resolve(pkgPath);
       } catch {
@@ -9080,14 +9082,14 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const panelArtwork = artworkDataUrl && artworkMode === "panel"
     ? `<rect x="742" y="46" width="384" height="200" rx="22" fill="${accentColor}" opacity=".32"/><image x="748" y="52" width="372" height="188" href="${escapeXml(artworkDataUrl)}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artwork)"/>`
     : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850"><style>${embedFonts ? buildEmbeddedTicketFontCss() : ""} text{font-family:"TicketThai","TicketLatin",sans-serif!important}</style>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850"><style>${embedFonts ? buildEmbeddedTicketFontCss() : ""} text{font-family:"Noto Sans Thai",sans-serif!important}</style>
     ${artworkDefs}<rect width="1200" height="850" fill="#0b1220"/><rect x="34" y="34" width="1132" height="782" rx="32" fill="#fffaf0"/>${backgroundArtwork}
     <path d="M34 300 H1166" stroke="${accentColor}" stroke-width="3" stroke-dasharray="11 10"/><path d="M62 74 Q62 62 74 62 M1138 74 Q1138 62 1126 62" fill="none" stroke="${accentColor}" stroke-width="2" opacity=".8"/>
     ${artworkMode === "panel" ? `<rect x="34" y="34" width="1132" height="266" rx="32" fill="${primaryColor}"/>` : ""}<text x="88" y="106" font-family="sans-serif" font-size="29" fill="${accentColor}" letter-spacing="6">${ticketClass.toUpperCase()}</text>
     <text x="88" y="158" font-family="sans-serif" font-size="40" font-weight="700" fill="#fff">${eventName}</text><text x="88" y="250" font-family="sans-serif" font-size="24" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
     <text x="88" y="350" font-family="sans-serif" font-size="22" fill="#7a6f66">GUEST</text><text x="88" y="392" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${holder}</text>
     <text x="88" y="460" font-family="sans-serif" font-size="22" fill="#7a6f66">PERFORMANCE</text><text x="88" y="500" font-family="sans-serif" font-size="32" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="570" font-family="sans-serif" font-size="23" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="604" font-family="sans-serif" font-size="21" fill="#6b625b">${venue}</text>` : ""}
-    <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${ticketClass}</text>${hasPrice ? `<text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>` : ""}
+    <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="708" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${ticketClass}</text>${hasPrice ? `<text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>` : ""}
     <rect x="490" y="622" width="320" height="174" rx="16" fill="${primaryColor}" opacity=".1" stroke="${primaryColor}" stroke-width="3"/><text x="515" y="653" font-family="sans-serif" font-size="21" font-weight="700" fill="${primaryColor}">${seatZone}</text><text x="515" y="686" font-family="sans-serif" font-size="18" font-weight="700" fill="#7a6f66">ROW</text><text x="515" y="774" font-family="sans-serif" font-size="92" font-weight="800" fill="${primaryColor}">${rowLabel}</text><text x="660" y="686" font-family="sans-serif" font-size="18" font-weight="700" fill="#7a6f66">SEAT</text><text x="660" y="776" font-family="sans-serif" font-size="108" font-weight="800" fill="${primaryColor}">${seatNumber}</text>
     ${note ? `<text x="88" y="758" font-family="sans-serif" font-size="15" fill="#6b625b">${note}</text>` : ""}
     <rect x="840" y="300" width="326" height="516" fill="#f1e7d6" opacity=".58"/><path d="M840 300 V816" stroke="#8e7d68" stroke-width="3" stroke-dasharray="4 10"/>
@@ -9261,12 +9263,13 @@ function buildEmbeddedTicketFontCss() {
   const css = resolveTicketFontPaths()
     .map((fontPath) => {
       const ext = path.extname(fontPath).replace(".", "").toLowerCase();
-      const format = ext === "woff2" ? "woff2" : "woff";
+      const format = ext === "woff2" ? "woff2" : ext === "ttf" ? "truetype" : "woff";
+      const mime = ext === "ttf" ? "ttf" : format;
       const weight = /-700-/.test(fontPath) ? 700 : /-400-/.test(fontPath) ? 400 : 400;
-      const family = /-thai-/.test(fontPath) ? "TicketThai" : "TicketLatin";
+      const family = "Noto Sans Thai";
       const bytes = readFileSync(fontPath);
       const base64 = bytes.toString("base64");
-      return `@font-face { font-family: "${family}"; src: url(data:font/${format};base64,${base64}) format("${format}"); font-weight: ${weight}; font-style: normal; font-display: block; }`;
+      return `@font-face { font-family: "${family}"; src: url(data:font/${mime};base64,${base64}) format("${format}"); font-weight: ${ext === "ttf" ? "100 900" : weight}; font-style: normal; font-display: block; }`;
     })
     .join("\n");
 
