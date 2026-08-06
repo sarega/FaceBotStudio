@@ -2003,7 +2003,8 @@ function getPendingAdminAgentOutreach(scopeKey: string) {
 }
 
 async function applyAdminAgentOutreachDraft(draft: AdminAgentOutreachDraft, actorUserId?: string | null) {
-  const campaign = await appDb.createOutreachCampaign({
+  const existingCampaign = (await appDb.listOutreachCampaigns(draft.event_id)).find((candidate) => normalizeComparableText(candidate.name) === normalizeComparableText(draft.campaign.name));
+  const campaign = existingCampaign || await appDb.createOutreachCampaign({
     event_id: draft.event_id,
     name: draft.campaign.name,
     description: draft.campaign.description || null,
@@ -2017,18 +2018,31 @@ async function applyAdminAgentOutreachDraft(draft: AdminAgentOutreachDraft, acto
   });
 
   const existingTargets = await appDb.listOutreachTargetsForEvent(draft.event_id);
-  const occupiedIdentityKeys = new Set(existingTargets.flatMap((target) => getAdminAgentOutreachIdentityKeys(target)));
-  const seenIdentityKeys = new Set<string>();
-  let skippedTargetCount = 0;
   let createdTargetCount = 0;
+  let updatedTargetCount = 0;
   for (const target of draft.targets) {
     const identityKeys = getAdminAgentOutreachIdentityKeys(target);
-    if (identityKeys.some((key) => occupiedIdentityKeys.has(key) || seenIdentityKeys.has(key))) {
-      skippedTargetCount += 1;
+    const existing = existingTargets.find((candidate) => {
+      const candidateName = normalizeComparableText(candidate.name);
+      const targetName = normalizeComparableText(target.name);
+      return candidateName === targetName || (targetName.length > 4 && (candidateName.includes(targetName) || targetName.includes(candidateName))) || identityKeys.some((key) => getAdminAgentOutreachIdentityKeys(candidate).includes(key));
+    });
+    if (existing) {
+      const update = buildOutreachTargetUpdate(existing);
+      update.facebook_page_url = target.facebook_page_url || existing.facebook_page_url;
+      update.facebook_page_id = target.facebook_page_id || existing.facebook_page_id;
+      update.organization_type = target.organization_type || existing.organization_type;
+      update.contact_person = target.contact_person || existing.contact_person;
+      update.email = target.email || existing.email;
+      update.website = target.website || existing.website;
+      update.notes = target.notes || existing.notes;
+      update.priority = target.priority || existing.priority;
+      update.next_follow_up_at = target.next_follow_up_at || existing.next_follow_up_at;
+      await appDb.updateOutreachTarget(existing.id, draft.event_id, update);
+      updatedTargetCount += 1;
       continue;
     }
-    identityKeys.forEach((key) => seenIdentityKeys.add(key));
-    await appDb.createOutreachTarget({
+    const created = await appDb.createOutreachTarget({
       event_id: draft.event_id,
       campaign_id: campaign.id,
       name: target.name,
@@ -2042,6 +2056,7 @@ async function applyAdminAgentOutreachDraft(draft: AdminAgentOutreachDraft, acto
       priority: target.priority,
       next_follow_up_at: target.next_follow_up_at || null,
     });
+    existingTargets.push(created);
     createdTargetCount += 1;
   }
 
@@ -2076,7 +2091,7 @@ async function applyAdminAgentOutreachDraft(draft: AdminAgentOutreachDraft, acto
       metadata: {
         event_id: draft.event_id,
         created_target_count: createdTargetCount,
-        skipped_target_count: skippedTargetCount,
+        updated_target_count: updatedTargetCount,
         created_asset_count: createdAssetCount,
         skipped_asset_count: skippedAssetCount,
         source: "admin_agent",
@@ -2092,7 +2107,7 @@ async function applyAdminAgentOutreachDraft(draft: AdminAgentOutreachDraft, acto
     campaign_name: campaign.name,
     download_url: `/api/outreach/targets/export?event_id=${encodeURIComponent(draft.event_id)}&campaign_id=${encodeURIComponent(campaign.id)}`,
     created_target_count: createdTargetCount,
-    skipped_target_count: skippedTargetCount,
+    updated_target_count: updatedTargetCount,
     created_asset_count: createdAssetCount,
     skipped_asset_count: skippedAssetCount,
   };
@@ -6542,7 +6557,7 @@ async function requestAdminAgentPlan(
     "Use update_event_status for live/inactive/pending/cancelled/archived updates.",
     "Use update_event_context for writing event context notes from admin instructions.",
     "Use configure_outreach when the admin asks to set up a Press Outreach campaign, media targets, or Press Kit assets.",
-    "configure_outreach only prepares campaign records; it never sends messages, makes first contact, or binds a Facebook identity.",
+    "configure_outreach creates a campaign when needed, or updates matching existing targets when the admin supplies follow-up URLs/details. It never sends messages, makes first contact, or binds a Facebook identity.",
     "The server will show a setup summary and require the admin to type an explicit confirmation before writing anything.",
     "Ask one short clarification in Thai when the campaign name or a target name is missing. Do not invent page IDs, URLs, contacts, or asset links.",
     webSearchEnabled
@@ -6721,7 +6736,7 @@ async function requestAdminAgentPlan(
           type: "function",
           function: {
             name: "configure_outreach",
-            description: "Prepare a Press Outreach campaign with targets and Press Kit assets. The server asks for confirmation before saving and never sends messages.",
+            description: "Prepare a Press Outreach campaign with targets and Press Kit assets, or update matching existing targets by name/URL. The server asks for confirmation before saving and never sends messages.",
             parameters: {
               type: "object",
               properties: {
@@ -8389,7 +8404,7 @@ async function runAdminAgentCommand(options: {
     adminAgentPendingOutreachByScope.delete(historyScopeKey);
     const reply = [
       `บันทึก Outreach เรียบร้อย: ${configured.campaign_name}`,
-      `Targets สร้างใหม่ ${configured.created_target_count} รายการ${configured.skipped_target_count ? ` (ข้ามซ้ำ ${configured.skipped_target_count})` : ""}`,
+      `Targets สร้างใหม่ ${configured.created_target_count} รายการ · อัปเดตเดิม ${configured.updated_target_count} รายการ`,
       `Press Kit สร้างใหม่ ${configured.created_asset_count} รายการ${configured.skipped_asset_count ? ` (ข้ามซ้ำ ${configured.skipped_asset_count})` : ""}`,
       "ยังไม่มีการส่งข้อความหรือผูก Facebook identity",
     ].join("\n");
@@ -8762,6 +8777,29 @@ function getOutreachApiEligibility(target: OutreachTargetRow) {
       ? "The reply window has expired; use the manual fallback."
       : "Eligible for an approved reply through the existing sender.",
   };
+}
+
+function decodeSearchUrl(value: string) {
+  const href = value.replace(/&amp;/g, "&").replace(/&#x2f;/gi, "/");
+  try {
+    const parsed = new URL(href, "https://duckduckgo.com");
+    return parsed.searchParams.get("uddg") || (parsed.protocol.startsWith("http") ? parsed.toString() : "");
+  } catch { return ""; }
+}
+
+async function findPublicOutreachLink(query: string, matcher: (url: URL) => boolean) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { signal: controller.signal, headers: { "User-Agent": "Meetrix Outreach URL resolver" } });
+    const html = response.ok ? await response.text() : "";
+    for (const match of html.matchAll(/class="result__a"[^>]*href="([^"]+)"/g)) {
+      const candidate = decodeSearchUrl(match[1]);
+      try { if (candidate && matcher(new URL(candidate))) return candidate; } catch { /* skip malformed result */ }
+    }
+    return "";
+  } catch { return ""; }
+  finally { clearTimeout(timeout); }
 }
 
 function extractOutboundMessageId(payload: unknown) {
@@ -14282,6 +14320,27 @@ async function startServer() {
     const campaign = await appDb.getOutreachCampaign(campaignId, eventId);
     if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
     return res.json(await appDb.listOutreachTargets(eventId, campaignId));
+  });
+
+  app.post("/api/outreach/campaigns/:id/resolve-links", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const campaign = await appDb.getOutreachCampaign(String(req.params.id || "").trim(), eventId);
+    if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
+    const targets = await appDb.listOutreachTargets(eventId, campaign.id);
+    const results = await Promise.all(targets.map(async (target) => {
+      const [facebook, website] = await Promise.all([
+        target.facebook_page_url ? Promise.resolve("") : findPublicOutreachLink(`${target.name} Facebook`, (url) => /(^|\.)facebook\.com$/i.test(url.hostname) && !/login|share|groups/i.test(url.pathname)),
+        target.website ? Promise.resolve("") : findPublicOutreachLink(`${target.name} official website`, (url) => !/(^|\.)(facebook|instagram|twitter|x|linkedin)\.com$/i.test(url.hostname)),
+      ]);
+      if (!facebook && !website) return null;
+      const update = buildOutreachTargetUpdate(target);
+      update.facebook_page_url = facebook || target.facebook_page_url;
+      update.website = website || target.website;
+      return appDb.updateOutreachTarget(target.id, eventId, update);
+    }));
+    const updated = results.filter(Boolean).length;
+    await recordAudit(req, "outreach.links_resolved", "outreach_campaign", campaign.id, { event_id: eventId, targets: targets.length, updated });
+    return res.json({ scanned: targets.length, updated });
   });
 
   app.post("/api/outreach/targets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
