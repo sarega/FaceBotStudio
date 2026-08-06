@@ -9339,7 +9339,7 @@ function renderTicketHtmlForScreenshot(reg: RegistrationRow, settings: Record<st
       width: 420px;
       padding: 8px;
       background: #e7edf5;
-      font-family: "TicketThai", "TicketLatin", system-ui, sans-serif;
+      font-family: "Noto Sans Thai", system-ui, sans-serif;
       color: #0f172a;
     }
     .ticket {
