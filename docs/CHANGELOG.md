@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3 - 2026-08-06
+
+- Prioritized Facebook Page discovery for Outreach targets and made target Facebook and website URLs directly editable.
+- Improved target-list navigation with status colors, keyboard up/down selection, and compact target actions.
+- Added Admin Agent multi-line input (Shift+Enter) and target context-menu deletion with cascade cleanup of its drafts and deliveries.
+
 ## 0.5.2 - 2026-08-06
 
 - Made Outreach fit a 13-inch screen: removed the KPI strip, made the target list independently scrollable, and kept target actions (including Copy) pinned at the top of the detail pane.
