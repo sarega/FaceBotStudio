@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 - 2026-08-06
+
+- Made Outreach fit a 13-inch screen: removed the KPI strip, made the target list independently scrollable, and kept target actions (including Copy) pinned at the top of the detail pane.
+- Added target-list context actions and batch draft, approval, copy, status, and URL lookup operations.
+- Updated Admin Agent Outreach handling so follow-up Facebook URLs update matching existing targets instead of being skipped as duplicates; Page/sender identity remains unbound until verified.
+
 ## 0.5.1 - 2026-08-03
 
 - Reflowed the Event Information header for constrained 13-inch screens.
