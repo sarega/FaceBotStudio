@@ -117,7 +117,7 @@ type AgentConsoleScreenProps = {
   filteredAdminCommandTemplates: AdminAgentCommandTemplate[];
   onApplyAdminCommandTemplate: (template: AdminAgentCommandTemplate) => void;
   closeAdminCommandPalette: () => void;
-  adminAgentInputRef: RefObject<HTMLInputElement | null>;
+  adminAgentInputRef: RefObject<HTMLTextAreaElement | null>;
   adminAgentImageInputRef: RefObject<HTMLInputElement | null>;
   onAdminAgentImageSelection: (event: ChangeEvent<HTMLInputElement>) => void;
   adminAgentPendingImages: PendingAdminAgentImageAttachment[];
@@ -668,18 +668,19 @@ export function AgentConsoleScreen({
             >
               <ImagePlus className="h-4 w-4" />
             </ActionButton>
-            <input
+            <textarea
               ref={adminAgentInputRef}
-              type="text"
               value={adminAgentInputText}
               onChange={(event) => onAdminAgentInputTextChange(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
                   void onAdminAgentSend();
                 }
               }}
-              placeholder="Ask Admin Agent or type a CLI command like list events status:pending"
-              className="agent-command-input flex-1 rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
+              rows={2}
+              placeholder="Ask Admin Agent… (Enter to send · Shift+Enter for a new line)"
+              className="agent-command-input flex-1 resize-none rounded-xl border-none bg-slate-100 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"
             />
             <ActionButton
               onClick={() => void onAdminAgentSend()}

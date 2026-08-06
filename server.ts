@@ -14328,14 +14328,10 @@ async function startServer() {
     if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
     const targets = await appDb.listOutreachTargets(eventId, campaign.id);
     const results = await Promise.all(targets.map(async (target) => {
-      const [facebook, website] = await Promise.all([
-        target.facebook_page_url ? Promise.resolve("") : findPublicOutreachLink(`${target.name} Facebook`, (url) => /(^|\.)facebook\.com$/i.test(url.hostname) && !/login|share|groups/i.test(url.pathname)),
-        target.website ? Promise.resolve("") : findPublicOutreachLink(`${target.name} official website`, (url) => !/(^|\.)(facebook|instagram|twitter|x|linkedin)\.com$/i.test(url.hostname)),
-      ]);
-      if (!facebook && !website) return null;
+      const facebook = target.facebook_page_url ? "" : await findPublicOutreachLink(`${target.name} Facebook`, (url) => /(^|\.)facebook\.com$/i.test(url.hostname) && !/login|share|groups/i.test(url.pathname));
+      if (!facebook) return null;
       const update = buildOutreachTargetUpdate(target);
       update.facebook_page_url = facebook || target.facebook_page_url;
-      update.website = website || target.website;
       return appDb.updateOutreachTarget(target.id, eventId, update);
     }));
     const updated = results.filter(Boolean).length;

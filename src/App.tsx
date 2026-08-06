@@ -3262,7 +3262,7 @@ export default function App() {
   const searchFocusTimeoutRef = useRef<number | null>(null);
   const adminAgentScrollRef = useRef<HTMLDivElement | null>(null);
   const adminAgentBottomRef = useRef<HTMLDivElement | null>(null);
-  const adminAgentInputRef = useRef<HTMLInputElement | null>(null);
+  const adminAgentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const adminAgentImageInputRef = useRef<HTMLInputElement | null>(null);
   const testImageInputRef = useRef<HTMLInputElement | null>(null);
   const publicChatPendingImagesRef = useRef<PendingPublicChatImageAttachment[]>([]);
