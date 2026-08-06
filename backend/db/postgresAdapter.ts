@@ -1452,6 +1452,11 @@ export class PostgresAppDatabase implements AppDatabase {
     return (result.rowCount || 0) > 0 ? this.getOutreachTarget(id, eventId) : undefined;
   }
 
+  async deleteOutreachTarget(id: string, eventId: string) {
+    const result = await this.pool.query("DELETE FROM outreach_targets WHERE id = $1 AND event_id = $2", [id, eventId]);
+    return (result.rowCount || 0) > 0;
+  }
+
   async bindOutreachTargetIdentity(id: string, eventId: string, pageId: string, senderId: string) {
     const result = await this.pool.query("UPDATE outreach_targets SET bound_page_id=$1,bound_sender_id=$2,delivery_mode='manual_only',updated_at=CURRENT_TIMESTAMP WHERE id=$3 AND event_id=$4", [pageId.trim(), senderId.trim(), id, eventId]);
     return (result.rowCount || 0) > 0 ? this.getOutreachTarget(id, eventId) : undefined;

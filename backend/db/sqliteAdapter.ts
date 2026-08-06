@@ -1895,6 +1895,10 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0 ? this.getOutreachTarget(id, eventId) : undefined;
   }
 
+  async deleteOutreachTarget(id: string, eventId: string) {
+    return this.db.prepare("DELETE FROM outreach_targets WHERE id = ? AND event_id = ?").run(id, eventId).changes > 0;
+  }
+
   async bindOutreachTargetIdentity(id: string, eventId: string, pageId: string, senderId: string) {
     const result = this.db.prepare("UPDATE outreach_targets SET bound_page_id=?,bound_sender_id=?,delivery_mode='manual_only',updated_at=CURRENT_TIMESTAMP WHERE id=? AND event_id=?").run(pageId.trim(), senderId.trim(), id, eventId);
     return result.changes > 0 ? this.getOutreachTarget(id, eventId) : undefined;

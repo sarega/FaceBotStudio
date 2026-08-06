@@ -14410,6 +14410,15 @@ async function startServer() {
     return res.json(target);
   });
 
+  app.delete("/api/outreach/targets/:id", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const eventId = getRequestedEventId(req);
+    const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
+    if (!target) return res.status(404).json({ error: "Outreach target not found" });
+    await appDb.deleteOutreachTarget(target.id, eventId);
+    await recordAudit(req, "outreach.target_deleted", "outreach_target", target.id, { event_id: eventId, campaign_id: target.campaign_id, name: target.name });
+    return res.status(204).end();
+  });
+
   app.post("/api/outreach/targets/:id/identity", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const body = readObjectBody(req);

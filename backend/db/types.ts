@@ -769,6 +769,7 @@ export interface AppDatabase {
   getOutreachTarget(id: string, eventId: string): Promise<OutreachTargetRow | undefined>;
   createOutreachTarget(input: CreateOutreachTargetInput): Promise<OutreachTargetRow>;
   updateOutreachTarget(id: string, eventId: string, input: UpdateOutreachTargetInput): Promise<OutreachTargetRow | undefined>;
+  deleteOutreachTarget(id: string, eventId: string): Promise<boolean>;
   bindOutreachTargetIdentity(id: string, eventId: string, pageId: string, senderId: string): Promise<OutreachTargetRow | undefined>;
   findOutreachTargetIdentityMatches(pageId: string, senderId: string, eventIds?: string[]): Promise<OutreachTargetRow[]>;
   markOutreachTargetReplied(id: string, eventId: string, repliedAt?: string): Promise<OutreachTargetRow | undefined>;

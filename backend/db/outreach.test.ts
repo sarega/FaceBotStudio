@@ -86,3 +86,16 @@ test("outreach target status records the first contact timestamp", async () => {
   assert.equal(updated?.status, "contacted");
   assert.ok(updated?.last_contacted_at);
 });
+
+test("deleting an outreach target removes its drafts", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Outreach delete test", organizer_id: "org_default" });
+  const campaign = await db.createOutreachCampaign({ event_id: event.id, name: "Delete test" });
+  const target = await db.createOutreachTarget({ event_id: event.id, campaign_id: campaign.id, name: "Remove me" });
+  await db.createOutreachDraft({ event_id: event.id, target_id: target.id, body: "Draft to remove" });
+
+  assert.equal(await db.deleteOutreachTarget(target.id, event.id), true);
+  assert.equal(await db.getOutreachTarget(target.id, event.id), undefined);
+  assert.deepEqual(await db.listOutreachDrafts(target.id, event.id), []);
+});
