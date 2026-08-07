@@ -97,7 +97,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const [previewTicketClass, setPreviewTicketClass] = useState("VIP");
   const [newClass, setNewClass] = useState({ name: "", price_amount: "", payment_required: true, primary_color: "#1d4ed8", accent_color: "#bfdbfe" });
   const [seatDrafts, setSeatDrafts] = useState<SeatDraft[]>([blankSeatDraft()]);
-  const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatTableZoom, setSeatTableZoom] = useState("0.75"); const [seatMapZone, setSeatMapZone] = useState(""); const [seatMapView, setSeatMapView] = useState<"map" | "table">("map"); const [showSeatMapImage, setShowSeatMapImage] = useState(false); const [utilityPaneWidth, setUtilityPaneWidth] = useState("380"); const [zoneOverviewMode, setZoneOverviewMode] = useState<"docked" | "floating">("docked"); const [zoneOverviewWidth, setZoneOverviewWidth] = useState("380"); const [zoneOverviewOffset, setZoneOverviewOffset] = useState({ x: 16, y: 80 }); const [zoneLayoutOrder, setZoneLayoutOrder] = useState<string[]>([]); const [zoneLayoutPositions, setZoneLayoutPositions] = useState<Record<string, { row: number; col: number }>>({}); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState(""); const [ticketSearch, setTicketSearch] = useState(""); const [ticketStatusFilter, setTicketStatusFilter] = useState("all"); const [ticketPerformanceFilter, setTicketPerformanceFilter] = useState("all"); const [ticketExportZoneGroup, setTicketExportZoneGroup] = useState("all");
+  const [seatMapImageUrl, setSeatMapImageUrl] = useState(""); const [seatMapFile, setSeatMapFile] = useState<File | null>(null); const [seatMapSourceNames, setSeatMapSourceNames] = useState<string[]>([]); const [seatMapZoom, setSeatMapZoom] = useState("1"); const [seatTableZoom, setSeatTableZoom] = useState("0.75"); const [seatMapZone, setSeatMapZone] = useState(""); const [seatMapView, setSeatMapView] = useState<"map" | "table">("map"); const [showSeatMapImage, setShowSeatMapImage] = useState(false); const [utilityPaneWidth, setUtilityPaneWidth] = useState("380"); const [zoneOverviewMode, setZoneOverviewMode] = useState<"docked" | "floating">("docked"); const [zoneOverviewWidth, setZoneOverviewWidth] = useState("380"); const [zoneOverviewOffset, setZoneOverviewOffset] = useState({ x: 16, y: 80 }); const [zoneLayoutOrder, setZoneLayoutOrder] = useState<string[]>([]); const [zoneLayoutPositions, setZoneLayoutPositions] = useState<Record<string, { row: number; col: number }>>({}); const [batchPrice, setBatchPrice] = useState(""); const [batchPriceSection, setBatchPriceSection] = useState(""); const [ticketSearch, setTicketSearch] = useState(""); const [ticketStatusFilter, setTicketStatusFilter] = useState("all"); const [ticketPerformanceFilter, setTicketPerformanceFilter] = useState("all"); const [ticketZoneFilter, setTicketZoneFilter] = useState("all"); const [ticketBuyerFilter, setTicketBuyerFilter] = useState("all"); const [ticketExportZoneGroup, setTicketExportZoneGroup] = useState("all");
   const zoneOverviewDragRef = useRef<{ pointerX: number; pointerY: number; x: number; y: number } | null>(null);
   const [seatMapReview, setSeatMapReview] = useState<SeatMapReview | null>(null); const [rescanPending, setRescanPending] = useState(false);
   const [processing, setProcessing] = useState<ProcessingState | null>(null); const [processingElapsed, setProcessingElapsed] = useState(0);
@@ -176,10 +176,14 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     return tickets.filter((ticket) => {
       if (ticketStatusFilter !== "all" && ticket.status !== ticketStatusFilter) return false;
       if (ticketPerformanceFilter !== "all" && ticket.performance_id !== ticketPerformanceFilter) return false;
+      if (ticketZoneFilter !== "all" && ticket.zone !== ticketZoneFilter) return false;
+      if (ticketBuyerFilter !== "all" && ticket.buyer_name?.trim() !== ticketBuyerFilter) return false;
       if (!query) return true;
       return [ticket.id, ticket.holder_name, ticket.buyer_name, ticket.ticket_class, ticket.performance_title, ticket.zone, ticket.row_label, ticket.seat_label].filter(Boolean).join(" ").toLocaleLowerCase().includes(query);
     });
-  }, [ticketPerformanceFilter, ticketSearch, ticketStatusFilter, tickets]);
+  }, [ticketBuyerFilter, ticketPerformanceFilter, ticketSearch, ticketStatusFilter, ticketZoneFilter, tickets]);
+  const ticketZones = useMemo(() => Array.from(new Set(tickets.map((ticket) => ticket.zone).filter((zone): zone is string => Boolean(zone)))).sort(naturalLabelCompare), [tickets]);
+  const ticketBuyers = useMemo(() => Array.from(new Set(tickets.map((ticket) => ticket.buyer_name?.trim()).filter((name): name is string => Boolean(name)))).sort(naturalLabelCompare), [tickets]);
   const ticketStatusCounts = useMemo(() => filteredTickets.reduce((counts, ticket) => ({ ...counts, [ticket.status]: (counts[ticket.status] || 0) + 1 }), {} as Record<string, number>), [filteredTickets]);
   const ticketRecipientSummary = useMemo(() => {
     const groups = new Map<string, { name: string; total: number; issued: number; held: number; checked_in: number; voided: number }>();
@@ -201,8 +205,10 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const printA4Params = new URLSearchParams({ event_id: eventId });
   if (ticketStatusFilter !== "all") printA4Params.set("status", ticketStatusFilter);
   if (ticketPerformanceFilter !== "all") printA4Params.set("performance_id", ticketPerformanceFilter);
+  if (ticketZoneFilter !== "all") printA4Params.set("zones", ticketZoneFilter);
+  if (ticketBuyerFilter !== "all") printA4Params.set("buyer_name", ticketBuyerFilter);
   if (ticketSearch.trim()) printA4Params.set("search", ticketSearch.trim());
-  if (selectedExportZones.length) printA4Params.set("zones", selectedExportZones.join(","));
+  if (ticketZoneFilter === "all" && selectedExportZones.length) printA4Params.set("zones", selectedExportZones.join(","));
   const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?${printA4Params.toString()}`;
   const ticketExportParams = new URLSearchParams({ event_id: eventId });
   if (selectedExportZones.length) ticketExportParams.set("zones", selectedExportZones.join(","));
@@ -642,7 +648,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
           <a href={ticketExportHref} className="text-sm font-bold text-violet-700">{t("salesCsv", "Sales CSV")} ({t("selectedExportGroup", "selected group")})</a>
         </div>
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_220px_180px_auto]">
+      <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_220px_180px_220px_auto]">
         <input aria-label={t("searchTickets", "Search tickets")} placeholder={t("searchTicketsPlaceholder", "Search recipient, buyer, ticket ID, seat…")} value={ticketSearch} onChange={(event) => setTicketSearch(event.target.value)} className="min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
         <select aria-label={t("filterStatus", "Filter status")} value={ticketStatusFilter} onChange={(event) => setTicketStatusFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
           <option value="all">{t("allStatuses", "All statuses")}</option>
@@ -655,12 +661,20 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
           <option value="all">{t("allPerformances", "All performances")}</option>
           {performances.map((performance) => <option key={performance.id} value={performance.id}>{performance.code} — {performance.title}</option>)}
         </select>
+        <select aria-label={t("filterZone", "Filter zone")} value={ticketZoneFilter} onChange={(event) => setTicketZoneFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="all">{t("allZones", "All zones")}</option>
+          {ticketZones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+        </select>
+        <select aria-label={t("filterBuyer", "Filter buyer")} value={ticketBuyerFilter} onChange={(event) => setTicketBuyerFilter(event.target.value)} className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900">
+          <option value="all">{t("allBuyers", "All buyers")}</option>
+          {ticketBuyers.map((buyer) => <option key={buyer} value={buyer}>{buyer}</option>)}
+        </select>
         <select aria-label={t("exportZones", "Export zones")} value={ticketExportZoneGroup} onChange={(event) => setTicketExportZoneGroup(event.target.value)} className="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-900">
           <option value="all">{t("allZoneGroup", "All zones")}</option>
           <option value="zones-1-6">{t("zones1to6", "Zones 1–6")}</option>
           <option value="zones-7-9">{t("zones7to9", "Zones 7–9")}</option>
         </select>
-        <button type="button" onClick={() => { setTicketSearch(""); setTicketStatusFilter("all"); setTicketPerformanceFilter("all"); setTicketExportZoneGroup("all"); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-700">{t("clearTicketFilters", "Clear")}</button>
+        <button type="button" onClick={() => { setTicketSearch(""); setTicketStatusFilter("all"); setTicketPerformanceFilter("all"); setTicketZoneFilter("all"); setTicketBuyerFilter("all"); setTicketExportZoneGroup("all"); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold text-slate-700">{t("clearTicketFilters", "Clear")}</button>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
         <div className="rounded-lg bg-slate-100 px-3 py-2"><p className="text-[10px] font-bold uppercase text-slate-500">{t("totalTickets", "Total")}</p><p className="text-lg font-extrabold text-slate-900">{formatNumber(filteredTickets.length)}</p></div>
