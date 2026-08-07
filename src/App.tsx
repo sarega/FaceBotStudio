@@ -111,6 +111,10 @@ interface Registration {
   id: string;
   sender_id: string;
   event_id?: string | null;
+  channel_platform?: ChannelPlatform | null;
+  channel_external_id?: string | null;
+  sms_opt_in_at?: string | null;
+  sms_opt_out_at?: string | null;
   first_name: string;
   last_name: string;
   phone: string;
@@ -3881,6 +3885,7 @@ export default function App() {
       `${reg.first_name} ${reg.last_name}`,
       reg.phone,
       reg.email,
+      reg.channel_platform,
       reg.status,
     ]),
   );
@@ -7865,6 +7870,27 @@ export default function App() {
     }
   };
 
+  const updateRegistrationSmsConsent = async (registrationId: string, consent: boolean) => {
+    setStatusUpdateLoading(true);
+    setStatusUpdateMessage("");
+    try {
+      const res = await apiFetch("/api/registrations/sms-consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: registrationId, consent, event_id: selectedEventId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to update SMS consent");
+      setStatusUpdateMessage(consent ? "SMS reminders enabled" : "SMS reminders disabled");
+      await fetchRegistrations(selectedEventId);
+      window.setTimeout(() => setStatusUpdateMessage(""), 2500);
+    } catch (err) {
+      setStatusUpdateMessage(err instanceof Error ? err.message : "Failed to update SMS consent");
+    } finally {
+      setStatusUpdateLoading(false);
+    }
+  };
+
   const deleteRegistration = async (registrationId: string) => {
     const registration = registrations.find((row) => row.id === registrationId);
     const label = registration ? `${registration.first_name} ${registration.last_name}`.trim() || registrationId : registrationId;
@@ -10273,6 +10299,7 @@ export default function App() {
                 onDeleteRegistration={deleteRegistration}
                 deleteRegistrationLoading={deleteRegistrationLoading}
                 onUpdateRegistrationStatus={updateRegistrationStatus}
+                onUpdateRegistrationSmsConsent={updateRegistrationSmsConsent}
                 statusUpdateLoading={statusUpdateLoading}
                 statusUpdateMessage={statusUpdateMessage}
               />

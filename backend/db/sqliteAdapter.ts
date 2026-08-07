@@ -477,6 +477,11 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE TABLE IF NOT EXISTS registrations (
         id TEXT PRIMARY KEY,
         sender_id TEXT,
+        channel_platform TEXT,
+        channel_external_id TEXT,
+        sms_opt_in_at DATETIME,
+        sms_opt_out_at DATETIME,
+        sms_consent_source TEXT,
         first_name TEXT,
         last_name TEXT,
         phone TEXT,
@@ -881,6 +886,11 @@ export class SqliteAppDatabase implements AppDatabase {
     `);
 
     this.ensureColumn("registrations", "event_id", "TEXT");
+    this.ensureColumn("registrations", "channel_platform", "TEXT");
+    this.ensureColumn("registrations", "channel_external_id", "TEXT");
+    this.ensureColumn("registrations", "sms_opt_in_at", "DATETIME");
+    this.ensureColumn("registrations", "sms_opt_out_at", "DATETIME");
+    this.ensureColumn("registrations", "sms_consent_source", "TEXT");
     this.ensureColumn("messages", "event_id", "TEXT");
     this.ensureColumn("messages", "page_id", "TEXT");
     this.ensureColumn("facebook_pages", "page_access_token", "TEXT");
@@ -1120,28 +1130,28 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async getRegistrationById(id: string) {
     return this.db.prepare(
-      "SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE id = ?",
+      "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE id = ?",
     ).get(id) as RegistrationRow | undefined;
   }
 
   async listRegistrations(limit?: number, eventId?: string) {
     if (typeof limit === "number" && eventId) {
       return this.db.prepare(
-        "SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC LIMIT ?",
+        "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC LIMIT ?",
       ).all(eventId, limit) as RegistrationRow[];
     }
     if (eventId) {
       return this.db.prepare(
-        "SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC",
+        "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC",
       ).all(eventId) as RegistrationRow[];
     }
     if (typeof limit === "number") {
       return this.db.prepare(
-        "SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC LIMIT ?",
+        "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC LIMIT ?",
       ).all(limit) as RegistrationRow[];
     }
     return this.db.prepare(
-      "SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC",
+      "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC",
     ).all() as RegistrationRow[];
   }
 
@@ -1158,7 +1168,7 @@ export class SqliteAppDatabase implements AppDatabase {
     const placeholders = normalizedSenderIds.map(() => "?").join(", ");
     if (eventId) {
       const statement = this.db.prepare(
-        `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status
+        `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status
          FROM registrations
          WHERE event_id = ? AND sender_id IN (${placeholders})
          ORDER BY timestamp DESC, id DESC`,
@@ -1167,7 +1177,7 @@ export class SqliteAppDatabase implements AppDatabase {
     }
 
     const statement = this.db.prepare(
-      `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp, status
+      `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status
        FROM registrations
        WHERE sender_id IN (${placeholders})
        ORDER BY timestamp DESC, id DESC`,
@@ -1186,6 +1196,8 @@ export class SqliteAppDatabase implements AppDatabase {
     const lastName = normalizeRegistrationNamePart(input.last_name);
     const phone = String(input.phone || "").trim();
     const email = input.email == null ? "" : String(input.email).trim();
+    const channelPlatform = String(input.channel_platform || "").trim() || null;
+    const channelExternalId = String(input.channel_external_id || "").trim() || null;
 
     if (!senderId || !firstName || !lastName || !phone) {
       return { statusCode: 400, content: { error: "Missing required registration fields" } };
@@ -1250,9 +1262,9 @@ export class SqliteAppDatabase implements AppDatabase {
       const id = generateRegistrationId();
       try {
         this.db.prepare(
-          `INSERT INTO registrations (id, sender_id, event_id, first_name, last_name, phone, email)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, senderId, eventId, firstName, lastName, phone, email);
+          `INSERT INTO registrations (id, sender_id, event_id, channel_platform, channel_external_id, first_name, last_name, phone, email)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(id, senderId, eventId, channelPlatform, channelExternalId, firstName, lastName, phone, email);
         return { statusCode: 200, content: { id, status: "success" } };
       } catch (error: any) {
         if (String(error?.message || "").includes("UNIQUE")) continue;
@@ -1261,6 +1273,13 @@ export class SqliteAppDatabase implements AppDatabase {
     }
 
     return { statusCode: 500, content: { error: "Failed to generate unique registration ID" } };
+  }
+
+  async setRegistrationSmsConsent(id: string, optedIn: boolean, source: string) {
+    const result = optedIn
+      ? this.db.prepare("UPDATE registrations SET sms_opt_in_at=CURRENT_TIMESTAMP, sms_opt_out_at=NULL, sms_consent_source=? WHERE id=?").run(source, id)
+      : this.db.prepare("UPDATE registrations SET sms_opt_out_at=CURRENT_TIMESTAMP, sms_consent_source=? WHERE id=?").run(source, id);
+    return result.changes > 0;
   }
 
   async createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput) {

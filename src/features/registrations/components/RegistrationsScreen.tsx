@@ -30,6 +30,9 @@ type RegistrationRecord = {
   last_name: string;
   phone: string;
   email: string;
+  channel_platform?: string | null;
+  sms_opt_in_at?: string | null;
+  sms_opt_out_at?: string | null;
   timestamp: string;
   status: string;
 };
@@ -77,6 +80,7 @@ type RegistrationsScreenProps = {
   onDeleteRegistration: (registrationId: string) => unknown;
   deleteRegistrationLoading: boolean;
   onUpdateRegistrationStatus: (registrationId: string, status: RegistrationStatus) => unknown;
+  onUpdateRegistrationSmsConsent: (registrationId: string, consent: boolean) => unknown;
   statusUpdateLoading: boolean;
   statusUpdateMessage: string;
   language: AppLanguage;
@@ -112,6 +116,7 @@ export function RegistrationsScreen({
   onDeleteRegistration,
   deleteRegistrationLoading,
   onUpdateRegistrationStatus,
+  onUpdateRegistrationSmsConsent,
   statusUpdateLoading,
   statusUpdateMessage,
   language,
@@ -195,6 +200,8 @@ export function RegistrationsScreen({
                       <p className="mt-0.5 truncate text-[10px] text-slate-500">
                         {registration.phone || registration.email || t("noContact", "No contact info")}
                       </p>
+                      {registration.channel_platform && <p className="mt-0.5 text-[10px] font-medium text-blue-600">{registration.channel_platform === "facebook" ? "Messenger" : registration.channel_platform}</p>}
+                      {registration.sms_opt_in_at && !registration.sms_opt_out_at && <p className="mt-0.5 text-[10px] font-medium text-emerald-600">SMS consent</p>}
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-2">
                       <StatusBadge tone={getRegistrationStatusTone(registration.status)}>{statusLabel(registration.status)}</StatusBadge>
@@ -213,13 +220,15 @@ export function RegistrationsScreen({
                   <th className="px-4 py-2.5">ID</th>
                   <th className="px-4 py-2.5">{t("name", "Name")}</th>
                   <th className="px-4 py-2.5">{t("contact", "Contact")}</th>
+                  <th className="px-4 py-2.5">{t("channel", "Channel")}</th>
+                  <th className="px-4 py-2.5">SMS</th>
                   <th className="px-4 py-2.5">{t("status", "Status")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRegistrations.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-slate-400 italic">
+                    <td colSpan={6} className="px-4 py-10 text-center text-slate-400 italic">
                       {deferredRegistrationListQuery ? t("noMatch", "No attendees match this search.") : t("noRegistrations", "No registrations yet.")}
                     </td>
                   </tr>
@@ -245,6 +254,19 @@ export function RegistrationsScreen({
                       <td className="px-4 py-2.5">
                         <p className="text-[11px]">{registration.phone}</p>
                         <p className="text-[10px] text-slate-400">{registration.email}</p>
+                      </td>
+                      <td className="px-4 py-2.5 text-[11px] text-slate-600">
+                        {registration.channel_platform === "facebook" ? "Messenger" : registration.channel_platform || "-"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(registration.sms_opt_in_at && !registration.sms_opt_out_at)}
+                          disabled={!canChangeRegistrationStatus || statusUpdateLoading}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => void onUpdateRegistrationSmsConsent(registration.id, event.target.checked)}
+                          aria-label={`SMS consent for ${registration.first_name} ${registration.last_name}`}
+                        />
                       </td>
                       <td className="px-4 py-2.5">
                         <StatusBadge tone={getRegistrationStatusTone(registration.status)}>

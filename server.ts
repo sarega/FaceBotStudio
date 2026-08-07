@@ -523,6 +523,7 @@ function getSystemInstruction(
     "Ask for registration details only after the user clearly wants to register or explicitly confirms they want to continue.",
     "Summarize registration details exactly once, immediately before calling the registerUser tool.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
+    "After a successful registration, ask whether the attendee explicitly agrees to receive SMS reminders for this event at their registered phone number. Never treat an unclear answer as consent. When they clearly answer yes or no, use setSmsConsent.",
     "Politely ask for any missing information one by one.",
     "If registration fails (e.g. limit reached or period closed), explain why to the user.",
     "If registration is rejected because the same first+last name already exists, explain that this event blocks duplicate full names and ask for a different attendee name.",
@@ -1160,6 +1161,7 @@ async function generateReplyForPreparedTurn(
     preparedTurn.history,
     preparedTurn.inputParts,
     routeId,
+    channel,
   );
   const latestSettings = await getSettingsMap(eventId);
   if (!isTruthySetting(latestSettings.event_public_bot_enabled ?? "1")) {
@@ -2319,6 +2321,10 @@ function serializeAdminRegistration(registration: RegistrationRow) {
   return {
     id: registration.id,
     sender_id: registration.sender_id,
+    channel_platform: registration.channel_platform || null,
+    channel_external_id: registration.channel_external_id || null,
+    sms_opt_in_at: registration.sms_opt_in_at || null,
+    sms_opt_out_at: registration.sms_opt_out_at || null,
     first_name: registration.first_name,
     last_name: registration.last_name,
     full_name: formatRegistrationDisplayName(registration),
@@ -4798,6 +4804,10 @@ const REGISTRATION_EXPORT_FIELDS: Array<keyof RegistrationRow> = [
   "id",
   "event_id",
   "sender_id",
+  "channel_platform",
+  "channel_external_id",
+  "sms_opt_in_at",
+  "sms_opt_out_at",
   "first_name",
   "last_name",
   "phone",
@@ -4822,6 +4832,10 @@ function buildRegistrationsCsvWithBom(rows: RegistrationRow[]) {
     id: String(row.id || ""),
     event_id: String(row.event_id || ""),
     sender_id: String(row.sender_id || ""),
+    channel_platform: String(row.channel_platform || ""),
+    channel_external_id: String(row.channel_external_id || ""),
+    sms_opt_in_at: String(row.sms_opt_in_at || ""),
+    sms_opt_out_at: String(row.sms_opt_out_at || ""),
     first_name: String(row.first_name || ""),
     last_name: String(row.last_name || ""),
     phone: String(row.phone || ""),
@@ -10221,6 +10235,20 @@ async function requestOpenRouterChat(
         {
           type: "function",
           function: {
+            name: "setSmsConsent",
+            description: "Record an explicit yes or no response to SMS reminders for the attendee's latest active registration in this event. Only use after the attendee has been asked about SMS reminders in this conversation.",
+            parameters: {
+              type: "object",
+              properties: {
+                consent: { type: "boolean", description: "True only for an explicit opt-in; false for an explicit refusal or opt-out." },
+              },
+              required: ["consent"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
             name: "cancelRegistration",
             description: "Find and cancel a registration for the current event. If the attendee is identified but not yet explicitly confirmed, this tool will return a confirmation request instead of cancelling.",
             parameters: {
@@ -10370,6 +10398,13 @@ function sanitizePromoTextParts(
   return response;
 }
 
+function isExplicitSmsConsentReply(value: string, consent: boolean) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[.!?\s]+/g, "");
+  const accepted = ["ยินยอม", "ตกลง", "รับsms", "รับข้อความ", "yes", "agree"];
+  const declined = ["ไม่ยินยอม", "ไม่รับ", "ไม่เอา", "nosms", "no"];
+  return (consent ? accepted : declined).some((answer) => normalized === answer || normalized === `${answer}ครับ` || normalized === `${answer}ค่ะ`);
+}
+
 async function buildToolResponseMessages(
   senderId: string,
   eventId: string,
@@ -10378,6 +10413,7 @@ async function buildToolResponseMessages(
   settings: Record<string, any>,
   incomingParts: ChatPart[],
   history: ChatHistoryMessage[],
+  replyRoute?: { platform: ChannelPlatform; externalId: string | null },
 ): Promise<ToolExecutionBundle> {
   const messages: ChatHistoryMessage[] = [];
   const ticketRegistrationIds: string[] = [];
@@ -10408,6 +10444,8 @@ async function buildToolResponseMessages(
         {
           sender_id: senderId,
           event_id: eventId,
+          channel_platform: replyRoute?.platform || null,
+          channel_external_id: replyRoute?.externalId || null,
           first_name: call.args.first_name,
           last_name: call.args.last_name,
           phone: call.args.phone,
@@ -10418,6 +10456,17 @@ async function buildToolResponseMessages(
       content = result.content;
       if (result.statusCode === 200 && typeof result.content.id === "string") {
         ticketRegistrationIds.push(result.content.id);
+      }
+    } else if (call.name === "setSmsConsent") {
+      const consent = call.args.consent === true;
+      if (!isExplicitSmsConsentReply(incomingText, consent)) {
+        content = { error: "SMS consent requires an explicit yes or no reply." };
+      } else {
+        const registration = (await appDb.listRegistrationsBySenderIds([senderId], eventId))
+          .find((row) => row.status !== "cancelled");
+        content = registration && await appDb.setRegistrationSmsConsent(registration.id, consent, "chat")
+          ? { status: "success", registration_id: registration.id, sms_consent: consent }
+          : { error: "No active registration found for SMS consent." };
       }
     } else if (call.name === "cancelRegistration") {
       const result = await executeAttendeeCancellationTool(senderId, eventId, call.args, incomingText);
@@ -10452,6 +10501,7 @@ async function generateBotReplyForSender(
   historyOverride?: ChatHistoryMessage[],
   incomingParts: ChatPart[] = [],
   routeId?: string | null,
+  channel?: string,
 ): Promise<BotReplyResult> {
   const settings = await getSettingsMap(eventId);
   const documents = await getEventDocuments(eventId);
@@ -10492,6 +10542,10 @@ async function generateBotReplyForSender(
       settings,
       incomingParts,
       history,
+      (() => {
+        const platform = normalizeChannelPlatformArg(channel);
+        return platform ? { platform, externalId: normalizeOptionalText(routeId) || null } : undefined;
+      })(),
     );
     const toolMessages = toolResult.messages;
     ticketRegistrationIds = toolResult.ticketRegistrationIds;
@@ -14176,6 +14230,35 @@ async function startServer() {
       res.status(500).json({ error: "Failed to update registration status" });
     }
   });
+
+  app.post(
+    "/api/registrations/sms-consent",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const body = readObjectBody(req);
+        const issues: ValidationIssue[] = [];
+        const id = readRequiredString(body, "id", issues, { label: "Registration ID", maxLength: 64 }).toUpperCase();
+        const consent = readBooleanWithDefault(body, "consent", false, issues);
+        if (issues.length > 0) return respondValidationError(res, issues);
+        const registration = await getRegistrationById(id);
+        if (!registration || normalizeOptionalText(registration.event_id) !== getRequestedEventId(req)) {
+          return res.status(404).json({ error: "Registration not found" });
+        }
+        const updated = await appDb.setRegistrationSmsConsent(id, consent, "admin");
+        if (!updated) return res.status(404).json({ error: "Registration not found" });
+        await recordAudit(req, consent ? "registration.sms_opted_in" : "registration.sms_opted_out", "registration", id, {
+          event_id: registration.event_id || null,
+          source: "admin",
+        });
+        return res.json({ status: "success", id, sms_consent: consent });
+      } catch (error) {
+        console.error("Failed to update SMS consent:", error);
+        return res.status(500).json({ error: "Failed to update SMS consent" });
+      }
+    },
+  );
 
   app.post("/api/registrations/delete", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
     try {

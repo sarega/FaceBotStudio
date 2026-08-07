@@ -243,6 +243,11 @@ export interface RegistrationRow {
   id: string;
   sender_id: string;
   event_id?: string | null;
+  channel_platform?: ChannelPlatform | null;
+  channel_external_id?: string | null;
+  sms_opt_in_at?: string | null;
+  sms_opt_out_at?: string | null;
+  sms_consent_source?: string | null;
   first_name: string;
   last_name: string;
   phone: string;
@@ -254,6 +259,8 @@ export interface RegistrationRow {
 export interface RegistrationInput {
   sender_id: string;
   event_id?: string;
+  channel_platform?: ChannelPlatform | null;
+  channel_external_id?: string | null;
   first_name: unknown;
   last_name: unknown;
   phone: unknown;
@@ -717,6 +724,7 @@ export interface AppDatabase {
   listRegistrationsBySenderIds(senderIds: string[], eventId?: string): Promise<RegistrationRow[]>;
   exportRegistrations(eventId?: string): Promise<RegistrationRow[]>;
   createRegistration(input: RegistrationInput): Promise<RegistrationResult>;
+  setRegistrationSmsConsent(id: string, optedIn: boolean, source: string): Promise<boolean>;
   createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput): Promise<RegistrationEmailDeliveryRow | null>;
   markRegistrationEmailDeliverySent(id: string, provider?: string | null): Promise<void>;
   markRegistrationEmailDeliveryFailed(id: string, errorMessage: string, provider?: string | null): Promise<void>;

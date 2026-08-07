@@ -617,7 +617,7 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async getRegistrationById(id: string) {
     const result = await this.pool.query<RegistrationRow>(
-      "SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations WHERE id = $1",
+      "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations WHERE id = $1",
       [id],
     );
     return result.rows[0];
@@ -634,14 +634,14 @@ export class PostgresAppDatabase implements AppDatabase {
     if (typeof limit === "number") {
       values.push(limit);
       const result = await this.pool.query<RegistrationRow>(
-        `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC LIMIT $${values.length}`,
+        `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC LIMIT $${values.length}`,
         values,
       );
       return result.rows;
     }
 
     const result = await this.pool.query<RegistrationRow>(
-      `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC`,
+      `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC`,
       values,
     );
     return result.rows;
@@ -659,7 +659,7 @@ export class PostgresAppDatabase implements AppDatabase {
 
     if (eventId) {
       const result = await this.pool.query<RegistrationRow>(
-        `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status
+        `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
          FROM registrations
          WHERE event_id = $1 AND sender_id = ANY($2::text[])
          ORDER BY timestamp DESC, id DESC`,
@@ -669,7 +669,7 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const result = await this.pool.query<RegistrationRow>(
-      `SELECT id, sender_id, event_id, first_name, last_name, phone, email, timestamp::text AS timestamp, status
+      `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
        FROM registrations
        WHERE sender_id = ANY($1::text[])
        ORDER BY timestamp DESC, id DESC`,
@@ -689,6 +689,8 @@ export class PostgresAppDatabase implements AppDatabase {
     const lastName = normalizeRegistrationNamePart(input.last_name);
     const phone = String(input.phone || "").trim();
     const email = input.email == null ? "" : String(input.email).trim();
+    const channelPlatform = String(input.channel_platform || "").trim() || null;
+    const channelExternalId = String(input.channel_external_id || "").trim() || null;
 
     if (!senderId || !firstName || !lastName || !phone) {
       return { statusCode: 400, content: { error: "Missing required registration fields" } };
@@ -763,9 +765,9 @@ export class PostgresAppDatabase implements AppDatabase {
         const id = generateRegistrationId();
         try {
           await client.query(
-            `INSERT INTO registrations (id, sender_id, event_id, first_name, last_name, phone, email)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [id, senderId, eventId, firstName, lastName, phone, email],
+            `INSERT INTO registrations (id, sender_id, event_id, channel_platform, channel_external_id, first_name, last_name, phone, email)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [id, senderId, eventId, channelPlatform, channelExternalId, firstName, lastName, phone, email],
           );
           await client.query("COMMIT");
           return { statusCode: 200, content: { id, status: "success" } };
@@ -781,6 +783,13 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     return { statusCode: 500, content: { error: "Failed to generate unique registration ID" } };
+  }
+
+  async setRegistrationSmsConsent(id: string, optedIn: boolean, source: string) {
+    const result = optedIn
+      ? await this.pool.query("UPDATE registrations SET sms_opt_in_at=CURRENT_TIMESTAMP, sms_opt_out_at=NULL, sms_consent_source=$2 WHERE id=$1", [id, source])
+      : await this.pool.query("UPDATE registrations SET sms_opt_out_at=CURRENT_TIMESTAMP, sms_consent_source=$2 WHERE id=$1", [id, source]);
+    return result.rowCount > 0;
   }
 
   async createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput) {
