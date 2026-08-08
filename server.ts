@@ -15026,6 +15026,7 @@ async function startServer() {
       const requestedStatus = String(req.query.status || "").trim();
       const requestedPerformanceId = String(req.query.performance_id || "").trim();
       const requestedBuyerName = String(req.query.buyer_name || "").trim();
+      const requestedRecipientName = String(req.query.recipient_name || "").trim();
       const requestedSearch = String(req.query.search || "").trim().toLocaleLowerCase();
       const requestedZones = parseDirectTicketZones(req.query.zones);
       const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => {
@@ -15034,6 +15035,7 @@ async function startServer() {
         if (requestedStatus && requestedStatus !== "all" && ticket.status !== requestedStatus) return false;
         if (requestedPerformanceId && requestedPerformanceId !== "all" && ticket.performance_id !== requestedPerformanceId) return false;
         if (requestedBuyerName && ticket.buyer_name?.trim() !== requestedBuyerName) return false;
+        if (requestedRecipientName && (ticket.holder_name?.trim() || ticket.buyer_name?.trim() || "—") !== requestedRecipientName) return false;
         if (!directTicketMatchesZones(ticket.zone, requestedZones)) return false;
         if (requestedSearch && ![ticket.id, ticket.holder_name, ticket.buyer_name, ticket.ticket_class, ticket.performance_title, ticket.zone, ticket.row_label, ticket.seat_label].filter(Boolean).join(" ").toLocaleLowerCase().includes(requestedSearch)) return false;
         return true;

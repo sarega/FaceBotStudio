@@ -209,6 +209,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   if (ticketPerformanceFilter !== "all") printA4Params.set("performance_id", ticketPerformanceFilter);
   if (ticketZoneFilter !== "all") printA4Params.set("zones", ticketZoneFilter);
   if (ticketBuyerFilter !== "all") printA4Params.set("buyer_name", ticketBuyerFilter);
+  if (ticketRecipientFilter !== "all") printA4Params.set("recipient_name", ticketRecipientFilter);
   if (ticketSearch.trim()) printA4Params.set("search", ticketSearch.trim());
   if (ticketZoneFilter === "all" && selectedExportZones.length) printA4Params.set("zones", selectedExportZones.join(","));
   const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?${printA4Params.toString()}`;
