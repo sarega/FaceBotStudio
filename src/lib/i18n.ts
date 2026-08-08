@@ -490,6 +490,7 @@ const THAI_LABELS: Record<string, string> = {
   "directTickets.tableView": "ตาราง",
   "directTickets.spatialMapHint": "ตำแหน่งอ้างอิงจากพิกัด X/Y ที่นำเข้า ช่องว่างเป็นตำแหน่งจริงของผัง",
   "directTickets.spatialMapUnavailable": "โซนนี้ยังมีพิกัด X/Y ไม่ครบพอ ใช้มุมมองตารางหรือนำเข้าผังที่ตรวจแล้ว",
+  "directTickets.directIssuedSeat": "ม่วง = ออกบัตรตรงแล้ว",
   "directTickets.allZones": "ทุกโซน",
   "directTickets.imageZoom": "ซูมรูปภาพ",
   "directTickets.closeMap": "ปิดผังที่นั่ง",
