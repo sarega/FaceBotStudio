@@ -14,11 +14,15 @@ import type {
   ChannelPlatform,
   CheckinAccessSessionRow,
   CheckinSessionRow,
+  CreateCustomerAccountInput,
+  CreateCustomerAccountTokenInput,
+  CreateNotificationDeliveryInput,
   CreateRegistrationEmailDeliveryInput,
   CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
   CreateDirectTicketInput,
+  CreateDirectOrderInput,
   ExchangeCheckinSessionTokenInput,
   EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
@@ -28,6 +32,7 @@ import type {
   EventStatus,
   EventRow,
   DirectPerformanceRow,
+  DirectOrderRow,
   DirectSeatRow,
   DirectTicketRow,
   FacebookPageRow,
@@ -35,6 +40,14 @@ import type {
   MessageAttachmentRow,
   MessageRow,
   MessageType,
+  CustomerAccountRow,
+  CustomerAccountSessionRow,
+  CustomerAccountTokenRow,
+  CustomerAccountTokenKind,
+  CustomerAccountStatus,
+  CustomerNotificationPreferencesRow,
+  UpdateCustomerNotificationPreferencesInput,
+  NotificationDeliveryRow,
   LlmUsageModelSummaryRow,
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
@@ -61,6 +74,7 @@ import type {
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
+  UpdateCustomerProfileInput,
   UpsertDirectPerformanceInput,
   ImportDirectSeatInput,
   UpdateOrganizerProfileInput,
@@ -184,6 +198,71 @@ function mapRegistrationEmailDeliveryRow(row?: Record<string, unknown>) {
     sent_at: typeof row.sent_at === "string" && row.sent_at ? row.sent_at : null,
     updated_at: String(row.updated_at || row.queued_at || ""),
   } satisfies RegistrationEmailDeliveryRow;
+}
+
+function mapNotificationDeliveryRow(row?: Record<string, unknown>) {
+  if (!row) return null;
+  return {
+    id: String(row.id || ""),
+    channel: String(row.channel || "email") as NotificationDeliveryRow["channel"],
+    kind: String(row.kind || ""),
+    recipient: String(row.recipient || ""),
+    recipient_snapshot: typeof row.recipient_snapshot === "string" && row.recipient_snapshot ? row.recipient_snapshot : null,
+    related_type: typeof row.related_type === "string" && row.related_type ? row.related_type : null,
+    related_id: typeof row.related_id === "string" && row.related_id ? row.related_id : null,
+    payload_json: String(row.payload_json || "{}"),
+    idempotency_key: String(row.idempotency_key || ""),
+    status: String(row.status || "queued") as NotificationDeliveryRow["status"],
+    attempt_count: Number(row.attempt_count || 0),
+    available_at: mapSqliteTimestamp(row.available_at),
+    locked_at: typeof row.locked_at === "string" && row.locked_at ? mapSqliteTimestamp(row.locked_at) : null,
+    locked_by: typeof row.locked_by === "string" && row.locked_by ? row.locked_by : null,
+    provider: typeof row.provider === "string" && row.provider ? row.provider : null,
+    provider_message_id: typeof row.provider_message_id === "string" && row.provider_message_id ? row.provider_message_id : null,
+    last_error: typeof row.last_error === "string" && row.last_error ? row.last_error : null,
+    queued_at: mapSqliteTimestamp(row.queued_at),
+    sent_at: typeof row.sent_at === "string" && row.sent_at ? mapSqliteTimestamp(row.sent_at) : null,
+    updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies NotificationDeliveryRow;
+}
+
+function mapCustomerAccountRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    id: String(row.id || ""),
+    email: String(row.email || ""),
+    normalized_email: String(row.normalized_email || ""),
+    password_hash: String(row.password_hash || ""),
+    email_verified_at: typeof row.email_verified_at === "string" && row.email_verified_at ? mapSqliteTimestamp(row.email_verified_at) : null,
+    first_name: String(row.first_name || ""),
+    last_name: String(row.last_name || ""),
+    phone: String(row.phone || ""),
+    normalized_phone: String(row.normalized_phone || ""),
+    address_line1: typeof row.address_line1 === "string" && row.address_line1 ? row.address_line1 : null,
+    address_line2: typeof row.address_line2 === "string" && row.address_line2 ? row.address_line2 : null,
+    district: typeof row.district === "string" && row.district ? row.district : null,
+    subdistrict: typeof row.subdistrict === "string" && row.subdistrict ? row.subdistrict : null,
+    province: typeof row.province === "string" && row.province ? row.province : null,
+    postal_code: typeof row.postal_code === "string" && row.postal_code ? row.postal_code : null,
+    country: typeof row.country === "string" && row.country ? row.country : null,
+    accepted_terms_at: mapSqliteTimestamp(row.accepted_terms_at),
+    accepted_privacy_at: mapSqliteTimestamp(row.accepted_privacy_at),
+    status: String(row.status || "pending") as CustomerAccountStatus,
+    last_login_at: typeof row.last_login_at === "string" && row.last_login_at ? mapSqliteTimestamp(row.last_login_at) : null,
+    created_at: mapSqliteTimestamp(row.created_at),
+    updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies CustomerAccountRow;
+}
+
+function mapCustomerAccountTokenRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    id: String(row.id || ""),
+    customer_account_id: String(row.customer_account_id || ""),
+    kind: String(row.kind || "email_verification") as CustomerAccountTokenKind,
+    expires_at: mapSqliteTimestamp(row.expires_at),
+    created_at: mapSqliteTimestamp(row.created_at),
+  } satisfies CustomerAccountTokenRow;
 }
 
 function mapEventBaseRow(row: Record<string, unknown>) {
@@ -374,7 +453,45 @@ function mapDirectSeatRow(row: Record<string, unknown>) {
 }
 
 function mapDirectTicketRow(row: Record<string, unknown>) {
-  return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""), ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null, payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null, rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null, source: row.source === "public" ? "public" : "admin", status: String(row.status || "held") as DirectTicketRow["status"], issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null, payment_verified_at: typeof row.payment_verified_at === "string" ? mapSqliteTimestamp(row.payment_verified_at) : null, issued_at: typeof row.issued_at === "string" ? mapSqliteTimestamp(row.issued_at) : null, checked_in_at: typeof row.checked_in_at === "string" ? mapSqliteTimestamp(row.checked_in_at) : null, voided_at: typeof row.voided_at === "string" ? mapSqliteTimestamp(row.voided_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined, zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined, seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined } satisfies DirectTicketRow;
+  return { id: String(row.id || ""), event_id: String(row.event_id || ""), order_id: typeof row.order_id === "string" && row.order_id ? row.order_id : null, customer_account_id: typeof row.customer_account_id === "string" && row.customer_account_id ? row.customer_account_id : null, performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""), ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null, payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null, rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null, source: row.source === "public" ? "public" : "admin", status: String(row.status || "held") as DirectTicketRow["status"], issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null, payment_verified_at: typeof row.payment_verified_at === "string" ? mapSqliteTimestamp(row.payment_verified_at) : null, issued_at: typeof row.issued_at === "string" ? mapSqliteTimestamp(row.issued_at) : null, checked_in_at: typeof row.checked_in_at === "string" ? mapSqliteTimestamp(row.checked_in_at) : null, voided_at: typeof row.voided_at === "string" ? mapSqliteTimestamp(row.voided_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined, zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined, seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined } satisfies DirectTicketRow;
+}
+
+function mapDirectOrderRow(row: Record<string, unknown>, tickets: DirectTicketRow[] = []) {
+  return {
+    id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""),
+    customer_account_id: typeof row.customer_account_id === "string" && row.customer_account_id ? row.customer_account_id : null,
+    buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""),
+    currency: String(row.currency || "THB"), subtotal_amount: Number(row.subtotal_amount || 0),
+    platform_fee_amount: Number(row.platform_fee_amount || 0), payment_fee_amount: Number(row.payment_fee_amount || 0),
+    tax_amount: Number(row.tax_amount || 0), discount_amount: Number(row.discount_amount || 0), total_amount: Number(row.total_amount || 0),
+    fee_rule_version: String(row.fee_rule_version || "v1"), tax_snapshot_json: String(row.tax_snapshot_json || "{}"),
+    billing_profile_json: String(row.billing_profile_json || "{}"), seller_snapshot_json: String(row.seller_snapshot_json || "{}"),
+    status: String(row.status || "pending_payment") as DirectOrderRow["status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null,
+    payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null,
+    payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null,
+    payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null,
+    rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null,
+    hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null,
+    billing_document_status: String(row.billing_document_status || "not_required") as DirectOrderRow["billing_document_status"],
+    billing_document_number: typeof row.billing_document_number === "string" ? row.billing_document_number : null,
+    created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), tickets,
+    performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined,
+    performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined,
+    performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined,
+    performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined,
+  } satisfies DirectOrderRow;
+}
+
+function mapCustomerNotificationPreferencesRow(row: Record<string, unknown> | undefined, customerAccountId: string) {
+  return {
+    customer_account_id: customerAccountId,
+    email_transactional_enabled: Boolean(row?.email_transactional_enabled ?? 1),
+    sms_transactional_enabled: Boolean(row?.sms_transactional_enabled ?? 0),
+    sms_marketing_enabled: Boolean(row?.sms_marketing_enabled ?? 0),
+    sms_consent_at: typeof row?.sms_consent_at === "string" ? mapSqliteTimestamp(row.sms_consent_at) : null,
+    sms_opted_out_at: typeof row?.sms_opted_out_at === "string" ? mapSqliteTimestamp(row.sms_opted_out_at) : null,
+    updated_at: mapSqliteTimestamp(row?.updated_at),
+  } satisfies CustomerNotificationPreferencesRow;
 }
 
 function mapOutreachCampaignRow(row: Record<string, unknown>) {
@@ -479,6 +596,7 @@ export class SqliteAppDatabase implements AppDatabase {
         sender_id TEXT,
         channel_platform TEXT,
         channel_external_id TEXT,
+        customer_account_id TEXT,
         sms_opt_in_at DATETIME,
         sms_opt_out_at DATETIME,
         sms_consent_source TEXT,
@@ -506,6 +624,28 @@ export class SqliteAppDatabase implements AppDatabase {
         FOREIGN KEY (registration_id) REFERENCES registrations(id) ON DELETE CASCADE,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS notification_deliveries (
+        id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+        kind TEXT NOT NULL,
+        recipient TEXT NOT NULL,
+        recipient_snapshot TEXT,
+        related_type TEXT,
+        related_id TEXT,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'sent', 'failed')),
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        locked_at DATETIME,
+        locked_by TEXT,
+        provider TEXT,
+        provider_message_id TEXT,
+        last_error TEXT,
+        queued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        sent_at DATETIME,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
       CREATE TABLE IF NOT EXISTS organizations (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -532,6 +672,59 @@ export class SqliteAppDatabase implements AppDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_login_at DATETIME
+      );
+      CREATE TABLE IF NOT EXISTS customer_accounts (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        normalized_email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        email_verified_at DATETIME,
+        first_name TEXT NOT NULL DEFAULT '',
+        last_name TEXT NOT NULL DEFAULT '',
+        phone TEXT NOT NULL DEFAULT '',
+        normalized_phone TEXT NOT NULL DEFAULT '',
+        address_line1 TEXT,
+        address_line2 TEXT,
+        district TEXT,
+        subdistrict TEXT,
+        province TEXT,
+        postal_code TEXT,
+        country TEXT,
+        accepted_terms_at DATETIME NOT NULL,
+        accepted_privacy_at DATETIME NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'disabled')),
+        last_login_at DATETIME,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS customer_sessions (
+        id TEXT PRIMARY KEY,
+        customer_account_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME NOT NULL,
+        last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_account_id) REFERENCES customer_accounts(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS customer_account_tokens (
+        id TEXT PRIMARY KEY,
+        customer_account_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('email_verification', 'password_reset')),
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at DATETIME NOT NULL,
+        used_at DATETIME,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_account_id) REFERENCES customer_accounts(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS customer_notification_preferences (
+        customer_account_id TEXT PRIMARY KEY,
+        email_transactional_enabled INTEGER NOT NULL DEFAULT 1,
+        sms_transactional_enabled INTEGER NOT NULL DEFAULT 0,
+        sms_marketing_enabled INTEGER NOT NULL DEFAULT 0,
+        sms_consent_at DATETIME,
+        sms_opted_out_at DATETIME,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_account_id) REFERENCES customer_accounts(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS user_preferences (
         user_id TEXT PRIMARY KEY,
@@ -824,6 +1017,7 @@ export class SqliteAppDatabase implements AppDatabase {
       );
       CREATE TABLE IF NOT EXISTS direct_tickets (
         id TEXT PRIMARY KEY, event_id TEXT NOT NULL, performance_id TEXT NOT NULL, seat_id TEXT NOT NULL,
+        order_id TEXT, customer_account_id TEXT,
         ticket_class TEXT NOT NULL, holder_name TEXT NOT NULL DEFAULT '', buyer_name TEXT NOT NULL DEFAULT '',
         phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', price_amount REAL NOT NULL DEFAULT 0,
         payment_status TEXT NOT NULL, payment_reference TEXT, status TEXT NOT NULL, issued_by_user_id TEXT,
@@ -832,6 +1026,32 @@ export class SqliteAppDatabase implements AppDatabase {
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
         FOREIGN KEY (performance_id) REFERENCES event_performances(id) ON DELETE RESTRICT,
         FOREIGN KEY (seat_id) REFERENCES direct_seats(id) ON DELETE RESTRICT
+      );
+      CREATE TABLE IF NOT EXISTS direct_orders (
+        id TEXT PRIMARY KEY, event_id TEXT NOT NULL, performance_id TEXT NOT NULL, customer_account_id TEXT,
+        buyer_name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+        currency TEXT NOT NULL DEFAULT 'THB', subtotal_amount REAL NOT NULL DEFAULT 0,
+        platform_fee_amount REAL NOT NULL DEFAULT 0, payment_fee_amount REAL NOT NULL DEFAULT 0,
+        tax_amount REAL NOT NULL DEFAULT 0, discount_amount REAL NOT NULL DEFAULT 0, total_amount REAL NOT NULL DEFAULT 0,
+        fee_rule_version TEXT NOT NULL DEFAULT 'v1', tax_snapshot_json TEXT NOT NULL DEFAULT '{}',
+        billing_profile_json TEXT NOT NULL DEFAULT '{}', seller_snapshot_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending_payment', payment_reference TEXT, payment_proof_mime TEXT,
+        payment_proof_base64 TEXT, payment_proof_submitted_at DATETIME, rejection_reason TEXT,
+        hold_expires_at DATETIME, billing_document_status TEXT NOT NULL DEFAULT 'not_required',
+        billing_document_number TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY (performance_id) REFERENCES event_performances(id) ON DELETE RESTRICT,
+        FOREIGN KEY (customer_account_id) REFERENCES customer_accounts(id) ON DELETE SET NULL
+      );
+      CREATE TABLE IF NOT EXISTS payment_attempts (
+        id TEXT PRIMARY KEY, order_id TEXT NOT NULL, attempt_number INTEGER NOT NULL DEFAULT 1,
+        method TEXT NOT NULL DEFAULT 'promptpay', amount REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending', transaction_reference TEXT, proof_mime TEXT,
+        proof_base64 TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (order_id, attempt_number),
+        FOREIGN KEY (order_id) REFERENCES direct_orders(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS event_document_chunks (
         id TEXT PRIMARY KEY,
@@ -846,6 +1066,10 @@ export class SqliteAppDatabase implements AppDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions (token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
+      CREATE INDEX IF NOT EXISTS idx_customer_sessions_token_hash ON customer_sessions (token_hash);
+      CREATE INDEX IF NOT EXISTS idx_customer_sessions_expires_at ON customer_sessions (expires_at);
+      CREATE INDEX IF NOT EXISTS idx_customer_account_tokens_token_hash ON customer_account_tokens (token_hash);
+      CREATE INDEX IF NOT EXISTS idx_customer_account_tokens_account_kind ON customer_account_tokens (customer_account_id, kind, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_checkin_sessions_token_hash ON checkin_sessions (token_hash);
       CREATE INDEX IF NOT EXISTS idx_checkin_sessions_expires_at ON checkin_sessions (expires_at);
       CREATE INDEX IF NOT EXISTS idx_checkin_sessions_event_id ON checkin_sessions (event_id, created_at DESC);
@@ -858,6 +1082,12 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_llm_usage_events_model ON llm_usage_events (provider, model);
       CREATE INDEX IF NOT EXISTS idx_registration_email_deliveries_event_status
         ON registration_email_deliveries (event_id, status, queued_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_notification_deliveries_claim
+        ON notification_deliveries (status, available_at, queued_at);
+      CREATE INDEX IF NOT EXISTS idx_notification_deliveries_related
+        ON notification_deliveries (related_type, related_id, queued_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_customer_notification_preferences_sms
+        ON customer_notification_preferences (sms_transactional_enabled, sms_marketing_enabled);
       CREATE INDEX IF NOT EXISTS idx_event_settings_event_id ON event_settings (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_event_id ON facebook_pages (event_id);
       CREATE INDEX IF NOT EXISTS idx_facebook_pages_page_id ON facebook_pages (page_id);
@@ -888,6 +1118,7 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("registrations", "event_id", "TEXT");
     this.ensureColumn("registrations", "channel_platform", "TEXT");
     this.ensureColumn("registrations", "channel_external_id", "TEXT");
+    this.ensureColumn("registrations", "customer_account_id", "TEXT");
     this.ensureColumn("registrations", "sms_opt_in_at", "DATETIME");
     this.ensureColumn("registrations", "sms_opt_out_at", "DATETIME");
     this.ensureColumn("registrations", "sms_consent_source", "TEXT");
@@ -943,6 +1174,8 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("direct_tickets", "payment_proof_submitted_at", "DATETIME");
     this.ensureColumn("direct_tickets", "rejection_reason", "TEXT");
     this.ensureColumn("direct_tickets", "source", "TEXT NOT NULL DEFAULT 'admin'");
+    this.ensureColumn("direct_tickets", "order_id", "TEXT");
+    this.ensureColumn("direct_tickets", "customer_account_id", "TEXT");
     this.migrateChannelEventAssignmentsToMany();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_events_organizer_id ON events (organizer_id);
@@ -956,6 +1189,14 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_direct_tickets_expiring_holds
         ON direct_tickets (hold_expires_at)
         WHERE status = 'held';
+      CREATE INDEX IF NOT EXISTS idx_registrations_customer_account
+        ON registrations (customer_account_id, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_direct_orders_customer
+        ON direct_orders (customer_account_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_direct_orders_event_status
+        ON direct_orders (event_id, status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_direct_tickets_order
+        ON direct_tickets (order_id);
 
       UPDATE direct_tickets
       SET payment_status = 'awaiting_payment'
@@ -1028,6 +1269,8 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.deleteExpiredSessions();
     await this.deleteExpiredCheckinSessions();
     await this.deleteExpiredCheckinAccessSessions();
+    await this.deleteExpiredCustomerSessions();
+    await this.deleteExpiredCustomerAccountTokens();
 
     this.initialized = true;
   }
@@ -1130,28 +1373,28 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async getRegistrationById(id: string) {
     return this.db.prepare(
-      "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE id = ?",
+      "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE id = ?",
     ).get(id) as RegistrationRow | undefined;
   }
 
   async listRegistrations(limit?: number, eventId?: string) {
     if (typeof limit === "number" && eventId) {
       return this.db.prepare(
-        "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC LIMIT ?",
+        "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC LIMIT ?",
       ).all(eventId, limit) as RegistrationRow[];
     }
     if (eventId) {
       return this.db.prepare(
-        "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC",
+        "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE event_id = ? ORDER BY timestamp DESC",
       ).all(eventId) as RegistrationRow[];
     }
     if (typeof limit === "number") {
       return this.db.prepare(
-        "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC LIMIT ?",
+        "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC LIMIT ?",
       ).all(limit) as RegistrationRow[];
     }
     return this.db.prepare(
-      "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC",
+      "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC",
     ).all() as RegistrationRow[];
   }
 
@@ -1168,7 +1411,7 @@ export class SqliteAppDatabase implements AppDatabase {
     const placeholders = normalizedSenderIds.map(() => "?").join(", ");
     if (eventId) {
       const statement = this.db.prepare(
-        `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status
+        `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status
          FROM registrations
          WHERE event_id = ? AND sender_id IN (${placeholders})
          ORDER BY timestamp DESC, id DESC`,
@@ -1177,7 +1420,7 @@ export class SqliteAppDatabase implements AppDatabase {
     }
 
     const statement = this.db.prepare(
-      `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status
+      `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status
        FROM registrations
        WHERE sender_id IN (${placeholders})
        ORDER BY timestamp DESC, id DESC`,
@@ -1262,9 +1505,9 @@ export class SqliteAppDatabase implements AppDatabase {
       const id = generateRegistrationId();
       try {
         this.db.prepare(
-          `INSERT INTO registrations (id, sender_id, event_id, channel_platform, channel_external_id, first_name, last_name, phone, email)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, senderId, eventId, channelPlatform, channelExternalId, firstName, lastName, phone, email);
+          `INSERT INTO registrations (id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, first_name, last_name, phone, email)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(id, senderId, eventId, input.customer_account_id || null, channelPlatform, channelExternalId, firstName, lastName, phone, email);
         return { statusCode: 200, content: { id, status: "success" } };
       } catch (error: any) {
         if (String(error?.message || "").includes("UNIQUE")) continue;
@@ -1337,6 +1580,386 @@ export class SqliteAppDatabase implements AppDatabase {
     );
   }
 
+  async enqueueNotificationDelivery(input: CreateNotificationDeliveryInput) {
+    const channel = String(input.channel || "").trim();
+    const kind = String(input.kind || "").trim();
+    const recipient = String(input.recipient || "").trim();
+    const idempotencyKey = String(input.idempotency_key || "").trim();
+    if (!channel || !kind || !recipient || !idempotencyKey) return null;
+
+    const id = generateEntityId("ntf");
+    const result = this.db.prepare(
+      `INSERT OR IGNORE INTO notification_deliveries (
+        id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+        payload_json, idempotency_key, provider
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      channel,
+      kind,
+      recipient,
+      input.recipient_snapshot == null ? null : String(input.recipient_snapshot),
+      input.related_type == null ? null : String(input.related_type).trim() || null,
+      input.related_id == null ? null : String(input.related_id).trim() || null,
+      String(input.payload_json || "{}").trim() || "{}",
+      idempotencyKey,
+      input.provider == null ? null : String(input.provider).trim() || null,
+    );
+    if (!result.changes) return null;
+
+    const row = this.db.prepare(
+      `SELECT id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+              payload_json, idempotency_key, status, attempt_count, available_at, locked_at,
+              locked_by, provider, provider_message_id, last_error, queued_at, sent_at, updated_at
+       FROM notification_deliveries
+       WHERE id = ?`,
+    ).get(id) as Record<string, unknown> | undefined;
+
+    return mapNotificationDeliveryRow(row);
+  }
+
+  async claimNotificationDeliveries(workerId: string, limit = 10) {
+    const normalizedWorkerId = String(workerId || "").trim();
+    const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 10, 1), 100);
+    if (!normalizedWorkerId) return [];
+
+    const claim = this.db.transaction(() => {
+      const candidates = this.db.prepare(
+        `SELECT id
+         FROM notification_deliveries
+         WHERE (status = 'queued' AND datetime(available_at) <= CURRENT_TIMESTAMP)
+            OR (status = 'processing' AND locked_at IS NOT NULL AND datetime(locked_at) <= datetime('now', '-5 minutes'))
+         ORDER BY datetime(available_at) ASC, datetime(queued_at) ASC, id ASC
+         LIMIT ?`,
+      ).all(normalizedLimit) as Array<{ id: string }>;
+      const update = this.db.prepare(
+        `UPDATE notification_deliveries
+         SET status = 'processing',
+             attempt_count = attempt_count + 1,
+             locked_at = CURRENT_TIMESTAMP,
+             locked_by = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?
+           AND ((status = 'queued' AND datetime(available_at) <= CURRENT_TIMESTAMP)
+             OR (status = 'processing' AND locked_at IS NOT NULL AND datetime(locked_at) <= datetime('now', '-5 minutes')))`,
+      );
+      const select = this.db.prepare(
+        `SELECT id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+                payload_json, idempotency_key, status, attempt_count, available_at, locked_at,
+                locked_by, provider, provider_message_id, last_error, queued_at, sent_at, updated_at
+         FROM notification_deliveries
+         WHERE id = ?`,
+      );
+      const claimed: NotificationDeliveryRow[] = [];
+      for (const candidate of candidates) {
+        if (!update.run(normalizedWorkerId, candidate.id).changes) continue;
+        const row = select.get(candidate.id) as Record<string, unknown> | undefined;
+        const mapped = mapNotificationDeliveryRow(row);
+        if (mapped) claimed.push(mapped);
+      }
+      return claimed;
+    });
+
+    return claim() as NotificationDeliveryRow[];
+  }
+
+  async markNotificationDeliverySent(id: string, workerId: string, providerMessageId?: string | null, provider?: string | null) {
+    this.db.prepare(
+      `UPDATE notification_deliveries
+       SET status = 'sent',
+           provider = COALESCE(?, provider),
+           provider_message_id = COALESCE(?, provider_message_id),
+           last_error = NULL,
+           sent_at = CURRENT_TIMESTAMP,
+           locked_at = NULL,
+           locked_by = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'processing' AND locked_by = ?`,
+    ).run(
+      provider == null ? null : String(provider).trim() || null,
+      providerMessageId == null ? null : String(providerMessageId).trim() || null,
+      String(id || "").trim(),
+      String(workerId || "").trim(),
+    );
+  }
+
+  async markNotificationDeliveryRetryable(id: string, workerId: string, errorMessage: string, availableAt: string, provider?: string | null) {
+    this.db.prepare(
+      `UPDATE notification_deliveries
+       SET status = 'queued',
+           available_at = ?,
+           provider = COALESCE(?, provider),
+           last_error = ?,
+           locked_at = NULL,
+           locked_by = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'processing' AND locked_by = ?`,
+    ).run(
+      String(availableAt || "").trim() || new Date().toISOString(),
+      provider == null ? null : String(provider).trim() || null,
+      String(errorMessage || "").trim().slice(0, 1000),
+      String(id || "").trim(),
+      String(workerId || "").trim(),
+    );
+  }
+
+  async markNotificationDeliveryFailed(id: string, workerId: string, errorMessage: string, provider?: string | null) {
+    this.db.prepare(
+      `UPDATE notification_deliveries
+       SET status = 'failed',
+           provider = COALESCE(?, provider),
+           last_error = ?,
+           locked_at = NULL,
+           locked_by = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'processing' AND locked_by = ?`,
+    ).run(
+      provider == null ? null : String(provider).trim() || null,
+      String(errorMessage || "").trim().slice(0, 1000),
+      String(id || "").trim(),
+      String(workerId || "").trim(),
+    );
+  }
+
+  async getCustomerAccountById(id: string) {
+    const row = this.db.prepare("SELECT * FROM customer_accounts WHERE id = ? LIMIT 1").get(String(id || "").trim()) as Record<string, unknown> | undefined;
+    return mapCustomerAccountRow(row);
+  }
+
+  async getCustomerAccountByNormalizedEmail(normalizedEmail: string) {
+    const row = this.db.prepare("SELECT * FROM customer_accounts WHERE normalized_email = ? LIMIT 1").get(String(normalizedEmail || "").trim()) as Record<string, unknown> | undefined;
+    return mapCustomerAccountRow(row);
+  }
+
+  async createCustomerAccount(input: CreateCustomerAccountInput) {
+    const id = generateEntityId("cst");
+    this.db.prepare(
+      `INSERT INTO customer_accounts (
+        id, email, normalized_email, password_hash, first_name, last_name, phone,
+        normalized_phone, accepted_terms_at, accepted_privacy_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      String(input.email || "").trim(),
+      String(input.normalized_email || "").trim(),
+      String(input.password_hash || "").trim(),
+      String(input.first_name || "").trim(),
+      String(input.last_name || "").trim(),
+      String(input.phone || "").trim(),
+      String(input.normalized_phone || "").trim(),
+      input.accepted_terms_at.toISOString(),
+      input.accepted_privacy_at.toISOString(),
+    );
+    const account = await this.getCustomerAccountById(id);
+    if (!account) throw new Error("Failed to create customer account");
+    return account;
+  }
+
+  async updateCustomerProfile(id: string, input: UpdateCustomerProfileInput) {
+    const normalizedId = String(id || "").trim();
+    const result = this.db.prepare(
+      `UPDATE customer_accounts
+       SET first_name = ?, last_name = ?, phone = ?, normalized_phone = ?,
+           address_line1 = ?, address_line2 = ?, district = ?, subdistrict = ?,
+           province = ?, postal_code = ?, country = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status != 'disabled'`,
+    ).run(
+      String(input.first_name || "").trim(),
+      String(input.last_name || "").trim(),
+      String(input.phone || "").trim(),
+      String(input.normalized_phone || "").trim(),
+      input.address_line1 || null,
+      input.address_line2 || null,
+      input.district || null,
+      input.subdistrict || null,
+      input.province || null,
+      input.postal_code || null,
+      input.country || null,
+      normalizedId,
+    );
+    return result.changes > 0 ? this.getCustomerAccountById(normalizedId) : undefined;
+  }
+
+  async updateCustomerPasswordHash(id: string, passwordHash: string) {
+    const result = this.db.prepare(
+      "UPDATE customer_accounts SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'disabled'",
+    ).run(String(passwordHash || "").trim(), String(id || "").trim());
+    return result.changes > 0;
+  }
+
+  async verifyCustomerAccountEmail(id: string) {
+    const result = this.db.prepare(
+      `UPDATE customer_accounts
+       SET email_verified_at = COALESCE(email_verified_at, CURRENT_TIMESTAMP),
+           status = CASE WHEN status = 'pending' THEN 'active' ELSE status END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status != 'disabled'`,
+    ).run(String(id || "").trim());
+    return result.changes > 0;
+  }
+
+  async updateCustomerAccountLastLogin(id: string) {
+    this.db.prepare(
+      "UPDATE customer_accounts SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'disabled'",
+    ).run(String(id || "").trim());
+  }
+
+  async setCustomerAccountStatus(id: string, status: CustomerAccountStatus) {
+    const update = this.db.transaction(() => {
+      const result = this.db.prepare(
+        "UPDATE customer_accounts SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      ).run(status, String(id || "").trim());
+      if (result.changes > 0 && status === "disabled") {
+        this.db.prepare("DELETE FROM customer_sessions WHERE customer_account_id = ?").run(String(id || "").trim());
+      }
+      return result.changes > 0;
+    });
+    return update();
+  }
+
+  async createCustomerSession(customerAccountId: string, tokenHash: string, expiresAt: Date) {
+    this.db.prepare(
+      `INSERT INTO customer_sessions (id, customer_account_id, token_hash, expires_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(generateEntityId("cses"), String(customerAccountId || "").trim(), String(tokenHash || "").trim(), expiresAt.toISOString());
+  }
+
+  async getCustomerSessionWithAccount(tokenHash: string) {
+    const row = this.db.prepare(
+      `SELECT
+        s.id AS session_id,
+        s.token_hash,
+        s.expires_at AS session_expires_at,
+        s.last_seen_at AS session_last_seen_at,
+        c.id, c.email, c.normalized_email, c.password_hash, c.email_verified_at,
+        c.first_name, c.last_name, c.phone, c.normalized_phone, c.address_line1,
+        c.address_line2, c.district, c.subdistrict, c.province, c.postal_code,
+        c.country, c.accepted_terms_at, c.accepted_privacy_at, c.status,
+        c.last_login_at, c.created_at, c.updated_at
+       FROM customer_sessions s
+       JOIN customer_accounts c ON c.id = s.customer_account_id
+       WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP AND c.status != 'disabled'
+       LIMIT 1`,
+    ).get(String(tokenHash || "").trim()) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const account = mapCustomerAccountRow(row);
+    if (!account) return undefined;
+    return {
+      session_id: String(row.session_id || ""),
+      token_hash: String(row.token_hash || ""),
+      expires_at: mapSqliteTimestamp(row.session_expires_at),
+      last_seen_at: mapSqliteTimestamp(row.session_last_seen_at),
+      account,
+    } satisfies CustomerAccountSessionRow;
+  }
+
+  async touchCustomerSession(sessionId: string) {
+    this.db.prepare("UPDATE customer_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?").run(String(sessionId || "").trim());
+  }
+
+  async deleteCustomerSession(tokenHash: string) {
+    this.db.prepare("DELETE FROM customer_sessions WHERE token_hash = ?").run(String(tokenHash || "").trim());
+  }
+
+  async deleteCustomerSessions(customerAccountId: string) {
+    this.db.prepare("DELETE FROM customer_sessions WHERE customer_account_id = ?").run(String(customerAccountId || "").trim());
+  }
+
+  async deleteExpiredCustomerSessions() {
+    this.db.prepare("DELETE FROM customer_sessions WHERE expires_at <= CURRENT_TIMESTAMP").run();
+  }
+
+  async createCustomerAccountToken(input: CreateCustomerAccountTokenInput) {
+    const id = generateEntityId("ctok");
+    this.db.prepare(
+      `INSERT INTO customer_account_tokens (id, customer_account_id, kind, token_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      String(input.customer_account_id || "").trim(),
+      input.kind,
+      String(input.token_hash || "").trim(),
+      input.expires_at.toISOString(),
+    );
+    const row = this.db.prepare("SELECT id, customer_account_id, kind, expires_at, created_at FROM customer_account_tokens WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    const token = mapCustomerAccountTokenRow(row);
+    if (!token) throw new Error("Failed to create customer account token");
+    return token;
+  }
+
+  async consumeCustomerAccountToken(tokenHash: string, kind: CustomerAccountTokenKind) {
+    const consume = this.db.transaction(() => {
+      const row = this.db.prepare(
+        `SELECT id, customer_account_id
+         FROM customer_account_tokens
+         WHERE token_hash = ? AND kind = ? AND used_at IS NULL AND datetime(expires_at) > CURRENT_TIMESTAMP
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      ).get(String(tokenHash || "").trim(), kind) as { id?: string; customer_account_id?: string } | undefined;
+      if (!row?.id || !row.customer_account_id) return undefined;
+      const result = this.db.prepare(
+        "UPDATE customer_account_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ? AND used_at IS NULL",
+      ).run(row.id);
+      return result.changes > 0 ? { token_id: row.id, customer_account_id: row.customer_account_id } : undefined;
+    });
+    return consume();
+  }
+
+  async deleteExpiredCustomerAccountTokens() {
+    this.db.prepare("DELETE FROM customer_account_tokens WHERE expires_at <= CURRENT_TIMESTAMP OR used_at IS NOT NULL").run();
+  }
+
+  async listCustomerRegistrations(customerAccountId: string) {
+    return this.db.prepare(
+      "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations WHERE customer_account_id = ? ORDER BY timestamp DESC",
+    ).all(String(customerAccountId || "").trim()) as RegistrationRow[];
+  }
+
+  async claimRegistrationToCustomer(input: { registration_id: string; customer_account_id: string; normalized_email?: string; normalized_phone?: string }) {
+    const registrationId = String(input.registration_id || "").trim().toUpperCase();
+    const accountId = String(input.customer_account_id || "").trim();
+    const row = this.db.prepare("SELECT customer_account_id, email, phone FROM registrations WHERE id = ? LIMIT 1").get(registrationId) as { customer_account_id?: string | null; email?: string; phone?: string } | undefined;
+    if (!row) return "not_found" as const;
+    if (row.customer_account_id && row.customer_account_id !== accountId) return "already_claimed" as const;
+    const emailMatches = Boolean(input.normalized_email && String(row.email || "").trim().toLowerCase() === input.normalized_email.trim().toLowerCase());
+    const phoneDigits = String(row.phone || "").replace(/\D/g, "");
+    const phoneMatches = Boolean(input.normalized_phone && phoneDigits && phoneDigits === input.normalized_phone.replace(/\D/g, ""));
+    if (!emailMatches && !phoneMatches) return "contact_mismatch" as const;
+    if (row.customer_account_id === accountId) return "already_claimed" as const;
+    const updated = this.db.prepare("UPDATE registrations SET customer_account_id = ? WHERE id = ? AND customer_account_id IS NULL").run(accountId, registrationId);
+    return updated.changes > 0 ? "claimed" as const : "already_claimed" as const;
+  }
+
+  async unlinkRegistrationFromCustomer(registrationId: string, customerAccountId?: string | null) {
+    const id = String(registrationId || "").trim().toUpperCase();
+    const accountId = customerAccountId == null ? "" : String(customerAccountId).trim();
+    const result = this.db.prepare(accountId
+      ? "UPDATE registrations SET customer_account_id = NULL WHERE id = ? AND customer_account_id = ?"
+      : "UPDATE registrations SET customer_account_id = NULL WHERE id = ? AND customer_account_id IS NOT NULL").run(...(accountId ? [id, accountId] : [id]));
+    return result.changes > 0;
+  }
+
+  async getCustomerNotificationPreferences(customerAccountId: string) {
+    const accountId = String(customerAccountId || "").trim();
+    const row = this.db.prepare("SELECT * FROM customer_notification_preferences WHERE customer_account_id = ?").get(accountId) as Record<string, unknown> | undefined;
+    return mapCustomerNotificationPreferencesRow(row, accountId);
+  }
+
+  async updateCustomerNotificationPreferences(customerAccountId: string, input: UpdateCustomerNotificationPreferencesInput) {
+    const accountId = String(customerAccountId || "").trim();
+    const current = await this.getCustomerNotificationPreferences(accountId);
+    const smsMarketing = input.sms_marketing_enabled ?? current.sms_marketing_enabled;
+    const smsTransactional = input.sms_transactional_enabled ?? current.sms_transactional_enabled;
+    const smsConsentAt = input.sms_consent_at === undefined ? current.sms_consent_at : input.sms_consent_at?.toISOString() || null;
+    const smsOptedOutAt = input.sms_opted_out_at === undefined ? current.sms_opted_out_at : input.sms_opted_out_at?.toISOString() || null;
+    this.db.prepare(
+      `INSERT INTO customer_notification_preferences (customer_account_id, email_transactional_enabled, sms_transactional_enabled, sms_marketing_enabled, sms_consent_at, sms_opted_out_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(customer_account_id) DO UPDATE SET email_transactional_enabled=excluded.email_transactional_enabled, sms_transactional_enabled=excluded.sms_transactional_enabled, sms_marketing_enabled=excluded.sms_marketing_enabled, sms_consent_at=excluded.sms_consent_at, sms_opted_out_at=excluded.sms_opted_out_at, updated_at=CURRENT_TIMESTAMP`,
+    ).run(accountId, input.email_transactional_enabled ?? current.email_transactional_enabled ? 1 : 0, smsTransactional ? 1 : 0, smsMarketing ? 1 : 0, smsConsentAt, smsOptedOutAt);
+    return this.getCustomerNotificationPreferences(accountId);
+  }
+
   async cancelRegistration(id: unknown): Promise<RegistrationResult> {
     const registrationId = String(id || "").trim();
     if (!registrationId) {
@@ -1391,6 +2014,8 @@ export class SqliteAppDatabase implements AppDatabase {
     const result = this.db.transaction(() => {
       const performance = this.db.prepare("SELECT id FROM event_performances WHERE id = ? AND event_id = ?").get(performanceId, eventId);
       if (!performance) return undefined;
+      const orders = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_orders WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
+      if (orders > 0) return { status: "blocked" as const, tickets: 0, seats: 0 };
       const tickets = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_tickets WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
       const seats = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_seats WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
       if (tickets > 0) return { status: "blocked" as const, tickets, seats };
@@ -1405,6 +2030,8 @@ export class SqliteAppDatabase implements AppDatabase {
     const reset = this.db.transaction(() => {
       const performance = this.db.prepare("SELECT id FROM event_performances WHERE id = ? AND event_id = ?").get(performanceId, eventId);
       if (!performance) return undefined;
+      const orders = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_orders WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
+      if (orders > 0) return { tickets: 0, seats: 0, orders, blocked: true };
       const tickets = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_tickets WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
       const seats = Number((this.db.prepare("SELECT COUNT(*) AS count FROM direct_seats WHERE performance_id = ? AND event_id = ?").get(performanceId, eventId) as { count?: number })?.count || 0);
       this.db.prepare("DELETE FROM direct_tickets WHERE performance_id = ? AND event_id = ?").run(performanceId, eventId);
@@ -1415,6 +2042,7 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   async listDirectSeats(eventId: string, performanceId?: string) {
+    await this.releaseExpiredDirectOrderHolds(eventId);
     await this.releaseExpiredDirectTicketHolds(eventId);
     const rows = performanceId ? this.db.prepare("SELECT * FROM direct_seats WHERE event_id = ? AND performance_id = ? ORDER BY zone, row_label, seat_label").all(eventId, performanceId) : this.db.prepare("SELECT * FROM direct_seats WHERE event_id = ? ORDER BY zone, row_label, seat_label").all(eventId);
     return rows.map((row) => mapDirectSeatRow(row as Record<string, unknown>));
@@ -1438,6 +2066,11 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.db.prepare(`SELECT t.*, p.code performance_code, p.title performance_title, p.starts_at performance_starts_at, p.ends_at performance_ends_at, s.zone, s.row_label, s.seat_label FROM direct_tickets t JOIN event_performances p ON p.id=t.performance_id JOIN direct_seats s ON s.id=t.seat_id ${where}`).all(...params).map((row) => mapDirectTicketRow(row as Record<string, unknown>));
   }
 
+  private directOrderQuery(where: string, params: unknown[]) {
+    const rows = this.db.prepare(`SELECT o.*, p.code performance_code, p.title performance_title, p.starts_at performance_starts_at, p.ends_at performance_ends_at FROM direct_orders o JOIN event_performances p ON p.id=o.performance_id ${where}`).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapDirectOrderRow(row, this.directTicketQuery("WHERE t.order_id = ? ORDER BY t.created_at ASC", [row.id])));
+  }
+
   async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketQuery("WHERE t.event_id = ? ORDER BY t.created_at DESC", [eventId]); }
   async getDirectTicketById(id: string) { return this.directTicketQuery("WHERE t.id = ?", [id])[0]; }
 
@@ -1451,12 +2084,143 @@ export class SqliteAppDatabase implements AppDatabase {
       const status = paymentStatus === "not_required" ? "issued" : "held";
       const id = generateEntityId("dtkt");
       const holdMinutes = Math.min(120, Math.max(5, Math.round(Number(input.hold_minutes) || 15)));
-      this.db.prepare(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN ?='held' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?)`)
-        .run(id,input.event_id,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,status,status,`+${holdMinutes} minutes`,input.source === "public" ? "public" : "admin");
+      this.db.prepare(`INSERT INTO direct_tickets (id,event_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN ?='held' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?)`)
+        .run(id,input.event_id,input.customer_account_id || null,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,status,status,`+${holdMinutes} minutes`,input.source === "public" ? "public" : "admin");
       this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(status, input.seat_id);
       return { ticket: this.directTicketQuery("WHERE t.id = ?", [id])[0] };
     });
     return create();
+  }
+
+  async createDirectOrder(input: CreateDirectOrderInput) {
+    await this.releaseExpiredDirectOrderHolds(input.event_id);
+    const seatIds = [...new Set((input.seat_ids || []).map((seatId) => String(seatId || "").trim()).filter(Boolean))];
+    if (!seatIds.length || !input.performance_id || !input.event_id) return { error: "invalid_order" as const };
+    const create = this.db.transaction(() => {
+      for (const seatId of seatIds) {
+        const seat = this.db.prepare("SELECT * FROM direct_seats WHERE id=? AND event_id=? AND performance_id=?").get(seatId, input.event_id, input.performance_id) as Record<string, unknown> | undefined;
+        if (!seat) return { error: "invalid_seat" as const };
+        if (seat.status !== "available" || seat.allocation_status !== "allocated") return { error: "seat_unavailable" as const };
+      }
+      const orderId = generateEntityId("ord");
+      const holdMinutes = Math.min(120, Math.max(5, Math.round(Number(input.hold_minutes) || 15)));
+      const totalAmount = Math.max(0, Number(input.total_amount) || 0);
+      const subtotalAmount = Math.max(0, Number(input.subtotal_amount) || 0);
+      const status = totalAmount === 0 ? "paid" : "pending_payment";
+      const billingStatus = String(input.billing_profile_json || "{}").trim() !== "{}" ? "pending" : "not_required";
+      this.db.prepare(`INSERT INTO direct_orders (id,event_id,performance_id,customer_account_id,buyer_name,phone,email,currency,subtotal_amount,platform_fee_amount,payment_fee_amount,tax_amount,discount_amount,total_amount,fee_rule_version,tax_snapshot_json,billing_profile_json,seller_snapshot_json,status,hold_expires_at,billing_document_status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='pending_payment' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?)`)
+        .run(orderId, input.event_id, input.performance_id, input.customer_account_id || null, String(input.buyer_name || "").trim(), String(input.phone || "").trim(), String(input.email || "").trim(), "THB", subtotalAmount, Math.max(0, Number(input.platform_fee_amount) || 0), Math.max(0, Number(input.payment_fee_amount) || 0), Math.max(0, Number(input.tax_amount) || 0), Math.max(0, Number(input.discount_amount) || 0), totalAmount, String(input.fee_rule_version || "v1"), String(input.tax_snapshot_json || "{}").trim() || "{}", String(input.billing_profile_json || "{}").trim() || "{}", String(input.seller_snapshot_json || "{}").trim() || "{}", status, status, `+${holdMinutes} minutes`, billingStatus);
+      const ticketInsert = this.db.prepare(`INSERT INTO direct_tickets (id,event_id,order_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_at,hold_expires_at,source)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN ?='held' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?)`);
+      const ticketStatus = status === "paid" ? "issued" : "held";
+      const paymentStatus = status === "paid" ? "verified" : "awaiting_payment";
+      const seatPrice = seatIds.length ? subtotalAmount / seatIds.length : 0;
+      for (const seatId of seatIds) {
+        ticketInsert.run(generateEntityId("dtkt"), input.event_id, orderId, input.customer_account_id || null, input.performance_id, seatId, String(input.ticket_class || "Public").trim() || "Public", String(input.buyer_name || "").trim(), String(input.buyer_name || "").trim(), String(input.phone || "").trim(), String(input.email || "").trim(), seatPrice, paymentStatus, ticketStatus, ticketStatus, ticketStatus, `+${holdMinutes} minutes`, input.source === "admin" ? "admin" : "public");
+        this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(ticketStatus, seatId);
+      }
+      this.db.prepare("INSERT INTO payment_attempts (id,order_id,attempt_number,method,amount,status) VALUES (?,?,?,?,?,?)").run(generateEntityId("pay"), orderId, 1, "promptpay", totalAmount, status === "paid" ? "verified" : "pending");
+      return { order: this.directOrderQuery("WHERE o.id = ?", [orderId])[0] };
+    });
+    try {
+      return create();
+    } catch (error: any) {
+      if (String(error?.message || "").toLowerCase().includes("unique")) return { error: "seat_unavailable" as const };
+      throw error;
+    }
+  }
+
+  async getDirectOrderById(id: string) {
+    await this.releaseExpiredDirectOrderHolds();
+    return this.directOrderQuery("WHERE o.id = ?", [String(id || "").trim()])[0];
+  }
+
+  async listDirectOrders(eventId: string) {
+    await this.releaseExpiredDirectOrderHolds(eventId);
+    return this.directOrderQuery("WHERE o.event_id = ? ORDER BY o.created_at DESC", [String(eventId || "").trim()]);
+  }
+
+  async listCustomerOrders(customerAccountId: string) {
+    await this.releaseExpiredDirectOrderHolds();
+    return this.directOrderQuery("WHERE o.customer_account_id = ? ORDER BY o.created_at DESC", [String(customerAccountId || "").trim()]);
+  }
+
+  async submitDirectOrderPaymentProof(id: string, input: { payment_proof_mime: string; payment_proof_base64: string; payment_reference?: string | null }) {
+    await this.releaseExpiredDirectOrderHolds();
+    const update = this.db.transaction(() => {
+      const order = this.directOrderQuery("WHERE o.id = ?", [id])[0];
+      if (!order || !["pending_payment", "payment_submitted"].includes(order.status)) return order;
+      this.db.prepare("UPDATE direct_orders SET status='payment_submitted',payment_proof_mime=?,payment_proof_base64=?,payment_proof_submitted_at=CURRENT_TIMESTAMP,payment_reference=?,hold_expires_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','+24 hours'),updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .run(input.payment_proof_mime, input.payment_proof_base64, input.payment_reference || null, id);
+      this.db.prepare("UPDATE direct_tickets SET payment_status='proof_submitted',payment_proof_mime=?,payment_proof_base64=?,payment_proof_submitted_at=CURRENT_TIMESTAMP,payment_reference=?,hold_expires_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','+24 hours'),updated_at=CURRENT_TIMESTAMP WHERE order_id=? AND status='held'")
+        .run(input.payment_proof_mime, input.payment_proof_base64, input.payment_reference || null, id);
+      this.db.prepare("UPDATE payment_attempts SET status='proof_submitted',proof_mime=?,proof_base64=?,transaction_reference=?,updated_at=CURRENT_TIMESTAMP WHERE order_id=? AND attempt_number=(SELECT MAX(attempt_number) FROM payment_attempts WHERE order_id=?)")
+        .run(input.payment_proof_mime, input.payment_proof_base64, input.payment_reference || null, id, id);
+      return this.directOrderQuery("WHERE o.id = ?", [id])[0];
+    });
+    return update();
+  }
+
+  async updateDirectOrderPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
+    const update = this.db.transaction(() => {
+      const order = this.directOrderQuery("WHERE o.id = ?", [id])[0];
+      if (!order) return undefined;
+      if (order.status === "paid" && input.payment_status === "verified") return order;
+      if (!["pending_payment", "payment_submitted"].includes(order.status) && input.payment_status !== "refunded") return order;
+      const nextStatus = input.payment_status === "verified" ? "paid" : input.payment_status === "refunded" ? "refunded" : "rejected";
+      const ticketStatus = input.payment_status === "verified" ? "issued" : "voided";
+      this.db.prepare("UPDATE direct_orders SET status=?,payment_reference=COALESCE(?,payment_reference),rejection_reason=?,hold_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .run(nextStatus, input.payment_reference || null, input.rejection_reason || null, id);
+      if (input.payment_status === "verified") this.db.prepare("UPDATE direct_tickets SET payment_reference=NULL WHERE order_id=?").run(id);
+      this.db.prepare("UPDATE direct_tickets SET payment_status=?,payment_verified_by_user_id=?,payment_verified_at=CURRENT_TIMESTAMP,rejection_reason=?,status=?,issued_at=CASE WHEN ?='issued' THEN CURRENT_TIMESTAMP ELSE issued_at END,voided_at=CASE WHEN ?='issued' THEN NULL ELSE CURRENT_TIMESTAMP END,hold_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE order_id=?")
+        .run(input.payment_status, input.verified_by_user_id || null, input.rejection_reason || null, ticketStatus, ticketStatus, ticketStatus, id);
+      this.db.prepare("UPDATE direct_tickets SET payment_reference=COALESCE(?,payment_reference) WHERE order_id=? AND id=(SELECT id FROM direct_tickets WHERE order_id=? ORDER BY created_at ASC, id ASC LIMIT 1)")
+        .run(input.payment_reference || null, id, id);
+      this.db.prepare("UPDATE direct_seats SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT seat_id FROM direct_tickets WHERE order_id=?)").run(input.payment_status === "verified" ? "issued" : "available", id);
+      this.db.prepare("UPDATE payment_attempts SET status=?,transaction_reference=COALESCE(?,transaction_reference),updated_at=CURRENT_TIMESTAMP WHERE order_id=? AND attempt_number=(SELECT MAX(attempt_number) FROM payment_attempts WHERE order_id=?)")
+        .run(input.payment_status, input.payment_reference || null, id, id);
+      return this.directOrderQuery("WHERE o.id = ?", [id])[0];
+    });
+    return update();
+  }
+
+  async releaseExpiredDirectOrderHolds(eventId?: string) {
+    const run = this.db.transaction(() => {
+      const orders = this.db.prepare(`SELECT id FROM direct_orders WHERE status IN ('pending_payment','payment_submitted') AND hold_expires_at IS NOT NULL AND julianday(hold_expires_at) <= julianday('now') ${eventId ? "AND event_id=?" : ""}`).all(...(eventId ? [eventId] : [])) as Array<{ id: string }>;
+      if (!orders.length) return 0;
+      for (const order of orders) {
+        this.db.prepare("UPDATE direct_orders SET status='expired',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(order.id);
+        this.db.prepare("UPDATE direct_tickets SET status='voided',payment_status='expired',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE order_id=? AND status='held'").run(order.id);
+        this.db.prepare("UPDATE direct_seats SET status='available',updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT seat_id FROM direct_tickets WHERE order_id=?) AND NOT EXISTS (SELECT 1 FROM direct_tickets other WHERE other.seat_id=direct_seats.id AND other.status IN ('held','issued','checked_in'))").run(order.id);
+      }
+      return orders.length;
+    });
+    return run();
+  }
+
+  async claimDirectOrderToCustomer(input: { order_id: string; customer_account_id: string; normalized_email?: string; normalized_phone?: string }) {
+    const orderId = String(input.order_id || "").trim();
+    const accountId = String(input.customer_account_id || "").trim();
+    const row = this.db.prepare("SELECT customer_account_id,email,phone FROM direct_orders WHERE id=? LIMIT 1").get(orderId) as { customer_account_id?: string | null; email?: string; phone?: string } | undefined;
+    if (!row) return "not_found" as const;
+    if (row.customer_account_id && row.customer_account_id !== accountId) return "already_claimed" as const;
+    const emailMatches = Boolean(input.normalized_email && String(row.email || "").trim().toLowerCase() === input.normalized_email.trim().toLowerCase());
+    const phoneMatches = Boolean(input.normalized_phone && String(row.phone || "").replace(/\D/g, "") === input.normalized_phone.replace(/\D/g, ""));
+    if (!emailMatches && !phoneMatches) return "contact_mismatch" as const;
+    if (row.customer_account_id === accountId) return "already_claimed" as const;
+    const result = this.db.prepare("UPDATE direct_orders SET customer_account_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND customer_account_id IS NULL").run(accountId, orderId);
+    this.db.prepare("UPDATE direct_tickets SET customer_account_id=? WHERE order_id=? AND customer_account_id IS NULL").run(accountId, orderId);
+    return result.changes > 0 ? "claimed" as const : "already_claimed" as const;
+  }
+
+  async unlinkDirectOrderFromCustomer(orderId: string, customerAccountId?: string | null) {
+    const id = String(orderId || "").trim();
+    const accountId = customerAccountId == null ? "" : String(customerAccountId).trim();
+    const where = accountId ? "id = ? AND customer_account_id = ?" : "id = ? AND customer_account_id IS NOT NULL";
+    const result = this.db.prepare(`UPDATE direct_orders SET customer_account_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE ${where}`).run(...(accountId ? [id, accountId] : [id]));
+    if (result.changes > 0) this.db.prepare("UPDATE direct_tickets SET customer_account_id = NULL WHERE order_id = ?").run(id);
+    return result.changes > 0;
   }
 
   async updateDirectTicketPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
@@ -1480,7 +2244,7 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async releaseExpiredDirectTicketHolds(eventId?: string) {
     const run = this.db.transaction(() => {
-      const rows = this.db.prepare(`SELECT id,seat_id FROM direct_tickets WHERE status='held' AND hold_expires_at IS NOT NULL AND julianday(hold_expires_at) <= julianday('now') ${eventId ? "AND event_id=?" : ""}`).all(...(eventId ? [eventId] : [])) as Array<{ id: string; seat_id: string }>;
+      const rows = this.db.prepare(`SELECT id,seat_id FROM direct_tickets WHERE order_id IS NULL AND status='held' AND hold_expires_at IS NOT NULL AND julianday(hold_expires_at) <= julianday('now') ${eventId ? "AND event_id=?" : ""}`).all(...(eventId ? [eventId] : [])) as Array<{ id: string; seat_id: string }>;
       if (!rows.length) return 0;
       const updateTicket = this.db.prepare("UPDATE direct_tickets SET status='voided',payment_status='expired',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?");
       const releaseSeat = this.db.prepare("UPDATE direct_seats SET status='available',updated_at=CURRENT_TIMESTAMP WHERE id=?");
@@ -1508,8 +2272,8 @@ export class SqliteAppDatabase implements AppDatabase {
       if (!ticket || !["issued", "checked_in"].includes(ticket.status)) return undefined;
       const nextId = generateEntityId("dtkt");
       this.db.prepare("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
-      this.db.prepare(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,payment_reference,status,issued_by_user_id,payment_verified_by_user_id,payment_verified_at,issued_at,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)`)
-        .run(nextId,ticket.event_id,ticket.performance_id,ticket.seat_id,ticket.ticket_class,ticket.holder_name,ticket.buyer_name,ticket.phone,ticket.email,ticket.price_amount,ticket.payment_status,ticket.payment_reference,"issued",issuedByUserId||null,ticket.payment_verified_by_user_id,ticket.payment_verified_at,ticket.source);
+      this.db.prepare(`INSERT INTO direct_tickets (id,event_id,order_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,payment_reference,status,issued_by_user_id,payment_verified_by_user_id,payment_verified_at,issued_at,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)`)
+        .run(nextId,ticket.event_id,ticket.order_id,ticket.customer_account_id,ticket.performance_id,ticket.seat_id,ticket.ticket_class,ticket.holder_name,ticket.buyer_name,ticket.phone,ticket.email,ticket.price_amount,ticket.payment_status,ticket.payment_reference,"issued",issuedByUserId||null,ticket.payment_verified_by_user_id,ticket.payment_verified_at,ticket.source);
       this.db.prepare("UPDATE direct_seats SET status='issued',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(ticket.seat_id);
       return this.directTicketQuery("WHERE t.id = ?", [nextId])[0];
     });

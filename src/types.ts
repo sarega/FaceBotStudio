@@ -322,6 +322,7 @@ export interface Settings {
   event_description: string;
   event_travel: string;
   event_public_page_enabled: string;
+  event_catalog_visible: string;
   event_public_show_seat_availability: string;
   event_public_slug: string;
   event_public_poster_url: string;
@@ -329,6 +330,16 @@ export interface Settings {
   event_public_theme_color: string;
   event_public_summary: string;
   event_public_registration_enabled: string;
+  direct_ticketing_public_enabled: string;
+  customer_ticketing_enabled: string;
+  customer_ticket_max_seats: string;
+  platform_fee_type: string;
+  platform_fee_value: string;
+  platform_fee_payer: string;
+  payment_fee_value: string;
+  tax_rate_percent: string;
+  seller_legal_name: string;
+  billing_document_mode: string;
   event_public_ticketing_mode: string;
   event_public_external_ticket_url: string;
   event_public_ticket_recovery_mode: string;
@@ -536,6 +547,43 @@ export interface PublicEventPageResponse {
   support: {
     bot_enabled: boolean;
   };
+}
+
+export interface PublicEventCatalogEntry {
+  slug: string;
+  name: string;
+  summary: string;
+  poster_url: string;
+  date: string;
+  end_date: string;
+  date_label: string;
+  timezone: string;
+  location: {
+    venue_name: string;
+    address_line: string;
+    compact: string;
+  };
+  organizer: {
+    name: string;
+    logo_url: string;
+  };
+  availability: {
+    state: "open" | "not_started" | "closed" | "full" | "invalid" | "tickets_available" | "tickets_unavailable" | "external";
+    label: string;
+    registration_enabled: boolean;
+    external_ticket_url: string;
+    direct_ticketing_enabled: boolean;
+    customer_checkout_enabled?: boolean;
+  };
+  starting_price: number | null;
+  performance_summary: {
+    count: number;
+    upcoming: Array<{ title: string; starts_at: string; ends_at: string | null }>;
+  };
+}
+
+export interface PublicEventCatalogResponse {
+  events: PublicEventCatalogEntry[];
 }
 
 export interface PublicEventRecoveredRegistrationResponse {

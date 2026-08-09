@@ -1,8 +1,10 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 
 export const SESSION_COOKIE_NAME = "fbs_session";
+export const CUSTOMER_SESSION_COOKIE_NAME = "fbs_customer_session";
 export const CHECKIN_ACCESS_COOKIE_NAME = "fbs_checkin_access";
 export const CSRF_COOKIE_NAME = "fbs_csrf";
+export const CUSTOMER_CSRF_COOKIE_NAME = "fbs_customer_csrf";
 export const ALL_USER_ROLES = ["owner", "admin", "operator", "checker", "viewer"] as const;
 const SESSION_COOKIE_PATH = "/";
 const CHECKIN_ACCESS_COOKIE_PATH = "/api/checkin-access";
@@ -179,6 +181,12 @@ export function getSessionTtlMs() {
   return safeDays * 24 * 60 * 60 * 1000;
 }
 
+export function getCustomerSessionTtlMs() {
+  const ttlDays = Number.parseInt(String(process.env.CUSTOMER_SESSION_TTL_DAYS || "14"), 10);
+  const safeDays = Number.isFinite(ttlDays) && ttlDays > 0 ? Math.min(ttlDays, 90) : 14;
+  return safeDays * 24 * 60 * 60 * 1000;
+}
+
 export function getCheckinAccessSessionTtlMs() {
   const ttlMinutes = Number.parseInt(String(process.env.CHECKIN_ACCESS_SESSION_TTL_MINUTES || "120"), 10);
   const safeMinutes = Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? ttlMinutes : 120;
@@ -245,6 +253,27 @@ export function serializeAdminSessionCookie(token: string, request?: CookieReque
   });
 }
 
+export function serializeCustomerSessionCookie(token: string, request?: CookieRequestLike) {
+  return cookieSerialize(CUSTOMER_SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: shouldUseSecureSessionCookie(request),
+    sameSite: ADMIN_SESSION_SAME_SITE,
+    path: SESSION_COOKIE_PATH,
+    maxAgeSeconds: Math.floor(getCustomerSessionTtlMs() / 1000),
+  });
+}
+
+export function serializeClearedCustomerSessionCookie(request?: CookieRequestLike) {
+  return cookieSerialize(CUSTOMER_SESSION_COOKIE_NAME, "", {
+    httpOnly: true,
+    secure: shouldUseSecureSessionCookie(request),
+    sameSite: ADMIN_SESSION_SAME_SITE,
+    path: SESSION_COOKIE_PATH,
+    maxAgeSeconds: 0,
+    expiresAt: EXPIRED_COOKIE_DATE,
+  });
+}
+
 export function serializeClearedAdminSessionCookie(request?: CookieRequestLike) {
   return cookieSerialize(SESSION_COOKIE_NAME, "", {
     httpOnly: true,
@@ -293,6 +322,27 @@ export function serializeCsrfTokenCookie(token: string, request?: CookieRequestL
     sameSite: CSRF_TOKEN_SAME_SITE,
     path: CSRF_COOKIE_PATH,
     maxAgeSeconds: Math.floor(getSessionTtlMs() / 1000),
+  });
+}
+
+export function serializeCustomerCsrfTokenCookie(token: string, request?: CookieRequestLike) {
+  return cookieSerialize(CUSTOMER_CSRF_COOKIE_NAME, token, {
+    httpOnly: false,
+    secure: shouldUseSecureSessionCookie(request),
+    sameSite: CSRF_TOKEN_SAME_SITE,
+    path: CSRF_COOKIE_PATH,
+    maxAgeSeconds: Math.floor(getCustomerSessionTtlMs() / 1000),
+  });
+}
+
+export function serializeClearedCustomerCsrfTokenCookie(request?: CookieRequestLike) {
+  return cookieSerialize(CUSTOMER_CSRF_COOKIE_NAME, "", {
+    httpOnly: false,
+    secure: shouldUseSecureSessionCookie(request),
+    sameSite: CSRF_TOKEN_SAME_SITE,
+    path: CSRF_COOKIE_PATH,
+    maxAgeSeconds: 0,
+    expiresAt: EXPIRED_COOKIE_DATE,
   });
 }
 

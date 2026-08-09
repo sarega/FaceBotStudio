@@ -84,6 +84,9 @@ import { AgentConsoleScreen } from "./features/agent/components/AgentConsoleScre
 import { AgentSetupScreen } from "./features/agent/components/AgentSetupScreen";
 import { CheckinAccessRoute } from "./features/checkin/components/CheckinAccessRoute";
 import { CheckinScreen } from "./features/checkin/components/CheckinScreen";
+import { CustomerAppScreen } from "./features/customer-account/components/CustomerAppScreen";
+import { CustomerAccountScreen } from "./features/customer-account/components/CustomerAccountScreen";
+import { CustomerCheckoutScreen } from "./features/customer-account/components/CustomerCheckoutScreen";
 import { ContextScreen } from "./features/context/components/ContextScreen";
 import { DirectTicketingScreen } from "./features/direct-ticketing/components/DirectTicketingScreen";
 import { EventWorkspaceScreen } from "./features/event/components/EventWorkspaceScreen";
@@ -93,6 +96,7 @@ import { PublicInboxScreen } from "./features/inbox/components/PublicInboxScreen
 import { OutreachScreen } from "./features/outreach/components/OutreachScreen";
 import { LogsScreen } from "./features/logs/components/LogsScreen";
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
+import { PublicEventCatalog } from "./features/public-event/components/PublicEventCatalog";
 import { RegistrationsScreen } from "./features/registrations/components/RegistrationsScreen";
 import { ReportsScreen } from "./features/reports/components/ReportsScreen";
 import { SettingsScreen } from "./features/settings/components/SettingsScreen";
@@ -2096,6 +2100,7 @@ const INITIAL_SETTINGS: Settings = {
   event_description: "",
   event_travel: "",
   event_public_page_enabled: "0",
+  event_catalog_visible: "0",
   event_public_show_seat_availability: "0",
   event_public_slug: "",
   event_public_poster_url: "",
@@ -2103,6 +2108,16 @@ const INITIAL_SETTINGS: Settings = {
   event_public_theme_color: "#2563eb",
   event_public_summary: "",
   event_public_registration_enabled: "1",
+  direct_ticketing_public_enabled: "0",
+  customer_ticketing_enabled: "0",
+  customer_ticket_max_seats: "6",
+  platform_fee_type: "percent",
+  platform_fee_value: "0",
+  platform_fee_payer: "customer",
+  payment_fee_value: "0",
+  tax_rate_percent: "0",
+  seller_legal_name: "",
+  billing_document_mode: "not_required",
   event_public_ticketing_mode: "inline",
   event_public_external_ticket_url: "",
   event_public_ticket_recovery_mode: "shared_contact",
@@ -2181,6 +2196,7 @@ function getBlankEventScopedSettings() {
     event_description: "",
     event_travel: "",
     event_public_page_enabled: "0",
+    event_catalog_visible: "0",
     event_public_show_seat_availability: "0",
     event_public_slug: "",
     event_public_poster_url: "",
@@ -2188,6 +2204,16 @@ function getBlankEventScopedSettings() {
     event_public_theme_color: "#2563eb",
     event_public_summary: "",
     event_public_registration_enabled: "1",
+    direct_ticketing_public_enabled: "0",
+    customer_ticketing_enabled: "0",
+    customer_ticket_max_seats: "6",
+    platform_fee_type: "percent",
+    platform_fee_value: "0",
+    platform_fee_payer: "customer",
+    payment_fee_value: "0",
+    tax_rate_percent: "0",
+    seller_legal_name: "",
+    billing_document_mode: "not_required",
     event_public_ticketing_mode: "inline",
     event_public_external_ticket_url: "",
     event_public_ticket_recovery_mode: "shared_contact",
@@ -2264,6 +2290,7 @@ function getBlankEventScopedSettings() {
     | "event_description"
     | "event_travel"
     | "event_public_page_enabled"
+    | "event_catalog_visible"
     | "event_public_show_seat_availability"
     | "event_public_slug"
     | "event_public_poster_url"
@@ -2271,6 +2298,16 @@ function getBlankEventScopedSettings() {
     | "event_public_theme_color"
     | "event_public_summary"
     | "event_public_registration_enabled"
+    | "direct_ticketing_public_enabled"
+    | "customer_ticketing_enabled"
+    | "customer_ticket_max_seats"
+    | "platform_fee_type"
+    | "platform_fee_value"
+    | "platform_fee_payer"
+    | "payment_fee_value"
+    | "tax_rate_percent"
+    | "seller_legal_name"
+    | "billing_document_mode"
     | "event_public_ticketing_mode"
     | "event_public_external_ticket_url"
     | "event_public_ticket_recovery_mode"
@@ -2389,6 +2426,7 @@ const ORGANIZER_PROFILE_SETTINGS_KEY_SET = new Set<keyof Settings>(ORGANIZER_PRO
 
 const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_page_enabled",
+  "event_catalog_visible",
   "event_public_show_seat_availability",
   "event_public_slug",
   "event_public_poster_url",
@@ -2396,6 +2434,16 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_theme_color",
   "event_public_summary",
   "event_public_registration_enabled",
+  "direct_ticketing_public_enabled",
+  "customer_ticketing_enabled",
+  "customer_ticket_max_seats",
+  "platform_fee_type",
+  "platform_fee_value",
+  "platform_fee_payer",
+  "payment_fee_value",
+  "tax_rate_percent",
+  "seller_legal_name",
+  "billing_document_mode",
   "event_public_ticketing_mode",
   "event_public_external_ticket_url",
   "event_public_ticket_recovery_mode",
@@ -2575,6 +2623,10 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_page_enabled === "string" && data.event_public_page_enabled.trim()
         ? data.event_public_page_enabled.trim()
         : INITIAL_SETTINGS.event_public_page_enabled,
+    event_catalog_visible:
+      typeof data.event_catalog_visible === "string" && data.event_catalog_visible.trim()
+        ? data.event_catalog_visible.trim()
+        : INITIAL_SETTINGS.event_catalog_visible,
     event_public_show_seat_availability:
       typeof data.event_public_show_seat_availability === "string" && data.event_public_show_seat_availability.trim()
         ? data.event_public_show_seat_availability.trim()
@@ -2600,6 +2652,44 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_registration_enabled === "string" && data.event_public_registration_enabled.trim()
         ? data.event_public_registration_enabled.trim()
         : INITIAL_SETTINGS.event_public_registration_enabled,
+    direct_ticketing_public_enabled:
+      typeof data.direct_ticketing_public_enabled === "string" && data.direct_ticketing_public_enabled.trim()
+        ? data.direct_ticketing_public_enabled.trim()
+        : INITIAL_SETTINGS.direct_ticketing_public_enabled,
+    customer_ticketing_enabled:
+      typeof data.customer_ticketing_enabled === "string" && data.customer_ticketing_enabled.trim()
+        ? data.customer_ticketing_enabled.trim()
+        : INITIAL_SETTINGS.customer_ticketing_enabled,
+    customer_ticket_max_seats:
+      typeof data.customer_ticket_max_seats === "string" && data.customer_ticket_max_seats.trim()
+        ? data.customer_ticket_max_seats.trim()
+        : INITIAL_SETTINGS.customer_ticket_max_seats,
+    platform_fee_type:
+      typeof data.platform_fee_type === "string" && data.platform_fee_type.trim()
+        ? data.platform_fee_type.trim()
+        : INITIAL_SETTINGS.platform_fee_type,
+    platform_fee_value:
+      typeof data.platform_fee_value === "string" && data.platform_fee_value.trim()
+        ? data.platform_fee_value.trim()
+        : INITIAL_SETTINGS.platform_fee_value,
+    platform_fee_payer:
+      typeof data.platform_fee_payer === "string" && data.platform_fee_payer.trim()
+        ? data.platform_fee_payer.trim()
+        : INITIAL_SETTINGS.platform_fee_payer,
+    payment_fee_value:
+      typeof data.payment_fee_value === "string" && data.payment_fee_value.trim()
+        ? data.payment_fee_value.trim()
+        : INITIAL_SETTINGS.payment_fee_value,
+    tax_rate_percent:
+      typeof data.tax_rate_percent === "string" && data.tax_rate_percent.trim()
+        ? data.tax_rate_percent.trim()
+        : INITIAL_SETTINGS.tax_rate_percent,
+    seller_legal_name:
+      typeof data.seller_legal_name === "string" ? data.seller_legal_name : INITIAL_SETTINGS.seller_legal_name,
+    billing_document_mode:
+      typeof data.billing_document_mode === "string" && data.billing_document_mode.trim()
+        ? data.billing_document_mode.trim()
+        : INITIAL_SETTINGS.billing_document_mode,
     event_public_ticketing_mode:
       data.event_public_ticketing_mode === "external" ? "external" : "inline",
     event_public_external_ticket_url:
@@ -2853,6 +2943,16 @@ function buildPublicEventSlug(value: string) {
 
 function getPublicEventSlugFromPath(pathname: string) {
   const match = String(pathname || "").match(/^\/events\/([^/?#]+)\/?$/i);
+  if (!match?.[1]) return "";
+  try {
+    return decodeURIComponent(match[1]).trim();
+  } catch {
+    return match[1].trim();
+  }
+}
+
+function getCustomerCheckoutSlugFromPath(pathname: string) {
+  const match = String(pathname || "").match(/^\/events\/([^/?#]+)\/checkout\/?$/i);
   if (!match?.[1]) return "";
   try {
     return decodeURIComponent(match[1]).trim();
@@ -3287,8 +3387,13 @@ export default function App() {
   testPendingImagesRef.current = testPendingImages;
 
   const currentPathname = typeof window !== "undefined" ? window.location.pathname : "/";
-  const publicEventSlug = getPublicEventSlugFromPath(currentPathname);
+  const customerCheckoutSlug = getCustomerCheckoutSlugFromPath(currentPathname);
+  const isCustomerCheckoutRoute = Boolean(customerCheckoutSlug);
+  const publicEventSlug = isCustomerCheckoutRoute ? "" : getPublicEventSlugFromPath(currentPathname);
   const isPublicEventRoute = Boolean(publicEventSlug);
+  const isPublicEventCatalogRoute = currentPathname === "/events" || currentPathname === "/events/";
+  const isCustomerAccountRoute = currentPathname === "/account" || currentPathname.startsWith("/account/");
+  const isCustomerAppRoute = currentPathname === "/app" || currentPathname.startsWith("/app/");
   const role = authUser?.role;
   const canEditSettings = role === "owner" || role === "admin";
   const canRunTest = role === "owner" || role === "admin" || role === "operator";
@@ -4916,6 +5021,13 @@ export default function App() {
         return;
       }
 
+      if (isPublicEventCatalogRoute || isCustomerAccountRoute || isCustomerAppRoute || isCustomerCheckoutRoute) {
+        setAuthStatus("unauthenticated");
+        setAuthUser(null);
+        setLoading(false);
+        return;
+      }
+
       if (checkinAccessMode) {
         setLoading(false);
         setAuthStatus("unauthenticated");
@@ -4949,7 +5061,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [checkinAccessMode, publicEventSlug]);
+  }, [checkinAccessMode, isCustomerAccountRoute, isCustomerAppRoute, isCustomerCheckoutRoute, isPublicEventCatalogRoute, publicEventSlug]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !selectedEventId || publicEventSlug || checkinAccessMode) return;
@@ -4957,10 +5069,10 @@ export default function App() {
   }, [authStatus, selectedEventId, activeTab, eventWorkspaceView, publicEventSlug, checkinAccessMode]);
 
   useEffect(() => {
-    if (publicEventSlug || checkinAccessMode || authStatus !== "authenticated") return;
+    if (isPublicEventCatalogRoute || isCustomerAccountRoute || isCustomerAppRoute || isCustomerCheckoutRoute || publicEventSlug || checkinAccessMode || authStatus !== "authenticated") return;
 
     void loadAppData();
-  }, [authStatus, role, checkinAccessMode, publicEventSlug]);
+  }, [authStatus, isCustomerAccountRoute, isCustomerAppRoute, isCustomerCheckoutRoute, isPublicEventCatalogRoute, role, checkinAccessMode, publicEventSlug]);
 
   useEffect(() => {
     if (publicEventSlug || authStatus !== "authenticated" || !selectedEventId) return;
@@ -9128,6 +9240,22 @@ export default function App() {
         latestResultToneClass={latestResultToneClass}
       />
     );
+  }
+
+  if (isPublicEventCatalogRoute) {
+    return <PublicEventCatalog />;
+  }
+
+  if (isCustomerCheckoutRoute) {
+    return <CustomerCheckoutScreen slug={customerCheckoutSlug} />;
+  }
+
+  if (isCustomerAppRoute) {
+    return <CustomerAppScreen />;
+  }
+
+  if (isCustomerAccountRoute) {
+    return <CustomerAccountScreen />;
   }
 
   if (!isPublicEventRoute && authStatus === "checking") {

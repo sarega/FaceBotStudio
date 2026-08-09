@@ -28,6 +28,7 @@ import type { InboundImageReference } from "./backend/runtime/inboundImage";
 import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup, buildLineWebhookDedupKey, canUseLineWebhookQueue, type LineInboundJob } from "./backend/runtime/lineQueue";
 import { enqueueTelegramInboundJob, startEmbeddedTelegramWorker, acquireTelegramWebhookDedup, buildTelegramWebhookDedupKey, canUseTelegramWebhookQueue, type TelegramInboundJob } from "./backend/runtime/telegramQueue";
 import { enqueueWhatsAppInboundJob, startEmbeddedWhatsAppWorker, acquireWhatsAppWebhookDedup, buildWhatsAppWebhookDedupKey, canUseWhatsAppWebhookQueue, type WhatsAppInboundJob } from "./backend/runtime/whatsappQueue";
+import { startEmbeddedNotificationWorker } from "./backend/runtime/notificationWorker";
 import { createRateLimitMiddleware, resetRateLimitCounter } from "./backend/runtime/rateLimit";
 import { pingRedis } from "./backend/runtime/redis";
 import { resolveStartupSecurityConfig } from "./backend/runtime/startupSecurity";
@@ -46,10 +47,13 @@ import {
 } from "./backend/channelPlatforms";
 import {
   ALL_USER_ROLES,
+  CUSTOMER_CSRF_COOKIE_NAME,
+  CUSTOMER_SESSION_COOKIE_NAME,
   CSRF_COOKIE_NAME,
   CHECKIN_ACCESS_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   createSessionToken,
+  getCustomerSessionTtlMs,
   getCheckinAccessSessionTtlMs,
   getSessionTtlMs,
   hashPassword,
@@ -59,6 +63,10 @@ import {
   passwordHashNeedsRehash,
   parseCookies,
   serializeAdminSessionCookie,
+  serializeClearedCustomerCsrfTokenCookie,
+  serializeClearedCustomerSessionCookie,
+  serializeCustomerCsrfTokenCookie,
+  serializeCustomerSessionCookie,
   serializeCheckinAccessSessionCookie,
   serializeCsrfTokenCookie,
   serializeClearedCheckinAccessSessionCookie,
@@ -67,6 +75,15 @@ import {
   verifyPasswordWithMetadata,
   type UserRole,
 } from "./backend/auth";
+import {
+  createCustomerAccountToken,
+  getCustomerAccountTokenTtlMs,
+  isValidCustomerEmail,
+  isValidCustomerPhone,
+  normalizeCustomerEmail,
+  normalizeCustomerPhone,
+  renderCustomerAccountEmail,
+} from "./backend/customerAuth";
 import {
   formatStoredDateForDisplay,
   formatStoredDateRangeForDisplay,
@@ -88,7 +105,9 @@ import {
   type AuthUserRow,
   type ChannelAccountRow,
   type ChannelPlatform,
+  type CustomerAccountRow,
   type CreateMessageAttachmentInput,
+  type DirectOrderRow,
   type DirectTicketRow,
   type EventDocumentChunkEmbeddingRow,
   type EventStatus,
@@ -122,6 +141,8 @@ import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapU
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor } from "./src/lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries } from "./src/lib/publicEventPageLayout";
+import { hasPublicCatalogAction, normalizePublicExternalTicketUrl, resolvePublicCatalogAvailability } from "./backend/publicCatalog";
+import { calculateOrderPricing, parseFeeType, parseMoney } from "./backend/commerce";
 
 dotenv.config();
 
@@ -167,6 +188,10 @@ const JSON_BODY_LIMIT = String(process.env.JSON_BODY_LIMIT || "256kb").trim() ||
 const CSRF_ALLOWED_ORIGINS_RAW = String(process.env.CSRF_ALLOWED_ORIGINS || "").trim();
 const LOGIN_IP_RATE_LIMIT_NAME = "auth-login-ip";
 const LOGIN_USERNAME_RATE_LIMIT_NAME = "auth-login-username";
+const CUSTOMER_LOGIN_IP_RATE_LIMIT_NAME = "customer-login-ip";
+const CUSTOMER_LOGIN_EMAIL_RATE_LIMIT_NAME = "customer-login-email";
+const CUSTOMER_ACCOUNT_IP_RATE_LIMIT_NAME = "customer-account-ip";
+const CUSTOMER_ACCOUNT_EMAIL_RATE_LIMIT_NAME = "customer-account-email";
 const ALLOWED_SETTINGS_KEY_SET = new Set<string>([...EVENT_SETTING_KEYS, ...GLOBAL_SETTING_KEYS]);
 const CSRF_HEADER_NAME = "x-csrf-token";
 
@@ -345,6 +370,12 @@ type AuthContext = {
   user: AuthUserRow;
 };
 
+type CustomerAuthContext = {
+  sessionId: string;
+  tokenHash: string;
+  account: CustomerAccountRow;
+};
+
 type CheckinAccessContext = {
   sessionId: string;
   checkinSessionId: string;
@@ -377,6 +408,7 @@ type EventScopeOptions = {
 
 type AuthenticatedRequest = Request & {
   auth?: AuthContext;
+  customer?: CustomerAuthContext;
   checkinAccess?: CheckinAccessContext;
   eventScope?: EventScopeContext;
 };
@@ -2442,6 +2474,18 @@ function getLoginUsernameRateLimitScope(req: Request) {
   return buildRateLimitKey(getLoginUsernameFromRequest(req));
 }
 
+function getCustomerEmailFromRequest(req: Request) {
+  return normalizeCustomerEmail(readObjectBody(req).email) || "unknown";
+}
+
+function getCustomerLoginIpRateLimitScope(req: Request) {
+  return buildRateLimitKey(getRequestIp(req) || "unknown");
+}
+
+function getCustomerEmailRateLimitScope(req: Request) {
+  return buildRateLimitKey(getCustomerEmailFromRequest(req));
+}
+
 function getRateLimitTokenHash(rawToken: unknown) {
   const normalized = String(rawToken ?? "").trim();
   if (!normalized) return "missing";
@@ -2561,12 +2605,19 @@ function getRequestHostOrigin(req: Request) {
 
 function hasSessionCookieContext(req: Request) {
   const cookies = parseCookies(req.headers.cookie);
-  return cookies.has(SESSION_COOKIE_NAME) || cookies.has(CHECKIN_ACCESS_COOKIE_NAME);
+  return cookies.has(SESSION_COOKIE_NAME)
+    || cookies.has(CUSTOMER_SESSION_COOKIE_NAME)
+    || cookies.has(CHECKIN_ACCESS_COOKIE_NAME);
 }
 
 function hasAdminSessionCookie(req: Request) {
   const cookies = parseCookies(req.headers.cookie);
   return cookies.has(SESSION_COOKIE_NAME);
+}
+
+function hasCustomerSessionCookie(req: Request) {
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies.has(CUSTOMER_SESSION_COOKIE_NAME);
 }
 
 function isCsrfCandidateRequest(req: Request) {
@@ -2583,7 +2634,12 @@ function isCsrfTokenRequiredRequest(req: Request) {
   const requestPath = String(req.path || "");
   if (requestPath.startsWith("/api/auth/login")) return false;
   if (requestPath.startsWith("/api/checkin-access")) return false;
-  return hasAdminSessionCookie(req);
+  if (requestPath.startsWith("/api/customer/")) return hasCustomerSessionCookie(req);
+  return hasAdminSessionCookie(req) || hasCustomerSessionCookie(req);
+}
+
+function usesCustomerCsrfCookie(req: Request) {
+  return String(req.path || "").startsWith("/api/customer/") || (!hasAdminSessionCookie(req) && hasCustomerSessionCookie(req));
 }
 
 function readCsrfTokenHeader(req: Request) {
@@ -2612,6 +2668,7 @@ async function recordSecurityEvent(req: AuthenticatedRequest, action: string, me
       target_type: "security",
       target_id: String(req.path || "").slice(0, 200) || null,
       metadata: {
+        customer_account_id: req.customer?.account.id || null,
         ip: getRequestIp(req),
         method: req.method,
         user_agent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
@@ -2648,7 +2705,7 @@ async function csrfProtectionMiddleware(req: AuthenticatedRequest, res: Response
 
   if (isCsrfTokenRequiredRequest(req)) {
     const cookies = parseCookies(req.headers.cookie);
-    const csrfCookieToken = cookies.get(CSRF_COOKIE_NAME) || "";
+    const csrfCookieToken = cookies.get(usesCustomerCsrfCookie(req) ? CUSTOMER_CSRF_COOKIE_NAME : CSRF_COOKIE_NAME) || "";
     const csrfHeaderToken = readCsrfTokenHeader(req);
     if (!hasMatchingCsrfTokens(csrfCookieToken, csrfHeaderToken)) {
       await recordSecurityEvent(req, "security.csrf_token_blocked", {
@@ -2668,13 +2725,19 @@ function ensureCsrfCookieMiddleware(req: AuthenticatedRequest, res: Response, ne
   if (!String(req.path || "").startsWith("/api/")) {
     return next();
   }
-  if (!req.auth?.user) {
+  if (!req.auth?.user && !req.customer?.account) {
     return next();
   }
 
-  const existingToken = parseCookies(req.headers.cookie).get(CSRF_COOKIE_NAME);
+  const customerRequest = Boolean(req.customer?.account) || usesCustomerCsrfCookie(req);
+  const csrfCookieName = customerRequest ? CUSTOMER_CSRF_COOKIE_NAME : CSRF_COOKIE_NAME;
+  const existingToken = parseCookies(req.headers.cookie).get(csrfCookieName);
   if (!existingToken) {
-    setCsrfCookie(res, createSessionToken(), req);
+    if (customerRequest) {
+      setCustomerCsrfCookie(res, createSessionToken(), req);
+    } else {
+      setCsrfCookie(res, createSessionToken(), req);
+    }
   }
   return next();
 }
@@ -2822,16 +2885,32 @@ function setSessionCookie(res: Response, token: string, req: Request) {
   appendSetCookieHeader(res, serializeAdminSessionCookie(token, req));
 }
 
+function setCustomerSessionCookie(res: Response, token: string, req: Request) {
+  appendSetCookieHeader(res, serializeCustomerSessionCookie(token, req));
+}
+
 function clearSessionCookie(res: Response, req: Request) {
   appendSetCookieHeader(res, serializeClearedAdminSessionCookie(req));
+}
+
+function clearCustomerSessionCookie(res: Response, req: Request) {
+  appendSetCookieHeader(res, serializeClearedCustomerSessionCookie(req));
 }
 
 function setCsrfCookie(res: Response, token: string, req: Request) {
   appendSetCookieHeader(res, serializeCsrfTokenCookie(token, req));
 }
 
+function setCustomerCsrfCookie(res: Response, token: string, req: Request) {
+  appendSetCookieHeader(res, serializeCustomerCsrfTokenCookie(token, req));
+}
+
 function clearCsrfCookie(res: Response, req: Request) {
   appendSetCookieHeader(res, serializeClearedCsrfTokenCookie(req));
+}
+
+function clearCustomerCsrfCookie(res: Response, req: Request) {
+  appendSetCookieHeader(res, serializeClearedCustomerCsrfTokenCookie(req));
 }
 
 function setCheckinAccessCookie(res: Response, token: string, req: Request, expiresAt?: string) {
@@ -2888,6 +2967,28 @@ function toPublicAuthUser(user: AuthUserRow) {
   };
 }
 
+function toPublicCustomerAccount(account: CustomerAccountRow) {
+  return {
+    id: account.id,
+    email: account.email,
+    email_verified_at: account.email_verified_at,
+    first_name: account.first_name,
+    last_name: account.last_name,
+    phone: account.phone,
+    address_line1: account.address_line1,
+    address_line2: account.address_line2,
+    district: account.district,
+    subdistrict: account.subdistrict,
+    province: account.province,
+    postal_code: account.postal_code,
+    country: account.country,
+    status: account.status,
+    last_login_at: account.last_login_at,
+    created_at: account.created_at,
+    updated_at: account.updated_at,
+  };
+}
+
 async function attachSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try {
     const cookies = parseCookies(req.headers.cookie);
@@ -2914,6 +3015,35 @@ async function attachSession(req: AuthenticatedRequest, res: Response, next: Nex
   } catch (error) {
     console.error("Failed to attach session:", error);
     return res.status(500).json({ error: "Failed to validate session" });
+  }
+}
+
+async function attachCustomerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  try {
+    const cookies = parseCookies(req.headers.cookie);
+    const sessionToken = cookies.get(CUSTOMER_SESSION_COOKIE_NAME);
+    if (!sessionToken) {
+      return next();
+    }
+
+    const tokenHash = hashSessionToken(sessionToken);
+    const session = await appDb.getCustomerSessionWithAccount(tokenHash);
+    if (!session || session.account.status === "disabled") {
+      clearCustomerSessionCookie(res, req);
+      clearCustomerCsrfCookie(res, req);
+      return next();
+    }
+
+    req.customer = {
+      sessionId: session.session_id,
+      tokenHash,
+      account: session.account,
+    };
+    await appDb.touchCustomerSession(session.session_id);
+    return next();
+  } catch (error) {
+    console.error("Failed to attach customer session:", error);
+    return res.status(500).json({ error: "Failed to validate customer session" });
   }
 }
 
@@ -2978,6 +3108,28 @@ function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunctio
     reason: "missing_session",
   });
   return res.status(401).json({ error: "Authentication required" });
+}
+
+function requireCustomerAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  if (!isCustomerAppEnabled()) {
+    return res.status(404).json({ error: "Not found" });
+  }
+  if (req.customer?.account) {
+    return next();
+  }
+  void recordSecurityEvent(req, "security.customer_auth_required_denied", {
+    reason: "missing_customer_session",
+  });
+  return res.status(401).json({ error: "Customer authentication required" });
+}
+
+function requireVerifiedCustomer(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  const result = requireCustomerAuth(req, res, () => undefined);
+  if (result !== undefined) return result;
+  if (!isVerifiedCustomer(req.customer?.account)) {
+    return res.status(403).json({ error: "Verified customer account required" });
+  }
+  return next();
 }
 
 function requireRoles(allowedRoles: UserRole[]) {
@@ -3120,6 +3272,37 @@ function buildEmailStatusResponse(eventId?: string) {
     errorMessage: config.errorMessage,
     lastTestResult: eventId ? (adminEmailTestResults.get(eventId) || null) : null,
   };
+}
+
+async function queueCustomerAccountEmail(
+  account: CustomerAccountRow,
+  kind: "email_verification" | "password_reset",
+  rawToken: string,
+  tokenId: string,
+) {
+  const emailConfig = getEmailConfig();
+  const payload = renderCustomerAccountEmail({
+    kind,
+    appUrl: emailConfig.appUrl,
+    rawToken,
+    firstName: account.first_name,
+    supportEmail: emailConfig.replyToAddress,
+  });
+  return appDb.enqueueNotificationDelivery({
+    channel: "email",
+    kind: kind === "email_verification" ? "customer.email_verification" : "customer.password_reset",
+    recipient: account.email,
+    recipient_snapshot: JSON.stringify({
+      email: account.email,
+      first_name: account.first_name,
+      last_name: account.last_name,
+    }),
+    related_type: "customer_account",
+    related_id: account.id,
+    payload_json: JSON.stringify(payload),
+    idempotency_key: `customer:${kind}:${account.id}:${tokenId}`,
+    provider: emailConfig.provider,
+  });
 }
 
 function normalizePublicSlug(rawValue: unknown) {
@@ -4135,6 +4318,88 @@ async function buildPublicEventPagePayload(
     },
     support: {
       bot_enabled: isTruthySetting(settings.event_public_bot_enabled ?? "1"),
+    },
+  };
+}
+
+async function buildPublicEventCatalogEntry(
+  event: Awaited<ReturnType<typeof appDb.getEventById>>,
+  settings: Record<string, string>,
+) {
+  if (!event || event.effective_status !== "active" || !isTruthySetting(settings.event_public_page_enabled ?? "0") || !isTruthySetting(settings.event_catalog_visible ?? "0")) {
+    return null;
+  }
+
+  const publicSlug = resolveEnglishPublicSlug({
+    customSlug: settings.event_public_slug,
+    eventName: String(settings.event_name || event.name || ""),
+    eventSlug: event.slug,
+    eventId: event.id,
+  });
+  if (!publicSlug) return null;
+
+  const externalTicketUrl = settings.event_public_ticketing_mode === "external"
+    ? normalizePublicExternalTicketUrl(settings.event_public_external_ticket_url)
+    : "";
+  const registrationEnabled = settings.event_public_ticketing_mode !== "external"
+    && isTruthySetting(settings.event_public_registration_enabled ?? "1");
+  const directTicketingEnabled = isPublicDirectTicketingEnabled(settings);
+  if (!hasPublicCatalogAction({ registrationEnabled, externalTicketUrl, directTicketingEnabled })) return null;
+
+  const [organizerProfile, directPerformances, directSeats] = await Promise.all([
+    appDb.getOrganizerProfile(event.organizer_id),
+    directTicketingEnabled ? appDb.listDirectPerformances(event.id) : Promise.resolve([]),
+    directTicketingEnabled ? appDb.listDirectSeats(event.id) : Promise.resolve([]),
+  ]);
+  const activePerformances = directPerformances.filter((performance) => performance.is_active);
+  const availableSeats = directSeats.filter((seat) => seat.status === "available" && seat.allocation_status === "allocated");
+  const location = buildEventLocationSummaryFromSettings(settings);
+  const organizer = buildOrganizerProfileResponse(organizerProfile, settings, event.organizer_id, event.organizer_name || "");
+  const availability = resolvePublicCatalogAvailability({
+    registrationEnabled,
+    registrationAvailability: event.registration_availability || getEventState(settings).registrationStatus,
+    externalTicketUrl,
+    directTicketingEnabled,
+    availableSeatCount: availableSeats.length,
+  });
+  const prices = availableSeats
+    .map((seat) => Number(seat.face_value))
+    .filter((price) => Number.isFinite(price) && price >= 0);
+
+  return {
+    slug: publicSlug,
+    name: String(settings.event_name || event.name || "").trim() || event.name,
+    summary: resolvePublicSummary(settings.event_public_summary, settings.event_description),
+    poster_url: String(settings.event_public_poster_url || "").trim(),
+    date: String(settings.event_date || "").trim(),
+    end_date: String(settings.event_end_date || "").trim(),
+    date_label: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
+    timezone: normalizeTimeZone(settings.event_timezone),
+    location: {
+      venue_name: location.venueName,
+      address_line: location.addressLine,
+      compact: location.compact,
+    },
+    organizer: {
+      name: organizer.display_name,
+      logo_url: organizer.logo_url,
+    },
+    availability: {
+      state: availability.state,
+      label: availability.label,
+      registration_enabled: registrationEnabled,
+      external_ticket_url: externalTicketUrl,
+      direct_ticketing_enabled: directTicketingEnabled,
+      customer_checkout_enabled: isCustomerPaidCheckoutEnabled(settings),
+    },
+    starting_price: prices.length > 0 ? Math.min(...prices) : null,
+    performance_summary: {
+      count: activePerformances.length,
+      upcoming: activePerformances.slice(0, 3).map((performance) => ({
+        title: performance.title,
+        starts_at: performance.starts_at,
+        ends_at: performance.ends_at,
+      })),
     },
   };
 }
@@ -8748,6 +9013,28 @@ async function recordAudit(
   });
 }
 
+async function recordCustomerAudit(
+  req: AuthenticatedRequest,
+  action: string,
+  targetType: string,
+  targetId: string,
+  customerAccountId: string,
+  metadata?: Record<string, unknown>,
+) {
+  await appDb.recordAuditLog({
+    actor_user_id: null,
+    action,
+    target_type: targetType,
+    target_id: targetId,
+    metadata: {
+      customer_account_id: customerAccountId,
+      ...metadata,
+      ip: getRequestIp(req),
+      user_agent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
+    },
+  });
+}
+
 function buildOutreachTargetUpdate(
   target: OutreachTargetRow,
   overrides: Partial<Pick<UpdateOutreachTargetInput, "status" | "delivery_mode" | "next_follow_up_at" | "outcome_note" | "assigned_user_id">> = {},
@@ -9652,11 +9939,108 @@ function isTruthySetting(value: unknown) {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+function isCustomerAppEnabled() {
+  return isTruthySetting(process.env.CUSTOMER_APP_ENABLED ?? "0");
+}
+
+function isCustomerAccountRegistrationEnabled() {
+  return isCustomerAppEnabled() && isTruthySetting(process.env.CUSTOMER_ACCOUNT_REGISTRATION_ENABLED ?? "0");
+}
+
 // Direct allocation is an internal workflow until the public seat-selection
 // experience is explicitly enabled for an event and the deployment.
 function isPublicDirectTicketingEnabled(settings?: Record<string, string>) {
   return isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")
     && isTruthySetting(settings?.direct_ticketing_public_enabled ?? "0");
+}
+
+function isCustomerPaidCheckoutEnabled(settings?: Record<string, string>) {
+  return isCustomerAppEnabled()
+    && isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")
+    && isTruthySetting(settings?.direct_ticketing_public_enabled ?? "0")
+    && isTruthySetting(settings?.customer_ticketing_enabled ?? "0");
+}
+
+function isVerifiedCustomer(account?: CustomerAccountRow | null) {
+  return Boolean(account && account.status === "active" && account.email_verified_at);
+}
+
+function serializeCustomerRegistration(registration: RegistrationRow) {
+  return {
+    id: registration.id,
+    event_id: registration.event_id || null,
+    first_name: registration.first_name,
+    last_name: registration.last_name,
+    phone: registration.phone,
+    email: registration.email,
+    timestamp: registration.timestamp,
+    status: registration.status,
+    ticket: buildTicketArtifactUrls(registration.id),
+  };
+}
+
+function serializeCustomerOrder(order: DirectOrderRow, includePaymentProof = false) {
+  return {
+    id: order.id,
+    event_id: order.event_id,
+    performance_id: order.performance_id,
+    buyer_name: order.buyer_name,
+    currency: order.currency,
+    subtotal_amount: order.subtotal_amount,
+    platform_fee_amount: order.platform_fee_amount,
+    payment_fee_amount: order.payment_fee_amount,
+    tax_amount: order.tax_amount,
+    discount_amount: order.discount_amount,
+    total_amount: order.total_amount,
+    fee_rule_version: order.fee_rule_version,
+    tax_snapshot_json: order.tax_snapshot_json,
+    status: order.status,
+    payment_reference: order.payment_reference,
+    payment_proof_submitted_at: order.payment_proof_submitted_at,
+    rejection_reason: order.rejection_reason,
+    hold_expires_at: order.hold_expires_at,
+    billing_document_status: order.billing_document_status,
+    billing_document_number: order.billing_document_number,
+    created_at: order.created_at,
+    updated_at: order.updated_at,
+    performance_code: order.performance_code,
+    performance_title: order.performance_title,
+    performance_starts_at: order.performance_starts_at,
+    performance_ends_at: order.performance_ends_at,
+    payment_proof_mime: includePaymentProof ? order.payment_proof_mime : Boolean(order.payment_proof_mime),
+    tickets: order.tickets.map((ticket) => ({
+      id: ticket.id,
+      performance_id: ticket.performance_id,
+      ticket_class: ticket.ticket_class,
+      holder_name: ticket.holder_name,
+      price_amount: ticket.price_amount,
+      payment_status: ticket.payment_status,
+      status: ticket.status,
+      delivery: buildDirectTicketDelivery(ticket),
+      zone: ticket.zone,
+      row_label: ticket.row_label,
+      seat_label: ticket.seat_label,
+    })),
+  };
+}
+
+function buildCustomerOrderPricing(settings: Record<string, string>, seatPrices: number[]) {
+  return calculateOrderPricing({
+    seatPrices,
+    feeEnabled: isTruthySetting(process.env.PLATFORM_FEES_ENABLED ?? "0"),
+    feeType: parseFeeType(settings.platform_fee_type),
+    feeValue: parseMoney(settings.platform_fee_value),
+    taxRatePercent: parseMoney(settings.tax_rate_percent),
+    paymentFeeValue: parseMoney(settings.payment_fee_value),
+  });
+}
+
+function buildOrderSellerSnapshot(settings: Record<string, string>, event: { organizer_name?: string | null }) {
+  return JSON.stringify({
+    legal_name: String(settings.seller_legal_name || "").trim() || String(event.organizer_name || "").trim(),
+    tax_mode: isTruthySetting(process.env.BILLING_DOCUMENTS_ENABLED ?? "0") ? String(settings.billing_document_mode || "not_required") : "not_required",
+    captured_at: new Date().toISOString(),
+  });
 }
 
 function looksLikeEmailAddress(value: string) {
@@ -11898,6 +12282,7 @@ async function startServer() {
     await startEmbeddedWhatsAppWorker(processWhatsAppInboundJob, { enabled: true });
     await startEmbeddedTelegramWorker(processTelegramInboundJob, { enabled: true });
     await startEmbeddedEmbeddingWorker(processEmbeddingJob, { enabled: true });
+    startEmbeddedNotificationWorker(appDb, { enabled: true });
   }
 
   if (!RUN_WEB_SERVER) {
@@ -11962,6 +12347,7 @@ async function startServer() {
   app.use("/uploads", express.static(PUBLIC_UPLOADS_ROOT_DIR));
   app.use(express.static(path.join(__dirname, "public")));
   app.use(attachSession);
+  app.use(attachCustomerSession);
   app.use("/api/checkin-access", attachCheckinAccessSession);
   app.use(ensureCsrfCookieMiddleware);
   app.use(csrfProtectionMiddleware);
@@ -11996,6 +12382,34 @@ async function startServer() {
         retry_after_seconds: retryAfterSeconds,
       });
     },
+  });
+  const customerLoginIpRateLimit = createRateLimitMiddleware({
+    name: CUSTOMER_LOGIN_IP_RATE_LIMIT_NAME,
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    keyFn: (req) => getCustomerLoginIpRateLimitScope(req),
+    errorMessage: "Too many customer login attempts from this IP. Please wait and try again.",
+  });
+  const customerLoginEmailRateLimit = createRateLimitMiddleware({
+    name: CUSTOMER_LOGIN_EMAIL_RATE_LIMIT_NAME,
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    keyFn: (req) => getCustomerEmailRateLimitScope(req),
+    errorMessage: "Too many customer login attempts for this email. Please wait and try again.",
+  });
+  const customerAccountIpRateLimit = createRateLimitMiddleware({
+    name: CUSTOMER_ACCOUNT_IP_RATE_LIMIT_NAME,
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    keyFn: (req) => getCustomerLoginIpRateLimitScope(req),
+    errorMessage: "Too many customer account requests. Please wait and try again.",
+  });
+  const customerAccountEmailRateLimit = createRateLimitMiddleware({
+    name: CUSTOMER_ACCOUNT_EMAIL_RATE_LIMIT_NAME,
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    keyFn: (req) => getCustomerEmailRateLimitScope(req),
+    errorMessage: "Too many customer account requests for this email. Please wait and try again.",
   });
   const checkinAccessIpRateLimit = createRateLimitMiddleware({
     name: "checkin-access-ip",
@@ -12125,6 +12539,443 @@ async function startServer() {
       console.error("Health check failed:", error);
       res.status(500).json({ status: "error", time: new Date().toISOString(), database: appDb.driver, runtime: APP_RUNTIME || "all" });
     }
+  });
+
+  app.post("/api/customer/account/register", customerAccountIpRateLimit, customerAccountEmailRateLimit, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAccountRegistrationEnabled()) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const email = readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 });
+      const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
+      const firstName = readRequiredString(body, "first_name", issues, { label: "First name", maxLength: 120 });
+      const lastName = readRequiredString(body, "last_name", issues, { label: "Last name", maxLength: 120 });
+      const phone = readRequiredString(body, "phone", issues, { label: "Phone", maxLength: 40 });
+      const acceptedTerms = readBooleanWithDefault(body, "accept_terms", false, issues);
+      const acceptedPrivacy = readBooleanWithDefault(body, "accept_privacy", false, issues);
+
+      if (email && !isValidCustomerEmail(email)) {
+        issues.push({ field: "email", message: "Enter a valid email address" });
+      }
+      if (password && password.length < 8) {
+        issues.push({ field: "password", message: "Password must be at least 8 characters" });
+      }
+      if (phone && !isValidCustomerPhone(phone)) {
+        issues.push({ field: "phone", message: "Enter a valid phone number" });
+      }
+      if (!acceptedTerms) {
+        issues.push({ field: "accept_terms", message: "Terms acceptance is required" });
+      }
+      if (!acceptedPrivacy) {
+        issues.push({ field: "accept_privacy", message: "Privacy notice acceptance is required" });
+      }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const normalizedEmail = normalizeCustomerEmail(email);
+      const normalizedPhone = normalizeCustomerPhone(phone);
+      const account = await appDb.createCustomerAccount({
+        email: email.trim(),
+        normalized_email: normalizedEmail,
+        password_hash: hashPassword(password),
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        phone: phone.trim(),
+        normalized_phone: normalizedPhone,
+        accepted_terms_at: new Date(),
+        accepted_privacy_at: new Date(),
+      });
+      const token = createCustomerAccountToken();
+      const tokenRow = await appDb.createCustomerAccountToken({
+        customer_account_id: account.id,
+        kind: "email_verification",
+        token_hash: token.tokenHash,
+        expires_at: new Date(Date.now() + getCustomerAccountTokenTtlMs("email_verification")),
+      });
+      let deliveryQueued = false;
+      try {
+        deliveryQueued = Boolean(await queueCustomerAccountEmail(account, "email_verification", token.rawToken, tokenRow.id));
+      } catch (error) {
+        console.error("Failed to queue customer verification email:", error);
+      }
+      await recordCustomerAudit(req, "customer.account_created", "customer_account", account.id, account.id, {
+        email_verified: false,
+        verification_delivery_queued: deliveryQueued,
+      });
+      return res.status(201).json({
+        account: toPublicCustomerAccount(account),
+        verification_required: true,
+        verification_delivery_queued: deliveryQueued,
+      });
+    } catch (error: any) {
+      const conflict = error?.code === "23505" || String(error?.message || "").toLowerCase().includes("unique");
+      if (!conflict) console.error("Customer registration failed:", error);
+      return res.status(conflict ? 409 : 500).json({
+        error: conflict ? "An account with this email already exists" : "Failed to create customer account",
+      });
+    }
+  });
+
+  app.post("/api/customer/account/login", customerLoginIpRateLimit, customerLoginEmailRateLimit, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const email = readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 });
+      const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
+      if (email && !isValidCustomerEmail(email)) {
+        issues.push({ field: "email", message: "Enter a valid email address" });
+      }
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
+      }
+
+      const normalizedEmail = normalizeCustomerEmail(email);
+      const account = await appDb.getCustomerAccountByNormalizedEmail(normalizedEmail);
+      const passwordHash = account?.password_hash;
+      const verification = account && account.status !== "disabled" && typeof passwordHash === "string"
+        ? verifyPasswordWithMetadata(password, passwordHash)
+        : { valid: false, needsRehash: false };
+      if (!account || account.status === "disabled" || !verification.valid) {
+        await recordSecurityEvent(req, "customer.login_failed", { reason: "invalid_credentials" });
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      const existingSessionToken = parseCookies(req.headers.cookie).get(CUSTOMER_SESSION_COOKIE_NAME);
+      if (existingSessionToken) {
+        await appDb.deleteCustomerSession(hashSessionToken(existingSessionToken));
+      }
+      const sessionToken = createSessionToken();
+      await appDb.createCustomerSession(
+        account.id,
+        hashSessionToken(sessionToken),
+        new Date(Date.now() + getCustomerSessionTtlMs()),
+      );
+      if (verification.needsRehash || passwordHashNeedsRehash(passwordHash)) {
+        await appDb.updateCustomerPasswordHash(account.id, hashPassword(password));
+      }
+      await appDb.updateCustomerAccountLastLogin(account.id);
+      setCustomerSessionCookie(res, sessionToken, req);
+      setCustomerCsrfCookie(res, createSessionToken(), req);
+      await resetRateLimitCounter(CUSTOMER_LOGIN_IP_RATE_LIMIT_NAME, getCustomerLoginIpRateLimitScope(req));
+      await resetRateLimitCounter(CUSTOMER_LOGIN_EMAIL_RATE_LIMIT_NAME, getCustomerEmailRateLimitScope(req));
+      await recordCustomerAudit(req, "customer.login", "customer_account", account.id, account.id);
+      const refreshed = await appDb.getCustomerAccountById(account.id);
+      return res.json({ account: toPublicCustomerAccount(refreshed || account) });
+    } catch (error) {
+      console.error("Customer login failed:", error);
+      return res.status(500).json({ error: "Failed to login" });
+    }
+  });
+
+  app.post("/api/customer/account/verify-email", customerAccountIpRateLimit, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const token = readRequiredString(body, "token", issues, { label: "Verification token", maxLength: 512 });
+      if (issues.length > 0) return respondValidationError(res, issues);
+      const consumed = await appDb.consumeCustomerAccountToken(hashSessionToken(token), "email_verification");
+      if (!consumed) return res.status(400).json({ error: "Verification link is invalid or expired" });
+      const verified = await appDb.verifyCustomerAccountEmail(consumed.customer_account_id);
+      if (!verified) return res.status(400).json({ error: "Verification link is invalid or expired" });
+      const account = await appDb.getCustomerAccountById(consumed.customer_account_id);
+      if (!account) return res.status(400).json({ error: "Verification link is invalid or expired" });
+      await recordCustomerAudit(req, "customer.account_verified", "customer_account", account.id, account.id);
+      return res.json({ account: toPublicCustomerAccount(account) });
+    } catch (error) {
+      console.error("Customer email verification failed:", error);
+      return res.status(500).json({ error: "Failed to verify customer account" });
+    }
+  });
+
+  app.post("/api/customer/account/forgot-password", customerAccountIpRateLimit, customerAccountEmailRateLimit, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const email = readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 });
+    if (email && !isValidCustomerEmail(email)) issues.push({ field: "email", message: "Enter a valid email address" });
+    if (issues.length > 0) return respondValidationError(res, issues);
+
+    try {
+      const account = await appDb.getCustomerAccountByNormalizedEmail(normalizeCustomerEmail(email));
+      if (account && account.status !== "disabled") {
+        const token = createCustomerAccountToken();
+        const tokenRow = await appDb.createCustomerAccountToken({
+          customer_account_id: account.id,
+          kind: "password_reset",
+          token_hash: token.tokenHash,
+          expires_at: new Date(Date.now() + getCustomerAccountTokenTtlMs("password_reset")),
+        });
+        try {
+          await queueCustomerAccountEmail(account, "password_reset", token.rawToken, tokenRow.id);
+        } catch (error) {
+          console.error("Failed to queue customer password reset email:", error);
+        }
+        await recordCustomerAudit(req, "customer.password_reset_requested", "customer_account", account.id, account.id);
+      }
+    } catch (error) {
+      console.error("Customer password reset request failed:", error);
+    }
+    return res.status(202).json({ status: "ok" });
+  });
+
+  app.post("/api/customer/account/reset-password", customerAccountIpRateLimit, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    try {
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const token = readRequiredString(body, "token", issues, { label: "Reset token", maxLength: 512 });
+      const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
+      if (password && password.length < 8) issues.push({ field: "password", message: "Password must be at least 8 characters" });
+      if (issues.length > 0) return respondValidationError(res, issues);
+      const consumed = await appDb.consumeCustomerAccountToken(hashSessionToken(token), "password_reset");
+      if (!consumed) return res.status(400).json({ error: "Reset link is invalid or expired" });
+      const updated = await appDb.updateCustomerPasswordHash(consumed.customer_account_id, hashPassword(password));
+      if (!updated) return res.status(400).json({ error: "Reset link is invalid or expired" });
+      await appDb.deleteCustomerSessions(consumed.customer_account_id);
+      const account = await appDb.getCustomerAccountById(consumed.customer_account_id);
+      if (account) {
+        await recordCustomerAudit(req, "customer.password_reset", "customer_account", account.id, account.id);
+      }
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Customer password reset failed:", error);
+      return res.status(500).json({ error: "Failed to reset password" });
+    }
+  });
+
+  app.post("/api/customer/account/logout", async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    try {
+      if (req.customer?.tokenHash) {
+        await appDb.deleteCustomerSession(req.customer.tokenHash);
+        await recordCustomerAudit(req, "customer.logout", "customer_account", req.customer.account.id, req.customer.account.id);
+      }
+      clearCustomerSessionCookie(res, req);
+      clearCustomerCsrfCookie(res, req);
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Customer logout failed:", error);
+      return res.status(500).json({ error: "Failed to logout" });
+    }
+  });
+
+  app.get("/api/customer/account/me", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) return res.status(404).json({ error: "Not found" });
+    return res.json({ account: toPublicCustomerAccount(req.customer!.account) });
+  });
+
+  app.get("/api/customer/account/profile", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) return res.status(404).json({ error: "Not found" });
+    return res.json({ account: toPublicCustomerAccount(req.customer!.account) });
+  });
+
+  app.patch("/api/customer/account/profile", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) return res.status(404).json({ error: "Not found" });
+    try {
+      const account = req.customer!.account;
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const hasField = (field: string) => Object.prototype.hasOwnProperty.call(body, field);
+      const readProfileValue = (field: string, maxLength: number, current: string | null) => {
+        if (!hasField(field)) return current;
+        if (body[field] == null) return null;
+        return trimStringInput(body[field], maxLength);
+      };
+      const firstName = readProfileValue("first_name", 120, account.first_name) || "";
+      const lastName = readProfileValue("last_name", 120, account.last_name) || "";
+      const phone = readProfileValue("phone", 40, account.phone) || "";
+      if (!firstName) issues.push({ field: "first_name", message: "First name is required" });
+      if (!lastName) issues.push({ field: "last_name", message: "Last name is required" });
+      if (!isValidCustomerPhone(phone)) issues.push({ field: "phone", message: "Enter a valid phone number" });
+      if (issues.length > 0) return respondValidationError(res, issues);
+
+      const updated = await appDb.updateCustomerProfile(account.id, {
+        first_name: firstName,
+        last_name: lastName,
+        phone,
+        normalized_phone: normalizeCustomerPhone(phone),
+        address_line1: readProfileValue("address_line1", 240, account.address_line1),
+        address_line2: readProfileValue("address_line2", 240, account.address_line2),
+        district: readProfileValue("district", 120, account.district),
+        subdistrict: readProfileValue("subdistrict", 120, account.subdistrict),
+        province: readProfileValue("province", 120, account.province),
+        postal_code: readProfileValue("postal_code", 32, account.postal_code),
+        country: readProfileValue("country", 120, account.country),
+      });
+      if (!updated) return res.status(404).json({ error: "Customer account not found" });
+      const changedFields = [
+        "first_name", "last_name", "phone", "address_line1", "address_line2", "district", "subdistrict", "province", "postal_code", "country",
+      ].filter((field) => hasField(field));
+      await recordCustomerAudit(req, "customer.profile_updated", "customer_account", account.id, account.id, { fields: changedFields });
+      return res.json({ account: toPublicCustomerAccount(updated) });
+    } catch (error) {
+      console.error("Customer profile update failed:", error);
+      return res.status(500).json({ error: "Failed to update customer profile" });
+    }
+  });
+
+  app.post("/api/customer/account/sessions/revoke", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) return res.status(404).json({ error: "Not found" });
+    try {
+      const account = req.customer!.account;
+      await appDb.deleteCustomerSessions(account.id);
+      clearCustomerSessionCookie(res, req);
+      clearCustomerCsrfCookie(res, req);
+      await recordCustomerAudit(req, "customer.sessions_revoked", "customer_account", account.id, account.id);
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Customer session revoke failed:", error);
+      return res.status(500).json({ error: "Failed to revoke customer sessions" });
+    }
+  });
+
+  app.post("/api/customer/account/disable", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const account = req.customer!.account;
+      await appDb.setCustomerAccountStatus(account.id, "disabled");
+      clearCustomerSessionCookie(res, req);
+      clearCustomerCsrfCookie(res, req);
+      await recordCustomerAudit(req, "customer.account_disabled", "customer_account", account.id, account.id);
+      return res.json({ status: "ok" });
+    } catch (error) {
+      console.error("Customer account disable failed:", error);
+      return res.status(500).json({ error: "Failed to disable customer account" });
+    }
+  });
+
+  app.get("/api/customer/tickets", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    const registrations = await appDb.listCustomerRegistrations(req.customer!.account.id);
+    const orders = await appDb.listCustomerOrders(req.customer!.account.id);
+    const tickets = orders.flatMap((order) => order.tickets.filter((ticket) => ["issued", "checked_in"].includes(ticket.status)).map((ticket) => ({
+      ...ticket,
+      order_id: order.id,
+      event_id: order.event_id,
+      performance_title: order.performance_title,
+      delivery: buildDirectTicketDelivery(ticket),
+    })));
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.json({ registrations: registrations.map(serializeCustomerRegistration), tickets });
+  });
+
+  app.get("/api/customer/orders", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    const orders = await appDb.listCustomerOrders(req.customer!.account.id);
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.json({ orders: orders.map((order) => serializeCustomerOrder(order)) });
+  });
+
+  app.get("/api/customer/orders/:id", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    const order = await appDb.getDirectOrderById(String(req.params.id || "").trim());
+    if (!order || order.customer_account_id !== req.customer!.account.id) return res.status(404).json({ error: "Order not found" });
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.json({ order: serializeCustomerOrder(order) });
+  });
+
+  app.get("/api/customer/orders/:id/payment-qr", requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    const order = await appDb.getDirectOrderById(String(req.params.id || "").trim());
+    if (!order || order.customer_account_id !== req.customer!.account.id) return res.status(404).send("Order not found");
+    if (!isCustomerPaidCheckoutEnabled(await getSettingsMap(order.event_id))) return res.status(404).send("Order not found");
+    if (!["pending_payment", "payment_submitted"].includes(order.status)) return res.status(409).send("Order is not awaiting payment");
+    const payload = buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), order.total_amount);
+    if (!payload) return res.status(503).send("PromptPay is not configured");
+    const png = await QRCode.toBuffer(payload, { width: 720, margin: 2, errorCorrectionLevel: "M" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(png);
+  });
+
+  app.post("/api/customer/orders/:id/payment-proof", requireVerifiedCustomer, express.raw({ type: "application/octet-stream", limit: "4mb" }), async (req: AuthenticatedRequest, res) => {
+    const order = await appDb.getDirectOrderById(String(req.params.id || "").trim());
+    if (!order || order.customer_account_id !== req.customer!.account.id) return res.status(404).json({ error: "Order not found" });
+    const mime = String(req.headers["x-proof-mime"] || "").trim().toLowerCase();
+    if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) return res.status(400).json({ error: "Payment proof must be PNG, JPG, or WebP" });
+    const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!bytes.length || bytes.length > 4 * 1024 * 1024) return res.status(400).json({ error: "Payment proof must be between 1 byte and 4 MB" });
+    const updated = await appDb.submitDirectOrderPaymentProof(order.id, {
+      payment_proof_mime: mime,
+      payment_proof_base64: bytes.toString("base64"),
+      payment_reference: String(req.headers["x-payment-reference"] || "").trim().slice(0, 255) || null,
+    });
+    if (!updated) return res.status(409).json({ error: "This order has expired or is no longer payable" });
+    await recordCustomerAudit(req, "customer.order_payment_proof_submitted", "direct_order", order.id, req.customer!.account.id, { event_id: order.event_id });
+    return res.json({ order: serializeCustomerOrder(updated) });
+  });
+
+  app.get("/api/customer/notification-preferences", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    const preferences = await appDb.getCustomerNotificationPreferences(req.customer!.account.id);
+    return res.json({ preferences });
+  });
+
+  app.patch("/api/customer/notification-preferences", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const smsMarketing = typeof body.sms_marketing_enabled === "boolean" ? body.sms_marketing_enabled : undefined;
+    const smsTransactional = typeof body.sms_transactional_enabled === "boolean" ? body.sms_transactional_enabled : undefined;
+    const emailTransactional = typeof body.email_transactional_enabled === "boolean" ? body.email_transactional_enabled : undefined;
+    const preferences = await appDb.updateCustomerNotificationPreferences(req.customer!.account.id, {
+      email_transactional_enabled: emailTransactional,
+      sms_transactional_enabled: smsTransactional,
+      sms_marketing_enabled: smsMarketing,
+      sms_consent_at: smsTransactional || smsMarketing ? new Date() : undefined,
+      sms_opted_out_at: smsTransactional === false || smsMarketing === false ? new Date() : undefined,
+    });
+    await recordCustomerAudit(req, "customer.notification_preferences_updated", "customer_account", req.customer!.account.id, req.customer!.account.id, { sms_transactional_enabled: preferences.sms_transactional_enabled, sms_marketing_enabled: preferences.sms_marketing_enabled });
+    return res.json({ preferences });
+  });
+
+  app.get("/api/customer/account/export", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
+    const account = req.customer!.account;
+    const registrations = await appDb.listCustomerRegistrations(account.id);
+    const orders = await appDb.listCustomerOrders(account.id);
+    await recordCustomerAudit(req, "customer.account_exported", "customer_account", account.id, account.id);
+    return res.json({ account: toPublicCustomerAccount(account), registrations: registrations.map(serializeCustomerRegistration), orders: orders.map((order) => serializeCustomerOrder(order)) });
+  });
+
+  app.post("/api/customer/claims", requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const registrationId = String(body.registration_id || "").trim();
+    const orderId = String(body.order_id || "").trim();
+    if (!registrationId && !orderId) return res.status(400).json({ error: "registration_id or order_id is required" });
+    const account = req.customer!.account;
+    const contact = { normalized_email: account.normalized_email, normalized_phone: account.normalized_phone };
+    const result = registrationId
+      ? await appDb.claimRegistrationToCustomer({ registration_id: registrationId, customer_account_id: account.id, ...contact })
+      : await appDb.claimDirectOrderToCustomer({ order_id: orderId, customer_account_id: account.id, ...contact });
+    if (result === "not_found") return res.status(404).json({ error: "Record not found" });
+    if (result === "contact_mismatch") return res.status(403).json({ error: "Verified account contact does not match this record" });
+    await recordCustomerAudit(req, result === "claimed" ? "customer.record_claimed" : "customer.record_claim_repeated", registrationId ? "registration" : "direct_order", registrationId || orderId, account.id, { result });
+    return res.json({ status: result, record_type: registrationId ? "registration" : "direct_order", record_id: registrationId || orderId });
+  });
+
+  app.post("/api/customer-claims/registrations/:id/unlink", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const registration = await appDb.getRegistrationById(req.params.id);
+    if (!registration || registration.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Registration not found" });
+    const changed = await appDb.unlinkRegistrationFromCustomer(registration.id);
+    if (changed) await recordAudit(req, "customer.registration_unlinked", "registration", registration.id, { event_id: registration.event_id });
+    return res.json({ status: changed ? "unlinked" : "already_unlinked" });
+  });
+
+  app.post("/api/customer-claims/orders/:id/unlink", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const order = await appDb.getDirectOrderById(req.params.id);
+    if (!order || order.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Order not found" });
+    const changed = await appDb.unlinkDirectOrderFromCustomer(order.id);
+    if (changed) await recordAudit(req, "customer.order_unlinked", "direct_order", order.id, { event_id: order.event_id });
+    return res.json({ status: changed ? "unlinked" : "already_unlinked" });
   });
 
   app.post("/api/auth/login", loginIpRateLimit, loginUsernameRateLimit, async (req, res) => {
@@ -13318,6 +14169,21 @@ async function startServer() {
     },
   );
 
+  app.get("/api/public/events", async (_req, res) => {
+    try {
+      const events = await appDb.listEvents();
+      const entries = (await Promise.all(events.map(async (event) => {
+        const settings = await appDb.getSettingsMap(event.id);
+        return buildPublicEventCatalogEntry(event, settings);
+      }))).filter(Boolean);
+      res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=300");
+      return res.json({ events: entries });
+    } catch (error) {
+      console.error("Failed to fetch public event catalog:", error);
+      return res.status(500).json({ error: "Failed to load public event catalog" });
+    }
+  });
+
   app.get("/api/public/events/:slug", async (req, res) => {
     try {
       const match = await resolvePublicEventBySlug(req.params.slug);
@@ -13356,6 +14222,77 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to load public direct ticketing:", error);
       return res.status(500).json({ error: "Failed to load direct tickets" });
+    }
+  });
+
+  app.get("/api/public/events/:slug/checkout", async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isCustomerPaidCheckoutEnabled(match.settings)) return res.status(404).json({ error: "Customer checkout unavailable" });
+      await appDb.releaseExpiredDirectOrderHolds(match.event.id);
+      const performances = (await appDb.listDirectPerformances(match.event.id)).filter((item) => item.is_active);
+      const seats = await appDb.listDirectSeats(match.event.id);
+      return res.json({
+        event: { id: match.event.id, slug: req.params.slug, name: String(match.settings.event_name || match.event.name || "Event"), seller_name: String(match.settings.seller_legal_name || match.event.organizer_name || "").trim() },
+        performances,
+        seats: seats.map(({ external_seat_ref: _externalSeatRef, ...seat }) => seat),
+        receiver_name: String(process.env.PROMPTPAY_RECEIVER_NAME || "").trim(),
+        promptpay_ready: Boolean(buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), 1)),
+        hold_minutes: 15,
+        max_seats: Math.min(12, Math.max(1, Number.parseInt(String(match.settings.customer_ticket_max_seats || "6"), 10) || 6)),
+      });
+    } catch (error) {
+      console.error("Failed to load customer checkout:", error);
+      return res.status(500).json({ error: "Failed to load checkout" });
+    }
+  });
+
+  app.post("/api/public/events/:slug/orders", webChatRateLimit, requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isCustomerPaidCheckoutEnabled(match.settings)) return res.status(404).json({ error: "Customer checkout unavailable" });
+      const body = readObjectBody(req);
+      const issues: ValidationIssue[] = [];
+      const performanceId = readRequiredString(body, "performance_id", issues, { label: "Performance", maxLength: 128 });
+      const seatIds = Array.isArray(body.seat_ids) ? [...new Set(body.seat_ids.map((value) => String(value || "").trim()).filter(Boolean))] : [];
+      const acceptedTerms = readBooleanWithDefault(body, "accept_terms", false, issues);
+      if (!seatIds.length) issues.push({ field: "seat_ids", message: "Select at least one seat" });
+      const maxSeats = Math.min(12, Math.max(1, Number.parseInt(String(match.settings.customer_ticket_max_seats || "6"), 10) || 6));
+      if (seatIds.length > maxSeats) issues.push({ field: "seat_ids", message: `You can select up to ${maxSeats} seats` });
+      if (!acceptedTerms) issues.push({ field: "accept_terms", message: "Checkout terms acceptance is required" });
+      if (issues.length) return respondValidationError(res, issues);
+      const account = req.customer!.account;
+      const seats = (await appDb.listDirectSeats(match.event.id, performanceId)).filter((seat) => seatIds.includes(seat.id));
+      if (seats.length !== seatIds.length || seats.some((seat) => seat.status !== "available" || seat.allocation_status !== "allocated")) return res.status(409).json({ error: "One or more selected seats are no longer available" });
+      const pricing = buildCustomerOrderPricing(match.settings, seats.map((seat) => Math.max(0, Number(seat.face_value || 0))));
+      const rawBillingProfile = body.billing_profile && typeof body.billing_profile === "object" && !Array.isArray(body.billing_profile) ? body.billing_profile as Record<string, unknown> : {};
+      const billingProfile = isTruthySetting(process.env.BILLING_DOCUMENTS_ENABLED ?? "0") ? {
+        document_kind: String(rawBillingProfile.document_kind || "receipt").trim().slice(0, 40),
+        name: String(rawBillingProfile.name || `${account.first_name} ${account.last_name}`).trim().slice(0, 180),
+        tax_id: String(rawBillingProfile.tax_id || "").replace(/\D/g, "").slice(0, 20),
+        address: String(rawBillingProfile.address || "").trim().slice(0, 500),
+      } : {};
+      const orderResult = await appDb.createDirectOrder({
+        event_id: match.event.id,
+        performance_id: performanceId,
+        seat_ids: seatIds,
+        customer_account_id: account.id,
+        buyer_name: `${account.first_name} ${account.last_name}`.trim(),
+        phone: account.phone,
+        email: account.email,
+        ...pricing,
+        billing_profile_json: JSON.stringify(billingProfile),
+        seller_snapshot_json: buildOrderSellerSnapshot(match.settings, match.event),
+        hold_minutes: 15,
+        ticket_class: "Public",
+        source: "public",
+      });
+      if (orderResult.error || !orderResult.order) return res.status(409).json({ error: orderResult.error || "seat_unavailable" });
+      await recordCustomerAudit(req, "customer.order_created", "direct_order", orderResult.order.id, account.id, { event_id: match.event.id, seat_count: seatIds.length, total_amount: orderResult.order.total_amount });
+      return res.status(201).json({ order: serializeCustomerOrder(orderResult.order) });
+    } catch (error) {
+      console.error("Failed to create customer order:", error);
+      return res.status(500).json({ error: "Failed to create order" });
     }
   });
 
@@ -13548,6 +14485,7 @@ async function startServer() {
       const creation = await createRegistration({
         sender_id: senderId,
         event_id: match.event.id,
+        customer_account_id: isVerifiedCustomer(req.customer?.account) ? req.customer?.account.id : null,
         first_name: firstName,
         last_name: lastName,
         phone,
@@ -14927,6 +15865,32 @@ async function startServer() {
     return res.json(imported);
   });
   app.get("/api/direct-ticketing/tickets", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
+  app.get("/api/direct-ticketing/orders", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const orders = await appDb.listDirectOrders(getRequestedEventId(req));
+    return res.json(orders.map((order) => serializeCustomerOrder(order)));
+  });
+  app.post("/api/direct-ticketing/orders/:id/payment", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const order = await appDb.getDirectOrderById(req.params.id);
+    if (!order || order.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Order not found" });
+    const body = readObjectBody(req);
+    const paymentStatus = body.payment_status === "verified" || body.payment_status === "rejected" || body.payment_status === "refunded" ? body.payment_status : null;
+    if (!paymentStatus) return res.status(400).json({ error: "payment_status must be verified, rejected, or refunded" });
+    const paymentReference = readOptionalString(body, "payment_reference", 255);
+    if (paymentStatus === "verified" && !paymentReference) return res.status(400).json({ error: "Bank transaction reference is required to verify payment" });
+    try {
+      const updated = await appDb.updateDirectOrderPayment(order.id, { payment_status: paymentStatus, payment_reference: paymentReference, rejection_reason: readOptionalString(body, "rejection_reason", 500), verified_by_user_id: req.auth?.user.id });
+      if (!updated) return res.status(404).json({ error: "Order not found" });
+      await recordAudit(req, "direct_order.payment_updated", "direct_order", updated.id, { event_id: updated.event_id, payment_status: paymentStatus, payment_reference: paymentReference });
+      if (paymentStatus !== "refunded") {
+        await Promise.all(updated.tickets.filter((ticket) => ticket.email).map((ticket) => sendDirectTicketDecisionEmail(ticket)));
+      }
+      return res.json(serializeCustomerOrder(updated));
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505" || /unique/i.test(String((error as Error)?.message || ""))) return res.status(409).json({ error: "This bank transaction reference has already been used" });
+      console.error("Failed to update direct order payment:", error);
+      return res.status(500).json({ error: "Failed to update order payment" });
+    }
+  });
   app.get("/api/direct-ticketing/payment-qr", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const receiverId = String(process.env.PROMPTPAY_ID || "").trim();
     const amount = Number(req.query.amount || 0);

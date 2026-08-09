@@ -17,11 +17,15 @@ import type {
   ChannelPlatform,
   CheckinAccessSessionRow,
   CheckinSessionRow,
+  CreateCustomerAccountInput,
+  CreateCustomerAccountTokenInput,
+  CreateNotificationDeliveryInput,
   CreateRegistrationEmailDeliveryInput,
   CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
   CreateDirectTicketInput,
+  CreateDirectOrderInput,
   ExchangeCheckinSessionTokenInput,
   EventDocumentChunkEmbeddingRow,
   EventDocumentChunkRow,
@@ -31,6 +35,7 @@ import type {
   EventStatus,
   EventRow,
   DirectPerformanceRow,
+  DirectOrderRow,
   DirectSeatRow,
   DirectTicketRow,
   FacebookPageRow,
@@ -38,6 +43,14 @@ import type {
   MessageAttachmentRow,
   MessageRow,
   MessageType,
+  CustomerAccountRow,
+  CustomerAccountSessionRow,
+  CustomerAccountTokenRow,
+  CustomerAccountTokenKind,
+  CustomerAccountStatus,
+  CustomerNotificationPreferencesRow,
+  UpdateCustomerNotificationPreferencesInput,
+  NotificationDeliveryRow,
   LlmUsageModelSummaryRow,
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
@@ -64,6 +77,7 @@ import type {
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
+  UpdateCustomerProfileInput,
   UpsertDirectPerformanceInput,
   ImportDirectSeatInput,
   UpdateOrganizerProfileInput,
@@ -182,6 +196,71 @@ function mapRegistrationEmailDeliveryRow(row?: Record<string, unknown>) {
     sent_at: typeof row.sent_at === "string" && row.sent_at ? row.sent_at : null,
     updated_at: String(row.updated_at || row.queued_at || ""),
   } satisfies RegistrationEmailDeliveryRow;
+}
+
+function mapNotificationDeliveryRow(row?: Record<string, unknown>) {
+  if (!row) return null;
+  return {
+    id: String(row.id || ""),
+    channel: String(row.channel || "email") as NotificationDeliveryRow["channel"],
+    kind: String(row.kind || ""),
+    recipient: String(row.recipient || ""),
+    recipient_snapshot: typeof row.recipient_snapshot === "string" && row.recipient_snapshot ? row.recipient_snapshot : null,
+    related_type: typeof row.related_type === "string" && row.related_type ? row.related_type : null,
+    related_id: typeof row.related_id === "string" && row.related_id ? row.related_id : null,
+    payload_json: String(row.payload_json || "{}"),
+    idempotency_key: String(row.idempotency_key || ""),
+    status: String(row.status || "queued") as NotificationDeliveryRow["status"],
+    attempt_count: Number(row.attempt_count || 0),
+    available_at: mapPostgresTimestamp(row.available_at) || "",
+    locked_at: mapPostgresTimestamp(row.locked_at),
+    locked_by: typeof row.locked_by === "string" && row.locked_by ? row.locked_by : null,
+    provider: typeof row.provider === "string" && row.provider ? row.provider : null,
+    provider_message_id: typeof row.provider_message_id === "string" && row.provider_message_id ? row.provider_message_id : null,
+    last_error: typeof row.last_error === "string" && row.last_error ? row.last_error : null,
+    queued_at: mapPostgresTimestamp(row.queued_at) || "",
+    sent_at: mapPostgresTimestamp(row.sent_at),
+    updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies NotificationDeliveryRow;
+}
+
+function mapCustomerAccountRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    id: String(row.id || ""),
+    email: String(row.email || ""),
+    normalized_email: String(row.normalized_email || ""),
+    password_hash: String(row.password_hash || ""),
+    email_verified_at: mapPostgresTimestamp(row.email_verified_at),
+    first_name: String(row.first_name || ""),
+    last_name: String(row.last_name || ""),
+    phone: String(row.phone || ""),
+    normalized_phone: String(row.normalized_phone || ""),
+    address_line1: typeof row.address_line1 === "string" && row.address_line1 ? row.address_line1 : null,
+    address_line2: typeof row.address_line2 === "string" && row.address_line2 ? row.address_line2 : null,
+    district: typeof row.district === "string" && row.district ? row.district : null,
+    subdistrict: typeof row.subdistrict === "string" && row.subdistrict ? row.subdistrict : null,
+    province: typeof row.province === "string" && row.province ? row.province : null,
+    postal_code: typeof row.postal_code === "string" && row.postal_code ? row.postal_code : null,
+    country: typeof row.country === "string" && row.country ? row.country : null,
+    accepted_terms_at: mapPostgresTimestamp(row.accepted_terms_at) || "",
+    accepted_privacy_at: mapPostgresTimestamp(row.accepted_privacy_at) || "",
+    status: String(row.status || "pending") as CustomerAccountStatus,
+    last_login_at: mapPostgresTimestamp(row.last_login_at),
+    created_at: mapPostgresTimestamp(row.created_at) || "",
+    updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies CustomerAccountRow;
+}
+
+function mapCustomerAccountTokenRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    id: String(row.id || ""),
+    customer_account_id: String(row.customer_account_id || ""),
+    kind: String(row.kind || "email_verification") as CustomerAccountTokenKind,
+    expires_at: mapPostgresTimestamp(row.expires_at) || "",
+    created_at: mapPostgresTimestamp(row.created_at) || "",
+  } satisfies CustomerAccountTokenRow;
 }
 
 function mapEventBaseRow(row: Record<string, unknown>) {
@@ -386,7 +465,7 @@ function mapPostgresTimestamp(value: unknown) {
 
 function mapDirectTicketRow(row: Record<string, unknown>) {
   return {
-    id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""),
+    id: String(row.id || ""), event_id: String(row.event_id || ""), order_id: typeof row.order_id === "string" && row.order_id ? row.order_id : null, customer_account_id: typeof row.customer_account_id === "string" && row.customer_account_id ? row.customer_account_id : null, performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""),
     ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""),
     price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"],
     payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null,
@@ -406,6 +485,31 @@ function mapDirectTicketRow(row: Record<string, unknown>) {
     zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined,
     seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined,
   } satisfies DirectTicketRow;
+}
+
+function mapDirectOrderRow(row: Record<string, unknown>, tickets: DirectTicketRow[] = []) {
+  return {
+    id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), customer_account_id: typeof row.customer_account_id === "string" && row.customer_account_id ? row.customer_account_id : null,
+    buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), currency: String(row.currency || "THB"),
+    subtotal_amount: Number(row.subtotal_amount || 0), platform_fee_amount: Number(row.platform_fee_amount || 0), payment_fee_amount: Number(row.payment_fee_amount || 0), tax_amount: Number(row.tax_amount || 0), discount_amount: Number(row.discount_amount || 0), total_amount: Number(row.total_amount || 0),
+    fee_rule_version: String(row.fee_rule_version || "v1"), tax_snapshot_json: String(row.tax_snapshot_json || "{}"), billing_profile_json: String(row.billing_profile_json || "{}"), seller_snapshot_json: String(row.seller_snapshot_json || "{}"),
+    status: String(row.status || "pending_payment") as DirectOrderRow["status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null,
+    payment_proof_submitted_at: mapPostgresTimestamp(row.payment_proof_submitted_at), rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: mapPostgresTimestamp(row.hold_expires_at), billing_document_status: String(row.billing_document_status || "not_required") as DirectOrderRow["billing_document_status"], billing_document_number: typeof row.billing_document_number === "string" ? row.billing_document_number : null,
+    created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "", tickets,
+    performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined,
+  } satisfies DirectOrderRow;
+}
+
+function mapCustomerNotificationPreferencesRow(row: Record<string, unknown> | undefined, customerAccountId: string) {
+  return {
+    customer_account_id: customerAccountId,
+    email_transactional_enabled: Boolean(row?.email_transactional_enabled ?? true),
+    sms_transactional_enabled: Boolean(row?.sms_transactional_enabled ?? false),
+    sms_marketing_enabled: Boolean(row?.sms_marketing_enabled ?? false),
+    sms_consent_at: mapPostgresTimestamp(row?.sms_consent_at),
+    sms_opted_out_at: mapPostgresTimestamp(row?.sms_opted_out_at),
+    updated_at: mapPostgresTimestamp(row?.updated_at) || "",
+  } satisfies CustomerNotificationPreferencesRow;
 }
 
 function mapOutreachCampaignRow(row: Record<string, unknown>) {
@@ -498,6 +602,8 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.deleteExpiredSessions();
     await this.deleteExpiredCheckinSessions();
     await this.deleteExpiredCheckinAccessSessions();
+    await this.deleteExpiredCustomerSessions();
+    await this.deleteExpiredCustomerAccountTokens();
     this.initialized = true;
   }
 
@@ -617,7 +723,7 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async getRegistrationById(id: string) {
     const result = await this.pool.query<RegistrationRow>(
-      "SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations WHERE id = $1",
+      "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations WHERE id = $1",
       [id],
     );
     return result.rows[0];
@@ -634,14 +740,14 @@ export class PostgresAppDatabase implements AppDatabase {
     if (typeof limit === "number") {
       values.push(limit);
       const result = await this.pool.query<RegistrationRow>(
-        `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC LIMIT $${values.length}`,
+        `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC LIMIT $${values.length}`,
         values,
       );
       return result.rows;
     }
 
     const result = await this.pool.query<RegistrationRow>(
-      `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC`,
+      `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC`,
       values,
     );
     return result.rows;
@@ -659,7 +765,7 @@ export class PostgresAppDatabase implements AppDatabase {
 
     if (eventId) {
       const result = await this.pool.query<RegistrationRow>(
-        `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
+        `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
          FROM registrations
          WHERE event_id = $1 AND sender_id = ANY($2::text[])
          ORDER BY timestamp DESC, id DESC`,
@@ -669,7 +775,7 @@ export class PostgresAppDatabase implements AppDatabase {
     }
 
     const result = await this.pool.query<RegistrationRow>(
-      `SELECT id, sender_id, event_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
+      `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
        FROM registrations
        WHERE sender_id = ANY($1::text[])
        ORDER BY timestamp DESC, id DESC`,
@@ -765,9 +871,9 @@ export class PostgresAppDatabase implements AppDatabase {
         const id = generateRegistrationId();
         try {
           await client.query(
-            `INSERT INTO registrations (id, sender_id, event_id, channel_platform, channel_external_id, first_name, last_name, phone, email)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [id, senderId, eventId, channelPlatform, channelExternalId, firstName, lastName, phone, email],
+            `INSERT INTO registrations (id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, first_name, last_name, phone, email)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [id, senderId, eventId, input.customer_account_id || null, channelPlatform, channelExternalId, firstName, lastName, phone, email],
           );
           await client.query("COMMIT");
           return { statusCode: 200, content: { id, status: "success" } };
@@ -840,6 +946,426 @@ export class PostgresAppDatabase implements AppDatabase {
         String(id || "").trim(),
       ],
     );
+  }
+
+  async enqueueNotificationDelivery(input: CreateNotificationDeliveryInput) {
+    const channel = String(input.channel || "").trim();
+    const kind = String(input.kind || "").trim();
+    const recipient = String(input.recipient || "").trim();
+    const idempotencyKey = String(input.idempotency_key || "").trim();
+    if (!channel || !kind || !recipient || !idempotencyKey) return null;
+
+    const result = await this.pool.query<Record<string, unknown>>(
+      `INSERT INTO notification_deliveries (
+        id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+        payload_json, idempotency_key, provider
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (idempotency_key) DO NOTHING
+      RETURNING id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+                payload_json, idempotency_key, status, attempt_count, available_at::text,
+                locked_at::text, locked_by, provider, provider_message_id, last_error,
+                queued_at::text, sent_at::text, updated_at::text`,
+      [
+        generateEntityId("ntf"),
+        channel,
+        kind,
+        recipient,
+        input.recipient_snapshot == null ? null : String(input.recipient_snapshot),
+        input.related_type == null ? null : String(input.related_type).trim() || null,
+        input.related_id == null ? null : String(input.related_id).trim() || null,
+        String(input.payload_json || "{}").trim() || "{}",
+        idempotencyKey,
+        input.provider == null ? null : String(input.provider).trim() || null,
+      ],
+    );
+
+    return mapNotificationDeliveryRow(result.rows[0]);
+  }
+
+  async claimNotificationDeliveries(workerId: string, limit = 10) {
+    const normalizedWorkerId = String(workerId || "").trim();
+    const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 10, 1), 100);
+    if (!normalizedWorkerId) return [];
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<Record<string, unknown>>(
+        `WITH candidates AS (
+           SELECT id
+           FROM notification_deliveries
+           WHERE (status = 'queued' AND available_at <= CURRENT_TIMESTAMP)
+              OR (status = 'processing' AND locked_at IS NOT NULL AND locked_at <= CURRENT_TIMESTAMP - INTERVAL '5 minutes')
+           ORDER BY available_at ASC, queued_at ASC, id ASC
+           LIMIT $1
+           FOR UPDATE SKIP LOCKED
+         )
+         UPDATE notification_deliveries AS deliveries
+         SET status = 'processing',
+             attempt_count = deliveries.attempt_count + 1,
+             locked_at = CURRENT_TIMESTAMP,
+             locked_by = $2,
+             updated_at = CURRENT_TIMESTAMP
+         FROM candidates
+         WHERE deliveries.id = candidates.id
+         RETURNING deliveries.id, deliveries.channel, deliveries.kind, deliveries.recipient,
+                   deliveries.recipient_snapshot, deliveries.related_type, deliveries.related_id,
+                   deliveries.payload_json, deliveries.idempotency_key, deliveries.status,
+                   deliveries.attempt_count, deliveries.available_at::text, deliveries.locked_at::text,
+                   deliveries.locked_by, deliveries.provider, deliveries.provider_message_id,
+                   deliveries.last_error, deliveries.queued_at::text, deliveries.sent_at::text,
+                   deliveries.updated_at::text`,
+        [normalizedLimit, normalizedWorkerId],
+      );
+      await client.query("COMMIT");
+      return result.rows.map((row) => mapNotificationDeliveryRow(row)).filter((row): row is NotificationDeliveryRow => Boolean(row));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async markNotificationDeliverySent(id: string, workerId: string, providerMessageId?: string | null, provider?: string | null) {
+    await this.pool.query(
+      `UPDATE notification_deliveries
+       SET status = 'sent',
+           provider = COALESCE($1, provider),
+           provider_message_id = COALESCE($2, provider_message_id),
+           last_error = NULL,
+           sent_at = CURRENT_TIMESTAMP,
+           locked_at = NULL,
+           locked_by = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND status = 'processing' AND locked_by = $4`,
+      [
+        provider == null ? null : String(provider).trim() || null,
+        providerMessageId == null ? null : String(providerMessageId).trim() || null,
+        String(id || "").trim(),
+        String(workerId || "").trim(),
+      ],
+    );
+  }
+
+  async markNotificationDeliveryRetryable(id: string, workerId: string, errorMessage: string, availableAt: string, provider?: string | null) {
+    await this.pool.query(
+      `UPDATE notification_deliveries
+       SET status = 'queued',
+           available_at = $1,
+           provider = COALESCE($2, provider),
+           last_error = $3,
+           locked_at = NULL,
+           locked_by = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4 AND status = 'processing' AND locked_by = $5`,
+      [
+        String(availableAt || "").trim() || new Date().toISOString(),
+        provider == null ? null : String(provider).trim() || null,
+        String(errorMessage || "").trim().slice(0, 1000),
+        String(id || "").trim(),
+        String(workerId || "").trim(),
+      ],
+    );
+  }
+
+  async markNotificationDeliveryFailed(id: string, workerId: string, errorMessage: string, provider?: string | null) {
+    await this.pool.query(
+      `UPDATE notification_deliveries
+       SET status = 'failed',
+           provider = COALESCE($1, provider),
+           last_error = $2,
+           locked_at = NULL,
+           locked_by = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND status = 'processing' AND locked_by = $4`,
+      [
+        provider == null ? null : String(provider).trim() || null,
+        String(errorMessage || "").trim().slice(0, 1000),
+        String(id || "").trim(),
+        String(workerId || "").trim(),
+      ],
+    );
+  }
+
+  async getCustomerAccountById(id: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT * FROM customer_accounts WHERE id = $1 LIMIT 1",
+      [String(id || "").trim()],
+    );
+    return mapCustomerAccountRow(result.rows[0]);
+  }
+
+  async getCustomerAccountByNormalizedEmail(normalizedEmail: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT * FROM customer_accounts WHERE normalized_email = $1 LIMIT 1",
+      [String(normalizedEmail || "").trim()],
+    );
+    return mapCustomerAccountRow(result.rows[0]);
+  }
+
+  async createCustomerAccount(input: CreateCustomerAccountInput) {
+    const id = generateEntityId("cst");
+    await this.pool.query(
+      `INSERT INTO customer_accounts (
+        id, email, normalized_email, password_hash, first_name, last_name, phone,
+        normalized_phone, accepted_terms_at, accepted_privacy_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        id,
+        String(input.email || "").trim(),
+        String(input.normalized_email || "").trim(),
+        String(input.password_hash || "").trim(),
+        String(input.first_name || "").trim(),
+        String(input.last_name || "").trim(),
+        String(input.phone || "").trim(),
+        String(input.normalized_phone || "").trim(),
+        input.accepted_terms_at.toISOString(),
+        input.accepted_privacy_at.toISOString(),
+      ],
+    );
+    const account = await this.getCustomerAccountById(id);
+    if (!account) throw new Error("Failed to create customer account");
+    return account;
+  }
+
+  async updateCustomerProfile(id: string, input: UpdateCustomerProfileInput) {
+    const normalizedId = String(id || "").trim();
+    const result = await this.pool.query(
+      `UPDATE customer_accounts
+       SET first_name = $1, last_name = $2, phone = $3, normalized_phone = $4,
+           address_line1 = $5, address_line2 = $6, district = $7, subdistrict = $8,
+           province = $9, postal_code = $10, country = $11, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $12 AND status != 'disabled'`,
+      [
+        String(input.first_name || "").trim(),
+        String(input.last_name || "").trim(),
+        String(input.phone || "").trim(),
+        String(input.normalized_phone || "").trim(),
+        input.address_line1 || null,
+        input.address_line2 || null,
+        input.district || null,
+        input.subdistrict || null,
+        input.province || null,
+        input.postal_code || null,
+        input.country || null,
+        normalizedId,
+      ],
+    );
+    return result.rowCount > 0 ? this.getCustomerAccountById(normalizedId) : undefined;
+  }
+
+  async updateCustomerPasswordHash(id: string, passwordHash: string) {
+    const result = await this.pool.query(
+      "UPDATE customer_accounts SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status != 'disabled'",
+      [String(passwordHash || "").trim(), String(id || "").trim()],
+    );
+    return result.rowCount > 0;
+  }
+
+  async verifyCustomerAccountEmail(id: string) {
+    const result = await this.pool.query(
+      `UPDATE customer_accounts
+       SET email_verified_at = COALESCE(email_verified_at, CURRENT_TIMESTAMP),
+           status = CASE WHEN status = 'pending' THEN 'active' ELSE status END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status != 'disabled'`,
+      [String(id || "").trim()],
+    );
+    return result.rowCount > 0;
+  }
+
+  async updateCustomerAccountLastLogin(id: string) {
+    await this.pool.query(
+      "UPDATE customer_accounts SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status != 'disabled'",
+      [String(id || "").trim()],
+    );
+  }
+
+  async setCustomerAccountStatus(id: string, status: CustomerAccountStatus) {
+    const normalizedId = String(id || "").trim();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        "UPDATE customer_accounts SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        [status, normalizedId],
+      );
+      if (result.rowCount > 0 && status === "disabled") {
+        await client.query("DELETE FROM customer_sessions WHERE customer_account_id = $1", [normalizedId]);
+      }
+      await client.query("COMMIT");
+      return result.rowCount > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createCustomerSession(customerAccountId: string, tokenHash: string, expiresAt: Date) {
+    await this.pool.query(
+      `INSERT INTO customer_sessions (id, customer_account_id, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4)`,
+      [generateEntityId("cses"), String(customerAccountId || "").trim(), String(tokenHash || "").trim(), expiresAt.toISOString()],
+    );
+  }
+
+  async getCustomerSessionWithAccount(tokenHash: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT
+        s.id AS session_id,
+        s.token_hash,
+        s.expires_at AS session_expires_at,
+        s.last_seen_at AS session_last_seen_at,
+        c.id, c.email, c.normalized_email, c.password_hash, c.email_verified_at,
+        c.first_name, c.last_name, c.phone, c.normalized_phone, c.address_line1,
+        c.address_line2, c.district, c.subdistrict, c.province, c.postal_code,
+        c.country, c.accepted_terms_at, c.accepted_privacy_at, c.status,
+        c.last_login_at, c.created_at, c.updated_at
+       FROM customer_sessions s
+       JOIN customer_accounts c ON c.id = s.customer_account_id
+       WHERE s.token_hash = $1 AND s.expires_at > CURRENT_TIMESTAMP AND c.status != 'disabled'
+       LIMIT 1`,
+      [String(tokenHash || "").trim()],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    const account = mapCustomerAccountRow(row);
+    if (!account) return undefined;
+    return {
+      session_id: String(row.session_id || ""),
+      token_hash: String(row.token_hash || ""),
+      expires_at: mapPostgresTimestamp(row.session_expires_at) || "",
+      last_seen_at: mapPostgresTimestamp(row.session_last_seen_at) || "",
+      account,
+    } satisfies CustomerAccountSessionRow;
+  }
+
+  async touchCustomerSession(sessionId: string) {
+    await this.pool.query("UPDATE customer_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id = $1", [String(sessionId || "").trim()]);
+  }
+
+  async deleteCustomerSession(tokenHash: string) {
+    await this.pool.query("DELETE FROM customer_sessions WHERE token_hash = $1", [String(tokenHash || "").trim()]);
+  }
+
+  async deleteCustomerSessions(customerAccountId: string) {
+    await this.pool.query("DELETE FROM customer_sessions WHERE customer_account_id = $1", [String(customerAccountId || "").trim()]);
+  }
+
+  async deleteExpiredCustomerSessions() {
+    await this.pool.query("DELETE FROM customer_sessions WHERE expires_at <= CURRENT_TIMESTAMP");
+  }
+
+  async createCustomerAccountToken(input: CreateCustomerAccountTokenInput) {
+    const id = generateEntityId("ctok");
+    await this.pool.query(
+      `INSERT INTO customer_account_tokens (id, customer_account_id, kind, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        id,
+        String(input.customer_account_id || "").trim(),
+        input.kind,
+        String(input.token_hash || "").trim(),
+        input.expires_at.toISOString(),
+      ],
+    );
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT id, customer_account_id, kind, expires_at, created_at FROM customer_account_tokens WHERE id = $1",
+      [id],
+    );
+    const token = mapCustomerAccountTokenRow(result.rows[0]);
+    if (!token) throw new Error("Failed to create customer account token");
+    return token;
+  }
+
+  async consumeCustomerAccountToken(tokenHash: string, kind: CustomerAccountTokenKind) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{ id: string; customer_account_id: string }>(
+        `SELECT id, customer_account_id
+         FROM customer_account_tokens
+         WHERE token_hash = $1 AND kind = $2 AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+         ORDER BY created_at DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [String(tokenHash || "").trim(), kind],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      const updated = await client.query(
+        "UPDATE customer_account_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1 AND used_at IS NULL",
+        [row.id],
+      );
+      await client.query("COMMIT");
+      return updated.rowCount > 0 ? { token_id: row.id, customer_account_id: row.customer_account_id } : undefined;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteExpiredCustomerAccountTokens() {
+    await this.pool.query("DELETE FROM customer_account_tokens WHERE expires_at <= CURRENT_TIMESTAMP OR used_at IS NOT NULL");
+  }
+
+  async listCustomerRegistrations(customerAccountId: string) {
+    const result = await this.pool.query<RegistrationRow>(
+      "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations WHERE customer_account_id = $1 ORDER BY timestamp DESC",
+      [String(customerAccountId || "").trim()],
+    );
+    return result.rows;
+  }
+
+  async claimRegistrationToCustomer(input: { registration_id: string; customer_account_id: string; normalized_email?: string; normalized_phone?: string }) {
+    const registrationId = String(input.registration_id || "").trim().toUpperCase();
+    const accountId = String(input.customer_account_id || "").trim();
+    const current = await this.pool.query<{ customer_account_id: string | null; email: string; phone: string }>("SELECT customer_account_id,email,phone FROM registrations WHERE id=$1 LIMIT 1", [registrationId]);
+    const row = current.rows[0];
+    if (!row) return "not_found" as const;
+    if (row.customer_account_id && row.customer_account_id !== accountId) return "already_claimed" as const;
+    const emailMatches = Boolean(input.normalized_email && String(row.email || "").trim().toLowerCase() === input.normalized_email.trim().toLowerCase());
+    const phoneMatches = Boolean(input.normalized_phone && String(row.phone || "").replace(/\D/g, "") === input.normalized_phone.replace(/\D/g, ""));
+    if (!emailMatches && !phoneMatches) return "contact_mismatch" as const;
+    if (row.customer_account_id === accountId) return "already_claimed" as const;
+    const updated = await this.pool.query("UPDATE registrations SET customer_account_id=$1 WHERE id=$2 AND customer_account_id IS NULL", [accountId, registrationId]);
+    return updated.rowCount > 0 ? "claimed" as const : "already_claimed" as const;
+  }
+
+  async unlinkRegistrationFromCustomer(registrationId: string, customerAccountId?: string | null) {
+    const id = String(registrationId || "").trim().toUpperCase();
+    const accountId = customerAccountId == null ? "" : String(customerAccountId).trim();
+    const result = await this.pool.query(accountId
+      ? "UPDATE registrations SET customer_account_id = NULL WHERE id = $1 AND customer_account_id = $2"
+      : "UPDATE registrations SET customer_account_id = NULL WHERE id = $1 AND customer_account_id IS NOT NULL", accountId ? [id, accountId] : [id]);
+    return (result.rowCount || 0) > 0;
+  }
+
+  async getCustomerNotificationPreferences(customerAccountId: string) {
+    const accountId = String(customerAccountId || "").trim();
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM customer_notification_preferences WHERE customer_account_id=$1", [accountId]);
+    return mapCustomerNotificationPreferencesRow(result.rows[0], accountId);
+  }
+
+  async updateCustomerNotificationPreferences(customerAccountId: string, input: UpdateCustomerNotificationPreferencesInput) {
+    const accountId = String(customerAccountId || "").trim();
+    const current = await this.getCustomerNotificationPreferences(accountId);
+    const result = await this.pool.query<Record<string, unknown>>(
+      `INSERT INTO customer_notification_preferences (customer_account_id,email_transactional_enabled,sms_transactional_enabled,sms_marketing_enabled,sms_consent_at,sms_opted_out_at)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(customer_account_id) DO UPDATE SET email_transactional_enabled=EXCLUDED.email_transactional_enabled,sms_transactional_enabled=EXCLUDED.sms_transactional_enabled,sms_marketing_enabled=EXCLUDED.sms_marketing_enabled,sms_consent_at=EXCLUDED.sms_consent_at,sms_opted_out_at=EXCLUDED.sms_opted_out_at,updated_at=CURRENT_TIMESTAMP
+       RETURNING *`,
+      [accountId, input.email_transactional_enabled ?? current.email_transactional_enabled, input.sms_transactional_enabled ?? current.sms_transactional_enabled, input.sms_marketing_enabled ?? current.sms_marketing_enabled, input.sms_consent_at === undefined ? current.sms_consent_at : input.sms_consent_at?.toISOString() || null, input.sms_opted_out_at === undefined ? current.sms_opted_out_at : input.sms_opted_out_at?.toISOString() || null],
+    );
+    return mapCustomerNotificationPreferencesRow(result.rows[0], accountId);
   }
 
   async cancelRegistration(id: unknown): Promise<RegistrationResult> {
@@ -926,6 +1452,11 @@ export class PostgresAppDatabase implements AppDatabase {
         await client.query("ROLLBACK");
         return undefined;
       }
+      const orderCount = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM direct_orders WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
+      if (Number(orderCount.rows[0]?.count || 0) > 0) {
+        await client.query("COMMIT");
+        return { tickets: 0, seats: 0, orders: Number(orderCount.rows[0]?.count || 0), blocked: true };
+      }
       const tickets = await client.query("DELETE FROM direct_tickets WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
       const seats = await client.query("DELETE FROM direct_seats WHERE performance_id=$1 AND event_id=$2", [performanceId, eventId]);
       await client.query("COMMIT");
@@ -939,6 +1470,7 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async listDirectSeats(eventId: string, performanceId?: string) {
+    await this.releaseExpiredDirectOrderHolds(eventId);
     await this.releaseExpiredDirectTicketHolds(eventId);
     const result = await this.pool.query<Record<string, unknown>>(`SELECT id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,status,allocation_status,source_status,created_at::text,updated_at::text FROM direct_seats WHERE event_id=$1 ${performanceId ? "AND performance_id=$2" : ""} ORDER BY zone,row_label,seat_label`, performanceId ? [eventId, performanceId] : [eventId]);
     return result.rows.map(mapDirectSeatRow);
@@ -969,13 +1501,147 @@ export class PostgresAppDatabase implements AppDatabase {
     const result = await this.pool.query<Record<string, unknown>>(`SELECT t.*,p.code performance_code,p.title performance_title,p.starts_at::text performance_starts_at,p.ends_at::text performance_ends_at,s.zone,s.row_label,s.seat_label FROM direct_tickets t JOIN event_performances p ON p.id=t.performance_id JOIN direct_seats s ON s.id=t.seat_id ${where}`, params); return result.rows.map(mapDirectTicketRow);
   }
 
+  private async directOrderRows(where: string, params: unknown[]) {
+    const result = await this.pool.query<Record<string, unknown>>(`SELECT o.*,p.code performance_code,p.title performance_title,p.starts_at::text performance_starts_at,p.ends_at::text performance_ends_at FROM direct_orders o JOIN event_performances p ON p.id=o.performance_id ${where}`, params);
+    return Promise.all(result.rows.map(async (row) => mapDirectOrderRow(row, await this.directTicketRows("WHERE t.order_id=$1 ORDER BY t.created_at ASC", [row.id]))));
+  }
+
   async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketRows("WHERE t.event_id=$1 ORDER BY t.created_at DESC", [eventId]); }
   async getDirectTicketById(id: string) { return (await this.directTicketRows("WHERE t.id=$1", [id]))[0]; }
 
   async createDirectTicket(input: CreateDirectTicketInput) {
+    await this.releaseExpiredDirectOrderHolds(input.event_id);
     await this.releaseExpiredDirectTicketHolds(input.event_id);
     const client = await this.pool.connect();
-    try { await client.query("BEGIN"); const seat = await client.query<Record<string, unknown>>("SELECT * FROM direct_seats WHERE id=$1 AND event_id=$2 AND performance_id=$3 FOR UPDATE", [input.seat_id,input.event_id,input.performance_id]); if (!seat.rows[0]) { await client.query("ROLLBACK"); return { error: "invalid_seat" as const }; } if (seat.rows[0].status !== "available" || seat.rows[0].allocation_status !== "allocated") { await client.query("ROLLBACK"); return { error: "seat_unavailable" as const }; } const paymentStatus = input.payment_required === false ? "not_required" : "awaiting_payment"; const status = paymentStatus === "not_required" ? "issued" : "held"; const id=generateEntityId("dtkt"); const holdMinutes=Math.min(120,Math.max(5,Math.round(Number(input.hold_minutes)||15))); await client.query(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $12='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN $12='held' THEN CURRENT_TIMESTAMP + ($14 * INTERVAL '1 minute') END,$15)`,[id,input.event_id,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,holdMinutes,input.source === "public" ? "public" : "admin"]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[status,input.seat_id]); await client.query("COMMIT"); return { ticket: await this.getDirectTicketById(id) }; } catch (error) { await client.query("ROLLBACK"); if ((error as { code?: string }).code === "23505") return { error: "seat_unavailable" as const }; throw error; } finally { client.release(); }
+    try { await client.query("BEGIN"); const seat = await client.query<Record<string, unknown>>("SELECT * FROM direct_seats WHERE id=$1 AND event_id=$2 AND performance_id=$3 FOR UPDATE", [input.seat_id,input.event_id,input.performance_id]); if (!seat.rows[0]) { await client.query("ROLLBACK"); return { error: "invalid_seat" as const }; } if (seat.rows[0].status !== "available" || seat.rows[0].allocation_status !== "allocated") { await client.query("ROLLBACK"); return { error: "seat_unavailable" as const }; } const paymentStatus = input.payment_required === false ? "not_required" : "awaiting_payment"; const status = paymentStatus === "not_required" ? "issued" : "held"; const id=generateEntityId("dtkt"); const holdMinutes=Math.min(120,Math.max(5,Math.round(Number(input.hold_minutes)||15))); await client.query(`INSERT INTO direct_tickets (id,event_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_by_user_id,issued_at,hold_expires_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CASE WHEN $13='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN $13='held' THEN CURRENT_TIMESTAMP + ($15 * INTERVAL '1 minute') END,$16)`,[id,input.event_id,input.customer_account_id || null,input.performance_id,input.seat_id,input.ticket_class,String(input.holder_name || ""),String(input.buyer_name || ""),String(input.phone || ""),String(input.email || ""),Number(input.price_amount || 0),paymentStatus,status,input.issued_by_user_id || null,holdMinutes,input.source === "public" ? "public" : "admin"]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[status,input.seat_id]); await client.query("COMMIT"); return { ticket: await this.getDirectTicketById(id) }; } catch (error) { await client.query("ROLLBACK"); if ((error as { code?: string }).code === "23505") return { error: "seat_unavailable" as const }; throw error; } finally { client.release(); }
+  }
+
+  async createDirectOrder(input: CreateDirectOrderInput) {
+    await this.releaseExpiredDirectOrderHolds(input.event_id);
+    const seatIds = [...new Set((input.seat_ids || []).map((seatId) => String(seatId || "").trim()).filter(Boolean))];
+    if (!seatIds.length || !input.event_id || !input.performance_id) return { error: "invalid_order" as const };
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const seats = await client.query<Record<string, unknown>>("SELECT * FROM direct_seats WHERE id=ANY($1::text[]) AND event_id=$2 AND performance_id=$3 FOR UPDATE", [seatIds, input.event_id, input.performance_id]);
+      if (seats.rows.length !== seatIds.length) { await client.query("ROLLBACK"); return { error: "invalid_seat" as const }; }
+      if (seats.rows.some((seat) => seat.status !== "available" || seat.allocation_status !== "allocated")) { await client.query("ROLLBACK"); return { error: "seat_unavailable" as const }; }
+      const orderId = generateEntityId("ord");
+      const holdMinutes = Math.min(120, Math.max(5, Math.round(Number(input.hold_minutes) || 15)));
+      const totalAmount = Math.max(0, Number(input.total_amount) || 0);
+      const subtotalAmount = Math.max(0, Number(input.subtotal_amount) || 0);
+      const status = totalAmount === 0 ? "paid" : "pending_payment";
+      const billingStatus = String(input.billing_profile_json || "{}").trim() !== "{}" ? "pending" : "not_required";
+      await client.query(`INSERT INTO direct_orders (id,event_id,performance_id,customer_account_id,buyer_name,phone,email,currency,subtotal_amount,platform_fee_amount,payment_fee_amount,tax_amount,discount_amount,total_amount,fee_rule_version,tax_snapshot_json,billing_profile_json,seller_snapshot_json,status,hold_expires_at,billing_document_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,CASE WHEN $19='pending_payment' THEN CURRENT_TIMESTAMP + ($20 * INTERVAL '1 minute') END,$21)`, [orderId,input.event_id,input.performance_id,input.customer_account_id || null,String(input.buyer_name || "").trim(),String(input.phone || "").trim(),String(input.email || "").trim(),"THB",subtotalAmount,Math.max(0,Number(input.platform_fee_amount)||0),Math.max(0,Number(input.payment_fee_amount)||0),Math.max(0,Number(input.tax_amount)||0),Math.max(0,Number(input.discount_amount)||0),totalAmount,String(input.fee_rule_version || "v1"),String(input.tax_snapshot_json || "{}").trim() || "{}",String(input.billing_profile_json || "{}").trim() || "{}",String(input.seller_snapshot_json || "{}").trim() || "{}",status,holdMinutes,billingStatus]);
+      const seatPrice = seatIds.length ? subtotalAmount / seatIds.length : 0;
+      const ticketStatus = status === "paid" ? "issued" : "held";
+      const paymentStatus = status === "paid" ? "verified" : "awaiting_payment";
+      for (const seat of seats.rows) {
+        await client.query(`INSERT INTO direct_tickets (id,event_id,order_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_at,hold_expires_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CASE WHEN $14='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN $14='held' THEN CURRENT_TIMESTAMP + ($15 * INTERVAL '1 minute') END,$16)`, [generateEntityId("dtkt"),input.event_id,orderId,input.customer_account_id || null,input.performance_id,seat.id,String(input.ticket_class || "Public").trim() || "Public",String(input.buyer_name || "").trim(),String(input.buyer_name || "").trim(),String(input.phone || "").trim(),String(input.email || "").trim(),seatPrice,paymentStatus,ticketStatus,holdMinutes,input.source === "admin" ? "admin" : "public"]);
+        await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2", [ticketStatus, seat.id]);
+      }
+      await client.query("INSERT INTO payment_attempts (id,order_id,attempt_number,method,amount,status) VALUES ($1,$2,1,'promptpay',$3,$4)", [generateEntityId("pay"),orderId,totalAmount,status === "paid" ? "verified" : "pending"]);
+      await client.query("COMMIT");
+      return { order: await this.getDirectOrderById(orderId) };
+    } catch (error: any) {
+      await client.query("ROLLBACK");
+      if (error?.code === "23505") return { error: "seat_unavailable" as const };
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async getDirectOrderById(id: string) {
+    await this.releaseExpiredDirectOrderHolds();
+    return (await this.directOrderRows("WHERE o.id=$1", [String(id || "").trim()]))[0];
+  }
+
+  async listDirectOrders(eventId: string) {
+    await this.releaseExpiredDirectOrderHolds(eventId);
+    return this.directOrderRows("WHERE o.event_id=$1 ORDER BY o.created_at DESC", [String(eventId || "").trim()]);
+  }
+
+  async listCustomerOrders(customerAccountId: string) {
+    await this.releaseExpiredDirectOrderHolds();
+    return this.directOrderRows("WHERE o.customer_account_id=$1 ORDER BY o.created_at DESC", [String(customerAccountId || "").trim()]);
+  }
+
+  async submitDirectOrderPaymentProof(id: string, input: { payment_proof_mime: string; payment_proof_base64: string; payment_reference?: string | null }) {
+    await this.releaseExpiredDirectOrderHolds();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query("SELECT id,status FROM direct_orders WHERE id=$1 FOR UPDATE", [id]);
+      const order = current.rows[0];
+      if (!order || !["pending_payment", "payment_submitted"].includes(String(order.status))) { await client.query("ROLLBACK"); return this.getDirectOrderById(id); }
+      await client.query("UPDATE direct_orders SET status='payment_submitted',payment_proof_mime=$1,payment_proof_base64=$2,payment_proof_submitted_at=CURRENT_TIMESTAMP,payment_reference=$3,hold_expires_at=CURRENT_TIMESTAMP+INTERVAL '24 hours',updated_at=CURRENT_TIMESTAMP WHERE id=$4", [input.payment_proof_mime,input.payment_proof_base64,input.payment_reference || null,id]);
+      await client.query("UPDATE direct_tickets SET payment_status='proof_submitted',payment_proof_mime=$1,payment_proof_base64=$2,payment_proof_submitted_at=CURRENT_TIMESTAMP,payment_reference=$3,hold_expires_at=CURRENT_TIMESTAMP+INTERVAL '24 hours',updated_at=CURRENT_TIMESTAMP WHERE order_id=$4 AND status='held'", [input.payment_proof_mime,input.payment_proof_base64,input.payment_reference || null,id]);
+      await client.query("UPDATE payment_attempts SET status='proof_submitted',proof_mime=$1,proof_base64=$2,transaction_reference=$3,updated_at=CURRENT_TIMESTAMP WHERE order_id=$4 AND attempt_number=(SELECT MAX(attempt_number) FROM payment_attempts WHERE order_id=$4)", [input.payment_proof_mime,input.payment_proof_base64,input.payment_reference || null,id]);
+      await client.query("COMMIT");
+      return this.getDirectOrderById(id);
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async updateDirectOrderPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query<Record<string, unknown>>("SELECT * FROM direct_orders WHERE id=$1 FOR UPDATE", [id]);
+      const order = current.rows[0];
+      if (!order) { await client.query("ROLLBACK"); return undefined; }
+      if (order.status === "paid" && input.payment_status === "verified") { await client.query("ROLLBACK"); return this.getDirectOrderById(id); }
+      if (!["pending_payment", "payment_submitted"].includes(String(order.status)) && input.payment_status !== "refunded") { await client.query("ROLLBACK"); return this.getDirectOrderById(id); }
+      const nextStatus = input.payment_status === "verified" ? "paid" : input.payment_status === "refunded" ? "refunded" : "rejected";
+      const ticketStatus = input.payment_status === "verified" ? "issued" : "voided";
+      await client.query("UPDATE direct_orders SET status=$1,payment_reference=COALESCE($2,payment_reference),rejection_reason=$3,hold_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$4", [nextStatus,input.payment_reference || null,input.rejection_reason || null,id]);
+      if (input.payment_status === "verified") await client.query("UPDATE direct_tickets SET payment_reference=NULL WHERE order_id=$1", [id]);
+      await client.query("UPDATE direct_tickets SET payment_status=$1,payment_verified_by_user_id=$2,payment_verified_at=CURRENT_TIMESTAMP,rejection_reason=$3,status=$4,issued_at=CASE WHEN $4='issued' THEN CURRENT_TIMESTAMP ELSE issued_at END,voided_at=CASE WHEN $4='issued' THEN NULL ELSE CURRENT_TIMESTAMP END,hold_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE order_id=$5", [input.payment_status,input.verified_by_user_id || null,input.rejection_reason || null,ticketStatus,id]);
+      await client.query("UPDATE direct_tickets SET payment_reference=COALESCE($1,payment_reference) WHERE order_id=$2 AND id=(SELECT id FROM direct_tickets WHERE order_id=$2 ORDER BY created_at ASC, id ASC LIMIT 1)", [input.payment_reference || null,id]);
+      await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT seat_id FROM direct_tickets WHERE order_id=$2)", [input.payment_status === "verified" ? "issued" : "available",id]);
+      await client.query("UPDATE payment_attempts SET status=$1,transaction_reference=COALESCE($2,transaction_reference),updated_at=CURRENT_TIMESTAMP WHERE order_id=$3 AND attempt_number=(SELECT MAX(attempt_number) FROM payment_attempts WHERE order_id=$3)", [input.payment_status,input.payment_reference || null,id]);
+      await client.query("COMMIT");
+      return this.getDirectOrderById(id);
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async releaseExpiredDirectOrderHolds(eventId?: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<{ id: string }>(`SELECT id FROM direct_orders WHERE status IN ('pending_payment','payment_submitted') AND hold_expires_at IS NOT NULL AND hold_expires_at<=CURRENT_TIMESTAMP ${eventId ? "AND event_id=$1" : ""} FOR UPDATE`, eventId ? [eventId] : []);
+      for (const row of result.rows) {
+        await client.query("UPDATE direct_orders SET status='expired',updated_at=CURRENT_TIMESTAMP WHERE id=$1", [row.id]);
+        await client.query("UPDATE direct_tickets SET status='voided',payment_status='expired',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE order_id=$1 AND status='held'", [row.id]);
+        await client.query("UPDATE direct_seats SET status='available',updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT seat_id FROM direct_tickets WHERE order_id=$1) AND NOT EXISTS (SELECT 1 FROM direct_tickets other WHERE other.seat_id=direct_seats.id AND other.status IN ('held','issued','checked_in'))", [row.id]);
+      }
+      await client.query("COMMIT");
+      return result.rowCount || 0;
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async claimDirectOrderToCustomer(input: { order_id: string; customer_account_id: string; normalized_email?: string; normalized_phone?: string }) {
+    const orderId = String(input.order_id || "").trim();
+    const accountId = String(input.customer_account_id || "").trim();
+    const result = await this.pool.query<{ customer_account_id: string | null; email: string; phone: string }>("SELECT customer_account_id,email,phone FROM direct_orders WHERE id=$1 LIMIT 1", [orderId]);
+    const row = result.rows[0];
+    if (!row) return "not_found" as const;
+    if (row.customer_account_id && row.customer_account_id !== accountId) return "already_claimed" as const;
+    const emailMatches = Boolean(input.normalized_email && String(row.email || "").trim().toLowerCase() === input.normalized_email.trim().toLowerCase());
+    const phoneMatches = Boolean(input.normalized_phone && String(row.phone || "").replace(/\D/g, "") === input.normalized_phone.replace(/\D/g, ""));
+    if (!emailMatches && !phoneMatches) return "contact_mismatch" as const;
+    if (row.customer_account_id === accountId) return "already_claimed" as const;
+    const updated = await this.pool.query("UPDATE direct_orders SET customer_account_id=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND customer_account_id IS NULL", [accountId,orderId]);
+    await this.pool.query("UPDATE direct_tickets SET customer_account_id=$1 WHERE order_id=$2 AND customer_account_id IS NULL", [accountId,orderId]);
+    return updated.rowCount > 0 ? "claimed" as const : "already_claimed" as const;
+  }
+
+  async unlinkDirectOrderFromCustomer(orderId: string, customerAccountId?: string | null) {
+    const id = String(orderId || "").trim();
+    const accountId = customerAccountId == null ? "" : String(customerAccountId).trim();
+    const result = await this.pool.query(accountId
+      ? "UPDATE direct_orders SET customer_account_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND customer_account_id = $2"
+      : "UPDATE direct_orders SET customer_account_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND customer_account_id IS NOT NULL", accountId ? [id, accountId] : [id]);
+    if ((result.rowCount || 0) > 0) await this.pool.query("UPDATE direct_tickets SET customer_account_id = NULL WHERE order_id = $1", [id]);
+    return (result.rowCount || 0) > 0;
   }
 
   async updateDirectTicketPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
@@ -989,7 +1655,7 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async releaseExpiredDirectTicketHolds(eventId?: string) {
-    const result=await this.pool.query(`WITH expired AS (UPDATE direct_tickets SET status='voided',payment_status='expired',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE status='held' AND hold_expires_at IS NOT NULL AND hold_expires_at<=CURRENT_TIMESTAMP ${eventId ? "AND event_id=$1" : ""} RETURNING seat_id) UPDATE direct_seats SET status='available',updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT seat_id FROM expired)`,eventId?[eventId]:[]);
+    const result=await this.pool.query(`WITH expired AS (UPDATE direct_tickets SET status='voided',payment_status='expired',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE order_id IS NULL AND status='held' AND hold_expires_at IS NOT NULL AND hold_expires_at<=CURRENT_TIMESTAMP ${eventId ? "AND event_id=$1" : ""} RETURNING seat_id) UPDATE direct_seats SET status='available',updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT seat_id FROM expired)`,eventId?[eventId]:[]);
     return result.rowCount||0;
   }
 
@@ -1016,7 +1682,7 @@ export class PostgresAppDatabase implements AppDatabase {
     }
   }
   async reissueDirectTicket(id: string, issuedByUserId?: string | null) {
-    const client=await this.pool.connect(); try { await client.query("BEGIN"); const current=await client.query<Record<string,unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE",[id]); const ticket=current.rows[0]; if(!ticket || !["issued","checked_in"].includes(String(ticket.status))) { await client.query("ROLLBACK"); return undefined; } const nextId=generateEntityId("dtkt"); await client.query("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); await client.query(`INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,payment_reference,status,issued_by_user_id,payment_verified_by_user_id,payment_verified_at,issued_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'issued',$13,$14,$15,CURRENT_TIMESTAMP,$16)`,[nextId,ticket.event_id,ticket.performance_id,ticket.seat_id,ticket.ticket_class,ticket.holder_name,ticket.buyer_name,ticket.phone,ticket.email,ticket.price_amount,ticket.payment_status,ticket.payment_reference,issuedByUserId||null,ticket.payment_verified_by_user_id,ticket.payment_verified_at,ticket.source]); await client.query("UPDATE direct_seats SET status='issued',updated_at=CURRENT_TIMESTAMP WHERE id=$1",[ticket.seat_id]); await client.query("COMMIT"); return this.getDirectTicketById(nextId); } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+    const client=await this.pool.connect(); try { await client.query("BEGIN"); const current=await client.query<Record<string,unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE",[id]); const ticket=current.rows[0]; if(!ticket || !["issued","checked_in"].includes(String(ticket.status))) { await client.query("ROLLBACK"); return undefined; } const nextId=generateEntityId("dtkt"); await client.query("UPDATE direct_tickets SET status='voided',voided_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); await client.query(`INSERT INTO direct_tickets (id,event_id,order_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,payment_reference,status,issued_by_user_id,payment_verified_by_user_id,payment_verified_at,issued_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'issued',$15,$16,$17,CURRENT_TIMESTAMP,$18)`,[nextId,ticket.event_id,ticket.order_id,ticket.customer_account_id,ticket.performance_id,ticket.seat_id,ticket.ticket_class,ticket.holder_name,ticket.buyer_name,ticket.phone,ticket.email,ticket.price_amount,ticket.payment_status,ticket.payment_reference,issuedByUserId||null,ticket.payment_verified_by_user_id,ticket.payment_verified_at,ticket.source]); await client.query("UPDATE direct_seats SET status='issued',updated_at=CURRENT_TIMESTAMP WHERE id=$1",[ticket.seat_id]); await client.query("COMMIT"); return this.getDirectTicketById(nextId); } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
   async checkInDirectTicket(id: string) { const ticket=await this.getDirectTicketById(id); if (!ticket) return { ticket: undefined, alreadyCheckedIn: false }; if (ticket.status === "checked_in") return { ticket, alreadyCheckedIn: true }; if (ticket.status !== "issued") return { ticket, alreadyCheckedIn: false }; await this.pool.query("UPDATE direct_tickets SET status='checked_in',checked_in_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[id]); return { ticket: await this.getDirectTicketById(id), alreadyCheckedIn: false }; }
 

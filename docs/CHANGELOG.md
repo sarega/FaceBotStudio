@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 - 2026-08-09
+
+- Added the customer ticketing platform foundation: customer accounts, verified checkout, multi-seat order holds, PromptPay QR payment proof, fee/tax snapshots, and customer ticket/order history.
+- Added customer claims, notification preferences, SMS outbox delivery, account export/disable controls, and admin payment review with audit coverage.
+- Added event-level checkout controls for public seat inventory, customer checkout, order limits, platform fees, payment fees, and tax settings; all new commerce features remain disabled by default behind feature flags.
+- Added SQLite/PostgreSQL migrations and legacy SQLite upgrade handling for customer links, order/payment records, preferences, and notification delivery.
+- Added public checkout, customer account, and admin order-review UI plus regression coverage for the new domain and legacy SQLite startup.
+
 ## 0.5.3 - 2026-08-06
 
 - Prioritized Facebook Page discovery for Outreach targets and made target Facebook and website URLs directly editable.

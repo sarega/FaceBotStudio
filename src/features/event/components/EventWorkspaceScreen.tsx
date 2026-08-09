@@ -1241,6 +1241,20 @@ export function EventWorkspaceScreen({
                           />
                           Public page enabled
                         </label>
+                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={settings.event_catalog_visible === "1"}
+                            disabled={!publicPageEnabled}
+                            onChange={(event) =>
+                              setSettings({
+                                ...settings,
+                                event_catalog_visible: event.target.checked ? "1" : "0",
+                              })}
+                          />
+                          Show in event catalog
+                        </label>
                         {settings.event_public_ticketing_mode !== "external" && <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"
@@ -1254,6 +1268,47 @@ export function EventWorkspaceScreen({
                           />
                           Inline registration
                         </label>}
+                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={settings.direct_ticketing_public_enabled === "1"}
+                            disabled={!publicPageEnabled}
+                            onChange={(event) => setSettings({ ...settings, direct_ticketing_public_enabled: event.target.checked ? "1" : "0" })}
+                          />
+                          Public seat inventory enabled
+                        </label>
+                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={settings.customer_ticketing_enabled === "1"}
+                            disabled={settings.direct_ticketing_public_enabled !== "1" || !publicPageEnabled}
+                            onChange={(event) => setSettings({ ...settings, customer_ticketing_enabled: event.target.checked ? "1" : "0" })}
+                          />
+                          Customer account checkout
+                        </label>
+                        {settings.customer_ticketing_enabled === "1" && <div className="w-full rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                          <div className="grid gap-3 md:grid-cols-4">
+                            <label>
+                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Max seats / order</span>
+                              <input type="number" min="1" max="12" value={settings.customer_ticket_max_seats || "6"} onChange={(event) => setSettings({ ...settings, customer_ticket_max_seats: event.target.value })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                            </label>
+                            <label>
+                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Platform fee %</span>
+                              <input type="number" min="0" max="100" step="0.01" value={settings.platform_fee_value || "0"} onChange={(event) => setSettings({ ...settings, platform_fee_value: event.target.value, platform_fee_type: "percent" })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                            </label>
+                            <label>
+                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Payment fee (THB)</span>
+                              <input type="number" min="0" step="0.01" value={settings.payment_fee_value || "0"} onChange={(event) => setSettings({ ...settings, payment_fee_value: event.target.value })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                            </label>
+                            <label>
+                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Tax rate %</span>
+                              <input type="number" min="0" max="100" step="0.01" value={settings.tax_rate_percent || "0"} onChange={(event) => setSettings({ ...settings, tax_rate_percent: event.target.value })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                            </label>
+                          </div>
+                          <p className="mt-2 text-xs text-slate-500">Customer checkout stays gated by the deployment flags and requires a verified customer account. PromptPay QR is used for the pilot.</p>
+                        </div>}
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"

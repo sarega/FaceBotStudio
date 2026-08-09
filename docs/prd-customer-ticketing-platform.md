@@ -4,11 +4,24 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Planning draft |
+| Status | Implementation complete behind feature flags; production enablement pending operational approvals |
 | Product | Meetrix / FaceBotStudio |
-| Scope | Customer accounts, event discovery, direct-ticket purchasing, customer ticket wallet, notifications, and event-manager access boundaries |
+| Scope | Customer accounts, event discovery, direct-ticket purchasing, customer ticket wallet, notifications, billing/tax documents, platform fees, organizer settlement, and event-manager access boundaries |
 | Delivery strategy | Additive, feature-flagged, backward-compatible rollout |
-| Runtime changes in this PRD | None |
+| Runtime changes in this PRD | Additive schema, customer routes/UI, order checkout, PromptPay proof review, notification outbox/SMS adapter, and account claim/unlink flows |
+
+### Implementation checkpoint
+
+| Phase | Status | Delivered |
+| --- | --- | --- |
+| 0–3 | Complete | Customer identity, public catalog, notification outbox foundation, and feature-flagged account surface |
+| 4 | Complete | Registration/order customer links, claim flow, customer wallet, and reversible admin unlink endpoints |
+| 5 | Complete | Multi-seat order domain, immutable fee/tax/seller snapshots, PromptPay payment attempts, expiry, and admin order review |
+| 6 | Complete | Verified-customer checkout pilot, seat hold, PromptPay QR, payment-proof upload, and ticket wallet |
+| 7 | Complete | Customer notification preferences, generic SMS provider adapter, retryable outbox worker, and SMS opt-in UI |
+| 8 | Complete | Account export/disable, ownership checks, audit events, customer claim controls, and legacy-flow regression coverage |
+
+Production launch remains gated until the seller/VAT/billing/settlement policy, PromptPay receiving account, email provider, SMS provider (if enabled), PostgreSQL migration verification, and event-level UAT are approved.
 
 ## 2. Executive summary
 
@@ -19,6 +32,10 @@ The customer application is a separate product surface from the existing organiz
 Free-event registration remains guest-friendly and must not require an account. A logged-in customer may use saved profile data and link a free registration to the account, but the existing guest registration flow and ticket remain valid.
 
 Public paid direct-ticket purchases require a verified customer account. Organizer-created complimentary or direct tickets may continue to be issued without a customer account.
+
+The initial public payment method is PromptPay Scan. The customer uploads payment proof after transferring the exact order amount, and staff verification is authoritative until an approved SCB Business QR/QR API confirmation path is enabled. An uploaded slip alone never marks an order as paid.
+
+The paid checkout must have an approved commercial and tax model before production enablement: who is the ticket seller, who issues customer billing documents, who receives the money, who pays the platform fee, and how organizer settlement is recorded.
 
 The implementation must not change current behavior until an explicit deployment-level and event-level feature flag is enabled. Database changes are additive, new foreign keys are nullable where legacy records exist, and no existing records are automatically converted into customer accounts.
 
@@ -201,8 +218,8 @@ Shared visual/domain components may be reused, but navigation, route guards, dat
 6. The system verifies that the account and event are allowed to purchase.
 7. Customer confirms buyer profile, ticket holders, price, and terms.
 8. Server creates one order, one or more tickets, and seat holds in one transaction.
-9. Customer completes the configured payment/proof flow.
-10. Staff or webhook verifies payment.
+9. Customer scans the PromptPay QR, transfers the exact amount, and uploads payment proof.
+10. Staff verifies the payment in the initial release; an approved bank callback/inquiry path may automate verification later.
 11. The order becomes paid and all eligible tickets become issued in one transaction.
 12. The notification outbox sends order/ticket messages.
 13. Issued tickets appear in `/app/tickets`.
@@ -368,7 +385,8 @@ One `direct_order` represents:
 - one payment state;
 - one or more direct tickets;
 - buyer/contact/address snapshots;
-- totals and payment audit metadata.
+- totals, financial line-item snapshots, and payment audit metadata;
+- seller/merchant model and organizer settlement metadata where applicable.
 
 The first release may restrict one order to one performance if that avoids ambiguous hold and refund behavior. Cross-performance carts are explicitly deferred.
 
@@ -412,6 +430,49 @@ Payment states remain compatible with the existing values:
 - Expiring an order releases every held seat in the same transaction.
 - Partial release is not allowed unless a separately designed order-edit flow exists.
 - Late payment is queued for manual resolution and never silently assigns another seat.
+
+### 14.6 First-release payment, commercial, and billing model
+
+The first public paid checkout uses PromptPay Scan:
+
+- customer scans the configured PromptPay QR and transfers the exact order amount;
+- customer uploads payment proof before the hold expires;
+- the order enters `payment_review`;
+- staff verifies the transfer against the receiving account and marks the payment decision;
+- only a verified payment issues tickets and moves the order to `paid`;
+- a future SCB Business QR/QR API callback or inquiry integration may automate payment confirmation, but must be idempotent and retain a manual fallback;
+- payment proof is evidence for review, not a tax invoice or a sufficient payment authority by itself.
+
+The commercial model must be explicit before public paid checkout. The deployment must choose and document one of these boundaries:
+
+- **Organizer as seller:** the organizer is the ticket seller and issues the customer receipt or tax invoice; FaceBotStudio charges the organizer a platform/service fee and records organizer settlement.
+- **Platform as seller:** FaceBotStudio issues customer billing documents, receives the ticket payment, records the organizer payable, and settles the organizer after fees, refunds, and approved adjustments.
+- **Collection on behalf of organizer:** permitted only after a written commercial agreement and accounting/tax review define agency, invoicing, settlement, and refund responsibilities.
+
+If a centralized FaceBotStudio account receives the full ticket price, the system must not report only the platform fee as revenue until the merchant/seller model has been approved by the responsible accountant.
+
+Every paid order must keep separate immutable amounts for:
+
+- ticket subtotal;
+- discounts and promotions;
+- platform fee;
+- payment-processing or bank fee;
+- applicable VAT/tax amount;
+- customer grand total;
+- amount paid, refunded, and adjusted;
+- organizer gross and net settlement.
+
+Recommended pilot pricing is `2% of paid ticket subtotal + THB 10 per order`, with zero platform fee for free events. The fee payer (organizer or customer), VAT treatment, minimums, caps, and any bank-fee pass-through must be configurable and approved before launch. Mandatory fees must be shown before payment; historical orders retain the fee rule and tax snapshot used at checkout.
+
+Billing requirements:
+
+- receipt, tax invoice, credit note, and debit note are distinct document types;
+- the document seller is the approved merchant/seller for that order;
+- customer billing profiles support name, address, tax ID, branch number, and delivery email when a tax document is requested;
+- billing documents are generated only after the payment decision reaches the approved issuance state;
+- VAT status and the applicable tax rate are configuration/snapshot data, never a hard-coded assumption;
+- e-Tax Invoice/e-Receipt is enabled only through an approved Revenue Department path or authorized provider;
+- refunds, cancellations, partial refunds, and organizer adjustments create auditable document and ledger adjustments rather than mutating an issued document.
 
 ## 15. Notification platform requirements
 
@@ -489,7 +550,11 @@ Hashed, expiring, one-time tokens for email verification and password reset.
 
 #### `direct_orders`
 
-Contains customer/event relationship, buyer snapshot, address snapshot, totals, currency, order/payment state, hold expiry, payment reference, and audit timestamps.
+Contains customer/event relationship, approved seller/merchant model, buyer snapshot, address snapshot, totals, currency, order/payment state, hold expiry, payment reference, financial line-item totals, and audit timestamps.
+
+#### `order_charges`
+
+Immutable order line items for ticket subtotal, discount, platform fee, payment-processing fee, VAT/tax, refund, and other approved adjustments. Each line stores its type, amount, currency, tax treatment, payer, fee-rule version, and source.
 
 #### `payment_attempts`
 
@@ -503,6 +568,22 @@ Stores channel, kind, recipient snapshot, related entity, payload/template data,
 
 Stores channel/purpose preference only after the notification model is defined. Transactional delivery rules remain server-controlled.
 
+#### `billing_profiles`
+
+Stores customer or organizer billing identity, address, tax ID, branch number, and delivery contact. Billing data is selected explicitly and copied into the resulting order/document snapshot.
+
+#### `tax_documents`
+
+Stores immutable receipt, tax invoice, credit note, and debit note metadata, document number, seller snapshot, buyer snapshot, source order, line totals, tax rate/amount, delivery state, and cancellation/replacement links.
+
+#### `fee_rules`
+
+Stores versioned platform-fee rules by organization/event, fee basis, percentage, fixed amount, minimum/cap, payer, VAT treatment, effective dates, and approval/audit metadata.
+
+#### `organizer_settlements`
+
+Stores order-level or payout-batch settlement totals, ticket gross, fees, refunds, tax adjustments, net payable, payout status, payout reference, and reconciliation timestamps.
+
 ### 16.2 Additive columns
 
 - `registrations.customer_account_id NULL REFERENCES customer_accounts(id)`
@@ -513,8 +594,10 @@ Stores channel/purpose preference only after the notification model is defined. 
 
 - Customer profile is current mutable data.
 - Registration is the attendee snapshot for that event registration.
-- Order is the buyer/contact/address/price snapshot at purchase.
+- Order is the buyer/contact/address/price/seller/fee/tax snapshot at purchase.
 - Ticket is the holder/performance/seat snapshot for admission.
+- Charges, fee rules, tax documents, and settlement records are immutable historical records; later configuration changes never rewrite them.
+- Money values use a fixed decimal or integer minor-unit representation; floating-point arithmetic is not used for totals, tax, fees, or settlement.
 - Historical snapshots are not rewritten when profile data changes.
 
 ## 17. API boundaries
@@ -546,11 +629,15 @@ POST /api/customer/auth/reset-password
 ```text
 GET   /api/customer/profile
 PATCH /api/customer/profile
+GET   /api/customer/billing-profile
+PATCH /api/customer/billing-profile
 GET   /api/customer/tickets
 GET   /api/customer/orders
 GET   /api/customer/orders/:id
 POST  /api/customer/events/:slug/orders
 POST  /api/customer/orders/:id/payment-proof
+POST  /api/customer/orders/:id/billing-document-request
+GET   /api/customer/orders/:id/billing-documents
 GET   /api/customer/notification-preferences
 PATCH /api/customer/notification-preferences
 ```
@@ -558,6 +645,13 @@ PATCH /api/customer/notification-preferences
 ### 17.4 Organizer APIs
 
 Existing routes remain operational. New order-management routes use existing role and event-scope middleware. Event managers must pass both role and event assignment checks.
+
+Proposed finance/settlement routes use the same organizer role, organization, and event-scope checks:
+
+```text
+GET /api/organizer/settlements
+GET /api/organizer/orders/:id/financials
+```
 
 ### 17.5 Authorization rules
 
@@ -597,6 +691,9 @@ Use both deployment-level and event-level gates.
 | `CUSTOMER_ACCOUNT_REGISTRATION_ENABLED` | `0` | Allows account creation |
 | `NOTIFICATION_OUTBOX_ENABLED` | `0` | Enables outbox processing for migrated kinds |
 | `SMS_NOTIFICATION_ENABLED` | `0` | Enables SMS provider dispatch |
+| `PLATFORM_FEES_ENABLED` | `0` | Enables configured platform-fee calculation and charging |
+| `BILLING_DOCUMENTS_ENABLED` | `0` | Enables customer/organizer receipts and tax-document paths |
+| `SCB_PAYMENT_CONFIRMATION_ENABLED` | `0` | Enables approved SCB Business QR/QR API confirmation/inquiry paths |
 | existing `PUBLIC_DIRECT_TICKETING_ENABLED` | unchanged | Deployment gate for public direct ticketing |
 
 ### 19.2 Proposed event settings
@@ -633,6 +730,8 @@ Public paid checkout is enabled only when every required deployment and event fl
 3. Capture representative PostgreSQL migration and SQLite initialization checks.
 4. Add proposed feature settings with false/zero defaults only when their consuming code is ready.
 5. Record baseline request error rates and key order/registration counts if production telemetry is available.
+6. Approve the commercial/tax boundary before paid checkout: ticket seller, money receiver, VAT status, customer billing document owner, platform-fee payer/rule, refund treatment, and organizer settlement model.
+7. Obtain accounting review of the selected model and document the required receipt, tax invoice, credit/debit note, e-Tax, withholding, and reconciliation behavior before production enablement.
 
 #### Exit criteria
 
@@ -751,6 +850,10 @@ Stop writing `customer_account_id` and hide linked registrations from the wallet
 
 **Goal:** Establish multi-ticket order/payment behavior while preserving current admin direct-ticket operations.
 
+#### Financial gate
+
+Before order-backed or public money flows are enabled, the approved seller/merchant model, fee rule, VAT treatment, billing-document owner, settlement schedule, refund treatment, and accounting review must be recorded for the pilot organization/event.
+
 #### Implementation steps
 
 1. Add `direct_orders`, `payment_attempts`, and nullable `direct_tickets.order_id` in PostgreSQL and SQLite.
@@ -762,6 +865,14 @@ Stop writing `customer_account_id` and hide linked registrations from the wallet
 7. Ensure reissue retains order association and invalidates the old ticket.
 8. Add reconciliation queries covering legacy tickets and order-backed tickets.
 9. Pilot with complimentary/test orders on a non-production event.
+
+#### Financial implementation requirements
+
+- Store order charges, fee-rule versions, tax snapshots, billing profiles, documents, refunds, and settlements additively in PostgreSQL and SQLite.
+- Calculate totals server-side using fixed-precision money arithmetic.
+- Keep platform fees, bank/payment fees, VAT/tax, discounts, refunds, and organizer net settlement as separate ledger values.
+- Do not issue a customer tax document or mark a financial settlement complete from an uploaded payment proof alone.
+- Reconciliation must compare order state, payment attempts, bank confirmations/manual decisions, issued documents, and settlement state.
 
 #### Exit criteria
 
@@ -788,10 +899,17 @@ Disable order-backed creation. Continue legacy ticket operations. Do not drop or
 6. Add customer ownership checks to every order/proof endpoint.
 7. Route order/payment/ticket notifications through the outbox.
 8. Add organizer order/review views scoped to assigned events.
-9. Keep `PUBLIC_DIRECT_TICKETING_ENABLED`, `direct_ticketing_public_enabled`, and `customer_ticketing_enabled` false by default.
+9. Keep `PUBLIC_DIRECT_TICKETING_ENABLED`, `direct_ticketing_public_enabled`, `customer_ticketing_enabled`, `PLATFORM_FEES_ENABLED`, `BILLING_DOCUMENTS_ENABLED`, and `SCB_PAYMENT_CONFIRMATION_ENABLED` false by default.
 10. Enable all gates for one internal/test event first.
-11. Run concurrency, expiry, duplicate payment reference, authorization, and recovery tests.
+11. Run concurrency, expiry, duplicate payment reference, authorization, recovery, fee/tax calculation, billing-document, refund, and settlement tests.
 12. Enable one production event with a small allocation and a documented operator runbook.
+
+#### Commercial and billing gate
+
+- The checkout displays the approved seller identity, ticket price, fees, applicable tax treatment, and total before payment.
+- The selected fee payer and amount are consistent between checkout, order, customer documents, organizer reports, and settlement.
+- Billing-document templates and issuance timing are approved for the selected VAT/tax status.
+- The pilot has a tested reconciliation and payout process, including late payment, refund, cancellation, and partial-adjustment handling.
 
 #### Exit criteria
 
@@ -800,6 +918,8 @@ Disable order-backed creation. Continue legacy ticket operations. Do not drop or
 - Client price manipulation cannot change order totals.
 - Payment failure/rejection/expiry releases seats correctly.
 - Verified payment issues every order ticket once.
+- Every paid order has an immutable financial breakdown and an auditable receipt/tax-document state appropriate to the approved seller model.
+- Organizer settlement totals reconcile to paid orders, fees, refunds, and bank receipts.
 - Turning off any required flag prevents new public orders while preserving existing orders and tickets.
 
 #### Rollback
@@ -868,6 +988,7 @@ Disable claiming while preserving already verified links unless a security incid
 | Service/API | Authentication boundaries, event scope, ownership, validation, response compatibility |
 | Frontend | Route guards, loading/error/empty states, price review, expired order handling |
 | Security | CSRF, rate limiting, token expiry, horizontal access, staff/customer separation |
+| Finance/Billing | Fee calculation, VAT/tax snapshots, document numbering, refunds, settlement, reconciliation, fixed-precision totals |
 | Regression | Existing registration, direct ticketing, printing, export, recovery, check-in |
 | Operational | Feature flags, partial rollout, rollback, queued notifications, provider failure |
 
@@ -885,6 +1006,10 @@ Disable claiming while preserving already verified links unless a security incid
 10. Profile edits do not rewrite historical snapshots.
 11. Legacy tickets without `order_id` continue all supported operations.
 12. PostgreSQL migrations and SQLite initialization expose equivalent behavior.
+13. Fee-rule changes do not rewrite existing orders, documents, refunds, or settlements.
+14. The same order total and tax/fee breakdown is shown in checkout, customer documents, organizer reports, and settlement output.
+15. Payment approval, document issuance, refund, and settlement retries are idempotent and auditable.
+16. A centralized payment account cannot cause the system to report only the platform fee until the approved seller model is configured.
 
 ### 21.3 Release checks per phase
 
@@ -906,6 +1031,7 @@ Disable claiming while preserving already verified links unless a security incid
 - order created/expired/paid/rejected/refunded counts;
 - seat conflict count;
 - payment proof and decision latency;
+- fee, VAT/tax, billing-document, refund, and organizer-settlement totals and failure counts;
 - notification queued/sent/failed/retried counts by channel/kind;
 - unauthorized/forbidden customer and event-scope access attempts;
 - legacy versus order-backed direct-ticket counts during migration.
@@ -916,6 +1042,7 @@ Audit at minimum:
 
 - customer account created, verified, disabled, password reset, profile/contact changed;
 - order created, expired, cancelled, payment proof submitted, payment verified/rejected/refunded;
+- fee rule created/approved/changed, billing document issued/cancelled, refund adjustment created, settlement generated/paid/reconciled;
 - ticket issued, reissued, voided, claimed, unlinked, checked in;
 - event-manager access assignment changes;
 - notification enqueued, permanently failed, manually retried;
@@ -928,6 +1055,7 @@ Sensitive values such as passwords, tokens, payment proof, full provider payload
 - Collect only profile/address fields required for the actual customer or accounting flow.
 - Publish a privacy notice before accepting customer accounts.
 - Define retention for accounts, addresses, payment proof, notification logs, and audit records.
+- Define retention and access controls for billing profiles, tax documents, settlement records, and financial reconciliation data.
 - Restrict payment proof to authorized event operators/admins and the owning customer only where product policy permits.
 - Never expose customer lists or PII through public event/catalog APIs.
 - Normalize identity fields server-side and validate every trust boundary.
@@ -950,6 +1078,7 @@ Sensitive values such as passwords, tokens, payment proof, full provider payload
 - Enable internal/test organization first.
 - Enable one event at a time.
 - Compare old and new reporting/reconciliation outputs.
+- Compare order totals, fee/tax breakdowns, issued documents, bank receipts, and organizer settlement outputs before production enablement.
 - Move notification kinds individually to the outbox.
 - Keep legacy routes and fields available.
 
@@ -965,8 +1094,9 @@ For checkout incidents:
 2. preserve access to existing orders/tickets;
 3. stop new holds and let or explicitly release existing holds according to runbook;
 4. reconcile payment and seat states;
-5. notify affected customers through a working channel;
-6. only then consider a global deployment flag shutdown.
+5. reconcile financial documents, fee/tax ledger, refunds, and organizer settlement state;
+6. notify affected customers through a working channel;
+7. only then consider a global deployment flag shutdown.
 
 ## 25. Operational readiness checklist
 
@@ -975,6 +1105,9 @@ Before enabling a production event:
 - event manager assignments are verified;
 - public event details, timezone, performances, prices, and inventory are approved;
 - direct seats are confirmed locked from Ticketmelon public sale;
+- approved ticket seller/merchant model and receiving account are documented;
+- VAT/tax status, billing-document owner, invoice templates, and issuance timing are approved by the responsible accountant;
+- platform-fee rule, fee payer, payment/bank-fee treatment, and customer price display are approved;
 - customer terms/privacy notice are published;
 - PromptPay/payment receiver and review policy are configured;
 - customer verification email works;
@@ -982,8 +1115,10 @@ Before enabling a production event:
 - hold duration, late-payment, refund, and cancellation policies are documented;
 - payment-review queue has assigned staff;
 - notification failure view is monitored;
+- billing-document and settlement failure views are monitored;
 - support and escalation contacts are documented;
 - reconciliation export is tested;
+- organizer payout schedule, refund/credit-note handling, and financial reconciliation are tested;
 - rollback flags and runbook are tested;
 - check-in still accepts existing and new ticket formats.
 
@@ -996,13 +1131,15 @@ Initial success is operational correctness rather than sales volume:
 - zero regression in existing guest registration and admin direct-ticket operations;
 - at least 99% of verified payments issue tickets without manual data repair;
 - notification delivery state is known for every attempted transactional message;
+- zero unexplained differences between paid orders, bank receipts, issued billing documents, and organizer settlements;
+- fee and tax breakdown is reproducible from the immutable order snapshot;
 - event managers cannot access unassigned events;
 - production checkout can be disabled per event without disabling ticket access or admin operations.
 
 ## 27. Open product decisions
 
 1. Is address required for all buyers, only invoice requests, or not required initially?
-2. What is the first supported payment method and its authoritative payment status source?
+2. The first payment method is PromptPay Scan with uploaded proof and manual verification; should the first live release also enable SCB Business QR/QR API confirmation, or remain manual?
 3. How many seats may one customer hold per order?
 4. Is one order restricted to one performance in the first release? Recommended: yes.
 5. Which email address/domain and templates will be used for account verification and ticket delivery?
@@ -1013,6 +1150,12 @@ Initial success is operational correctness rather than sales volume:
 10. What proof is required to claim a historical registration or direct ticket?
 11. Should organizer-issued tickets be linkable to an existing customer account at issue time?
 12. Which current `operator` actions must be restricted or expanded for the Event Manager product label?
+13. Is the approved first-release model organizer-as-seller, platform-as-seller, or collection-on-behalf-of-organizer?
+14. What is the initial VAT/tax status, and which party owns customer receipts, tax invoices, credit notes, and debit notes?
+15. Who pays the platform fee, and is the pilot fee `2% of paid ticket subtotal + THB 10 per order` acceptable?
+16. Are bank/payment fees absorbed, passed through, or included in the platform fee?
+17. What are the settlement schedule, refund/late-payment rules, withholding requirements, and reconciliation owner?
+18. Which e-Tax Invoice/e-Receipt path or authorized provider will be used?
 
 ## 28. Definition of done for the overall program
 
@@ -1030,3 +1173,5 @@ The customer ticketing platform is complete for the initial production scope whe
 10. Public checkout can be enabled and disabled independently per event.
 11. PostgreSQL and SQLite implementations pass the agreed critical test matrix.
 12. Production runbook, reconciliation, monitoring, incident rollback, and support ownership are approved.
+13. The ticket seller, VAT/tax model, billing-document process, platform-fee policy, refund policy, and organizer settlement process are approved and tested.
+14. Paid orders retain reproducible immutable financial snapshots, and customer/organizer documents reconcile to payment and settlement records.

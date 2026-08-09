@@ -243,6 +243,7 @@ export interface RegistrationRow {
   id: string;
   sender_id: string;
   event_id?: string | null;
+  customer_account_id?: string | null;
   channel_platform?: ChannelPlatform | null;
   channel_external_id?: string | null;
   sms_opt_in_at?: string | null;
@@ -259,6 +260,7 @@ export interface RegistrationRow {
 export interface RegistrationInput {
   sender_id: string;
   event_id?: string;
+  customer_account_id?: string | null;
   channel_platform?: ChannelPlatform | null;
   channel_external_id?: string | null;
   first_name: unknown;
@@ -291,6 +293,13 @@ export interface DirectPerformanceDeleteResult {
   seats: number;
 }
 
+export interface DirectPerformanceResetResult {
+  tickets: number;
+  seats: number;
+  orders?: number;
+  blocked?: boolean;
+}
+
 export interface DirectSeatRow {
   id: string;
   event_id: string;
@@ -313,6 +322,8 @@ export interface DirectSeatRow {
 export interface DirectTicketRow {
   id: string;
   event_id: string;
+  order_id: string | null;
+  customer_account_id: string | null;
   performance_id: string;
   seat_id: string;
   ticket_class: string;
@@ -384,6 +395,102 @@ export interface CreateDirectTicketInput {
   hold_minutes?: number | null;
   source?: "admin" | "public";
   issued_by_user_id?: string | null;
+  customer_account_id?: string | null;
+}
+
+export type DirectOrderStatus = "pending_payment" | "payment_submitted" | "paid" | "rejected" | "expired" | "refunded" | "cancelled";
+export type PaymentAttemptStatus = "pending" | "proof_submitted" | "verified" | "rejected" | "refunded";
+
+export interface DirectOrderRow {
+  id: string;
+  event_id: string;
+  performance_id: string;
+  customer_account_id: string | null;
+  buyer_name: string;
+  phone: string;
+  email: string;
+  currency: string;
+  subtotal_amount: number;
+  platform_fee_amount: number;
+  payment_fee_amount: number;
+  tax_amount: number;
+  discount_amount: number;
+  total_amount: number;
+  fee_rule_version: string;
+  tax_snapshot_json: string;
+  billing_profile_json: string;
+  seller_snapshot_json: string;
+  status: DirectOrderStatus;
+  payment_reference: string | null;
+  payment_proof_mime: string | null;
+  payment_proof_base64: string | null;
+  payment_proof_submitted_at: string | null;
+  rejection_reason: string | null;
+  hold_expires_at: string | null;
+  billing_document_status: "not_required" | "pending" | "issued";
+  billing_document_number: string | null;
+  created_at: string;
+  updated_at: string;
+  performance_code?: string;
+  performance_title?: string;
+  performance_starts_at?: string;
+  performance_ends_at?: string;
+  tickets: DirectTicketRow[];
+}
+
+export interface CreateDirectOrderInput {
+  event_id: string;
+  performance_id: string;
+  seat_ids: string[];
+  customer_account_id?: string | null;
+  buyer_name: string;
+  phone: string;
+  email: string;
+  subtotal_amount: number;
+  platform_fee_amount?: number;
+  payment_fee_amount?: number;
+  tax_amount?: number;
+  discount_amount?: number;
+  total_amount: number;
+  fee_rule_version?: string;
+  tax_snapshot_json?: string;
+  billing_profile_json?: string;
+  seller_snapshot_json?: string;
+  hold_minutes?: number;
+  ticket_class?: string;
+  source?: "admin" | "public";
+}
+
+export interface PaymentAttemptRow {
+  id: string;
+  order_id: string;
+  attempt_number: number;
+  method: "promptpay" | "scb_qr" | "manual";
+  amount: number;
+  status: PaymentAttemptStatus;
+  transaction_reference: string | null;
+  proof_mime: string | null;
+  proof_base64: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CustomerNotificationPreferencesRow {
+  customer_account_id: string;
+  email_transactional_enabled: boolean;
+  sms_transactional_enabled: boolean;
+  sms_marketing_enabled: boolean;
+  sms_consent_at: string | null;
+  sms_opted_out_at: string | null;
+  updated_at: string;
+}
+
+export interface UpdateCustomerNotificationPreferencesInput {
+  email_transactional_enabled?: boolean;
+  sms_transactional_enabled?: boolean;
+  sms_marketing_enabled?: boolean;
+  sms_consent_at?: Date | null;
+  sms_opted_out_at?: Date | null;
 }
 
 export type RegistrationEmailDeliveryStatus = "queued" | "sent" | "failed";
@@ -410,6 +517,121 @@ export interface CreateRegistrationEmailDeliveryInput {
   kind: string;
   subject: string;
   provider?: string | null;
+}
+
+export type NotificationChannel = "email" | "sms";
+export type NotificationDeliveryStatus = "queued" | "processing" | "sent" | "failed";
+
+export interface NotificationDeliveryRow {
+  id: string;
+  channel: NotificationChannel;
+  kind: string;
+  recipient: string;
+  recipient_snapshot: string | null;
+  related_type: string | null;
+  related_id: string | null;
+  payload_json: string;
+  idempotency_key: string;
+  status: NotificationDeliveryStatus;
+  attempt_count: number;
+  available_at: string;
+  locked_at: string | null;
+  locked_by: string | null;
+  provider: string | null;
+  provider_message_id: string | null;
+  last_error: string | null;
+  queued_at: string;
+  sent_at: string | null;
+  updated_at: string;
+}
+
+export interface CreateNotificationDeliveryInput {
+  channel: NotificationChannel;
+  kind: string;
+  recipient: string;
+  recipient_snapshot?: string | null;
+  related_type?: string | null;
+  related_id?: string | null;
+  payload_json?: string | null;
+  idempotency_key: string;
+  provider?: string | null;
+}
+
+export type CustomerAccountStatus = "pending" | "active" | "disabled";
+export type CustomerAccountTokenKind = "email_verification" | "password_reset";
+
+export interface CustomerAccountRow {
+  id: string;
+  email: string;
+  normalized_email: string;
+  password_hash: string;
+  email_verified_at: string | null;
+  first_name: string;
+  last_name: string;
+  phone: string;
+  normalized_phone: string;
+  address_line1: string | null;
+  address_line2: string | null;
+  district: string | null;
+  subdistrict: string | null;
+  province: string | null;
+  postal_code: string | null;
+  country: string | null;
+  accepted_terms_at: string;
+  accepted_privacy_at: string;
+  status: CustomerAccountStatus;
+  last_login_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCustomerAccountInput {
+  email: string;
+  normalized_email: string;
+  password_hash: string;
+  first_name: string;
+  last_name: string;
+  phone: string;
+  normalized_phone: string;
+  accepted_terms_at: Date;
+  accepted_privacy_at: Date;
+}
+
+export interface UpdateCustomerProfileInput {
+  first_name: string;
+  last_name: string;
+  phone: string;
+  normalized_phone: string;
+  address_line1?: string | null;
+  address_line2?: string | null;
+  district?: string | null;
+  subdistrict?: string | null;
+  province?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
+}
+
+export interface CustomerAccountSessionRow {
+  session_id: string;
+  token_hash: string;
+  expires_at: string;
+  last_seen_at: string;
+  account: CustomerAccountRow;
+}
+
+export interface CreateCustomerAccountTokenInput {
+  customer_account_id: string;
+  kind: CustomerAccountTokenKind;
+  token_hash: string;
+  expires_at: Date;
+}
+
+export interface CustomerAccountTokenRow {
+  id: string;
+  customer_account_id: string;
+  kind: CustomerAccountTokenKind;
+  expires_at: string;
+  created_at: string;
 }
 
 export interface AuthUserRow {
@@ -724,10 +946,37 @@ export interface AppDatabase {
   listRegistrationsBySenderIds(senderIds: string[], eventId?: string): Promise<RegistrationRow[]>;
   exportRegistrations(eventId?: string): Promise<RegistrationRow[]>;
   createRegistration(input: RegistrationInput): Promise<RegistrationResult>;
+  listCustomerRegistrations(customerAccountId: string): Promise<RegistrationRow[]>;
+  claimRegistrationToCustomer(input: { registration_id: string; customer_account_id: string; normalized_email?: string; normalized_phone?: string }): Promise<"claimed" | "already_claimed" | "not_found" | "contact_mismatch">;
+  unlinkRegistrationFromCustomer(registrationId: string, customerAccountId?: string | null): Promise<boolean>;
   setRegistrationSmsConsent(id: string, optedIn: boolean, source: string): Promise<boolean>;
   createRegistrationEmailDelivery(input: CreateRegistrationEmailDeliveryInput): Promise<RegistrationEmailDeliveryRow | null>;
   markRegistrationEmailDeliverySent(id: string, provider?: string | null): Promise<void>;
   markRegistrationEmailDeliveryFailed(id: string, errorMessage: string, provider?: string | null): Promise<void>;
+  enqueueNotificationDelivery(input: CreateNotificationDeliveryInput): Promise<NotificationDeliveryRow | null>;
+  claimNotificationDeliveries(workerId: string, limit?: number): Promise<NotificationDeliveryRow[]>;
+  markNotificationDeliverySent(id: string, workerId: string, providerMessageId?: string | null, provider?: string | null): Promise<void>;
+  markNotificationDeliveryRetryable(id: string, workerId: string, errorMessage: string, availableAt: string, provider?: string | null): Promise<void>;
+  markNotificationDeliveryFailed(id: string, workerId: string, errorMessage: string, provider?: string | null): Promise<void>;
+  getCustomerAccountById(id: string): Promise<CustomerAccountRow | undefined>;
+  getCustomerAccountByNormalizedEmail(normalizedEmail: string): Promise<CustomerAccountRow | undefined>;
+  createCustomerAccount(input: CreateCustomerAccountInput): Promise<CustomerAccountRow>;
+  updateCustomerProfile(id: string, input: UpdateCustomerProfileInput): Promise<CustomerAccountRow | undefined>;
+  updateCustomerPasswordHash(id: string, passwordHash: string): Promise<boolean>;
+  verifyCustomerAccountEmail(id: string): Promise<boolean>;
+  updateCustomerAccountLastLogin(id: string): Promise<void>;
+  setCustomerAccountStatus(id: string, status: CustomerAccountStatus): Promise<boolean>;
+  createCustomerSession(customerAccountId: string, tokenHash: string, expiresAt: Date): Promise<void>;
+  getCustomerSessionWithAccount(tokenHash: string): Promise<CustomerAccountSessionRow | undefined>;
+  touchCustomerSession(sessionId: string): Promise<void>;
+  deleteCustomerSession(tokenHash: string): Promise<void>;
+  deleteCustomerSessions(customerAccountId: string): Promise<void>;
+  deleteExpiredCustomerSessions(): Promise<void>;
+  createCustomerAccountToken(input: CreateCustomerAccountTokenInput): Promise<CustomerAccountTokenRow>;
+  consumeCustomerAccountToken(tokenHash: string, kind: CustomerAccountTokenKind): Promise<{ token_id: string; customer_account_id: string } | undefined>;
+  deleteExpiredCustomerAccountTokens(): Promise<void>;
+  getCustomerNotificationPreferences(customerAccountId: string): Promise<CustomerNotificationPreferencesRow>;
+  updateCustomerNotificationPreferences(customerAccountId: string, input: UpdateCustomerNotificationPreferencesInput): Promise<CustomerNotificationPreferencesRow>;
   cancelRegistration(id: unknown): Promise<RegistrationResult>;
   checkInRegistration(id: string): Promise<boolean>;
   updateRegistrationStatus(id: string, status: RegistrationStatus): Promise<boolean>;
@@ -735,12 +984,21 @@ export interface AppDatabase {
   listDirectPerformances(eventId: string): Promise<DirectPerformanceRow[]>;
   upsertDirectPerformance(input: UpsertDirectPerformanceInput): Promise<DirectPerformanceRow>;
   deleteDirectPerformance(eventId: string, performanceId: string): Promise<DirectPerformanceDeleteResult | undefined>;
-  resetDirectPerformance(eventId: string, performanceId: string): Promise<{ tickets: number; seats: number } | undefined>;
+  resetDirectPerformance(eventId: string, performanceId: string): Promise<DirectPerformanceResetResult | undefined>;
   listDirectSeats(eventId: string, performanceId?: string): Promise<DirectSeatRow[]>;
   importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean }): Promise<DirectSeatRow[]>;
   listDirectTickets(eventId: string): Promise<DirectTicketRow[]>;
   getDirectTicketById(id: string): Promise<DirectTicketRow | undefined>;
   createDirectTicket(input: CreateDirectTicketInput): Promise<{ ticket?: DirectTicketRow; error?: "seat_unavailable" | "invalid_seat" }>;
+  createDirectOrder(input: CreateDirectOrderInput): Promise<{ order?: DirectOrderRow; error?: "seat_unavailable" | "invalid_seat" | "invalid_order" }>;
+  getDirectOrderById(id: string): Promise<DirectOrderRow | undefined>;
+  listDirectOrders(eventId: string): Promise<DirectOrderRow[]>;
+  listCustomerOrders(customerAccountId: string): Promise<DirectOrderRow[]>;
+  submitDirectOrderPaymentProof(id: string, input: { payment_proof_mime: string; payment_proof_base64: string; payment_reference?: string | null }): Promise<DirectOrderRow | undefined>;
+  updateDirectOrderPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }): Promise<DirectOrderRow | undefined>;
+  releaseExpiredDirectOrderHolds(eventId?: string): Promise<number>;
+  claimDirectOrderToCustomer(input: { order_id: string; customer_account_id: string; normalized_email?: string; normalized_phone?: string }): Promise<"claimed" | "already_claimed" | "not_found" | "contact_mismatch">;
+  unlinkDirectOrderFromCustomer(orderId: string, customerAccountId?: string | null): Promise<boolean>;
   updateDirectTicketPayment(
     id: string,
     input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null },
