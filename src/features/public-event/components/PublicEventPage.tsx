@@ -2,6 +2,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import {
   AlertCircle,
+  ArrowRight,
+  CalendarDays,
   Download,
   ExternalLink,
   Eye,
@@ -11,6 +13,7 @@ import {
   MessageSquare,
   RefreshCw,
   Send,
+  Ticket,
   X,
 } from "lucide-react";
 
@@ -182,6 +185,88 @@ function LocationTravelSection({
   );
 }
 
+function formatTicketPrice(value: number | null) {
+  if (value == null) return "Price shown at checkout";
+  return new Intl.NumberFormat("th-TH", {
+    style: "currency",
+    currency: "THB",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function TicketSalesCard({ event }: { event: PublicEventPageResponse["event"] }) {
+  const sales = event.ticket_sales || {
+    enabled: false,
+    starting_price: null,
+    performance_count: 0,
+    available_seat_count: 0,
+    performances: [],
+  };
+  const checkoutHref = `/events/${encodeURIComponent(event.slug)}/checkout`;
+
+  return (
+    <div id="ticket-sales" className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Ticket className="h-5 w-5 text-blue-600" />
+            <h2 className="text-lg font-semibold text-slate-900">Tickets & seats</h2>
+          </div>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            Choose a performance and select seats from the live Meetrix inventory.
+          </p>
+        </div>
+        <StatusBadge tone={event.customer_checkout_enabled ? "emerald" : "amber"}>
+          {event.customer_checkout_enabled ? "Live" : "Setup"}
+        </StatusBadge>
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        <div className="surface-tile rounded-xl px-3 py-2.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">From</p>
+          <p className="mt-1 text-sm font-semibold text-slate-900">{formatTicketPrice(sales.starting_price)}</p>
+        </div>
+        <div className="surface-tile rounded-xl px-3 py-2.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Rounds</p>
+          <p className="mt-1 text-sm font-semibold text-slate-900">{sales.performance_count || "-"}</p>
+        </div>
+        <div className="surface-tile rounded-xl px-3 py-2.5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Seats left</p>
+          <p className="mt-1 text-sm font-semibold text-slate-900">{sales.available_seat_count || "-"}</p>
+        </div>
+      </div>
+
+      {sales.performances.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {sales.performances.map((performance) => (
+            <div key={`${performance.title}-${performance.starts_at}`} className="flex items-start gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
+              <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+              <span>
+                <span className="block font-semibold text-slate-900">{performance.title}</span>
+                <span className="block text-xs text-slate-500">{new Date(performance.starts_at).toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" })}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {event.customer_checkout_enabled ? (
+        <a
+          href={checkoutHref}
+          className="public-page-control mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+        >
+          Choose performance & seats
+          <ArrowRight className="h-4 w-4" />
+        </a>
+      ) : (
+        <div className="surface-subpanel mt-4 rounded-xl px-3.5 py-3 text-sm leading-6 text-slate-600">
+          Ticket checkout is being configured. Please check back soon.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PublicEventPage({
   page,
   loading,
@@ -230,6 +315,8 @@ export function PublicEventPage({
   const externalTicketing = Boolean(
     page?.event.ticketing_mode === "external" && page.event.external_ticket_url,
   );
+  const customerTicketing = page?.event.ticketing_mode === "customer";
+  const customerCheckoutEnabled = Boolean(page?.event.customer_checkout_enabled);
   const contactVisible = Boolean(
     page?.contact.enabled
     && (
@@ -242,6 +329,7 @@ export function PublicEventPage({
   const registrationAvailable = Boolean(
     page
     && !externalTicketing
+    && !customerTicketing
     && page.event.registration_enabled
     && page.event.registration_availability === "open",
   );
@@ -253,6 +341,11 @@ export function PublicEventPage({
   const nameVerificationRequired = registrationResult?.status === "name_verification_required";
   const verifiedRecoveryRequired = registrationResult?.status === "verification_required";
   const availabilityHelper = (() => {
+    if (customerTicketing) {
+      return customerCheckoutEnabled
+        ? "Choose a performance and seat from our live ticket inventory."
+        : "Ticket checkout is being configured.";
+    }
     if (externalTicketing) return "Tickets are available through our ticketing partner.";
     switch (page?.event.registration_availability) {
       case "full":
@@ -471,12 +564,23 @@ export function PublicEventPage({
                   </div>
                 </div>
 
-                <div className={`grid gap-2.5 ${page.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
+                <div className={`grid gap-2.5 ${customerTicketing || page.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
                   <div className="surface-tile rounded-xl px-3.5 py-3">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Registration</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{customerTicketing ? "Ticket sales" : "Registration"}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">{availabilityHelper}</p>
                   </div>
-                  {page.event.show_seat_availability && (
+                  {customerTicketing ? (
+                    <>
+                      <div className="surface-tile rounded-xl px-3.5 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">From</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{formatTicketPrice(page.event.ticket_sales.starting_price)}</p>
+                      </div>
+                      <div className="surface-tile rounded-xl px-3.5 py-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats left</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{page.event.ticket_sales.available_seat_count || "-"}</p>
+                      </div>
+                    </>
+                  ) : page.event.show_seat_availability && (
                     <div className="surface-tile rounded-xl px-3.5 py-3">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
                       <p className="mt-1 text-sm font-semibold text-slate-900">
@@ -486,7 +590,7 @@ export function PublicEventPage({
                       </p>
                     </div>
                   )}
-                  {page.event.show_seat_availability && (
+                  {!customerTicketing && page.event.show_seat_availability && (
                     <div className="surface-tile rounded-xl px-3.5 py-3">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
                       <p className="mt-1 text-sm font-semibold text-slate-900">
@@ -497,14 +601,20 @@ export function PublicEventPage({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <a
-                    href={externalTicketing ? page.event.external_ticket_url : "#public-registration"}
-                    target={externalTicketing ? "_blank" : undefined}
-                    rel={externalTicketing ? "noopener noreferrer" : undefined}
-                    className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-4.5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
-                  >
-                    {page.event.cta_label}
-                  </a>
+                  {customerTicketing && !customerCheckoutEnabled ? (
+                    <span aria-disabled="true" className="public-checkout-unavailable inline-flex cursor-not-allowed items-center justify-center rounded-full px-4.5 py-2.5 text-sm font-semibold">
+                      Checkout unavailable
+                    </span>
+                  ) : (
+                    <a
+                      href={customerTicketing ? `/events/${encodeURIComponent(page.event.slug)}/checkout` : externalTicketing ? page.event.external_ticket_url : "#public-registration"}
+                      target={externalTicketing ? "_blank" : undefined}
+                      rel={externalTicketing ? "noopener noreferrer" : undefined}
+                      className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-4.5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
+                    >
+                      {customerTicketing ? "Choose seats" : page.event.cta_label}
+                    </a>
+                  )}
                   {page.location.map_url && (
                     <a
                       href={page.location.map_url}
@@ -525,8 +635,10 @@ export function PublicEventPage({
                 {mainColumnSections}
               </div>
 
-              <aside id="public-registration" className="space-y-4 xl:sticky xl:top-5 xl:self-start">
-                {externalTicketing ? (
+              <aside id={customerTicketing ? "public-ticketing" : "public-registration"} className="space-y-4 xl:sticky xl:top-5 xl:self-start">
+                {customerTicketing ? (
+                  <TicketSalesCard event={page.event} />
+                ) : externalTicketing ? (
                   <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>

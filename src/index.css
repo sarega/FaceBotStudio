@@ -1058,6 +1058,25 @@ html.theme-dark .direct-ticketing-page > div > div.rounded-2xl .border-t.border-
   background: linear-gradient(145deg, rgba(245, 243, 255, 0.94), rgba(255, 255, 255, 0.98) 58%);
 }
 
+.ticketing-settings-card {
+  border-color: #bfdbfe;
+  background: rgba(239, 246, 255, 0.72);
+}
+
+.ticketing-settings-label {
+  color: #64748b;
+}
+
+.ticketing-settings-hint {
+  color: #64748b;
+}
+
+.public-checkout-unavailable {
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+}
+
 .workspace-section {
   border-color: transparent !important;
   box-shadow: 0 18px 42px -34px rgba(15, 23, 42, 0.32) !important;
@@ -1191,6 +1210,25 @@ html.theme-dark .surface-panel-emerald {
 
 html.theme-dark .surface-panel-violet {
   background: linear-gradient(145deg, rgba(35, 26, 66, 0.96), rgba(14, 23, 41, 0.98) 58%) !important;
+}
+
+html.theme-dark .ticketing-settings-card {
+  border-color: rgba(96, 165, 250, 0.58) !important;
+  background: linear-gradient(145deg, rgba(19, 46, 78, 0.96), rgba(12, 29, 52, 0.98)) !important;
+}
+
+html.theme-dark .ticketing-settings-label {
+  color: #bfdbfe !important;
+}
+
+html.theme-dark .ticketing-settings-hint {
+  color: #cbd5e1 !important;
+}
+
+html.theme-dark .public-checkout-unavailable {
+  background: rgba(51, 65, 85, 0.92) !important;
+  border-color: #64748b !important;
+  color: #e2e8f0 !important;
 }
 
 html.theme-dark .workspace-section-blue {

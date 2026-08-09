@@ -4217,7 +4217,47 @@ async function buildPublicEventPagePayload(
   });
   const configuredExternalTicketUrl = String(settings.event_public_external_ticket_url || "").trim();
   const externalTicketUrl = /^https?:\/\//i.test(configuredExternalTicketUrl) ? configuredExternalTicketUrl : "";
-  const ticketingMode = settings.event_public_ticketing_mode === "external" && externalTicketUrl ? "external" : "inline";
+  const ticketingMode = settings.event_public_ticketing_mode === "customer"
+    ? "customer"
+    : settings.event_public_ticketing_mode === "external" && externalTicketUrl
+      ? "external"
+      : "inline";
+  const directTicketingEnabled = ticketingMode === "customer" && isPublicDirectTicketingEnabled(settings);
+  const customerCheckoutEnabled = ticketingMode === "customer" && isCustomerPaidCheckoutEnabled(settings);
+  let ticketSales = {
+    enabled: false,
+    starting_price: null as number | null,
+    performance_count: 0,
+    available_seat_count: 0,
+    performances: [] as Array<{ title: string; starts_at: string; ends_at: string | null }>,
+  };
+  if (directTicketingEnabled) {
+    await appDb.releaseExpiredDirectOrderHolds(event.id);
+    const [performances, seats] = await Promise.all([
+      appDb.listDirectPerformances(event.id),
+      appDb.listDirectSeats(event.id),
+    ]);
+    const activePerformances = performances.filter((performance) => performance.is_active);
+    const activePerformanceIds = new Set(activePerformances.map((performance) => performance.id));
+    const availableSeats = seats.filter((seat) => activePerformanceIds.has(seat.performance_id) && seat.status === "available" && seat.allocation_status === "allocated");
+    const prices = availableSeats
+      .map((seat) => Number(seat.face_value))
+      .filter((price) => Number.isFinite(price) && price >= 0);
+    ticketSales = {
+      enabled: true,
+      starting_price: prices.length > 0 ? Math.min(...prices) : null,
+      performance_count: activePerformances.length,
+      available_seat_count: availableSeats.length,
+      performances: activePerformances.slice(0, 3).map((performance) => ({
+        title: performance.title,
+        starts_at: performance.starts_at,
+        ends_at: performance.ends_at,
+      })),
+    };
+  }
+  const ctaLabel = ticketingMode === "customer"
+    ? String(settings.event_public_cta_label || "").trim() || "Buy tickets"
+    : String(settings.event_public_cta_label || "").trim() || (ticketingMode === "external" ? "Buy Tickets" : "Register Now");
 
   return {
     event: {
@@ -4228,7 +4268,7 @@ async function buildPublicEventPagePayload(
       summary,
       description: sanitizeEventDescriptionHtml(settings.event_description),
       poster_url: String(settings.event_public_poster_url || "").trim(),
-      cta_label: String(settings.event_public_cta_label || "").trim() || (ticketingMode === "external" ? "Buy Tickets" : "Register Now"),
+      cta_label: ctaLabel,
       success_message:
         String(settings.event_public_success_message || "").trim()
         || "Registration complete. Save your ticket image to your phone now.",
@@ -4239,8 +4279,10 @@ async function buildPublicEventPagePayload(
       registration_enabled: ticketingMode === "inline" && isTruthySetting(settings.event_public_registration_enabled ?? "1"),
       ticketing_mode: ticketingMode,
       external_ticket_url: externalTicketUrl,
+      customer_checkout_enabled: customerCheckoutEnabled,
+      ticket_sales: ticketSales,
       ticket_recovery_mode: resolvePublicTicketRecoveryMode(settings.event_public_ticket_recovery_mode),
-      show_seat_availability: isTruthySetting(settings.event_public_show_seat_availability ?? "0"),
+      show_seat_availability: isTruthySetting(settings.event_public_show_seat_availability ?? "0") || ticketSales.enabled,
       registration_availability: event.registration_availability || capacity.registrationAvailability,
       registration_limit: capacity.limit,
       active_registration_count: capacity.activeCount,
@@ -4338,12 +4380,14 @@ async function buildPublicEventCatalogEntry(
   });
   if (!publicSlug) return null;
 
+  const customerTicketingSelected = settings.event_public_ticketing_mode === "customer";
   const externalTicketUrl = settings.event_public_ticketing_mode === "external"
     ? normalizePublicExternalTicketUrl(settings.event_public_external_ticket_url)
     : "";
-  const registrationEnabled = settings.event_public_ticketing_mode !== "external"
+  const registrationEnabled = settings.event_public_ticketing_mode === "inline"
     && isTruthySetting(settings.event_public_registration_enabled ?? "1");
-  const directTicketingEnabled = isPublicDirectTicketingEnabled(settings);
+  const directTicketingEnabled = customerTicketingSelected && isPublicDirectTicketingEnabled(settings);
+  const customerCheckoutEnabled = customerTicketingSelected && isCustomerPaidCheckoutEnabled(settings);
   if (!hasPublicCatalogAction({ registrationEnabled, externalTicketUrl, directTicketingEnabled })) return null;
 
   const [organizerProfile, directPerformances, directSeats] = await Promise.all([
@@ -4390,7 +4434,7 @@ async function buildPublicEventCatalogEntry(
       registration_enabled: registrationEnabled,
       external_ticket_url: externalTicketUrl,
       direct_ticketing_enabled: directTicketingEnabled,
-      customer_checkout_enabled: isCustomerPaidCheckoutEnabled(settings),
+      customer_checkout_enabled: customerCheckoutEnabled,
     },
     starting_price: prices.length > 0 ? Math.min(...prices) : null,
     performance_summary: {
@@ -9958,7 +10002,8 @@ function isCustomerPaidCheckoutEnabled(settings?: Record<string, string>) {
   return isCustomerAppEnabled()
     && isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")
     && isTruthySetting(settings?.direct_ticketing_public_enabled ?? "0")
-    && isTruthySetting(settings?.customer_ticketing_enabled ?? "0");
+    && isTruthySetting(settings?.customer_ticketing_enabled ?? "0")
+    && String(settings?.event_public_ticketing_mode || "inline").trim().toLowerCase() === "customer";
 }
 
 function isVerifiedCustomer(account?: CustomerAccountRow | null) {

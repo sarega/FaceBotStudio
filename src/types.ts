@@ -476,8 +476,16 @@ export interface PublicEventPageResponse {
     date_label: string;
     timezone: string;
     registration_enabled: boolean;
-    ticketing_mode: "inline" | "external";
+    ticketing_mode: "inline" | "external" | "customer";
     external_ticket_url: string;
+    customer_checkout_enabled: boolean;
+    ticket_sales: {
+      enabled: boolean;
+      starting_price: number | null;
+      performance_count: number;
+      available_seat_count: number;
+      performances: Array<{ title: string; starts_at: string; ends_at: string | null }>;
+    };
     ticket_recovery_mode: "shared_contact" | "verified_contact";
     show_seat_availability: boolean;
     registration_availability: "open" | "not_started" | "closed" | "invalid" | "full";

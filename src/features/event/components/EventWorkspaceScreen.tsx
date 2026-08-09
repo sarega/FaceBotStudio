@@ -1143,7 +1143,9 @@ export function EventWorkspaceScreen({
                         className="mt-1"
                         items={[
                           publicPageEnabled ? "Attendee page available" : "Attendee page hidden",
-                          settings.event_public_ticketing_mode === "external"
+                          settings.event_public_ticketing_mode === "customer"
+                            ? "Meetrix seat checkout"
+                            : settings.event_public_ticketing_mode === "external"
                             ? "External ticketing"
                             : publicRegistrationEnabled ? "Registration enabled" : "Registration disabled",
                           eventPublicDirty ? "Unsaved changes" : "All changes saved",
@@ -1255,7 +1257,7 @@ export function EventWorkspaceScreen({
                           />
                           Show in event catalog
                         </label>
-                        {settings.event_public_ticketing_mode !== "external" && <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                        {settings.event_public_ticketing_mode === "inline" && <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"
                             className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
@@ -1284,30 +1286,43 @@ export function EventWorkspaceScreen({
                             className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                             checked={settings.customer_ticketing_enabled === "1"}
                             disabled={settings.direct_ticketing_public_enabled !== "1" || !publicPageEnabled}
-                            onChange={(event) => setSettings({ ...settings, customer_ticketing_enabled: event.target.checked ? "1" : "0" })}
+                            onChange={(event) => setSettings({
+                              ...settings,
+                              customer_ticketing_enabled: event.target.checked ? "1" : "0",
+                              event_public_ticketing_mode: event.target.checked
+                                ? "customer"
+                                : settings.event_public_ticketing_mode === "customer" ? "inline" : settings.event_public_ticketing_mode,
+                            })}
                           />
                           Customer account checkout
                         </label>
-                        {settings.customer_ticketing_enabled === "1" && <div className="w-full rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                        {settings.customer_ticketing_enabled === "1" && <div className="ticketing-settings-card w-full rounded-xl border border-blue-100 bg-blue-50/60 p-3">
                           <div className="grid gap-3 md:grid-cols-4">
                             <label>
-                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Max seats / order</span>
+                              <span className="ticketing-settings-label mb-1 block text-xs font-bold uppercase">Max seats / order</span>
                               <input type="number" min="1" max="12" value={settings.customer_ticket_max_seats || "6"} onChange={(event) => setSettings({ ...settings, customer_ticket_max_seats: event.target.value })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             </label>
                             <label>
-                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Platform fee %</span>
+                              <span className="ticketing-settings-label mb-1 block text-xs font-bold uppercase">Platform fee %</span>
                               <input type="number" min="0" max="100" step="0.01" value={settings.platform_fee_value || "0"} onChange={(event) => setSettings({ ...settings, platform_fee_value: event.target.value, platform_fee_type: "percent" })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             </label>
                             <label>
-                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Payment fee (THB)</span>
+                              <span className="ticketing-settings-label mb-1 block text-xs font-bold uppercase">Payment fee (THB)</span>
                               <input type="number" min="0" step="0.01" value={settings.payment_fee_value || "0"} onChange={(event) => setSettings({ ...settings, payment_fee_value: event.target.value })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             </label>
                             <label>
-                              <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Tax rate %</span>
+                              <span className="ticketing-settings-label mb-1 block text-xs font-bold uppercase">Tax rate %</span>
                               <input type="number" min="0" max="100" step="0.01" value={settings.tax_rate_percent || "0"} onChange={(event) => setSettings({ ...settings, tax_rate_percent: event.target.value })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             </label>
                           </div>
-                          <p className="mt-2 text-xs text-slate-500">Customer checkout stays gated by the deployment flags and requires a verified customer account. PromptPay QR is used for the pilot.</p>
+                          <p className="ticketing-settings-hint mt-2 text-xs">Select “Sell seats on Meetrix” below to make this the public event CTA. Checkout stays gated by deployment flags and requires a verified customer account. PromptPay QR is used for the pilot.</p>
+                          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-blue-100/70 pt-3">
+                            <p className="ticketing-settings-hint text-xs">Rounds, prices, and seats are sourced from Direct Ticketing.</p>
+                            <ActionButton type="button" onClick={() => handleNavigateToTab("direct_tickets")} tone="neutral" className="px-3 text-xs">
+                              <QrCode className="h-3.5 w-3.5" />
+                              Manage Direct Tickets
+                            </ActionButton>
+                          </div>
                         </div>}
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
@@ -1328,10 +1343,19 @@ export function EventWorkspaceScreen({
                               <span className="mb-1 block text-xs font-bold uppercase text-slate-500">Ticketing</span>
                               <select
                                 value={settings.event_public_ticketing_mode}
-                                onChange={(event) => setSettings({ ...settings, event_public_ticketing_mode: event.target.value === "external" ? "external" : "inline" })}
+                                onChange={(event) => {
+                                  const mode = event.target.value === "customer" || event.target.value === "external" ? event.target.value : "inline";
+                                  setSettings({
+                                    ...settings,
+                                    event_public_ticketing_mode: mode,
+                                    customer_ticketing_enabled: mode === "customer" ? "1" : "0",
+                                    direct_ticketing_public_enabled: mode === "customer" ? "1" : settings.direct_ticketing_public_enabled,
+                                  });
+                                }}
                                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               >
                                 <option value="inline">Register on Meetrix</option>
+                                <option value="customer">Sell seats on Meetrix</option>
                                 <option value="external">Send to ticket URL</option>
                               </select>
                             </label>
@@ -1346,6 +1370,7 @@ export function EventWorkspaceScreen({
                               />
                             </label>}
                           </div>
+                          {settings.event_public_ticketing_mode === "customer" && <p className="mt-2 text-xs text-slate-500">The public CTA opens Meetrix checkout. Performance rounds, prices, and available seats are read from Direct Ticketing.</p>}
                           {settings.event_public_ticketing_mode === "external" && <p className="mt-2 text-xs text-slate-500">The public CTA opens this URL in a new tab. Meetrix registration and ticket recovery are hidden.</p>}
                         </div>
                         <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">

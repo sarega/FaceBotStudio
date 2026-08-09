@@ -2691,7 +2691,9 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
         ? data.billing_document_mode.trim()
         : INITIAL_SETTINGS.billing_document_mode,
     event_public_ticketing_mode:
-      data.event_public_ticketing_mode === "external" ? "external" : "inline",
+      data.event_public_ticketing_mode === "customer"
+        ? "customer"
+        : data.event_public_ticketing_mode === "external" ? "external" : "inline",
     event_public_external_ticket_url:
       typeof data.event_public_external_ticket_url === "string"
         ? data.event_public_external_ticket_url.trim()
