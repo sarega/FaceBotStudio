@@ -31,6 +31,8 @@ type CustomerTicket = {
 
 type CustomerOrder = {
   id: string;
+  event_name?: string | null;
+  event_slug?: string | null;
   status: string;
   currency: string;
   subtotal_amount: number;
@@ -120,11 +122,15 @@ function OrderCard({ order, onUpdated }: { order: CustomerOrder; onUpdated: (ord
   return (
     <article className="rounded-3xl border border-white/10 bg-slate-900/50 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><p className="text-xs uppercase tracking-[0.16em] text-slate-500">Order</p><h2 className="mt-1 font-semibold text-white">{order.id}</h2><p className="mt-1 text-sm text-slate-400">{order.performance_title || "Event performance"} · {date(order.performance_starts_at)}</p></div>
+        <div><p className="text-xs uppercase tracking-[0.16em] text-slate-500">{order.event_name || "Event"}</p><h2 className="mt-1 font-semibold text-white">{order.id}</h2><p className="mt-1 text-sm text-slate-400">{order.performance_title || "Event performance"} · {date(order.performance_starts_at)}</p></div>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${order.status === "paid" ? "bg-emerald-500/15 text-emerald-300" : order.status === "rejected" || order.status === "expired" ? "bg-rose-500/15 text-rose-300" : "bg-amber-500/15 text-amber-200"}`}>{order.status.replaceAll("_", " ")}</span>
       </div>
       <div className="mt-5 grid gap-3 sm:grid-cols-4"><div><p className="text-xs text-slate-500">Tickets</p><p className="mt-1 text-sm font-semibold text-slate-200">{order.tickets.length}</p></div><div><p className="text-xs text-slate-500">Subtotal</p><p className="mt-1 text-sm text-slate-200">{money(order.subtotal_amount, order.currency)}</p></div><div><p className="text-xs text-slate-500">Fees + tax</p><p className="mt-1 text-sm text-slate-200">{money(order.platform_fee_amount + order.payment_fee_amount + order.tax_amount, order.currency)}</p></div><div><p className="text-xs text-slate-500">Total</p><p className="mt-1 text-sm font-bold text-white">{money(order.total_amount, order.currency)}</p></div></div>
       {order.rejection_reason && <p className="mt-4 rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{order.rejection_reason}</p>}
+      <div className="mt-4 flex flex-wrap gap-2">
+        {order.event_slug && <a href={`/events/${encodeURIComponent(order.event_slug)}`} className="inline-flex items-center rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-blue-300 hover:text-white">Open event</a>}
+        <a href="/events" className="inline-flex items-center rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-slate-400 hover:border-blue-300 hover:text-white">Browse more events</a>
+      </div>
       {canPay && <div className="mt-5 grid gap-4 md:grid-cols-[180px_1fr] md:items-start"><img src={`/api/customer/orders/${encodeURIComponent(order.id)}/payment-qr`} alt="PromptPay QR" className="h-44 w-44 rounded-2xl bg-white p-2" /><div className="space-y-3"><p className="text-sm leading-6 text-slate-400">สแกนจ่ายด้วย PromptPay ตามยอดรวม แล้วแนบสลิปเพื่อให้ทีมงานตรวจสอบ ออเดอร์จะหมดอายุตามเวลาที่แสดงด้านล่าง</p>{order.hold_expires_at && <p className="text-xs text-amber-200">Hold expires: {date(order.hold_expires_at)}</p>}<label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-dashed border-white/15 px-4 py-3 text-sm text-slate-300 hover:border-blue-400"><FileImage className="h-4 w-4 text-blue-300" /><span className="min-w-0 flex-1 truncate">{file?.name || "Choose payment proof"}</span><input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => setFile(event.target.files?.[0] || null)} /></label><button type="button" disabled={!file || busy} onClick={() => void submitProof()} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Submitting…" : "Submit payment proof"}</button>{errorMessage && <p className="text-sm text-rose-300">{errorMessage}</p>}{order.payment_proof_submitted_at && <p className="text-xs text-emerald-300">Payment proof submitted {date(order.payment_proof_submitted_at)}</p>}</div></div>}
       {order.status === "paid" && <div className="mt-5 flex items-center gap-2 text-sm text-emerald-300"><CheckCircle2 className="h-4 w-4" /> Payment verified. Tickets are ready in My tickets.</div>}
     </article>

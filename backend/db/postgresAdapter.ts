@@ -21,6 +21,7 @@ import type {
   CreateCustomerAccountTokenInput,
   CreateNotificationDeliveryInput,
   CreateRegistrationEmailDeliveryInput,
+  CreateOrganizerProfileInput,
   CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
@@ -55,6 +56,8 @@ import type {
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
   OrganizerProfileRow,
+  OrganizerFinancialProfileRow,
+  UpdateOrganizerFinancialProfileInput,
   OrganizerVerificationStatus,
   OutreachAssetRow,
   OutreachCampaignRow,
@@ -281,6 +284,7 @@ function mapOrganizerProfileRow(row?: Record<string, unknown>) {
   if (!row) return undefined;
   return {
     id: String(row.id || ""),
+    organization_id: String(row.organization_id || row.owner_organization_id || row.id || ""),
     name: String(row.name || ""),
     slug: String(row.slug || ""),
     legal_name: typeof row.legal_name === "string" && row.legal_name ? row.legal_name : null,
@@ -296,6 +300,36 @@ function mapOrganizerProfileRow(row?: Record<string, unknown>) {
     created_at: String(row.created_at || ""),
     updated_at: String(row.updated_at || row.created_at || ""),
   } satisfies OrganizerProfileRow;
+}
+
+function mapOrganizerFinancialProfileRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    organization_id: String(row.organization_id || ""),
+    organizer_profile_id: typeof row.organizer_profile_id === "string" && row.organizer_profile_id ? row.organizer_profile_id : typeof row.organizer_id === "string" && row.organizer_id ? row.organizer_id : undefined,
+    payment_method: "promptpay",
+    promptpay_id: typeof row.promptpay_id === "string" && row.promptpay_id ? row.promptpay_id : null,
+    promptpay_receiver_name: typeof row.promptpay_receiver_name === "string" && row.promptpay_receiver_name ? row.promptpay_receiver_name : null,
+    payment_status: String(row.payment_status || "draft") as OrganizerFinancialProfileRow["payment_status"],
+    legal_entity_type: String(row.legal_entity_type || "individual") as OrganizerFinancialProfileRow["legal_entity_type"],
+    tax_id: typeof row.tax_id === "string" && row.tax_id ? row.tax_id : null,
+    vat_status: String(row.vat_status || "unknown") as OrganizerFinancialProfileRow["vat_status"],
+    vat_rate_percent: Number(row.vat_rate_percent || 0),
+    registered_address: typeof row.registered_address === "string" && row.registered_address ? row.registered_address : null,
+    branch_number: typeof row.branch_number === "string" && row.branch_number ? row.branch_number : null,
+    billing_document_mode: String(row.billing_document_mode || "not_required") as OrganizerFinancialProfileRow["billing_document_mode"],
+    platform_fee_type: String(row.platform_fee_type || "percent") as OrganizerFinancialProfileRow["platform_fee_type"],
+    platform_fee_value: Number(row.platform_fee_value || 0),
+    platform_fee_payer: String(row.platform_fee_payer || "customer") as OrganizerFinancialProfileRow["platform_fee_payer"],
+    payment_fee_value: Number(row.payment_fee_value || 0),
+    payout_mode: String(row.payout_mode || "direct_to_organizer") as OrganizerFinancialProfileRow["payout_mode"],
+    payout_schedule: String(row.payout_schedule || "manual") as OrganizerFinancialProfileRow["payout_schedule"],
+    payout_status: String(row.payout_status || "not_applicable") as OrganizerFinancialProfileRow["payout_status"],
+    pricing_policy_enabled: row.pricing_policy_enabled === true,
+    version: Number(row.version || 1),
+    created_at: mapPostgresTimestamp(row.created_at) || "",
+    updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies OrganizerFinancialProfileRow;
 }
 
 function mapPageRow(row: Record<string, unknown>) {
@@ -450,7 +484,7 @@ function mapDirectSeatRow(row: Record<string, unknown>) {
     id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""),
     zone: String(row.zone || ""), section_label: typeof row.section_label === "string" ? row.section_label : null, row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""),
     external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null,
-    face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y),
+    ticket_class: typeof row.ticket_class === "string" && row.ticket_class.trim() ? row.ticket_class : null, face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y),
     status: String(row.status || "available") as DirectSeatRow["status"],
     allocation_status: String(row.allocation_status || "allocated") as DirectSeatRow["allocation_status"],
     source_status: String(row.source_status || "unknown") as DirectSeatRow["source_status"],
@@ -493,6 +527,9 @@ function mapDirectOrderRow(row: Record<string, unknown>, tickets: DirectTicketRo
     buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), currency: String(row.currency || "THB"),
     subtotal_amount: Number(row.subtotal_amount || 0), platform_fee_amount: Number(row.platform_fee_amount || 0), payment_fee_amount: Number(row.payment_fee_amount || 0), tax_amount: Number(row.tax_amount || 0), discount_amount: Number(row.discount_amount || 0), total_amount: Number(row.total_amount || 0),
     fee_rule_version: String(row.fee_rule_version || "v1"), tax_snapshot_json: String(row.tax_snapshot_json || "{}"), billing_profile_json: String(row.billing_profile_json || "{}"), seller_snapshot_json: String(row.seller_snapshot_json || "{}"),
+    seller_organization_id: typeof row.seller_organization_id === "string" && row.seller_organization_id ? row.seller_organization_id : null,
+    payment_profile_version: Number(row.payment_profile_version || 1), payment_receiver_snapshot_json: String(row.payment_receiver_snapshot_json || "{}"),
+    payout_status: String(row.payout_status || "not_applicable") as DirectOrderRow["payout_status"],
     status: String(row.status || "pending_payment") as DirectOrderRow["status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null,
     payment_proof_submitted_at: mapPostgresTimestamp(row.payment_proof_submitted_at), rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: mapPostgresTimestamp(row.hold_expires_at), billing_document_status: String(row.billing_document_status || "not_required") as DirectOrderRow["billing_document_status"], billing_document_number: typeof row.billing_document_number === "string" ? row.billing_document_number : null,
     created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "", tickets,
@@ -982,6 +1019,40 @@ export class PostgresAppDatabase implements AppDatabase {
     return mapNotificationDeliveryRow(result.rows[0]);
   }
 
+  async listNotificationDeliveries(options: { related_type?: string; related_id?: string; kind?: string; limit?: number } = {}) {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    const relatedType = String(options.related_type || "").trim();
+    const relatedId = String(options.related_id || "").trim();
+    const kind = String(options.kind || "").trim();
+    if (relatedType) {
+      params.push(relatedType);
+      clauses.push(`related_type = $${params.length}`);
+    }
+    if (relatedId) {
+      params.push(relatedId);
+      clauses.push(`related_id = $${params.length}`);
+    }
+    if (kind) {
+      params.push(kind);
+      clauses.push(`kind = $${params.length}`);
+    }
+    const limit = Math.min(Math.max(Number.parseInt(String(options.limit ?? 200), 10) || 200, 1), 1000);
+    params.push(limit);
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+              payload_json, idempotency_key, status, attempt_count, available_at::text,
+              locked_at::text, locked_by, provider, provider_message_id, last_error,
+              queued_at::text, sent_at::text, updated_at::text
+       FROM notification_deliveries
+       ${clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""}
+       ORDER BY queued_at DESC, id DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows.map((row) => mapNotificationDeliveryRow(row)).filter((row): row is NotificationDeliveryRow => Boolean(row));
+  }
+
   async claimNotificationDeliveries(workerId: string, limit = 10) {
     const normalizedWorkerId = String(workerId || "").trim();
     const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 10, 1), 100);
@@ -1102,6 +1173,15 @@ export class PostgresAppDatabase implements AppDatabase {
       [String(normalizedEmail || "").trim()],
     );
     return mapCustomerAccountRow(result.rows[0]);
+  }
+
+  async listCustomerAccounts(limit = 200) {
+    const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 200, 1), 1000);
+    const result = await this.pool.query<Record<string, unknown>>(
+      "SELECT * FROM customer_accounts ORDER BY created_at DESC, id DESC LIMIT $1",
+      [normalizedLimit],
+    );
+    return result.rows.map((row) => mapCustomerAccountRow(row)).filter((row): row is CustomerAccountRow => Boolean(row));
   }
 
   async createCustomerAccount(input: CreateCustomerAccountInput) {
@@ -1472,7 +1552,7 @@ export class PostgresAppDatabase implements AppDatabase {
   async listDirectSeats(eventId: string, performanceId?: string) {
     await this.releaseExpiredDirectOrderHolds(eventId);
     await this.releaseExpiredDirectTicketHolds(eventId);
-    const result = await this.pool.query<Record<string, unknown>>(`SELECT id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,status,allocation_status,source_status,created_at::text,updated_at::text FROM direct_seats WHERE event_id=$1 ${performanceId ? "AND performance_id=$2" : ""} ORDER BY zone,row_label,seat_label`, performanceId ? [eventId, performanceId] : [eventId]);
+    const result = await this.pool.query<Record<string, unknown>>(`SELECT id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,ticket_class,face_value,x,y,status,allocation_status,source_status,created_at::text,updated_at::text FROM direct_seats WHERE event_id=$1 ${performanceId ? "AND performance_id=$2" : ""} ORDER BY zone,row_label,seat_label`, performanceId ? [eventId, performanceId] : [eventId]);
     return result.rows.map(mapDirectSeatRow);
   }
 
@@ -1484,7 +1564,7 @@ export class PostgresAppDatabase implements AppDatabase {
       for (const seat of seats) {
         const allocationStatus = seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated";
         const sourceStatus = seat.source_status || "unknown";
-        await client.query(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,allocation_status,source_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=EXCLUDED.section_label,external_seat_ref=EXCLUDED.external_seat_ref,face_value=EXCLUDED.face_value,${layoutUpdate},allocation_status=EXCLUDED.allocation_status,source_status=EXCLUDED.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`, [generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, allocationStatus, sourceStatus]);
+        await client.query(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,ticket_class,face_value,x,y,allocation_status,source_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=EXCLUDED.section_label,external_seat_ref=EXCLUDED.external_seat_ref,ticket_class=EXCLUDED.ticket_class,face_value=EXCLUDED.face_value,${layoutUpdate},allocation_status=EXCLUDED.allocation_status,source_status=EXCLUDED.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`, [generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.ticket_class || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, allocationStatus, sourceStatus]);
       }
       if (options?.replaceMissing && seats.length) {
         const keep = seats.map((_, index) => `(zone=$${index * 3 + 3} AND row_label=$${index * 3 + 4} AND seat_label=$${index * 3 + 5})`).join(" OR ");
@@ -1532,7 +1612,7 @@ export class PostgresAppDatabase implements AppDatabase {
       const subtotalAmount = Math.max(0, Number(input.subtotal_amount) || 0);
       const status = totalAmount === 0 ? "paid" : "pending_payment";
       const billingStatus = String(input.billing_profile_json || "{}").trim() !== "{}" ? "pending" : "not_required";
-      await client.query(`INSERT INTO direct_orders (id,event_id,performance_id,customer_account_id,buyer_name,phone,email,currency,subtotal_amount,platform_fee_amount,payment_fee_amount,tax_amount,discount_amount,total_amount,fee_rule_version,tax_snapshot_json,billing_profile_json,seller_snapshot_json,status,hold_expires_at,billing_document_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,CASE WHEN $19='pending_payment' THEN CURRENT_TIMESTAMP + ($20 * INTERVAL '1 minute') END,$21)`, [orderId,input.event_id,input.performance_id,input.customer_account_id || null,String(input.buyer_name || "").trim(),String(input.phone || "").trim(),String(input.email || "").trim(),"THB",subtotalAmount,Math.max(0,Number(input.platform_fee_amount)||0),Math.max(0,Number(input.payment_fee_amount)||0),Math.max(0,Number(input.tax_amount)||0),Math.max(0,Number(input.discount_amount)||0),totalAmount,String(input.fee_rule_version || "v1"),String(input.tax_snapshot_json || "{}").trim() || "{}",String(input.billing_profile_json || "{}").trim() || "{}",String(input.seller_snapshot_json || "{}").trim() || "{}",status,holdMinutes,billingStatus]);
+      await client.query(`INSERT INTO direct_orders (id,event_id,performance_id,customer_account_id,buyer_name,phone,email,currency,subtotal_amount,platform_fee_amount,payment_fee_amount,tax_amount,discount_amount,total_amount,fee_rule_version,tax_snapshot_json,billing_profile_json,seller_snapshot_json,status,hold_expires_at,billing_document_status,seller_organization_id,payment_profile_version,payment_receiver_snapshot_json,payout_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,CASE WHEN $19='pending_payment' THEN CURRENT_TIMESTAMP + ($20 * INTERVAL '1 minute') END,$21,$22,$23,$24,$25)`, [orderId,input.event_id,input.performance_id,input.customer_account_id || null,String(input.buyer_name || "").trim(),String(input.phone || "").trim(),String(input.email || "").trim(),"THB",subtotalAmount,Math.max(0,Number(input.platform_fee_amount)||0),Math.max(0,Number(input.payment_fee_amount)||0),Math.max(0,Number(input.tax_amount)||0),Math.max(0,Number(input.discount_amount)||0),totalAmount,String(input.fee_rule_version || "v1"),String(input.tax_snapshot_json || "{}").trim() || "{}",String(input.billing_profile_json || "{}").trim() || "{}",String(input.seller_snapshot_json || "{}").trim() || "{}",status,holdMinutes,billingStatus,input.seller_organization_id || null,Math.max(1,Number(input.payment_profile_version)||1),String(input.payment_receiver_snapshot_json || "{}").trim() || "{}",input.payout_status || "not_applicable"]);
       const seatPrice = seatIds.length ? subtotalAmount / seatIds.length : 0;
       const ticketStatus = status === "paid" ? "issued" : "held";
       const paymentStatus = status === "paid" ? "verified" : "awaiting_payment";
@@ -1540,7 +1620,7 @@ export class PostgresAppDatabase implements AppDatabase {
         await client.query(`INSERT INTO direct_tickets (id,event_id,order_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_at,hold_expires_at,source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CASE WHEN $14='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN $14='held' THEN CURRENT_TIMESTAMP + ($15 * INTERVAL '1 minute') END,$16)`, [generateEntityId("dtkt"),input.event_id,orderId,input.customer_account_id || null,input.performance_id,seat.id,String(input.ticket_class || "Public").trim() || "Public",String(input.buyer_name || "").trim(),String(input.buyer_name || "").trim(),String(input.phone || "").trim(),String(input.email || "").trim(),seatPrice,paymentStatus,ticketStatus,holdMinutes,input.source === "admin" ? "admin" : "public"]);
         await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2", [ticketStatus, seat.id]);
       }
-      await client.query("INSERT INTO payment_attempts (id,order_id,attempt_number,method,amount,status) VALUES ($1,$2,1,'promptpay',$3,$4)", [generateEntityId("pay"),orderId,totalAmount,status === "paid" ? "verified" : "pending"]);
+      await client.query("INSERT INTO payment_attempts (id,order_id,attempt_number,method,amount,status,receiver_snapshot_json) VALUES ($1,$2,1,'promptpay',$3,$4,$5)", [generateEntityId("pay"),orderId,totalAmount,status === "paid" ? "verified" : "pending",String(input.payment_receiver_snapshot_json || "{}").trim() || "{}"]);
       await client.query("COMMIT");
       return { order: await this.getDirectOrderById(orderId) };
     } catch (error: any) {
@@ -1842,7 +1922,8 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows;
   }
 
-  async listEvents() {
+  async listEvents(organizationId?: string) {
+    const normalizedOrganizationId = String(organizationId || "").trim();
     const result = await this.pool.query<Record<string, unknown>>(
       `SELECT
          e.id,
@@ -1856,7 +1937,9 @@ export class PostgresAppDatabase implements AppDatabase {
          e.updated_at::text AS updated_at
        FROM events e
        LEFT JOIN organizations o ON o.id = e.organizer_id
+       ${normalizedOrganizationId ? "WHERE e.organizer_id = $1" : ""}
        ORDER BY e.is_default DESC, e.created_at ASC`,
+      normalizedOrganizationId ? [normalizedOrganizationId] : [],
     );
     return Promise.all(result.rows.map((row) => this.hydrateEventRow(row)));
   }
@@ -2014,6 +2097,224 @@ export class PostgresAppDatabase implements AppDatabase {
       ],
     );
     return mapOrganizerProfileRow(result.rows[0]);
+  }
+
+  async listOrganizerProfiles(organizationId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT id, organization_id, name, slug, legal_name, public_display_name, public_description,
+              public_logo_url, public_website_url, public_facebook_url, public_line_url,
+              public_contact_text, verification_status, verification_notes,
+              created_at::text AS created_at, updated_at::text AS updated_at
+       FROM organizer_profiles
+       WHERE organization_id = $1
+       ORDER BY name ASC, created_at ASC`,
+      [String(organizationId || "").trim()],
+    );
+    return result.rows.map((row) => mapOrganizerProfileRow(row)).filter((row): row is OrganizerProfileRow => Boolean(row));
+  }
+
+  async getOrganizerProfileById(organizerProfileId: string, organizationId: string) {
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT id, organization_id, name, slug, legal_name, public_display_name, public_description,
+              public_logo_url, public_website_url, public_facebook_url, public_line_url,
+              public_contact_text, verification_status, verification_notes,
+              created_at::text AS created_at, updated_at::text AS updated_at
+       FROM organizer_profiles
+       WHERE id = $1 AND organization_id = $2`,
+      [String(organizerProfileId || "").trim(), String(organizationId || "").trim()],
+    );
+    return mapOrganizerProfileRow(result.rows[0]);
+  }
+
+  async createOrganizerProfile(organizationId: string, input: CreateOrganizerProfileInput) {
+    const ownerId = String(organizationId || "").trim();
+    const name = String(input.name || "").trim() || "New Organizer";
+    const baseSlug = slugifyText(input.slug || name);
+    const slugResult = await this.pool.query<{ slug: string }>(
+      "SELECT slug FROM organizer_profiles WHERE organization_id = $1 AND (slug = $2 OR slug LIKE $3)",
+      [ownerId, baseSlug, `${baseSlug}-%`],
+    );
+    const usedSlugs = new Set(slugResult.rows.map((row) => row.slug));
+    let slug = baseSlug;
+    let suffix = 2;
+    while (usedSlugs.has(slug)) {
+      slug = `${baseSlug}-${suffix}`;
+      suffix += 1;
+    }
+    const id = generateEntityId("orgp");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO organizer_profiles (
+           id, organization_id, name, slug, legal_name, public_display_name, public_description,
+           public_logo_url, public_website_url, public_facebook_url, public_line_url, public_contact_text,
+           verification_status, verification_notes
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          id, ownerId, name, slug,
+          input.legal_name ?? null, input.public_display_name ?? null, input.public_description ?? null,
+          input.public_logo_url ?? null, input.public_website_url ?? null, input.public_facebook_url ?? null,
+          input.public_line_url ?? null, input.public_contact_text ?? null,
+          input.verification_status ?? "draft", input.verification_notes ?? null,
+        ],
+      );
+      await client.query("INSERT INTO organizer_financial_profiles (organizer_id) VALUES ($1) ON CONFLICT (organizer_id) DO NOTHING", [id]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    const profile = await this.getOrganizerProfileById(id, ownerId);
+    if (!profile) throw new Error("Failed to create organizer profile");
+    return profile;
+  }
+
+  async updateOrganizerProfileById(organizerProfileId: string, organizationId: string, input: UpdateOrganizerProfileInput & { name?: string; slug?: string }) {
+    const profileId = String(organizerProfileId || "").trim();
+    const ownerId = String(organizationId || "").trim();
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    if (typeof input.name === "string" && input.name.trim()) { values.push(input.name.trim()); updates.push(`name = $${values.length}`); }
+    if (typeof input.slug === "string" && input.slug.trim()) { values.push(slugifyText(input.slug)); updates.push(`slug = $${values.length}`); }
+    values.push(input.legal_name ?? null); updates.push(`legal_name = $${values.length}`);
+    values.push(input.public_display_name ?? null); updates.push(`public_display_name = $${values.length}`);
+    values.push(input.public_description ?? null); updates.push(`public_description = $${values.length}`);
+    values.push(input.public_logo_url ?? null); updates.push(`public_logo_url = $${values.length}`);
+    values.push(input.public_website_url ?? null); updates.push(`public_website_url = $${values.length}`);
+    values.push(input.public_facebook_url ?? null); updates.push(`public_facebook_url = $${values.length}`);
+    values.push(input.public_line_url ?? null); updates.push(`public_line_url = $${values.length}`);
+    values.push(input.public_contact_text ?? null); updates.push(`public_contact_text = $${values.length}`);
+    values.push(input.verification_status ?? "draft"); updates.push(`verification_status = $${values.length}`);
+    values.push(input.verification_notes ?? null); updates.push(`verification_notes = $${values.length}`);
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    values.push(profileId, ownerId);
+    const result = await this.pool.query(
+      `UPDATE organizer_profiles SET ${updates.join(", ")} WHERE id = $${values.length - 1} AND organization_id = $${values.length}`,
+      values,
+    );
+    if (!result.rowCount) return undefined;
+    return this.getOrganizerProfileById(profileId, ownerId);
+  }
+
+  async getOrganizerFinancialProfile(organizationId: string) {
+    const normalizedOrganizationId = String(organizationId || "").trim();
+    if (!normalizedOrganizationId) return undefined;
+    await this.pool.query("INSERT INTO organization_financial_profiles (organization_id) VALUES ($1) ON CONFLICT (organization_id) DO NOTHING", [normalizedOrganizationId]);
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM organization_financial_profiles WHERE organization_id = $1", [normalizedOrganizationId]);
+    return mapOrganizerFinancialProfileRow(result.rows[0]);
+  }
+
+  async updateOrganizerFinancialProfile(organizationId: string, input: UpdateOrganizerFinancialProfileInput) {
+    const current = await this.getOrganizerFinancialProfile(organizationId);
+    if (!current) return undefined;
+    const promptpayId = input.clear_promptpay_id ? null : input.promptpay_id === undefined ? current.promptpay_id : input.promptpay_id;
+    const result = await this.pool.query<Record<string, unknown>>(
+      `UPDATE organization_financial_profiles
+       SET payment_method = $2,
+           promptpay_id = $3,
+           promptpay_receiver_name = $4,
+           payment_status = $5,
+           legal_entity_type = $6,
+           tax_id = $7,
+           vat_status = $8,
+           vat_rate_percent = $9,
+           registered_address = $10,
+           branch_number = $11,
+           billing_document_mode = $12,
+           platform_fee_type = $13,
+           platform_fee_value = $14,
+           platform_fee_payer = $15,
+           payment_fee_value = $16,
+           payout_mode = $17,
+           payout_schedule = $18,
+           payout_status = $19,
+           pricing_policy_enabled = $20,
+           version = version + 1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE organization_id = $1
+       RETURNING *`,
+      [
+        current.organization_id,
+        input.payment_method || current.payment_method,
+        promptpayId,
+        input.promptpay_receiver_name === undefined ? current.promptpay_receiver_name : input.promptpay_receiver_name,
+        input.payment_status || current.payment_status,
+        input.legal_entity_type || current.legal_entity_type,
+        input.tax_id === undefined ? current.tax_id : input.tax_id,
+        input.vat_status || current.vat_status,
+        Number.isFinite(input.vat_rate_percent) ? input.vat_rate_percent : current.vat_rate_percent,
+        input.registered_address === undefined ? current.registered_address : input.registered_address,
+        input.branch_number === undefined ? current.branch_number : input.branch_number,
+        input.billing_document_mode || current.billing_document_mode,
+        input.platform_fee_type || current.platform_fee_type,
+        Number.isFinite(input.platform_fee_value) ? input.platform_fee_value : current.platform_fee_value,
+        input.platform_fee_payer || current.platform_fee_payer,
+        Number.isFinite(input.payment_fee_value) ? input.payment_fee_value : current.payment_fee_value,
+        input.payout_mode || current.payout_mode,
+        input.payout_schedule || current.payout_schedule,
+        input.payout_status || current.payout_status,
+        input.pricing_policy_enabled === undefined ? current.pricing_policy_enabled : input.pricing_policy_enabled,
+      ],
+    );
+    return mapOrganizerFinancialProfileRow(result.rows[0]);
+  }
+
+  async getOrganizerFinancialProfileByOrganizerId(organizerProfileId: string, organizationId: string) {
+    const profile = await this.getOrganizerProfileById(organizerProfileId, organizationId);
+    if (!profile) return undefined;
+    await this.pool.query("INSERT INTO organizer_financial_profiles (organizer_id) VALUES ($1) ON CONFLICT (organizer_id) DO NOTHING", [profile.id]);
+    const result = await this.pool.query<Record<string, unknown>>(
+      `SELECT f.*, p.organization_id, p.id AS organizer_profile_id
+       FROM organizer_financial_profiles f
+       JOIN organizer_profiles p ON p.id = f.organizer_id
+       WHERE f.organizer_id = $1 AND p.organization_id = $2`,
+      [profile.id, profile.organization_id],
+    );
+    return mapOrganizerFinancialProfileRow(result.rows[0]);
+  }
+
+  async updateOrganizerFinancialProfileByOrganizerId(organizerProfileId: string, organizationId: string, input: UpdateOrganizerFinancialProfileInput) {
+    const current = await this.getOrganizerFinancialProfileByOrganizerId(organizerProfileId, organizationId);
+    if (!current || !current.organizer_profile_id) return undefined;
+    const promptpayId = input.clear_promptpay_id ? null : input.promptpay_id === undefined ? current.promptpay_id : input.promptpay_id;
+    const result = await this.pool.query<Record<string, unknown>>(
+      `UPDATE organizer_financial_profiles
+       SET payment_method = $2, promptpay_id = $3, promptpay_receiver_name = $4, payment_status = $5,
+           legal_entity_type = $6, tax_id = $7, vat_status = $8, vat_rate_percent = $9,
+           registered_address = $10, branch_number = $11, billing_document_mode = $12,
+           platform_fee_type = $13, platform_fee_value = $14, platform_fee_payer = $15,
+           payment_fee_value = $16, payout_mode = $17, payout_schedule = $18, payout_status = $19,
+           pricing_policy_enabled = $20, version = version + 1, updated_at = CURRENT_TIMESTAMP
+       WHERE organizer_id = $1
+       RETURNING *`,
+      [
+        current.organizer_profile_id,
+        input.payment_method || current.payment_method,
+        promptpayId,
+        input.promptpay_receiver_name === undefined ? current.promptpay_receiver_name : input.promptpay_receiver_name,
+        input.payment_status || current.payment_status,
+        input.legal_entity_type || current.legal_entity_type,
+        input.tax_id === undefined ? current.tax_id : input.tax_id,
+        input.vat_status || current.vat_status,
+        Number.isFinite(input.vat_rate_percent) ? input.vat_rate_percent : current.vat_rate_percent,
+        input.registered_address === undefined ? current.registered_address : input.registered_address,
+        input.branch_number === undefined ? current.branch_number : input.branch_number,
+        input.billing_document_mode || current.billing_document_mode,
+        input.platform_fee_type || current.platform_fee_type,
+        Number.isFinite(input.platform_fee_value) ? input.platform_fee_value : current.platform_fee_value,
+        input.platform_fee_payer || current.platform_fee_payer,
+        Number.isFinite(input.payment_fee_value) ? input.payment_fee_value : current.payment_fee_value,
+        input.payout_mode || current.payout_mode,
+        input.payout_schedule || current.payout_schedule,
+        input.payout_status || current.payout_status,
+        input.pricing_policy_enabled === undefined ? current.pricing_policy_enabled : input.pricing_policy_enabled,
+      ],
+    );
+    if (!result.rows[0]) return undefined;
+    return this.getOrganizerFinancialProfileByOrganizerId(current.organizer_profile_id, organizationId);
   }
 
   async getEventDeletionImpact(eventId: string) {

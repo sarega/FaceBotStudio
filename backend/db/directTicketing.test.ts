@@ -14,8 +14,9 @@ test("direct seats cannot issue two active tickets and rejected payment releases
     starts_at: "2026-08-22T18:30:00+07:00",
   });
   const [seat] = await db.importDirectSeats(event.id, performance.id, [
-    { zone: "VIP", row_label: "A", seat_label: "01", face_value: 2500 },
+    { zone: "VIP", row_label: "A", seat_label: "01", ticket_class: "Premium", face_value: 2500 },
   ]);
+  assert.equal(seat.ticket_class, "Premium");
 
   const first = await db.createDirectTicket({
     event_id: event.id, performance_id: performance.id, seat_id: seat.id,

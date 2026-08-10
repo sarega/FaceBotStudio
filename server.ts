@@ -58,6 +58,7 @@ import {
   getSessionTtlMs,
   hashPassword,
   hashSessionToken,
+  isCustomerScopedCsrfPath,
   isValidUsername,
   normalizeUsername,
   passwordHashNeedsRehash,
@@ -114,6 +115,8 @@ import {
   type MessageAttachmentRow,
   type MessageRow,
   type OrganizerProfileRow,
+  type OrganizerFinancialProfileRow,
+  type UpdateOrganizerFinancialProfileInput,
   type OutreachDeliveryRow,
   type OutreachCampaignRow,
   type OutreachTargetRow,
@@ -2634,12 +2637,12 @@ function isCsrfTokenRequiredRequest(req: Request) {
   const requestPath = String(req.path || "");
   if (requestPath.startsWith("/api/auth/login")) return false;
   if (requestPath.startsWith("/api/checkin-access")) return false;
-  if (requestPath.startsWith("/api/customer/")) return hasCustomerSessionCookie(req);
+  if (isCustomerScopedCsrfPath(requestPath)) return hasCustomerSessionCookie(req);
   return hasAdminSessionCookie(req) || hasCustomerSessionCookie(req);
 }
 
 function usesCustomerCsrfCookie(req: Request) {
-  return String(req.path || "").startsWith("/api/customer/") || (!hasAdminSessionCookie(req) && hasCustomerSessionCookie(req));
+  return isCustomerScopedCsrfPath(String(req.path || "")) || (!hasAdminSessionCookie(req) && hasCustomerSessionCookie(req));
 }
 
 function readCsrfTokenHeader(req: Request) {
@@ -2844,6 +2847,16 @@ function requireEventScope(options?: EventScopeOptions) {
     const event = await appDb.getEventById(scope.eventId);
     if (!event) {
       return res.status(404).json({ error: "Event not found" });
+    }
+
+    if (req.auth?.user && event.organizer_id !== req.auth.user.organization_id) {
+      await recordSecurityEvent(req, "security.event_scope_denied", {
+        reason: "organizer_mismatch",
+        event_id: event.id,
+        event_organizer_id: event.organizer_id,
+        user_organization_id: req.auth.user.organization_id,
+      });
+      return res.status(403).json({ error: "This event belongs to another organizer" });
     }
 
     req.eventScope = scope;
@@ -3270,6 +3283,7 @@ function buildEmailStatusResponse(eventId?: string) {
     appUrl: config.appUrl,
     readiness: config.readiness,
     errorMessage: config.errorMessage,
+    notificationWorker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
     lastTestResult: eventId ? (adminEmailTestResults.get(eventId) || null) : null,
   };
 }
@@ -3281,6 +3295,9 @@ async function queueCustomerAccountEmail(
   tokenId: string,
 ) {
   const emailConfig = getEmailConfig();
+  if (!emailConfig.ready) {
+    throw new Error(emailConfig.errorMessage || "Email provider is not configured");
+  }
   const payload = renderCustomerAccountEmail({
     kind,
     appUrl: emailConfig.appUrl,
@@ -4171,7 +4188,9 @@ function buildOrganizerProfileResponse(
     : "empty";
 
   return {
-    organization_id: normalizeOptionalText(profile?.id) || fallbackOrganizationId,
+    organizer_profile_id: normalizeOptionalText(profile?.id) || fallbackOrganizationId,
+    organization_id: normalizeOptionalText(profile?.organization_id) || fallbackOrganizationId,
+    owner_organization_id: normalizeOptionalText(profile?.organization_id) || fallbackOrganizationId,
     organization_name: normalizeOptionalText(profile?.name) || fallbackOrganizationName,
     organization_slug: normalizeOptionalText(profile?.slug),
     legal_name: normalizeOptionalText(profile?.legal_name),
@@ -4185,7 +4204,121 @@ function buildOrganizerProfileResponse(
     verification_status: normalizeOptionalText(profile?.verification_status) || "draft",
     verification_notes: normalizeOptionalText(profile?.verification_notes),
     public_profile_source: source as "organization_profile" | "event_settings_fallback" | "organization_name_fallback" | "empty",
-    applies_to_all_events: true,
+    applies_to_all_events: false,
+  };
+}
+
+async function resolveEventOrganizerProfile(
+  event: { organizer_id?: string | null },
+  settings: Record<string, string>,
+) {
+  const ownerOrganizationId = normalizeOptionalText(event.organizer_id);
+  const requestedProfileId = normalizeOptionalText(settings.event_public_organizer_profile_id);
+  if (requestedProfileId && ownerOrganizationId) {
+    const selected = await appDb.getOrganizerProfileById(requestedProfileId, ownerOrganizationId);
+    if (selected) return selected;
+  }
+
+  if (ownerOrganizationId) {
+    const profiles = await appDb.listOrganizerProfiles(ownerOrganizationId);
+    if (profiles[0]) return profiles[0];
+    return appDb.getOrganizerProfile(ownerOrganizationId);
+  }
+  return undefined;
+}
+
+async function resolveEventOrganizerFinancialProfile(
+  event: { organizer_id?: string | null },
+  settings: Record<string, string>,
+) {
+  const profile = await resolveEventOrganizerProfile(event, settings);
+  const ownerOrganizationId = normalizeOptionalText(event.organizer_id);
+  if (profile && ownerOrganizationId && profile.id !== ownerOrganizationId) {
+    return appDb.getOrganizerFinancialProfileByOrganizerId(profile.id, ownerOrganizationId);
+  }
+  return ownerOrganizationId ? appDb.getOrganizerFinancialProfile(ownerOrganizationId) : undefined;
+}
+
+function buildOrganizerFinancialProfileResponse(profile: OrganizerFinancialProfileRow | undefined, organizer?: OrganizerProfileRow) {
+  if (!profile) return null;
+  return {
+    organization_id: profile.organization_id,
+    organizer_profile_id: profile.organizer_profile_id || organizer?.id || profile.organization_id,
+    organization_name: organizer?.name || "",
+    payment_method: profile.payment_method,
+    promptpay_id_configured: Boolean(profile.promptpay_id),
+    promptpay_id_masked: maskPromptPayId(profile.promptpay_id),
+    promptpay_receiver_name: profile.promptpay_receiver_name || "",
+    payment_status: profile.payment_status,
+    promptpay_ready: resolveOrganizerPaymentConfig(profile).promptpay_ready,
+    legal_entity_type: profile.legal_entity_type,
+    tax_id_configured: Boolean(profile.tax_id),
+    tax_id_masked: maskPromptPayId(profile.tax_id),
+    vat_status: profile.vat_status,
+    vat_rate_percent: profile.vat_rate_percent,
+    registered_address: profile.registered_address || "",
+    branch_number: profile.branch_number || "",
+    billing_document_mode: profile.billing_document_mode,
+    platform_fee_type: profile.platform_fee_type,
+    platform_fee_value: profile.platform_fee_value,
+    platform_fee_payer: profile.platform_fee_payer,
+    payment_fee_value: profile.payment_fee_value,
+    payout_mode: profile.payout_mode,
+    payout_schedule: profile.payout_schedule,
+    payout_status: profile.payout_status,
+    pricing_policy_enabled: profile.pricing_policy_enabled,
+    version: profile.version,
+    updated_at: profile.updated_at,
+  };
+}
+
+function parseOrganizerFinancialProfileUpdate(body: Record<string, unknown>, current: OrganizerFinancialProfileRow) {
+  const clearPromptpayId = body.clear_promptpay_id === true;
+  const enteredPromptpayId = readOptionalString(body, "promptpay_id", 32).replace(/\D/g, "");
+  const promptpayId = clearPromptpayId ? "" : enteredPromptpayId || current.promptpay_id || "";
+  const receiverName = normalizeOptionalText(readOptionalString(body, "promptpay_receiver_name", 180)) || current.promptpay_receiver_name || "";
+  if (promptpayId && !buildPromptPayPayload(promptpayId, 1)) return { error: "PromptPay ID must be a Thai mobile number or national ID" } as const;
+  if (promptpayId && !receiverName) return { error: "PromptPay receiver name is required" } as const;
+  const enumValue = <T extends string>(key: string, allowed: readonly T[], fallback: T) => {
+    const value = String(body[key] || "").trim() as T;
+    return allowed.includes(value) ? value : fallback;
+  };
+  const payoutMode = enumValue("payout_mode", ["direct_to_organizer", "platform_settlement"] as const, current.payout_mode);
+  return {
+    input: {
+      promptpay_id: enteredPromptpayId || undefined,
+      clear_promptpay_id: clearPromptpayId,
+      promptpay_receiver_name: receiverName || null,
+      payment_status: promptpayId ? "active" : "draft",
+      legal_entity_type: enumValue("legal_entity_type", ["individual", "company", "partnership", "other"] as const, current.legal_entity_type),
+      tax_id: normalizeOptionalText(readOptionalString(body, "tax_id", 32)).replace(/\D/g, "") || current.tax_id,
+      vat_status: enumValue("vat_status", ["not_registered", "registered", "exempt", "unknown"] as const, current.vat_status),
+      vat_rate_percent: Math.min(100, Math.max(0, Number(body.vat_rate_percent ?? current.vat_rate_percent) || 0)),
+      registered_address: normalizeOptionalText(readOptionalString(body, "registered_address", 1000)) || null,
+      branch_number: normalizeOptionalText(readOptionalString(body, "branch_number", 80)) || null,
+      billing_document_mode: enumValue("billing_document_mode", ["not_required", "receipt", "tax_invoice", "e_tax"] as const, current.billing_document_mode),
+      platform_fee_type: enumValue("platform_fee_type", ["percent", "fixed"] as const, current.platform_fee_type),
+      platform_fee_value: Math.max(0, Number(body.platform_fee_value ?? current.platform_fee_value) || 0),
+      platform_fee_payer: enumValue("platform_fee_payer", ["customer", "organizer"] as const, current.platform_fee_payer),
+      payment_fee_value: Math.max(0, Number(body.payment_fee_value ?? current.payment_fee_value) || 0),
+      payout_mode: payoutMode,
+      payout_schedule: enumValue("payout_schedule", ["manual", "daily", "weekly", "monthly"] as const, current.payout_schedule),
+      payout_status: payoutMode === "platform_settlement" ? "blocked" : "not_applicable",
+      pricing_policy_enabled: body.pricing_policy_enabled === undefined ? current.pricing_policy_enabled : body.pricing_policy_enabled === true,
+    } satisfies UpdateOrganizerFinancialProfileInput,
+  } as const;
+}
+
+function buildOrganizerManagementResponse(profile: OrganizerProfileRow, finance?: OrganizerFinancialProfileRow) {
+  return {
+    ...buildOrganizerProfileResponse(profile, null, profile.organization_id, profile.name),
+    id: profile.id,
+    name: profile.name,
+    slug: profile.slug,
+    legal_name: profile.legal_name || "",
+    verification_status: profile.verification_status,
+    verification_notes: profile.verification_notes || "",
+    finance: buildOrganizerFinancialProfileResponse(finance, profile),
   };
 }
 
@@ -4202,7 +4335,7 @@ async function buildPublicEventPagePayload(
   const sponsorEntries = parsePublicSponsorEntries(settings.event_public_sponsors_json);
   const speakerEntries = parsePublicSpeakerEntries(settings.event_public_speakers_json);
   const sectionEntries = parsePublicEventSections(settings.event_public_sections_json);
-  const organizerProfile = await appDb.getOrganizerProfile(event.organizer_id);
+  const organizerProfile = await resolveEventOrganizerProfile(event, settings);
   const organizer = buildOrganizerProfileResponse(
     organizerProfile,
     settings,
@@ -4239,15 +4372,16 @@ async function buildPublicEventPagePayload(
     ]);
     const activePerformances = performances.filter((performance) => performance.is_active);
     const activePerformanceIds = new Set(activePerformances.map((performance) => performance.id));
-    const availableSeats = seats.filter((seat) => activePerformanceIds.has(seat.performance_id) && seat.status === "available" && seat.allocation_status === "allocated");
-    const prices = availableSeats
-      .map((seat) => Number(seat.face_value))
-      .filter((price) => Number.isFinite(price) && price >= 0);
+    const sellableSeats = seats.filter((seat) => {
+      const price = Number(seat.face_value);
+      return activePerformanceIds.has(seat.performance_id) && seat.status === "available" && seat.allocation_status === "allocated" && Boolean(seat.ticket_class?.trim()) && Number.isFinite(price) && price > 0;
+    });
+    const prices = sellableSeats.map((seat) => Number(seat.face_value));
     ticketSales = {
       enabled: true,
       starting_price: prices.length > 0 ? Math.min(...prices) : null,
       performance_count: activePerformances.length,
-      available_seat_count: availableSeats.length,
+      available_seat_count: sellableSeats.length,
       performances: activePerformances.slice(0, 3).map((performance) => ({
         title: performance.title,
         starts_at: performance.starts_at,
@@ -4391,12 +4525,16 @@ async function buildPublicEventCatalogEntry(
   if (!hasPublicCatalogAction({ registrationEnabled, externalTicketUrl, directTicketingEnabled })) return null;
 
   const [organizerProfile, directPerformances, directSeats] = await Promise.all([
-    appDb.getOrganizerProfile(event.organizer_id),
+    resolveEventOrganizerProfile(event, settings),
     directTicketingEnabled ? appDb.listDirectPerformances(event.id) : Promise.resolve([]),
     directTicketingEnabled ? appDb.listDirectSeats(event.id) : Promise.resolve([]),
   ]);
   const activePerformances = directPerformances.filter((performance) => performance.is_active);
-  const availableSeats = directSeats.filter((seat) => seat.status === "available" && seat.allocation_status === "allocated");
+  const activePerformanceIds = new Set(activePerformances.map((performance) => performance.id));
+  const availableSeats = directSeats.filter((seat) => {
+    const price = Number(seat.face_value);
+    return activePerformanceIds.has(seat.performance_id) && seat.status === "available" && seat.allocation_status === "allocated" && Boolean(seat.ticket_class?.trim()) && Number.isFinite(price) && price > 0;
+  });
   const location = buildEventLocationSummaryFromSettings(settings);
   const organizer = buildOrganizerProfileResponse(organizerProfile, settings, event.organizer_id, event.organizer_name || "");
   const availability = resolvePublicCatalogAvailability({
@@ -4408,7 +4546,7 @@ async function buildPublicEventCatalogEntry(
   });
   const prices = availableSeats
     .map((seat) => Number(seat.face_value))
-    .filter((price) => Number.isFinite(price) && price >= 0);
+    .filter((price) => Number.isFinite(price) && price > 0);
 
   return {
     slug: publicSlug,
@@ -9603,6 +9741,72 @@ function buildPromptPayPayload(receiverId: string, amount: number) {
   return `${payload}${crc16Ccitt(payload)}`;
 }
 
+function maskPromptPayId(value: unknown) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length <= 4) return `••••${digits}`;
+  return `${digits.slice(0, 2)}${"•".repeat(Math.max(2, digits.length - 4))}${digits.slice(-2)}`;
+}
+
+function resolveOrganizerPaymentConfig(profile?: OrganizerFinancialProfileRow) {
+  const profileReceiverId = String(profile?.promptpay_id || "").trim();
+  const profileReady = profile?.payment_status === "active"
+    && Boolean(profileReceiverId)
+    && Boolean(String(profile?.promptpay_receiver_name || "").trim())
+    && Boolean(buildPromptPayPayload(profileReceiverId, 1));
+  if (profileReady) {
+    return {
+      receiver_id: profileReceiverId,
+      receiver_name: String(profile?.promptpay_receiver_name || "").trim(),
+      promptpay_ready: true,
+      source: "organizer_profile" as const,
+      profile_version: profile?.version || 1,
+    };
+  }
+
+  // Keep local development convenient, but never let a deployment-wide QR
+  // silently receive production money after organizer profiles are enabled.
+  const legacyReceiverId = String(process.env.PROMPTPAY_ID || "").trim();
+  const allowLegacyFallback = process.env.NODE_ENV !== "production" && !profileReceiverId && profile?.payment_status !== "active";
+  if (allowLegacyFallback && buildPromptPayPayload(legacyReceiverId, 1)) {
+    return {
+      receiver_id: legacyReceiverId,
+      receiver_name: String(process.env.PROMPTPAY_RECEIVER_NAME || "").trim(),
+      promptpay_ready: true,
+      source: "legacy_env" as const,
+      profile_version: 0,
+    };
+  }
+  return {
+    receiver_id: "",
+    receiver_name: "",
+    promptpay_ready: false,
+    source: "organizer_profile" as const,
+    profile_version: profile?.version || 1,
+  };
+}
+
+function buildPaymentReceiverSnapshot(profile: OrganizerFinancialProfileRow | undefined, paymentConfig = resolveOrganizerPaymentConfig(profile)) {
+  return JSON.stringify({
+    organization_id: profile?.organization_id || null,
+    profile_version: paymentConfig.profile_version,
+    payment_method: "promptpay",
+    receiver_id: paymentConfig.receiver_id || null,
+    receiver_name: paymentConfig.receiver_name || null,
+    source: paymentConfig.source,
+    captured_at: new Date().toISOString(),
+  });
+}
+
+function parsePaymentReceiverSnapshot(value: unknown) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
 let cachedTicketFontCssForHtml: string | null = null;
 
 function resolvePuppeteerExecutablePath() {
@@ -10069,21 +10273,30 @@ function serializeCustomerOrder(order: DirectOrderRow, includePaymentProof = fal
   };
 }
 
-function buildCustomerOrderPricing(settings: Record<string, string>, seatPrices: number[]) {
+function buildCustomerOrderPricing(settings: Record<string, string>, seatPrices: number[], profile?: OrganizerFinancialProfileRow) {
+  const useOrganizerPolicy = Boolean(profile?.pricing_policy_enabled);
   return calculateOrderPricing({
     seatPrices,
-    feeEnabled: isTruthySetting(process.env.PLATFORM_FEES_ENABLED ?? "0"),
-    feeType: parseFeeType(settings.platform_fee_type),
-    feeValue: parseMoney(settings.platform_fee_value),
-    taxRatePercent: parseMoney(settings.tax_rate_percent),
-    paymentFeeValue: parseMoney(settings.payment_fee_value),
+    feeEnabled: useOrganizerPolicy ? parseMoney(profile?.platform_fee_value) > 0 : isTruthySetting(process.env.PLATFORM_FEES_ENABLED ?? "0"),
+    feeType: parseFeeType(useOrganizerPolicy ? profile?.platform_fee_type : settings.platform_fee_type),
+    feeValue: useOrganizerPolicy ? parseMoney(profile?.platform_fee_value) : parseMoney(settings.platform_fee_value),
+    taxRatePercent: useOrganizerPolicy ? parseMoney(profile?.vat_rate_percent) : parseMoney(settings.tax_rate_percent),
+    paymentFeeValue: useOrganizerPolicy ? parseMoney(profile?.payment_fee_value) : parseMoney(settings.payment_fee_value),
   });
 }
 
-function buildOrderSellerSnapshot(settings: Record<string, string>, event: { organizer_name?: string | null }) {
+function buildOrderSellerSnapshot(settings: Record<string, string>, event: { organizer_id?: string | null; organizer_name?: string | null }, profile?: OrganizerFinancialProfileRow) {
+  const useOrganizerPolicy = Boolean(profile?.pricing_policy_enabled);
   return JSON.stringify({
-    legal_name: String(settings.seller_legal_name || "").trim() || String(event.organizer_name || "").trim(),
-    tax_mode: isTruthySetting(process.env.BILLING_DOCUMENTS_ENABLED ?? "0") ? String(settings.billing_document_mode || "not_required") : "not_required",
+    organization_id: profile?.organization_id || event.organizer_id || null,
+    profile_version: profile?.version || 0,
+    legal_name: String(settings.seller_legal_name || "").trim()
+      || String(event.organizer_name || "").trim(),
+    tax_id: profile?.tax_id || null,
+    vat_status: profile?.vat_status || "unknown",
+    tax_mode: useOrganizerPolicy
+      ? profile?.billing_document_mode || "not_required"
+      : isTruthySetting(process.env.BILLING_DOCUMENTS_ENABLED ?? "0") ? String(settings.billing_document_mode || "not_required") : "not_required",
     captured_at: new Date().toISOString(),
   });
 }
@@ -12743,6 +12956,44 @@ async function startServer() {
     }
   });
 
+  app.post("/api/customer/account/resend-verification", customerAccountIpRateLimit, customerAccountEmailRateLimit, async (req: AuthenticatedRequest, res) => {
+    if (!isCustomerAppEnabled()) {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const email = readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 });
+    if (email && !isValidCustomerEmail(email)) issues.push({ field: "email", message: "Enter a valid email address" });
+    if (issues.length > 0) return respondValidationError(res, issues);
+
+    try {
+      const account = await appDb.getCustomerAccountByNormalizedEmail(normalizeCustomerEmail(email));
+      let deliveryQueued = false;
+      if (account && account.status === "pending" && !account.email_verified_at) {
+        const token = createCustomerAccountToken();
+        const tokenRow = await appDb.createCustomerAccountToken({
+          customer_account_id: account.id,
+          kind: "email_verification",
+          token_hash: token.tokenHash,
+          expires_at: new Date(Date.now() + getCustomerAccountTokenTtlMs("email_verification")),
+        });
+        try {
+          deliveryQueued = Boolean(await queueCustomerAccountEmail(account, "email_verification", token.rawToken, tokenRow.id));
+        } catch (error) {
+          console.error("Failed to queue customer verification resend:", error);
+        }
+        await recordCustomerAudit(req, "customer.verification_requested", "customer_account", account.id, account.id, {
+          verification_delivery_queued: deliveryQueued,
+        });
+      }
+      return res.status(202).json({ status: "ok", verification_delivery_queued: deliveryQueued });
+    } catch (error) {
+      console.error("Customer verification resend failed:", error);
+      return res.status(202).json({ status: "ok", verification_delivery_queued: false });
+    }
+  });
+
   app.post("/api/customer/account/forgot-password", customerAccountIpRateLimit, customerAccountEmailRateLimit, async (req: AuthenticatedRequest, res) => {
     if (!isCustomerAppEnabled()) {
       return res.status(404).json({ error: "Not found" });
@@ -12921,8 +13172,17 @@ async function startServer() {
 
   app.get("/api/customer/orders", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
     const orders = await appDb.listCustomerOrders(req.customer!.account.id);
+    const eventById = new Map<string, { name: string; slug: string }>();
+    await Promise.all([...new Set(orders.map((order) => order.event_id))].map(async (eventId) => {
+      const event = await appDb.getEventById(eventId);
+      if (event) eventById.set(eventId, { name: event.name, slug: event.slug });
+    }));
     res.setHeader("Cache-Control", "private, no-store");
-    return res.json({ orders: orders.map((order) => serializeCustomerOrder(order)) });
+    return res.json({ orders: orders.map((order) => ({
+      ...serializeCustomerOrder(order),
+      event_name: eventById.get(order.event_id)?.name || null,
+      event_slug: eventById.get(order.event_id)?.slug || null,
+    })) });
   });
 
   app.get("/api/customer/orders/:id", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
@@ -12937,7 +13197,12 @@ async function startServer() {
     if (!order || order.customer_account_id !== req.customer!.account.id) return res.status(404).send("Order not found");
     if (!isCustomerPaidCheckoutEnabled(await getSettingsMap(order.event_id))) return res.status(404).send("Order not found");
     if (!["pending_payment", "payment_submitted"].includes(order.status)) return res.status(409).send("Order is not awaiting payment");
-    const payload = buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), order.total_amount);
+    const event = await appDb.getEventById(order.event_id);
+    const settings = event ? await getSettingsMap(event.id) : {};
+    const profile = event ? await resolveEventOrganizerFinancialProfile(event, settings) : undefined;
+    const snapshot = parsePaymentReceiverSnapshot(order.payment_receiver_snapshot_json);
+    const receiverId = String(snapshot.receiver_id || "").trim() || resolveOrganizerPaymentConfig(profile).receiver_id;
+    const payload = buildPromptPayPayload(receiverId, order.total_amount);
     if (!payload) return res.status(503).send("PromptPay is not configured");
     const png = await QRCode.toBuffer(payload, { width: 720, margin: 2, errorCorrectionLevel: "M" });
     res.setHeader("Content-Type", "image/png");
@@ -13579,9 +13844,9 @@ async function startServer() {
     },
   );
 
-  app.get("/api/events", requireAuth, async (_req, res) => {
+  app.get("/api/events", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const events = await appDb.listEvents();
+      const events = await appDb.listEvents(req.auth?.user.organization_id);
       const enrichedEvents = await Promise.all(
         events.map(async (event) => {
           const settings = await getSettingsMap(event.id);
@@ -14257,11 +14522,13 @@ async function startServer() {
       await appDb.releaseExpiredDirectTicketHolds(match.event.id);
       const performances = (await appDb.listDirectPerformances(match.event.id)).filter((item) => item.is_active);
       const seats = await appDb.listDirectSeats(match.event.id);
+      const financialProfile = await resolveEventOrganizerFinancialProfile(match.event, match.settings);
+      const paymentConfig = resolveOrganizerPaymentConfig(financialProfile);
       return res.json({
         performances,
         seats: seats.map(({ external_seat_ref: _externalSeatRef, ...seat }) => seat),
-        receiver_name: String(process.env.PROMPTPAY_RECEIVER_NAME || "").trim(),
-        promptpay_ready: Boolean(buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), 1)),
+        receiver_name: paymentConfig.receiver_name,
+        promptpay_ready: paymentConfig.promptpay_ready,
         hold_minutes: 15,
       });
     } catch (error) {
@@ -14277,12 +14544,14 @@ async function startServer() {
       await appDb.releaseExpiredDirectOrderHolds(match.event.id);
       const performances = (await appDb.listDirectPerformances(match.event.id)).filter((item) => item.is_active);
       const seats = await appDb.listDirectSeats(match.event.id);
+      const financialProfile = await resolveEventOrganizerFinancialProfile(match.event, match.settings);
+      const paymentConfig = resolveOrganizerPaymentConfig(financialProfile);
       return res.json({
-        event: { id: match.event.id, slug: req.params.slug, name: String(match.settings.event_name || match.event.name || "Event"), seller_name: String(match.settings.seller_legal_name || match.event.organizer_name || "").trim() },
+        event: { id: match.event.id, slug: req.params.slug, name: String(match.settings.event_name || match.event.name || "Event"), seller_name: String(match.settings.seller_legal_name || match.event.organizer_name || "").trim(), organizer_id: match.event.organizer_id },
         performances,
         seats: seats.map(({ external_seat_ref: _externalSeatRef, ...seat }) => seat),
-        receiver_name: String(process.env.PROMPTPAY_RECEIVER_NAME || "").trim(),
-        promptpay_ready: Boolean(buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), 1)),
+        receiver_name: paymentConfig.receiver_name,
+        promptpay_ready: paymentConfig.promptpay_ready,
         hold_minutes: 15,
         max_seats: Math.min(12, Math.max(1, Number.parseInt(String(match.settings.customer_ticket_max_seats || "6"), 10) || 6)),
       });
@@ -14307,9 +14576,25 @@ async function startServer() {
       if (!acceptedTerms) issues.push({ field: "accept_terms", message: "Checkout terms acceptance is required" });
       if (issues.length) return respondValidationError(res, issues);
       const account = req.customer!.account;
-      const seats = (await appDb.listDirectSeats(match.event.id, performanceId)).filter((seat) => seatIds.includes(seat.id));
+      const [performances, performanceSeats] = await Promise.all([
+        appDb.listDirectPerformances(match.event.id),
+        appDb.listDirectSeats(match.event.id, performanceId),
+      ]);
+      if (!performances.some((performance) => performance.id === performanceId && performance.is_active)) return res.status(409).json({ error: "The selected performance is unavailable" });
+      const seats = performanceSeats.filter((seat) => seatIds.includes(seat.id));
       if (seats.length !== seatIds.length || seats.some((seat) => seat.status !== "available" || seat.allocation_status !== "allocated")) return res.status(409).json({ error: "One or more selected seats are no longer available" });
-      const pricing = buildCustomerOrderPricing(match.settings, seats.map((seat) => Math.max(0, Number(seat.face_value || 0))));
+      const seatPrices = seats.map((seat) => Number(seat.face_value));
+      if (seatPrices.some((price) => !Number.isFinite(price) || price <= 0)) return res.status(409).json({ error: "One or more selected seats do not have a public price" });
+      if (new Set(seatPrices.map((price) => price.toFixed(2))).size !== 1) return res.status(409).json({ error: "Selected seats must use the same price" });
+      const seatClasses = seats.map((seat) => String(seat.ticket_class || "").trim());
+      if (seatClasses.some((ticketClass) => !ticketClass)) return res.status(409).json({ error: "One or more selected seats do not have a ticket class" });
+      if (new Set(seatClasses.map((ticketClass) => ticketClass.toLocaleLowerCase())).size !== 1) return res.status(409).json({ error: "Selected seats must use the same ticket class" });
+      const financialProfile = await resolveEventOrganizerFinancialProfile(match.event, match.settings);
+      const paymentConfig = resolveOrganizerPaymentConfig(financialProfile);
+      const pricing = buildCustomerOrderPricing(match.settings, seatPrices, financialProfile);
+      if (pricing.total_amount > 0 && !paymentConfig.promptpay_ready) {
+        return res.status(503).json({ error: "Organizer payment profile is not ready" });
+      }
       const rawBillingProfile = body.billing_profile && typeof body.billing_profile === "object" && !Array.isArray(body.billing_profile) ? body.billing_profile as Record<string, unknown> : {};
       const billingProfile = isTruthySetting(process.env.BILLING_DOCUMENTS_ENABLED ?? "0") ? {
         document_kind: String(rawBillingProfile.document_kind || "receipt").trim().slice(0, 40),
@@ -14327,9 +14612,13 @@ async function startServer() {
         email: account.email,
         ...pricing,
         billing_profile_json: JSON.stringify(billingProfile),
-        seller_snapshot_json: buildOrderSellerSnapshot(match.settings, match.event),
+        seller_snapshot_json: buildOrderSellerSnapshot(match.settings, match.event, financialProfile),
+        seller_organization_id: match.event.organizer_id,
+        payment_profile_version: paymentConfig.profile_version,
+        payment_receiver_snapshot_json: buildPaymentReceiverSnapshot(financialProfile, paymentConfig),
+        payout_status: financialProfile?.payout_mode === "platform_settlement" ? "pending" : "not_applicable",
         hold_minutes: 15,
-        ticket_class: "Public",
+        ticket_class: seatClasses[0],
         source: "public",
       });
       if (orderResult.error || !orderResult.order) return res.status(409).json({ error: orderResult.error || "seat_unavailable" });
@@ -14409,7 +14698,10 @@ async function startServer() {
     await appDb.releaseExpiredDirectTicketHolds();
     const ticket = await appDb.getDirectTicketById(id);
     if (!ticket || ticket.status !== "held") return res.status(409).send("Order is not awaiting payment");
-    const payload = buildPromptPayPayload(String(process.env.PROMPTPAY_ID || "").trim(), ticket.price_amount);
+    const event = await appDb.getEventById(ticket.event_id);
+    const settings = event ? await getSettingsMap(event.id) : {};
+    const profile = event ? await resolveEventOrganizerFinancialProfile(event, settings) : undefined;
+    const payload = buildPromptPayPayload(resolveOrganizerPaymentConfig(profile).receiver_id, ticket.price_amount);
     if (!payload) return res.status(503).send("PromptPay is not configured");
     const png = await QRCode.toBuffer(payload, { width: 720, margin: 2, errorCorrectionLevel: "M" });
     res.setHeader("Content-Type", "image/png");
@@ -14462,7 +14754,10 @@ async function startServer() {
     const paidAt = Date.parse(String(body.paid_at || ""));
     const createdAt = Date.parse(ticket.created_at);
     const proofSubmittedAt = Date.parse(ticket.payment_proof_submitted_at || "");
-    const expectedReceiver = String(process.env.PROMPTPAY_ID || "").replace(/\D/g, "");
+    const ticketEvent = await appDb.getEventById(ticket.event_id);
+    const ticketSettings = ticketEvent ? await getSettingsMap(ticketEvent.id) : {};
+    const ticketProfile = ticketEvent ? await resolveEventOrganizerFinancialProfile(ticketEvent, ticketSettings) : undefined;
+    const expectedReceiver = resolveOrganizerPaymentConfig(ticketProfile).receiver_id.replace(/\D/g, "");
     const receivedReceiver = String(body.receiver_id || "").replace(/\D/g, "");
     const reasons = [
       body.status !== "verified" ? "provider_status" : "",
@@ -15903,7 +16198,7 @@ async function startServer() {
   app.post("/api/direct-ticketing/seats/import", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const body = readObjectBody(req); const performanceId = String(body.performance_id || "").trim(); const rawSeats = Array.isArray(body.seats) ? body.seats : [];
     if (!performanceId || !rawSeats.length) return res.status(400).json({ error: "performance_id and at least one seat are required" });
-    const seats = rawSeats.map((row) => ({ zone: String(row?.zone || "").trim(), section_label: typeof row?.section_label === "string" ? row.section_label.trim() || null : null, row_label: String(row?.row_label || "").trim(), seat_label: String(row?.seat_label || "").trim(), external_seat_ref: typeof row?.external_seat_ref === "string" ? row.external_seat_ref.trim() || null : null, face_value: Number.isFinite(Number(row?.face_value)) ? Number(row.face_value) : null, x: Number.isFinite(Number(row?.x)) ? Number(row.x) : null, y: Number.isFinite(Number(row?.y)) ? Number(row.y) : null, allocation_status: row?.allocation_status === "not_allocated" ? "not_allocated" as const : "allocated" as const, source_status: ["available", "sold", "generated", "blocked", "unknown"].includes(String(row?.source_status || "")) ? String(row.source_status) as "available" | "sold" | "generated" | "blocked" | "unknown" : "unknown" as const })).filter((seat) => seat.zone && seat.row_label && seat.seat_label);
+    const seats = rawSeats.map((row) => ({ zone: String(row?.zone || "").trim(), section_label: typeof row?.section_label === "string" ? row.section_label.trim() || null : null, row_label: String(row?.row_label || "").trim(), seat_label: String(row?.seat_label || "").trim(), external_seat_ref: typeof row?.external_seat_ref === "string" ? row.external_seat_ref.trim() || null : null, ticket_class: typeof row?.ticket_class === "string" ? row.ticket_class.trim().slice(0, 80) || null : null, face_value: Number.isFinite(Number(row?.face_value)) ? Number(row.face_value) : null, x: Number.isFinite(Number(row?.x)) ? Number(row.x) : null, y: Number.isFinite(Number(row?.y)) ? Number(row.y) : null, allocation_status: row?.allocation_status === "not_allocated" ? "not_allocated" as const : "allocated" as const, source_status: ["available", "sold", "generated", "blocked", "unknown"].includes(String(row?.source_status || "")) ? String(row.source_status) as "available" | "sold" | "generated" | "blocked" | "unknown" : "unknown" as const })).filter((seat) => seat.zone && seat.row_label && seat.seat_label);
     if (!seats.length) return res.status(400).json({ error: "Every seat needs zone, row_label, and seat_label" });
     const imported = await appDb.importDirectSeats(getRequestedEventId(req), performanceId, seats, { replaceMissing: body.replace_missing === true, replaceLayout: body.replace_layout === true });
     await recordAudit(req, "direct_seats.imported", "direct_performance", performanceId, { event_id: getRequestedEventId(req), imported_count: seats.length, replace_layout: body.replace_layout === true });
@@ -15937,10 +16232,13 @@ async function startServer() {
     }
   });
   app.get("/api/direct-ticketing/payment-qr", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
-    const receiverId = String(process.env.PROMPTPAY_ID || "").trim();
+    const event = await appDb.getEventById(getRequestedEventId(req));
+    const settings = event ? await getSettingsMap(event.id) : {};
+    const profile = event ? await resolveEventOrganizerFinancialProfile(event, settings) : undefined;
+    const receiverId = resolveOrganizerPaymentConfig(profile).receiver_id;
     const amount = Number(req.query.amount || 0);
     const payload = buildPromptPayPayload(receiverId, amount);
-    if (!payload) return res.status(503).json({ error: "PromptPay is not configured. Set PROMPTPAY_ID to a Thai mobile number or national ID." });
+    if (!payload) return res.status(503).json({ error: "Organizer PromptPay profile is not configured. Set it in Organizer finance settings." });
     const png = await QRCode.toBuffer(payload, { width: 720, margin: 2, errorCorrectionLevel: "M" });
     res.setHeader("Content-Type", "image/png"); res.setHeader("Cache-Control", "no-store"); return res.send(png);
   });
@@ -16220,6 +16518,188 @@ async function startServer() {
     }
   });
 
+  app.get("/api/organizers", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const organizationId = String(req.auth?.user.organization_id || "").trim();
+      const profiles = await appDb.listOrganizerProfiles(organizationId);
+      const entries = await Promise.all(profiles.map(async (profile) => buildOrganizerManagementResponse(
+        profile,
+        await appDb.getOrganizerFinancialProfileByOrganizerId(profile.id, organizationId),
+      )));
+      return res.json(entries);
+    } catch (error) {
+      console.error("Failed to fetch organizer directory:", error);
+      return res.status(500).json({ error: "Failed to fetch organizers" });
+    }
+  });
+
+  app.post("/api/organizers", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const organizationId = String(req.auth?.user.organization_id || "").trim();
+      const body = readObjectBody(req);
+      const name = readOptionalString(body, "name", 180).trim();
+      if (!name) return res.status(400).json({ error: "Organizer name is required" });
+      const profile = await appDb.createOrganizerProfile(organizationId, {
+        name,
+        slug: readOptionalString(body, "slug", 180),
+        legal_name: normalizeOptionalText(readOptionalString(body, "legal_name", 180)) || null,
+        public_display_name: normalizeOptionalText(readOptionalString(body, "display_name", 180)) || null,
+        public_description: normalizeOptionalText(readOptionalString(body, "description", 2000)) || null,
+        public_logo_url: normalizeOptionalText(readOptionalString(body, "logo_url", 2048)) || null,
+        public_website_url: normalizeOptionalText(readOptionalString(body, "website_url", 2048)) || null,
+        public_facebook_url: normalizeOptionalText(readOptionalString(body, "facebook_url", 2048)) || null,
+        public_line_url: normalizeOptionalText(readOptionalString(body, "line_url", 2048)) || null,
+        public_contact_text: normalizeOptionalText(readOptionalString(body, "contact_text", 2000)) || null,
+      });
+      const finance = await appDb.getOrganizerFinancialProfileByOrganizerId(profile.id, organizationId);
+      await recordAudit(req, "organizer.created", "organizer_profile", profile.id, { organization_id: organizationId, name: profile.name });
+      return res.status(201).json(buildOrganizerManagementResponse(profile, finance));
+    } catch (error) {
+      console.error("Failed to create organizer:", error);
+      return res.status(500).json({ error: "Failed to create organizer" });
+    }
+  });
+
+  app.post("/api/organizers/:id", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const organizationId = String(req.auth?.user.organization_id || "").trim();
+      const body = readObjectBody(req);
+      const profile = await appDb.updateOrganizerProfileById(String(req.params.id || ""), organizationId, {
+        name: readOptionalString(body, "name", 180) || undefined,
+        slug: readOptionalString(body, "slug", 180) || undefined,
+        legal_name: normalizeOptionalText(readOptionalString(body, "legal_name", 180)) || null,
+        public_display_name: normalizeOptionalText(readOptionalString(body, "display_name", 180)) || null,
+        public_description: normalizeOptionalText(readOptionalString(body, "description", 2000)) || null,
+        public_logo_url: normalizeOptionalText(readOptionalString(body, "logo_url", 2048)) || null,
+        public_website_url: normalizeOptionalText(readOptionalString(body, "website_url", 2048)) || null,
+        public_facebook_url: normalizeOptionalText(readOptionalString(body, "facebook_url", 2048)) || null,
+        public_line_url: normalizeOptionalText(readOptionalString(body, "line_url", 2048)) || null,
+        public_contact_text: normalizeOptionalText(readOptionalString(body, "contact_text", 2000)) || null,
+        verification_status: "draft",
+      });
+      if (!profile) return res.status(404).json({ error: "Organizer not found" });
+      const finance = await appDb.getOrganizerFinancialProfileByOrganizerId(profile.id, organizationId);
+      await recordAudit(req, "organizer.profile_updated", "organizer_profile", profile.id, { organization_id: organizationId });
+      return res.json(buildOrganizerManagementResponse(profile, finance));
+    } catch (error) {
+      console.error("Failed to update organizer:", error);
+      return res.status(500).json({ error: "Failed to update organizer" });
+    }
+  });
+
+  app.get("/api/organizers/:id/financial-profile", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const organizationId = String(req.auth?.user.organization_id || "").trim();
+      const organizer = await appDb.getOrganizerProfileById(String(req.params.id || ""), organizationId);
+      if (!organizer) return res.status(404).json({ error: "Organizer not found" });
+      return res.json(buildOrganizerFinancialProfileResponse(
+        await appDb.getOrganizerFinancialProfileByOrganizerId(organizer.id, organizationId),
+        organizer,
+      ));
+    } catch (error) {
+      console.error("Failed to fetch organizer financial profile:", error);
+      return res.status(500).json({ error: "Failed to fetch organizer financial profile" });
+    }
+  });
+
+  app.post("/api/organizers/:id/financial-profile", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const organizationId = String(req.auth?.user.organization_id || "").trim();
+      const organizer = await appDb.getOrganizerProfileById(String(req.params.id || ""), organizationId);
+      if (!organizer) return res.status(404).json({ error: "Organizer not found" });
+      const current = await appDb.getOrganizerFinancialProfileByOrganizerId(organizer.id, organizationId);
+      if (!current) return res.status(404).json({ error: "Organizer finance profile not found" });
+      const parsed = parseOrganizerFinancialProfileUpdate(readObjectBody(req), current);
+      if ("error" in parsed) return res.status(400).json({ error: parsed.error });
+      const updated = await appDb.updateOrganizerFinancialProfileByOrganizerId(organizer.id, organizationId, parsed.input);
+      if (!updated) return res.status(404).json({ error: "Organizer finance profile not found" });
+      await recordAudit(req, "organizer.financial_profile_updated", "organizer_profile", organizer.id, { organization_id: organizationId, profile_version: updated.version });
+      return res.json(buildOrganizerFinancialProfileResponse(updated, organizer));
+    } catch (error) {
+      console.error("Failed to update organizer financial profile:", error);
+      return res.status(500).json({ error: "Failed to update organizer financial profile" });
+    }
+  });
+
+  app.get(
+    "/api/organization/financial-profile",
+    requireAuth,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const organizationId = String(req.auth?.user.organization_id || "").trim();
+        const profile = await appDb.getOrganizerFinancialProfile(organizationId);
+        const organizer = await appDb.getOrganizerProfile(organizationId);
+        return res.json(buildOrganizerFinancialProfileResponse(profile, organizer));
+      } catch (error) {
+        console.error("Failed to fetch organizer financial profile:", error);
+        return res.status(500).json({ error: "Failed to fetch organizer financial profile" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/organization/financial-profile",
+    requireRoles(["owner", "admin"]),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const organizationId = String(req.auth?.user.organization_id || "").trim();
+        const current = await appDb.getOrganizerFinancialProfile(organizationId);
+        if (!current) return res.status(404).json({ error: "Organizer not found" });
+        const body = readObjectBody(req);
+        const clearPromptpayId = body.clear_promptpay_id === true;
+        const enteredPromptpayId = readOptionalString(body, "promptpay_id", 32).replace(/\D/g, "");
+        const promptpayId = clearPromptpayId ? "" : enteredPromptpayId || current.promptpay_id || "";
+        const receiverName = normalizeOptionalText(readOptionalString(body, "promptpay_receiver_name", 180)) || current.promptpay_receiver_name || "";
+        if (promptpayId && !buildPromptPayPayload(promptpayId, 1)) {
+          return res.status(400).json({ error: "PromptPay ID must be a Thai mobile number or national ID" });
+        }
+        if (promptpayId && !receiverName) {
+          return res.status(400).json({ error: "PromptPay receiver name is required" });
+        }
+
+        const enumValue = <T extends string>(key: string, allowed: readonly T[], fallback: T) => {
+          const value = String(body[key] || "").trim() as T;
+          return allowed.includes(value) ? value : fallback;
+        };
+        const payoutMode = enumValue("payout_mode", ["direct_to_organizer", "platform_settlement"] as const, current.payout_mode);
+        const input: UpdateOrganizerFinancialProfileInput = {
+          promptpay_id: enteredPromptpayId || undefined,
+          clear_promptpay_id: clearPromptpayId,
+          promptpay_receiver_name: receiverName || null,
+          payment_status: promptpayId ? "active" : "draft",
+          legal_entity_type: enumValue("legal_entity_type", ["individual", "company", "partnership", "other"] as const, current.legal_entity_type),
+          tax_id: normalizeOptionalText(readOptionalString(body, "tax_id", 32)).replace(/\D/g, "") || current.tax_id,
+          vat_status: enumValue("vat_status", ["not_registered", "registered", "exempt", "unknown"] as const, current.vat_status),
+          vat_rate_percent: Math.min(100, Math.max(0, Number(body.vat_rate_percent ?? current.vat_rate_percent) || 0)),
+          registered_address: normalizeOptionalText(readOptionalString(body, "registered_address", 1000)) || null,
+          branch_number: normalizeOptionalText(readOptionalString(body, "branch_number", 80)) || null,
+          billing_document_mode: enumValue("billing_document_mode", ["not_required", "receipt", "tax_invoice", "e_tax"] as const, current.billing_document_mode),
+          platform_fee_type: enumValue("platform_fee_type", ["percent", "fixed"] as const, current.platform_fee_type),
+          platform_fee_value: Math.max(0, Number(body.platform_fee_value ?? current.platform_fee_value) || 0),
+          platform_fee_payer: enumValue("platform_fee_payer", ["customer", "organizer"] as const, current.platform_fee_payer),
+          payment_fee_value: Math.max(0, Number(body.payment_fee_value ?? current.payment_fee_value) || 0),
+          payout_mode: payoutMode,
+          payout_schedule: enumValue("payout_schedule", ["manual", "daily", "weekly", "monthly"] as const, current.payout_schedule),
+          payout_status: payoutMode === "platform_settlement" ? "blocked" : "not_applicable",
+          pricing_policy_enabled: body.pricing_policy_enabled === undefined ? current.pricing_policy_enabled : body.pricing_policy_enabled === true,
+        };
+        const updated = await appDb.updateOrganizerFinancialProfile(organizationId, input);
+        if (!updated) return res.status(404).json({ error: "Organizer not found" });
+        await recordAudit(req, "organizer.financial_profile_updated", "organization", organizationId, {
+          payment_status: updated.payment_status,
+          pricing_policy_enabled: updated.pricing_policy_enabled,
+          payout_mode: updated.payout_mode,
+          profile_version: updated.version,
+        });
+        const organizer = await appDb.getOrganizerProfile(organizationId);
+        return res.json(buildOrganizerFinancialProfileResponse(updated, organizer));
+      } catch (error) {
+        console.error("Failed to update organizer financial profile:", error);
+        return res.status(500).json({ error: "Failed to update organizer financial profile" });
+      }
+    },
+  );
+
   app.get(
     "/api/organizer-profile",
     requireAuth,
@@ -16232,7 +16712,7 @@ async function startServer() {
         return res.status(404).json({ error: "Event not found" });
       }
       const fallbackSettings = await getSettingsMap(eventId);
-      const organizerProfile = await appDb.getOrganizerProfile(event.organizer_id);
+      const organizerProfile = await resolveEventOrganizerProfile(event, fallbackSettings);
       return res.json(
         buildOrganizerProfileResponse(
           organizerProfile,
@@ -16260,6 +16740,7 @@ async function startServer() {
         return res.status(404).json({ error: "Event not found" });
       }
 
+      const fallbackSettings = await getSettingsMap(eventId);
       const body = readObjectBody(req);
       const input = {
         legal_name: normalizeOptionalText(readOptionalString(body, "legal_name", 180)) || null,
@@ -16272,12 +16753,19 @@ async function startServer() {
         public_contact_text: normalizeOptionalText(readOptionalString(body, "contact_text", 2000)) || null,
       };
 
-      const existingProfile = await appDb.getOrganizerProfile(event.organizer_id);
-      const updatedProfile = await appDb.updateOrganizerProfile(event.organizer_id, {
-        ...input,
-        verification_status: existingProfile?.verification_status || "draft",
-        verification_notes: existingProfile?.verification_notes || null,
-      });
+      const existingProfile = await resolveEventOrganizerProfile(event, fallbackSettings);
+      const selectedProfileId = normalizeOptionalText(fallbackSettings.event_public_organizer_profile_id);
+      const updatedProfile = selectedProfileId && existingProfile && existingProfile.id !== event.organizer_id
+        ? await appDb.updateOrganizerProfileById(existingProfile.id, event.organizer_id, {
+          ...input,
+          verification_status: existingProfile.verification_status || "draft",
+          verification_notes: existingProfile.verification_notes || null,
+        })
+        : await appDb.updateOrganizerProfile(event.organizer_id, {
+          ...input,
+          verification_status: existingProfile?.verification_status || "draft",
+          verification_notes: existingProfile?.verification_notes || null,
+        });
       if (!updatedProfile) {
         return res.status(404).json({ error: "Organizer not found" });
       }
@@ -16404,6 +16892,123 @@ async function startServer() {
     }
     },
   );
+
+  app.get("/api/admin/customers", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const rawLimit = Array.isArray(req.query?.limit) ? req.query.limit[0] : req.query?.limit;
+      const limit = Math.min(Math.max(Number.parseInt(String(rawLimit || "200"), 10) || 200, 1), 500);
+      const organizationId = req.auth?.user.organization_id || "";
+      const [accounts, events, deliveries] = await Promise.all([
+        appDb.listCustomerAccounts(limit),
+        appDb.listEvents(organizationId),
+        appDb.listNotificationDeliveries({ related_type: "customer_account", kind: "customer.email_verification", limit: Math.min(limit * 3, 1000) }),
+      ]);
+      const eventById = new Map(events.map((event) => [event.id, event]));
+      const latestDeliveryByAccount = new Map<string, typeof deliveries[number]>();
+      for (const delivery of deliveries) {
+        if (delivery.related_id && !latestDeliveryByAccount.has(delivery.related_id)) {
+          latestDeliveryByAccount.set(delivery.related_id, delivery);
+        }
+      }
+
+      const customers = await Promise.all(accounts.map(async (account) => {
+        const orders = (await appDb.listCustomerOrders(account.id))
+          .filter((order) => eventById.has(order.event_id))
+          .map((order) => ({
+            id: order.id,
+            event_id: order.event_id,
+            event_name: eventById.get(order.event_id)?.name || order.event_id,
+            event_slug: eventById.get(order.event_id)?.slug || "",
+            performance_id: order.performance_id,
+            performance_title: order.performance_title || order.performance_code || order.performance_id,
+            status: order.status,
+            payment_status: order.status === "paid" ? "paid" : order.status,
+            currency: order.currency,
+            subtotal_amount: order.subtotal_amount,
+            total_amount: order.total_amount,
+            created_at: order.created_at,
+            hold_expires_at: order.hold_expires_at,
+            tickets: order.tickets.map((ticket) => ({
+              id: ticket.id,
+              ticket_class: ticket.ticket_class,
+              price_amount: ticket.price_amount,
+              payment_status: ticket.payment_status,
+              status: ticket.status,
+              zone: ticket.zone || "",
+              row_label: ticket.row_label || "",
+              seat_label: ticket.seat_label || "",
+            })),
+          }));
+        const paidOrders = orders.filter((order) => order.status === "paid");
+        const latestDelivery = latestDeliveryByAccount.get(account.id);
+        return {
+          ...toPublicCustomerAccount(account),
+          email_delivery: latestDelivery
+            ? {
+                status: latestDelivery.status,
+                provider: latestDelivery.provider,
+                attempt_count: latestDelivery.attempt_count,
+                last_error: latestDelivery.last_error,
+                queued_at: latestDelivery.queued_at,
+                sent_at: latestDelivery.sent_at,
+                updated_at: latestDelivery.updated_at,
+              }
+            : null,
+          order_count: orders.length,
+          paid_order_count: paidOrders.length,
+          paid_amount: paidOrders.reduce((sum, order) => sum + order.total_amount, 0),
+          orders,
+        };
+      }));
+
+      return res.json({
+        generated_at: new Date().toISOString(),
+        scope: { organization_id: organizationId, organization_name: req.auth?.user.organization_name || "" },
+        email: {
+          provider: getEmailConfig().provider,
+          worker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
+        },
+        summary: {
+          total: customers.length,
+          verified: customers.filter((customer) => Boolean(customer.email_verified_at)).length,
+          pending: customers.filter((customer) => customer.status === "pending").length,
+          disabled: customers.filter((customer) => customer.status === "disabled").length,
+          with_orders: customers.filter((customer) => customer.order_count > 0).length,
+          paid_orders: customers.reduce((sum, customer) => sum + customer.paid_order_count, 0),
+          paid_amount: customers.reduce((sum, customer) => sum + customer.paid_amount, 0),
+        },
+        customers,
+      });
+    } catch (error) {
+      console.error("Failed to fetch customer management data:", error);
+      return res.status(500).json({ error: "Failed to fetch customer management data" });
+    }
+  });
+
+  app.post("/api/admin/customers/:id/resend-verification", requireRoles(["owner", "admin"]), manualOutboundActionRateLimit, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const account = await appDb.getCustomerAccountById(String(req.params.id || "").trim());
+      if (!account) return res.status(404).json({ error: "Customer account not found" });
+      if (account.status !== "pending" || account.email_verified_at) {
+        return res.status(409).json({ error: "Customer email is already verified or the account is unavailable" });
+      }
+      const token = createCustomerAccountToken();
+      const tokenRow = await appDb.createCustomerAccountToken({
+        customer_account_id: account.id,
+        kind: "email_verification",
+        token_hash: token.tokenHash,
+        expires_at: new Date(Date.now() + getCustomerAccountTokenTtlMs("email_verification")),
+      });
+      const delivery = await queueCustomerAccountEmail(account, "email_verification", token.rawToken, tokenRow.id);
+      await recordAudit(req, "customer.verification_resent", "customer_account", account.id, {
+        verification_delivery_queued: Boolean(delivery),
+      });
+      return res.json({ status: "ok", verification_delivery_queued: Boolean(delivery) });
+    } catch (error) {
+      console.error("Failed to resend customer verification email:", error);
+      return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to resend verification email" });
+    }
+  });
 
   app.get("/api/admin/email/status", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {

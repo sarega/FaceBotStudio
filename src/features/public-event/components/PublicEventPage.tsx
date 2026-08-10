@@ -213,7 +213,7 @@ function TicketSalesCard({ event }: { event: PublicEventPageResponse["event"] })
             <h2 className="text-lg font-semibold text-slate-900">Tickets & seats</h2>
           </div>
           <p className="mt-1 text-sm leading-6 text-slate-500">
-            Choose a performance and select seats from the live Meetrix inventory.
+            Choose a performance, compare prices, then select seats from the live Meetrix inventory.
           </p>
         </div>
         <StatusBadge tone={event.customer_checkout_enabled ? "emerald" : "amber"}>
@@ -255,7 +255,7 @@ function TicketSalesCard({ event }: { event: PublicEventPageResponse["event"] })
           href={checkoutHref}
           className="public-page-control mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
         >
-          Choose performance & seats
+          Choose performance & price
           <ArrowRight className="h-4 w-4" />
         </a>
       ) : (
@@ -612,7 +612,7 @@ export function PublicEventPage({
                       rel={externalTicketing ? "noopener noreferrer" : undefined}
                       className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-4.5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                     >
-                      {customerTicketing ? "Choose seats" : page.event.cta_label}
+                      {customerTicketing ? "Choose performance" : page.event.cta_label}
                     </a>
                   )}
                   {page.location.map_url && (

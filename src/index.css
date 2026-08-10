@@ -5,6 +5,131 @@
   --font-edit: "Sarabun", "Noto Sans Thai", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Direct-ticketing density: keep the shared performance context compact and consistent. */
+@media (min-width: 901px) {
+  .direct-ticketing-page .direct-ticketing-performance-context {
+    gap: 0.25rem 0.8rem;
+    padding: 0.5rem 0.8rem;
+  }
+
+  .direct-ticketing-page .direct-ticketing-performance-context-copy h3 {
+    margin-top: 0.05rem;
+    font-size: 0.9rem;
+  }
+
+  .direct-ticketing-page .direct-ticketing-performance-context-copy > p:last-child {
+    margin-top: 0.1rem;
+    font-size: 0.68rem;
+  }
+
+  .direct-ticketing-page .direct-ticketing-performance-context-eyebrow {
+    font-size: 0.58rem;
+  }
+
+  .direct-ticketing-page .direct-ticketing-performance-context-controls {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .direct-ticketing-page .direct-ticketing-performance-status {
+    grid-column: 1;
+    grid-row: 2;
+    gap: 0.25rem 0.75rem;
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .direct-ticketing-page .direct-ticketing-performance-context-controls select,
+  .direct-ticketing-page .direct-ticketing-new-performance-button {
+    min-height: 2rem;
+  }
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing {
+  margin-top: 0.4rem !important;
+  padding: 0.65rem 0.85rem !important;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:first-child > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 0.5rem;
+  min-width: 0;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:first-child .text-xs {
+  margin: 0;
+  font-size: 0.58rem;
+  line-height: 1;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:first-child h3 {
+  overflow: hidden;
+  margin: 0 !important;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:first-child p.text-sm {
+  display: none;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:nth-child(2) {
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.15fr) 100px auto !important;
+  gap: 0.45rem !important;
+  margin-top: 0.45rem !important;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:nth-child(2) label {
+  font-size: 0.62rem;
+  line-height: 1.1;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:nth-child(2) select,
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:nth-child(2) input {
+  min-height: 2rem;
+  margin-top: 0.2rem !important;
+  padding: 0.35rem 0.55rem !important;
+  font-size: 0.74rem;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > p:last-child {
+  margin: 0.35rem 0 0 !important;
+  font-size: 0.62rem;
+  line-height: 1;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] > .direct-ticketing-manage-section.flex.flex-wrap.items-center {
+  gap: 0.25rem 0.7rem !important;
+  margin-top: 0.4rem !important;
+  padding: 0.42rem 0.75rem !important;
+  font-size: 0.64rem;
+  line-height: 1.2;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] > .direct-ticketing-manage-section.flex.flex-wrap.items-center > span {
+  white-space: nowrap;
+}
+
+.direct-ticketing-page[data-direct-section="manage"] > .direct-ticketing-manage-section.flex.flex-wrap.items-center i {
+  width: 0.6rem !important;
+  height: 0.6rem !important;
+}
+
+@media (max-width: 900px) {
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:nth-child(2) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  }
+
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:nth-child(2) > label:nth-child(3),
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing > div:nth-child(2) > button {
+    grid-column: span 1;
+  }
+}
+
 .event-description-content {
   color: rgb(71 85 105);
   font-size: 0.875rem;
@@ -432,6 +557,7 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   }
 
   .direct-ticketing-spatial-seat.is-available { border: 1px solid #059669; background: #fff; color: #047857; }
+  .direct-ticketing-spatial-seat.is-public-available { border: 1px solid #e11d48; background: #e11d48; color: #fff; }
   .direct-ticketing-spatial-seat.is-blocked { border: 1px solid #e11d48; background: #e11d48; color: #fff; }
   .direct-ticketing-spatial-seat.is-sold { border: 1px solid #0ea5e9; background: #0ea5e9; color: #fff; }
   .direct-ticketing-spatial-seat.is-unknown { border: 1px solid #94a3b8; background: #e2e8f0; color: #475569; }
@@ -462,6 +588,14 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-settings-section,
   .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-import-section {
     display: none !important;
+  }
+
+  .direct-ticketing-page[data-direct-section="settings"] .direct-ticketing-batch-pricing {
+    display: none !important;
+  }
+
+  .direct-ticketing-page[data-direct-section="manage"] .direct-ticketing-batch-pricing {
+    display: block !important;
   }
 
   .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-setup-grid {
@@ -747,11 +881,25 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
     color: #93c5fd !important;
   }
 
-  html.theme-dark .registration-row-selected .text-slate-400,
-  html.theme-dark .registration-row-selected .text-slate-500,
-  html.theme-dark .registration-row-selected .text-slate-600 {
-    color: #cbd5e1 !important;
-  }
+html.theme-dark .registration-row-selected .text-slate-400,
+html.theme-dark .registration-row-selected .text-slate-500,
+html.theme-dark .registration-row-selected .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+html.theme-dark .customer-management-email-notice {
+  background: rgba(30, 64, 175, 0.18) !important;
+  border-color: rgba(59, 130, 246, 0.58) !important;
+  color: #bfdbfe !important;
+}
+
+html.theme-dark .customer-management-row-selected {
+  background: rgba(30, 64, 175, 0.24) !important;
+}
+
+html.theme-dark .customer-management-row-selected:hover {
+  background: rgba(30, 64, 175, 0.34) !important;
+}
 }
 
 /* Direct ticketing uses filled fields and quiet containers so dense setup forms stay scannable. */
@@ -933,6 +1081,238 @@ html.theme-dark .direct-ticketing-page > div > div.rounded-2xl .rounded-lg.borde
 
 html.theme-dark .direct-ticketing-page > div > div.rounded-2xl .border-t.border-slate-700 {
   border-top-color: transparent !important;
+}
+
+/* Direct ticketing setup: keep the selected round visible and make the first two steps fit on a laptop viewport. */
+.direct-ticketing-performance-context {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(23rem, 1.25fr);
+  align-items: center;
+  gap: 0.75rem 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd6fe;
+  border-radius: 1rem;
+  background: linear-gradient(110deg, #faf5ff 0%, #f8fafc 56%, #eff6ff 100%);
+  box-shadow: 0 14px 28px -28px rgba(76, 29, 149, 0.7);
+}
+
+.direct-ticketing-performance-context-copy {
+  min-width: 0;
+}
+
+.direct-ticketing-performance-context-eyebrow {
+  margin: 0;
+  color: #7c3aed;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.direct-ticketing-performance-context-copy h3 {
+  margin: 0.2rem 0 0;
+  color: #172033;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.direct-ticketing-performance-context-copy > p:last-child {
+  overflow: hidden;
+  margin: 0.2rem 0 0;
+  color: #64748b;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.direct-ticketing-performance-context-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.direct-ticketing-performance-context-controls label {
+  display: block;
+  min-width: 0;
+}
+
+.direct-ticketing-performance-context-controls label > span {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: #475569;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.direct-ticketing-performance-context-controls select {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.65rem;
+  color: #172033;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.direct-ticketing-new-performance-button {
+  min-height: 2.25rem;
+  white-space: nowrap;
+  border-radius: 0.65rem;
+  background: #6d28d9;
+  padding: 0.45rem 0.7rem;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  box-shadow: 0 8px 16px -12px rgba(109, 40, 217, 0.9);
+}
+
+.direct-ticketing-new-performance-button:hover {
+  background: #5b21b6;
+}
+
+.direct-ticketing-performance-status {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  border-top: 1px solid rgba(196, 181, 253, 0.65);
+  padding-top: 0.55rem;
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.direct-ticketing-performance-status strong {
+  color: #172033;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.direct-ticketing-performance-status-current {
+  margin-left: auto;
+  color: #6d28d9;
+  font-weight: 800;
+}
+
+.direct-ticketing-performance-status-empty {
+  color: #92400e;
+  font-weight: 700;
+}
+
+.direct-ticketing-page[data-direct-section="import"] > .direct-ticketing-import-section.rounded-xl.border-amber-300 {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 0;
+  padding: 0.65rem 1rem !important;
+  font-size: 0.78rem;
+}
+
+.direct-ticketing-page[data-direct-section="import"] > .direct-ticketing-import-section.rounded-xl.border-amber-300 p {
+  margin: 0.15rem 0 0;
+  color: #92400e;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.direct-ticketing-page[data-has-performance="false"] .direct-ticketing-seat-plan-bundle {
+  display: none !important;
+}
+
+.direct-ticketing-seat-plan-bundle {
+  padding: 0.75rem 1rem !important;
+}
+
+.direct-ticketing-seat-plan-bundle p.text-sm {
+  max-width: 78ch;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.direct-ticketing-seat-plan-bundle label {
+  white-space: nowrap;
+}
+
+.direct-ticketing-page[data-direct-section="import"] .direct-ticketing-setup-grid {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: 0.75rem !important;
+}
+
+.direct-ticketing-page[data-direct-section="import"] .direct-ticketing-performance,
+.direct-ticketing-page[data-direct-section="import"] .direct-ticketing-seats {
+  min-width: 0;
+  padding: 1rem !important;
+}
+
+/* The primary performance selector lives in the context bar above; keep the import card focused on its actual tools. */
+.direct-ticketing-page[data-direct-section="import"] .direct-ticketing-seats > select.mt-3 {
+  display: none;
+}
+
+.direct-ticketing-page[data-direct-section="import"] .direct-ticketing-performance h3,
+.direct-ticketing-page[data-direct-section="import"] .direct-ticketing-seats h3 {
+  font-size: 0.92rem;
+}
+
+.direct-ticketing-page[data-direct-section="import"] .direct-ticketing-seats .max-h-52 {
+  max-height: min(17rem, calc(100dvh - 21rem));
+}
+
+html.theme-dark .direct-ticketing-performance-context {
+  border-color: #4338ca;
+  background: linear-gradient(110deg, #21183d 0%, #111a2f 56%, #102b46 100%);
+  box-shadow: 0 18px 34px -30px rgba(0, 0, 0, 0.9);
+}
+
+html.theme-dark .direct-ticketing-performance-context-copy h3,
+html.theme-dark .direct-ticketing-performance-status strong {
+  color: #f8fafc;
+}
+
+html.theme-dark .direct-ticketing-performance-context-copy > p:last-child,
+html.theme-dark .direct-ticketing-performance-context-controls label > span,
+html.theme-dark .direct-ticketing-performance-status {
+  color: #cbd5e1;
+}
+
+html.theme-dark .direct-ticketing-performance-context-controls select {
+  background: #172033 !important;
+  color: #f8fafc;
+  box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.38);
+}
+
+html.theme-dark .direct-ticketing-performance-status {
+  border-top-color: rgba(99, 102, 241, 0.45);
+}
+
+html.theme-dark .direct-ticketing-performance-status-current {
+  color: #c4b5fd;
+}
+
+html.theme-dark .direct-ticketing-performance-status-empty {
+  color: #fbbf24;
+}
+
+@media (max-width: 900px) {
+  .direct-ticketing-performance-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .direct-ticketing-performance-status-current {
+    margin-left: 0;
+  }
+
+  .direct-ticketing-page[data-direct-section="import"] .direct-ticketing-setup-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 640px) {
@@ -1251,6 +1631,12 @@ html.theme-dark .workspace-disclosure {
 
 html.theme-dark .public-setup-tabs {
   background: rgba(15, 23, 42, 0.95) !important;
+}
+
+html.theme-dark .public-setup-tabs button.bg-white {
+  background: rgba(37, 99, 235, 0.24) !important;
+  color: #bfdbfe !important;
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.55), 0 6px 18px rgba(2, 6, 23, 0.32) !important;
 }
 
 html.theme-dark .event-workspace-row {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 - 2026-08-11
+
+- Added an organizer directory with reusable public profiles, logos, contact details, PromptPay receiving settings, tax, fee, and payout policies; events can now select their organizer instead of copying organizer data.
+- Added customer account verification delivery, customer profile controls, and admin customer management with account status, verification state, and purchase history.
+- Connected Direct Ticketing inventory to public checkout with performance, ticket-class, price, zone, and seat selection while preserving admin VIP and complimentary overrides.
+- Improved checkout security and payment/order snapshots, SQLite/PostgreSQL migrations, regression coverage, compact workspace layouts, and dark-theme selection highlights.
+
 ## 0.6.0 - 2026-08-09
 
 - Added the customer ticketing platform foundation: customer accounts, verified checkout, multi-seat order holds, PromptPay QR payment proof, fee/tax snapshots, and customer ticket/order history.

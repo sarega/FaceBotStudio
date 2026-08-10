@@ -7,11 +7,11 @@ export type SpatialSeatInput = {
   y?: number | string | null;
 };
 
-export type SpatialSeatPosition = SpatialSeatInput & { left: number; top: number };
+export type SpatialSeatPosition<T extends SpatialSeatInput = SpatialSeatInput> = T & { left: number; top: number };
 
-export type SpatialSeatLayout = {
-  positioned: SpatialSeatPosition[];
-  unpositioned: SpatialSeatInput[];
+export type SpatialSeatLayout<T extends SpatialSeatInput = SpatialSeatInput> = {
+  positioned: SpatialSeatPosition<T>[];
+  unpositioned: T[];
   coverage: number;
   aspectRatio: number;
 };
@@ -21,7 +21,7 @@ const finiteCoordinate = (value: number | string | null | undefined) => {
   return Number.isFinite(coordinate) ? coordinate : null;
 };
 
-export function buildSpatialSeatLayout(rows: SpatialSeatInput[], zone = ""): SpatialSeatLayout {
+export function buildSpatialSeatLayout<T extends SpatialSeatInput>(rows: T[], zone = ""): SpatialSeatLayout<T> {
   const filtered = rows.filter((row) => (!zone || row.zone === zone) && row.row_label.trim() && row.seat_label.trim());
   const positionedRows = filtered.flatMap((row) => {
     const x = finiteCoordinate(row.x);

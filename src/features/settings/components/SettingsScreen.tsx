@@ -249,7 +249,7 @@ export function SettingsScreen({
     >
       <div className="surface-panel rounded-2xl p-2">
         <div className="grid grid-cols-2 gap-2 sm:flex">
-        <button type="button" onClick={() => setSection("general")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "general" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.general", "General & Account")}</button>
+          <button type="button" onClick={() => setSection("general")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "general" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.general", "General & Account")}</button>
           {canEditSettings && <button type="button" onClick={() => setSection("bot")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "bot" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.bot", "Bot & Channels")}</button>}
           <button type="button" onClick={() => setSection("system")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "system" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.system", "Version & Updates")}</button>
           {canManageUsers && <button type="button" onClick={onOpenTeamAccess} className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">{label("settings.access", "Admin & Access")}</button>}

@@ -309,6 +309,7 @@ export interface DirectSeatRow {
   row_label: string;
   seat_label: string;
   external_seat_ref: string | null;
+  ticket_class: string | null;
   face_value: number | null;
   x: number | null;
   y: number | null;
@@ -374,6 +375,7 @@ export interface ImportDirectSeatInput {
   row_label: string;
   seat_label: string;
   external_seat_ref?: string | null;
+  ticket_class?: string | null;
   face_value?: number | null;
   x?: number | null;
   y?: number | null;
@@ -400,6 +402,15 @@ export interface CreateDirectTicketInput {
 
 export type DirectOrderStatus = "pending_payment" | "payment_submitted" | "paid" | "rejected" | "expired" | "refunded" | "cancelled";
 export type PaymentAttemptStatus = "pending" | "proof_submitted" | "verified" | "rejected" | "refunded";
+export type OrganizerPaymentStatus = "draft" | "active" | "suspended";
+export type OrganizerVatStatus = "not_registered" | "registered" | "exempt" | "unknown";
+export type OrganizerBillingDocumentMode = "not_required" | "receipt" | "tax_invoice" | "e_tax";
+export type OrganizerFeeType = "percent" | "fixed";
+export type OrganizerFeePayer = "customer" | "organizer";
+export type OrganizerPayoutMode = "direct_to_organizer" | "platform_settlement";
+export type OrganizerPayoutSchedule = "manual" | "daily" | "weekly" | "monthly";
+export type OrganizerPayoutStatus = "not_applicable" | "ready" | "blocked";
+export type DirectOrderPayoutStatus = OrganizerPayoutStatus | "pending" | "paid";
 
 export interface DirectOrderRow {
   id: string;
@@ -420,6 +431,10 @@ export interface DirectOrderRow {
   tax_snapshot_json: string;
   billing_profile_json: string;
   seller_snapshot_json: string;
+  seller_organization_id: string | null;
+  payment_profile_version: number;
+  payment_receiver_snapshot_json: string;
+  payout_status: DirectOrderPayoutStatus;
   status: DirectOrderStatus;
   payment_reference: string | null;
   payment_proof_mime: string | null;
@@ -456,6 +471,10 @@ export interface CreateDirectOrderInput {
   tax_snapshot_json?: string;
   billing_profile_json?: string;
   seller_snapshot_json?: string;
+  seller_organization_id?: string | null;
+  payment_profile_version?: number | null;
+  payment_receiver_snapshot_json?: string;
+  payout_status?: DirectOrderPayoutStatus;
   hold_minutes?: number;
   ticket_class?: string;
   source?: "admin" | "public";
@@ -827,6 +846,7 @@ export interface UpdateEventInput {
 
 export interface OrganizerProfileRow {
   id: string;
+  organization_id: string;
   name: string;
   slug: string;
   legal_name: string | null;
@@ -843,6 +863,56 @@ export interface OrganizerProfileRow {
   updated_at: string;
 }
 
+export interface OrganizerFinancialProfileRow {
+  organization_id: string;
+  organizer_profile_id?: string;
+  payment_method: "promptpay";
+  promptpay_id: string | null;
+  promptpay_receiver_name: string | null;
+  payment_status: OrganizerPaymentStatus;
+  legal_entity_type: "individual" | "company" | "partnership" | "other";
+  tax_id: string | null;
+  vat_status: OrganizerVatStatus;
+  vat_rate_percent: number;
+  registered_address: string | null;
+  branch_number: string | null;
+  billing_document_mode: OrganizerBillingDocumentMode;
+  platform_fee_type: OrganizerFeeType;
+  platform_fee_value: number;
+  platform_fee_payer: OrganizerFeePayer;
+  payment_fee_value: number;
+  payout_mode: OrganizerPayoutMode;
+  payout_schedule: OrganizerPayoutSchedule;
+  payout_status: OrganizerPayoutStatus;
+  pricing_policy_enabled: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateOrganizerFinancialProfileInput {
+  payment_method?: "promptpay";
+  promptpay_id?: string | null;
+  promptpay_receiver_name?: string | null;
+  payment_status?: OrganizerPaymentStatus;
+  legal_entity_type?: OrganizerFinancialProfileRow["legal_entity_type"];
+  tax_id?: string | null;
+  vat_status?: OrganizerVatStatus;
+  vat_rate_percent?: number;
+  registered_address?: string | null;
+  branch_number?: string | null;
+  billing_document_mode?: OrganizerBillingDocumentMode;
+  platform_fee_type?: OrganizerFeeType;
+  platform_fee_value?: number;
+  platform_fee_payer?: OrganizerFeePayer;
+  payment_fee_value?: number;
+  payout_mode?: OrganizerPayoutMode;
+  payout_schedule?: OrganizerPayoutSchedule;
+  payout_status?: OrganizerPayoutStatus;
+  pricing_policy_enabled?: boolean;
+  clear_promptpay_id?: boolean;
+}
+
 export interface UpdateOrganizerProfileInput {
   legal_name?: string | null;
   public_display_name?: string | null;
@@ -854,6 +924,11 @@ export interface UpdateOrganizerProfileInput {
   public_contact_text?: string | null;
   verification_status?: OrganizerVerificationStatus;
   verification_notes?: string | null;
+}
+
+export interface CreateOrganizerProfileInput extends UpdateOrganizerProfileInput {
+  name: string;
+  slug?: string;
 }
 
 export interface UpsertFacebookPageInput {
@@ -954,12 +1029,14 @@ export interface AppDatabase {
   markRegistrationEmailDeliverySent(id: string, provider?: string | null): Promise<void>;
   markRegistrationEmailDeliveryFailed(id: string, errorMessage: string, provider?: string | null): Promise<void>;
   enqueueNotificationDelivery(input: CreateNotificationDeliveryInput): Promise<NotificationDeliveryRow | null>;
+  listNotificationDeliveries(options?: { related_type?: string; related_id?: string; kind?: string; limit?: number }): Promise<NotificationDeliveryRow[]>;
   claimNotificationDeliveries(workerId: string, limit?: number): Promise<NotificationDeliveryRow[]>;
   markNotificationDeliverySent(id: string, workerId: string, providerMessageId?: string | null, provider?: string | null): Promise<void>;
   markNotificationDeliveryRetryable(id: string, workerId: string, errorMessage: string, availableAt: string, provider?: string | null): Promise<void>;
   markNotificationDeliveryFailed(id: string, workerId: string, errorMessage: string, provider?: string | null): Promise<void>;
   getCustomerAccountById(id: string): Promise<CustomerAccountRow | undefined>;
   getCustomerAccountByNormalizedEmail(normalizedEmail: string): Promise<CustomerAccountRow | undefined>;
+  listCustomerAccounts(limit?: number): Promise<CustomerAccountRow[]>;
   createCustomerAccount(input: CreateCustomerAccountInput): Promise<CustomerAccountRow>;
   updateCustomerProfile(id: string, input: UpdateCustomerProfileInput): Promise<CustomerAccountRow | undefined>;
   updateCustomerPasswordHash(id: string, passwordHash: string): Promise<boolean>;
@@ -1018,12 +1095,20 @@ export interface AppDatabase {
   getMessageHistoryRows(senderId: string, limit: number, eventId?: string, pageId?: string): Promise<Array<{ text: string; type: MessageType }>>;
   getConversationRowsForSender(senderId: string, limit: number, eventId?: string, pageId?: string): Promise<MessageRow[]>;
   getEventSettingUpdatedAt(eventId: string, key: string): Promise<string | null>;
-  listEvents(): Promise<EventRow[]>;
+  listEvents(organizationId?: string): Promise<EventRow[]>;
   getEventById(eventId: string): Promise<EventRow | undefined>;
   createEvent(input: CreateEventInput): Promise<EventRow>;
   updateEvent(eventId: string, input: UpdateEventInput): Promise<boolean>;
   getOrganizerProfile(organizationId: string): Promise<OrganizerProfileRow | undefined>;
   updateOrganizerProfile(organizationId: string, input: UpdateOrganizerProfileInput): Promise<OrganizerProfileRow | undefined>;
+  listOrganizerProfiles(organizationId: string): Promise<OrganizerProfileRow[]>;
+  getOrganizerProfileById(organizerProfileId: string, organizationId: string): Promise<OrganizerProfileRow | undefined>;
+  createOrganizerProfile(organizationId: string, input: CreateOrganizerProfileInput): Promise<OrganizerProfileRow>;
+  updateOrganizerProfileById(organizerProfileId: string, organizationId: string, input: UpdateOrganizerProfileInput & { name?: string; slug?: string }): Promise<OrganizerProfileRow | undefined>;
+  getOrganizerFinancialProfile(organizationId: string): Promise<OrganizerFinancialProfileRow | undefined>;
+  updateOrganizerFinancialProfile(organizationId: string, input: UpdateOrganizerFinancialProfileInput): Promise<OrganizerFinancialProfileRow | undefined>;
+  getOrganizerFinancialProfileByOrganizerId(organizerProfileId: string, organizationId: string): Promise<OrganizerFinancialProfileRow | undefined>;
+  updateOrganizerFinancialProfileByOrganizerId(organizerProfileId: string, organizationId: string, input: UpdateOrganizerFinancialProfileInput): Promise<OrganizerFinancialProfileRow | undefined>;
   getEventDeletionImpact(eventId: string): Promise<EventDeletionImpact>;
   deleteEvent(eventId: string): Promise<boolean>;
   listOutreachCampaigns(eventId: string): Promise<OutreachCampaignRow[]>;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, CheckCircle2, LockKeyhole, LogOut, Mail, RefreshCw, Save, ShieldCheck, UserRound } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, LockKeyhole, LogOut, Mail, RefreshCw, Save, ShieldCheck, ShoppingBag, UserRound } from "lucide-react";
 
 export type CustomerAccount = {
   id: string;
@@ -16,6 +16,17 @@ export type CustomerAccount = {
   postal_code: string | null;
   country: string | null;
   status: "pending" | "active" | "disabled";
+};
+
+type CustomerOrderSummary = {
+  id: string;
+  event_name: string | null;
+  event_slug: string | null;
+  performance_title?: string;
+  total_amount: number;
+  currency: string;
+  status: string;
+  tickets?: Array<{ id: string }>;
 };
 
 type CustomerScreenMode = "login" | "register" | "forgot" | "reset" | "verify" | "profile" | "unavailable";
@@ -148,6 +159,8 @@ export function CustomerAccountScreen() {
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [notice, setNotice] = useState("");
+  const [orders, setOrders] = useState<CustomerOrderSummary[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const handledTokenRef = useRef("");
 
   const setField = (field: keyof CustomerForm, value: string | boolean) => {
@@ -186,6 +199,25 @@ export function CustomerAccountScreen() {
       cancelled = true;
     };
   }, [account, mode]);
+
+  useEffect(() => {
+    if (mode !== "profile" || !account) return;
+    let cancelled = false;
+    setOrdersLoading(true);
+    void customerApi<{ orders: CustomerOrderSummary[] }>("/api/customer/orders")
+      .then((data) => {
+        if (!cancelled) setOrders(Array.isArray(data.orders) ? data.orders : []);
+      })
+      .catch(() => {
+        if (!cancelled) setOrders([]);
+      })
+      .finally(() => {
+        if (!cancelled) setOrdersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account?.id, mode]);
 
   useEffect(() => {
     if (mode !== "verify" || !form.token || handledTokenRef.current === form.token) return;
@@ -318,6 +350,30 @@ export function CustomerAccountScreen() {
     }
   };
 
+  const resendVerification = async () => {
+    if (!form.email.trim()) {
+      setErrorMessage("Enter your account email first.");
+      return;
+    }
+    setBusy(true);
+    setErrorMessage("");
+    setNotice("");
+    try {
+      const data = await customerApi<{ verification_delivery_queued?: boolean }>("/api/customer/account/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: form.email }),
+      });
+      setNotice(data.verification_delivery_queued === false
+        ? "We could not queue the email yet. Please try again shortly or contact support."
+        : "A new verification email has been queued. Check your inbox and spam folder.");
+    } catch (error: unknown) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to resend verification email");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const revokeSessions = async () => {
     setBusy(true);
     setErrorMessage("");
@@ -409,6 +465,36 @@ export function CustomerAccountScreen() {
                 </div>
                 <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300">{account.status}</span>
               </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <a href="/events" className="group flex items-center justify-between rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4 transition-colors hover:border-blue-300/50 hover:bg-blue-500/15">
+                  <span className="flex items-center gap-3"><CalendarDays className="h-5 w-5 text-blue-300" /><span><span className="block text-sm font-semibold text-white">Browse events</span><span className="mt-1 block text-xs text-slate-400">Find another event to attend</span></span></span>
+                  <ChevronRight className="h-4 w-4 text-blue-300 transition-transform group-hover:translate-x-0.5" />
+                </a>
+                <a href="/app/orders" className="group flex items-center justify-between rounded-2xl border border-violet-400/20 bg-violet-500/10 p-4 transition-colors hover:border-violet-300/50 hover:bg-violet-500/15">
+                  <span className="flex items-center gap-3"><ShoppingBag className="h-5 w-5 text-violet-300" /><span><span className="block text-sm font-semibold text-white">My tickets &amp; orders</span><span className="mt-1 block text-xs text-slate-400">Review purchases and payment status</span></span></span>
+                  <ChevronRight className="h-4 w-4 text-violet-300 transition-transform group-hover:translate-x-0.5" />
+                </a>
+              </div>
+              <section className="rounded-2xl border border-white/10 bg-slate-900/50 p-4" aria-labelledby="customer-purchases-heading">
+                <div className="flex items-center justify-between gap-3">
+                  <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-300">Purchase history</p><h2 id="customer-purchases-heading" className="mt-1 text-base font-semibold text-white">Events you selected</h2></div>
+                  {orders.length > 0 && <a href="/app/orders" className="text-xs font-semibold text-blue-300 hover:text-blue-200">View all</a>}
+                </div>
+                {ordersLoading ? (
+                  <p className="mt-4 flex items-center gap-2 text-sm text-slate-400"><RefreshCw className="h-4 w-4 animate-spin text-blue-300" /> Loading purchases…</p>
+                ) : orders.length > 0 ? (
+                  <div className="mt-4 space-y-2">
+                    {orders.slice(0, 3).map((order) => (
+                      <div key={order.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/40 px-3 py-3">
+                        <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-100">{order.event_name || order.performance_title || "Purchased event"}</p><p className="mt-1 text-xs text-slate-500">{order.performance_title || "Order"} · {order.tickets?.length || 0} ticket{order.tickets?.length === 1 ? "" : "s"} · {order.status.replaceAll("_", " ")}</p></div>
+                        {order.event_slug ? <a href={`/events/${encodeURIComponent(order.event_slug)}`} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-blue-300 hover:text-white">Open event <ChevronRight className="h-3.5 w-3.5" /></a> : <a href="/app/orders" className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-blue-300 hover:text-white">Open order <ChevronRight className="h-3.5 w-3.5" /></a>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm leading-6 text-slate-400">ยังไม่มีรายการซื้อในบัญชีนี้ ลองดู event ที่เปิดขายได้จากปุ่ม Browse events</p>
+                )}
+              </section>
               <div className="grid gap-4 sm:grid-cols-2">
                 <CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" />
                 <CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" />
@@ -442,7 +528,7 @@ export function CustomerAccountScreen() {
               {notice && <p className="flex items-start gap-2 text-sm text-emerald-300"><Mail className="mt-0.5 h-4 w-4 shrink-0" /> {notice}</p>}
               <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? "Create account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Reset password" : "Sign in"}</button>
               <div className="flex flex-wrap justify-between gap-3 text-sm text-slate-400">
-                {mode === "login" && <><button type="button" onClick={() => navigate("register")} className="hover:text-white">Create account</button><button type="button" onClick={() => navigate("forgot")} className="hover:text-white">Forgot password?</button></>}
+                {mode === "login" && <><button type="button" onClick={() => navigate("register")} className="hover:text-white">Create account</button><button type="button" onClick={() => void resendVerification()} disabled={busy} className="hover:text-white disabled:opacity-50">Resend verification</button><button type="button" onClick={() => navigate("forgot")} className="hover:text-white">Forgot password?</button></>}
                 {mode === "register" && <button type="button" onClick={() => navigate("login")} className="hover:text-white">Already have an account? Sign in</button>}
                 {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => navigate("login")} className="hover:text-white">Back to sign in</button>}
               </div>

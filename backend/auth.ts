@@ -22,6 +22,12 @@ const PASSWORD_HASH_PARAMS = {
 } as const;
 const PASSWORD_HASH_PARAM_STRING = `n=${PASSWORD_HASH_PARAMS.N},r=${PASSWORD_HASH_PARAMS.r},p=${PASSWORD_HASH_PARAMS.p}`;
 
+export function isCustomerScopedCsrfPath(path: string) {
+  const normalizedPath = String(path || "").trim();
+  return normalizedPath.startsWith("/api/customer/")
+    || /^\/api\/public\/events\/[^/]+\/orders\/?$/.test(normalizedPath);
+}
+
 type CookieRequestLike = {
   secure?: boolean;
   headers?: Record<string, unknown>;

@@ -193,6 +193,8 @@ type EventWorkspaceScreenProps = {
   publicPageSummary: string;
   attendeeLocationLabel: string;
   organizerProfile: OrganizerProfileRecord | null;
+  organizerProfiles: OrganizerProfileRecord[];
+  onOrganizerProfileChange: (profileId: string) => void;
   initialSettings: Pick<
     Settings,
     | "event_public_brand_label"
@@ -502,6 +504,8 @@ export function EventWorkspaceScreen({
   publicPageSummary,
   attendeeLocationLabel,
   organizerProfile,
+  organizerProfiles,
+  onOrganizerProfileChange,
   initialSettings,
   publicContactIntro,
   publicContactMessengerHref,
@@ -1218,7 +1222,7 @@ export function EventWorkspaceScreen({
                           key={panel.id}
                           type="button"
                           onClick={() => setPublicSetupPanel(panel.id)}
-                          className={`rounded-xl px-3 py-2.5 text-center transition-all ${publicSetupPanel === panel.id ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-100" : "text-slate-500 hover:bg-white/70 hover:text-slate-800"}`}
+                          className={`rounded-xl px-3 py-2.5 text-center transition-all ${publicSetupPanel === panel.id ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-100" : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"}`}
                         >
                           <span className="block text-xs font-bold">{panel.label}</span>
                         </button>
@@ -1949,102 +1953,44 @@ export function EventWorkspaceScreen({
                       </div>
 
                       <div className={`${publicSetupPanel === "people" ? "block" : "hidden"} md:col-span-2`}>
-                        <div className="mb-4 flex items-start justify-between gap-3">
+                        <div className="mb-3 flex items-start justify-between gap-3">
                           <div>
                             <h5 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                               <Building2 className="h-4 w-4 text-blue-600" />
-                              Organizer Info
+                              Organizer
                             </h5>
+                            <p className="mt-1 text-xs text-slate-500">เลือกผู้จัดงานจาก Organizer directory รายละเอียดและการเงินจัดการที่หน้า Organizer</p>
                           </div>
                           <HelpPopover label="Open note for Organizer Info">
-                            This no longer saves per event. Updating it here refreshes the organizer card for all events under the same organizer context.
+                            An event keeps only the selected organizer. Public profile, logo, payment, tax, and payout settings live on that organizer.
                           </HelpPopover>
                         </div>
 
-                        {organizerProfile && (
-                          <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-                            <p className="font-semibold text-slate-800">
-                              {organizerProfile.organization_name || settings.event_public_organizer_name.trim() || "Current organizer"}
-                            </p>
-                            <p className="mt-1">
-                              Source: {organizerProfile.public_profile_source.replace(/_/g, " ")}
-                              {" · "}
-                              Verification: {organizerProfile.verification_status.replace(/_/g, " ")}
-                            </p>
-                          </div>
-                        )}
-
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                           <div>
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer Name</label>
-                            <input
-                              value={settings.event_public_organizer_name}
-                              onChange={(event) => setSettings({ ...settings, event_public_organizer_name: event.target.value })}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="Meetrix Events"
-                            />
+                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Selected organizer</label>
+                            {organizerProfiles.length > 0 ? (
+                              <select
+                                value={settings.event_public_organizer_profile_id}
+                                onChange={(event) => onOrganizerProfileChange(event.target.value)}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                {organizerProfiles.map((profile) => {
+                                  const profileId = profile.organizer_profile_id || profile.id || "";
+                                  return <option key={profileId} value={profileId}>{profile.name || profile.display_name || profile.organization_name || "Organizer"}</option>;
+                                })}
+                              </select>
+                            ) : (
+                              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">ยังไม่มี Organizer ใน directory</div>
+                            )}
                           </div>
-
-                          <div>
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer Logo URL</label>
-                            <input
-                              value={settings.event_public_organizer_logo_url}
-                              onChange={(event) => setSettings({ ...settings, event_public_organizer_logo_url: event.target.value })}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="/uploads/organizers/meetrix-logo.png"
-                            />
-                          </div>
-
-                          <div className="md:col-span-2">
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer Description</label>
-                            <textarea
-                              value={settings.event_public_organizer_description}
-                              onChange={(event) => setSettings({ ...settings, event_public_organizer_description: event.target.value })}
-                              rows={4}
-                              className="min-h-[7rem] w-full resize-y rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="Short organizer profile, mission, or event context."
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Website URL</label>
-                            <input
-                              value={settings.event_public_organizer_website_url}
-                              onChange={(event) => setSettings({ ...settings, event_public_organizer_website_url: event.target.value })}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="https://example.com"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Facebook URL</label>
-                            <input
-                              value={settings.event_public_organizer_facebook_url}
-                              onChange={(event) => setSettings({ ...settings, event_public_organizer_facebook_url: event.target.value })}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="https://facebook.com/yourpage"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">LINE URL</label>
-                            <input
-                              value={settings.event_public_organizer_line_url}
-                              onChange={(event) => setSettings({ ...settings, event_public_organizer_line_url: event.target.value })}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="https://lin.ee/youraccount"
-                            />
-                          </div>
-
-                          <div className="md:col-span-2">
-                            <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Contact Text</label>
-                            <textarea
-                              value={settings.event_public_organizer_contact_text}
-                              onChange={(event) => setSettings({ ...settings, event_public_organizer_contact_text: event.target.value })}
-                              rows={3}
-                              className="min-h-[5.5rem] w-full resize-y rounded-xl border border-slate-200 bg-white p-4 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="Support email, contact person, or lightweight organizer note."
-                            />
+                          <div className="flex items-end justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                            <div className="min-w-0">
+                              <p className="text-[10px] font-bold uppercase tracking-[.12em] text-slate-500">Public profile</p>
+                              <p className="truncate text-sm font-semibold text-slate-800">{organizerProfile?.display_name || organizerProfile?.organization_name || settings.event_public_organizer_name || "—"}</p>
+                              <p className="mt-0.5 truncate text-[11px] text-slate-500">{organizerProfile?.verification_status?.replace(/_/g, " ") || "draft"} · managed centrally</p>
+                            </div>
+                            <ActionButton type="button" onClick={() => handleNavigateToTab("organizer")} tone="neutral" className="shrink-0 px-2.5 text-xs">Manage organizers</ActionButton>
                           </div>
                         </div>
                       </div>

@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Users,
+  WalletCards,
   Download,
   QrCode,
   Search,
@@ -87,6 +88,7 @@ import { CheckinScreen } from "./features/checkin/components/CheckinScreen";
 import { CustomerAppScreen } from "./features/customer-account/components/CustomerAppScreen";
 import { CustomerAccountScreen } from "./features/customer-account/components/CustomerAccountScreen";
 import { CustomerCheckoutScreen } from "./features/customer-account/components/CustomerCheckoutScreen";
+import { CustomerManagementScreen } from "./features/customer-management/components/CustomerManagementScreen";
 import { ContextScreen } from "./features/context/components/ContextScreen";
 import { DirectTicketingScreen } from "./features/direct-ticketing/components/DirectTicketingScreen";
 import { EventWorkspaceScreen } from "./features/event/components/EventWorkspaceScreen";
@@ -94,6 +96,7 @@ import { EventWorkspacePanel } from "./features/event-workspace/components/Event
 import { EventMailScreen } from "./features/mail/components/EventMailScreen";
 import { PublicInboxScreen } from "./features/inbox/components/PublicInboxScreen";
 import { OutreachScreen } from "./features/outreach/components/OutreachScreen";
+import { OrganizerScreen } from "./features/organizer/components/OrganizerScreen";
 import { LogsScreen } from "./features/logs/components/LogsScreen";
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { PublicEventCatalog } from "./features/public-event/components/PublicEventCatalog";
@@ -178,7 +181,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "event" | "mail" | "design" | "test" | "agent" | "logs" | "settings" | "team" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
+type AppTab = "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -326,6 +329,15 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       { label: "Manual payment", body: "A paid ticket is issued only after staff verifies the PromptPay transfer." },
     ],
   },
+  customers: {
+    title: "Customer Management Help",
+    summary: "Review customer accounts, email verification state, and purchases linked to this organization.",
+    points: [
+      { label: "Verification status", body: "Sent means Resend accepted the message. It does not guarantee the message reached the inbox; check spam and the provider dashboard too." },
+      { label: "Resend", body: "Pending accounts can receive a fresh verification link from the customer detail panel." },
+      { label: "Purchase history", body: "Orders and seats are shown only after they are linked to the customer account and are scoped to this organization." },
+    ],
+  },
   event: {
     title: "Event Workspace Help",
     summary: "Keep operational event facts here. This tab defines what the event is and when registration should behave as open, closed, or unavailable.",
@@ -413,6 +425,24 @@ const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
       {
         label: "External access",
         body: "Telegram can call this Agent without loading the web UI, with allowlisted chat IDs and webhook secret protection.",
+      },
+    ],
+  },
+  organizer: {
+    title: "Organizer Help",
+    summary: "Manage organizer-owned payment, tax, fee, and payout rules separately from event content and operations.",
+    points: [
+      {
+        label: "Organizer scope",
+        body: "PromptPay receiver, tax profile, billing mode, platform fee, and payout rules belong to the current organization and can be shared by its events.",
+      },
+      {
+        label: "Event separation",
+        body: "Events use the organizer assigned to them. Keep event facts in Event Workspace and keep money movement rules here.",
+      },
+      {
+        label: "Payment readiness",
+        body: "PromptPay setup enables the pilot QR and manual proof review. It does not verify the bank account automatically.",
       },
     ],
   },
@@ -771,9 +801,11 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
   design: "Context",
   test: "Test",
   agent: "Agent",
+  organizer: "Organizer",
   logs: "Logs",
   settings: "Setup",
   team: "Team",
+  customers: "Customers",
   registrations: "Registrations",
   direct_tickets: "Direct Tickets",
   reports: "Reports",
@@ -839,7 +871,7 @@ function readWorkspaceSession() {
   if (typeof window === "undefined") return fallback;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
-    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "logs", "settings", "team", "registrations", "direct_tickets", "reports", "checkin", "inbox", "outreach"];
+    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "organizer", "logs", "settings", "team", "customers", "registrations", "direct_tickets", "reports", "checkin", "inbox", "outreach"];
     return {
       eventId: typeof parsed.eventId === "string" ? parsed.eventId : "",
       activeTab: validTabs.includes(parsed.activeTab as AppTab) ? parsed.activeTab as AppTab : fallback.activeTab,
@@ -2140,6 +2172,7 @@ const INITIAL_SETTINGS: Settings = {
   event_public_brand_about_url: "",
   event_public_brand_privacy_url: "",
   event_public_brand_contact_url: "",
+  event_public_organizer_profile_id: "",
   event_public_organizer_name: "",
   event_public_organizer_description: "",
   event_public_organizer_logo_url: "",
@@ -2236,6 +2269,7 @@ function getBlankEventScopedSettings() {
     event_public_brand_about_url: "",
     event_public_brand_privacy_url: "",
     event_public_brand_contact_url: "",
+    event_public_organizer_profile_id: "",
     event_public_organizer_name: "",
     event_public_organizer_description: "",
     event_public_organizer_logo_url: "",
@@ -2329,6 +2363,7 @@ function getBlankEventScopedSettings() {
     | "event_public_brand_about_url"
     | "event_public_brand_privacy_url"
     | "event_public_brand_contact_url"
+    | "event_public_organizer_profile_id"
     | "event_public_organizer_name"
     | "event_public_organizer_description"
     | "event_public_organizer_logo_url"
@@ -2465,6 +2500,7 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_brand_about_url",
   "event_public_brand_privacy_url",
   "event_public_brand_contact_url",
+  "event_public_organizer_profile_id",
   ...ORGANIZER_PROFILE_SETTINGS_KEYS,
   "event_public_sponsors_json",
   "event_public_sections_json",
@@ -2774,6 +2810,10 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_brand_contact_url === "string"
         ? data.event_public_brand_contact_url
         : INITIAL_SETTINGS.event_public_brand_contact_url,
+    event_public_organizer_profile_id:
+      typeof data.event_public_organizer_profile_id === "string"
+        ? data.event_public_organizer_profile_id
+        : INITIAL_SETTINGS.event_public_organizer_profile_id,
     event_public_organizer_name:
       typeof data.event_public_organizer_name === "string"
         ? data.event_public_organizer_name
@@ -2913,6 +2953,7 @@ function applyOrganizerProfileToSettings(current: Settings, profile: OrganizerPr
   if (!profile) return current;
   return {
     ...current,
+    event_public_organizer_profile_id: profile.organizer_profile_id || profile.id || current.event_public_organizer_profile_id,
     event_public_organizer_name: profile.display_name || profile.organization_name || "",
     event_public_organizer_description: profile.description,
     event_public_organizer_logo_url: profile.logo_url,
@@ -2920,18 +2961,6 @@ function applyOrganizerProfileToSettings(current: Settings, profile: OrganizerPr
     event_public_organizer_facebook_url: profile.facebook_url,
     event_public_organizer_line_url: profile.line_url,
     event_public_organizer_contact_text: profile.contact_text,
-  };
-}
-
-function buildOrganizerProfilePayloadFromSettings(source: Settings) {
-  return {
-    display_name: source.event_public_organizer_name.trim(),
-    description: source.event_public_organizer_description.trim(),
-    logo_url: source.event_public_organizer_logo_url.trim(),
-    website_url: source.event_public_organizer_website_url.trim(),
-    facebook_url: source.event_public_organizer_facebook_url.trim(),
-    line_url: source.event_public_organizer_line_url.trim(),
-    contact_text: source.event_public_organizer_contact_text.trim(),
   };
 }
 
@@ -3173,6 +3202,7 @@ export default function App() {
   const [publicInboxReplyText, setPublicInboxReplyText] = useState("");
   const [publicInboxReplySending, setPublicInboxReplySending] = useState(false);
   const [events, setEvents] = useState<EventRecord[]>([]);
+  const [organizerProfiles, setOrganizerProfiles] = useState<OrganizerProfileRecord[]>([]);
   const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
   const [selectedEventId, setSelectedEventId] = useState(initialWorkspaceSession.eventId);
   const [eventLoading, setEventLoading] = useState(false);
@@ -3405,6 +3435,7 @@ export default function App() {
   const canChangeRegistrationStatus = role === "owner" || role === "admin" || role === "operator";
   const canManageKnowledge = role === "owner" || role === "admin" || role === "operator";
   const canManageUsers = role === "owner" || role === "admin";
+  const canManageCustomers = canManageUsers;
   const canChangeRoles = role === "owner" || role === "admin";
   const canManageCheckinAccess = role === "owner" || role === "admin" || role === "operator";
   const canSendManualOverride = role === "owner" || role === "admin" || role === "operator";
@@ -3562,7 +3593,7 @@ export default function App() {
     { id: "public" as const, icon: Eye, label: translate(language, "nav.publicPage", "Public Page"), description: translate(language, "nav.publicPageDescription", "Poster, public copy, and privacy messaging") },
   ];
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
-  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs" || activeTab === "outreach";
+  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const effectiveSidebarCollapsed = sidebarCollapsed;
   const primaryTabs = [
@@ -3571,6 +3602,9 @@ export default function App() {
     ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: translate(language, "nav.context", "Context") }] : []),
     ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: translate(language, "nav.test", "Test") }] : []),
     ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: translate(language, "nav.agent", "Agent") }] : []),
+    ...(canEditSettings ? [{ id: "organizer" as const, icon: WalletCards, label: translate(language, "nav.organizer", "Organizer") }] : []),
+    ...(canViewLogs ? [{ id: "outreach" as const, icon: Send, label: translate(language, "nav.outreach", "Outreach") }] : []),
+    ...(canManageCustomers ? [{ id: "customers" as const, icon: User, label: translate(language, "nav.customers", "Customers") }] : []),
   ];
   const setupTabs = [
     ...(authUser ? [{ id: "settings" as const, icon: SettingsIcon, label: translate(language, "nav.settings", "Settings Center") }] : []),
@@ -3582,7 +3616,6 @@ export default function App() {
     { id: "setup" as const, icon: SettingsIcon, label: translate(language, "nav.runtimeSetup", "Runtime Setup"), description: translate(language, "nav.runtimeSetupDescription", "Runtime policy and external channel setup") },
   ];
   const operationsTabs = [
-    ...(canViewLogs ? [{ id: "outreach" as const, icon: Send, label: translate(language, "nav.outreach", "Outreach") }] : []),
     ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: translate(language, "nav.reports", "Reports") }] : []),
     ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: translate(language, "nav.registrations", "Registrations") }] : []),
     ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: translate(language, "nav.directTickets", "Direct Tickets") }] : []),
@@ -4508,6 +4541,34 @@ export default function App() {
     }
   };
 
+  const fetchOrganizerProfiles = async () => {
+    if (!canEditSettings) {
+      setOrganizerProfiles([]);
+      return [] as OrganizerProfileRecord[];
+    }
+    try {
+      const res = await apiFetch("/api/organizers");
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) throw new Error(data?.error || "Failed to fetch organizers");
+      const rows = Array.isArray(data) ? data as OrganizerProfileRecord[] : [];
+      setOrganizerProfiles(rows);
+      return rows;
+    } catch (err) {
+      console.error("Failed to fetch organizers", err);
+      setEventMessage(err instanceof Error ? err.message : "Failed to fetch organizers");
+      return [] as OrganizerProfileRecord[];
+    }
+  };
+
+  const handleOrganizerProfileChange = (profileId: string) => {
+    const nextProfile = organizerProfiles.find((profile) => (profile.organizer_profile_id || profile.id || "") === profileId) || null;
+    setOrganizerProfile(nextProfile);
+    setSettings((current) => applyOrganizerProfileToSettings(
+      { ...current, event_public_organizer_profile_id: profileId },
+      nextProfile,
+    ));
+  };
+
   const fetchChannels = async (eventId = selectedEventId) => {
     try {
       const scopedEventId = String(eventId || "").trim();
@@ -4573,6 +4634,7 @@ export default function App() {
     try {
       const [eventRows] = await Promise.all([
         fetchEvents(),
+        fetchOrganizerProfiles(),
         fetchChannelPlatforms(),
         role === "owner" || role === "admin" ? fetchTeamUsers() : Promise.resolve(),
       ]);
@@ -5566,6 +5628,8 @@ export default function App() {
       ...(canEditSettings ? ["design"] : []),
       ...(canRunTest ? ["test"] : []),
       ...(canRunAgent ? ["agent"] : []),
+      ...(canEditSettings ? ["organizer"] : []),
+      ...(canManageCustomers ? ["customers"] : []),
       ...(canManageRegistrations ? ["registrations", "direct_tickets", "checkin"] : []),
       ...(canViewLogs ? ["reports"] : []),
       ...(canViewLogs ? ["inbox"] : []),
@@ -5577,7 +5641,7 @@ export default function App() {
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || getDefaultTabForRole(role));
     }
-  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canManageRegistrations, canManageUsers, role]);
+  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canManageRegistrations, canManageCustomers, canManageUsers, role]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
@@ -6595,41 +6659,6 @@ export default function App() {
     return saveSettingsSubset([...EVENT_MAIL_SETTINGS_KEYS], "Mail settings saved");
   };
 
-  const saveOrganizerProfile = async (eventId: string, sourceSettings: Settings) => {
-    if (!eventId) return false;
-
-    setSaving(true);
-    try {
-      const payload = buildOrganizerProfilePayloadFromSettings(normalizeSettingsForSave(sourceSettings));
-      const res = await apiFetch("/api/organizer-profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event_id: eventId, ...payload }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error((data as { error?: string }).error || "Failed to save organizer profile");
-      }
-      const nextProfile = data as OrganizerProfileRecord;
-      const nextSettings = applyOrganizerProfileToSettings(sourceSettings, nextProfile);
-      setOrganizerProfile(nextProfile);
-      setSettings(nextSettings);
-      setSavedSettings((prev) => ({
-        ...prev,
-        ...(Object.fromEntries(
-          ORGANIZER_PROFILE_SETTINGS_KEYS.map((key) => [key, nextSettings[key]]),
-        ) as Partial<Settings>),
-      }));
-      return true;
-    } catch (err) {
-      console.error("Failed to save organizer profile", err);
-      setSettingsMessage(err instanceof Error ? err.message : "Failed to save organizer profile");
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const saveEventPublicPage = async () => {
     const nextSettings = {
       ...settings,
@@ -6647,17 +6676,6 @@ export default function App() {
       nextSettings,
     );
     if (!saved) return false;
-
-    const organizerDirty = ORGANIZER_PROFILE_SETTINGS_KEYS.some(
-      (key) => normalizeSettingsForSave(nextSettings)[key] !== normalizedSavedSettings[key],
-    );
-    if (organizerDirty) {
-      const organizerSaved = await saveOrganizerProfile(selectedEventId, nextSettings);
-      if (!organizerSaved) {
-        setSettingsMessage("Organizer profile could not be saved, but other public page settings were saved");
-        return false;
-      }
-    }
 
     if (saved) {
       setSettingsMessage("Public page settings saved");
@@ -10071,6 +10089,8 @@ export default function App() {
               publicPageSummary={publicPageSummary}
               attendeeLocationLabel={attendeeLocationLabel}
               organizerProfile={organizerProfile}
+              organizerProfiles={organizerProfiles}
+              onOrganizerProfileChange={handleOrganizerProfileChange}
               initialSettings={{
                 event_public_brand_label: INITIAL_SETTINGS.event_public_brand_label,
                 event_public_cta_label: INITIAL_SETTINGS.event_public_cta_label,
@@ -10435,6 +10455,18 @@ export default function App() {
               />
             </motion.div>
           )}
+          {activeTab === "customers" && (
+            <motion.div
+              key="customers"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-6"
+            >
+              <CustomerManagementScreen apiFetch={apiFetch} />
+            </motion.div>
+          )}
+
           {activeTab === "outreach" && (
             <motion.div key="outreach" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
               <OutreachScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} language={language} />
@@ -10596,6 +10628,15 @@ export default function App() {
                 logInspectorPanel={logInspectorPanel}
               />
             </motion.div>
+          )}
+
+          {activeTab === "organizer" && (
+            <OrganizerScreen
+              authUser={authUser}
+              apiFetch={apiFetch}
+              canEditSettings={canEditSettings}
+              onOrganizerProfilesChanged={() => { void fetchOrganizerProfiles(); }}
+            />
           )}
 
           {activeTab === "settings" && (

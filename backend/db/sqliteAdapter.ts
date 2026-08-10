@@ -18,6 +18,7 @@ import type {
   CreateCustomerAccountTokenInput,
   CreateNotificationDeliveryInput,
   CreateRegistrationEmailDeliveryInput,
+  CreateOrganizerProfileInput,
   CreateMessageAttachmentInput,
   CreateEventInput,
   CreateCheckinSessionInput,
@@ -52,6 +53,8 @@ import type {
   LlmUsageSummaryRow,
   LlmUsageTotalsRow,
   OrganizerProfileRow,
+  OrganizerFinancialProfileRow,
+  UpdateOrganizerFinancialProfileInput,
   OrganizerVerificationStatus,
   OutreachAssetRow,
   OutreachCampaignRow,
@@ -283,6 +286,7 @@ function mapOrganizerProfileRow(row?: Record<string, unknown>) {
   if (!row) return undefined;
   return {
     id: String(row.id || ""),
+    organization_id: String(row.organization_id || row.owner_organization_id || row.id || ""),
     name: String(row.name || ""),
     slug: String(row.slug || ""),
     legal_name: typeof row.legal_name === "string" && row.legal_name ? row.legal_name : null,
@@ -298,6 +302,36 @@ function mapOrganizerProfileRow(row?: Record<string, unknown>) {
     created_at: String(row.created_at || ""),
     updated_at: String(row.updated_at || row.created_at || ""),
   } satisfies OrganizerProfileRow;
+}
+
+function mapOrganizerFinancialProfileRow(row?: Record<string, unknown>) {
+  if (!row) return undefined;
+  return {
+    organization_id: String(row.organization_id || ""),
+    organizer_profile_id: typeof row.organizer_profile_id === "string" && row.organizer_profile_id ? row.organizer_profile_id : typeof row.organizer_id === "string" && row.organizer_id ? row.organizer_id : undefined,
+    payment_method: "promptpay",
+    promptpay_id: typeof row.promptpay_id === "string" && row.promptpay_id ? row.promptpay_id : null,
+    promptpay_receiver_name: typeof row.promptpay_receiver_name === "string" && row.promptpay_receiver_name ? row.promptpay_receiver_name : null,
+    payment_status: String(row.payment_status || "draft") as OrganizerFinancialProfileRow["payment_status"],
+    legal_entity_type: String(row.legal_entity_type || "individual") as OrganizerFinancialProfileRow["legal_entity_type"],
+    tax_id: typeof row.tax_id === "string" && row.tax_id ? row.tax_id : null,
+    vat_status: String(row.vat_status || "unknown") as OrganizerFinancialProfileRow["vat_status"],
+    vat_rate_percent: Number(row.vat_rate_percent || 0),
+    registered_address: typeof row.registered_address === "string" && row.registered_address ? row.registered_address : null,
+    branch_number: typeof row.branch_number === "string" && row.branch_number ? row.branch_number : null,
+    billing_document_mode: String(row.billing_document_mode || "not_required") as OrganizerFinancialProfileRow["billing_document_mode"],
+    platform_fee_type: String(row.platform_fee_type || "percent") as OrganizerFinancialProfileRow["platform_fee_type"],
+    platform_fee_value: Number(row.platform_fee_value || 0),
+    platform_fee_payer: String(row.platform_fee_payer || "customer") as OrganizerFinancialProfileRow["platform_fee_payer"],
+    payment_fee_value: Number(row.payment_fee_value || 0),
+    payout_mode: String(row.payout_mode || "direct_to_organizer") as OrganizerFinancialProfileRow["payout_mode"],
+    payout_schedule: String(row.payout_schedule || "manual") as OrganizerFinancialProfileRow["payout_schedule"],
+    payout_status: String(row.payout_status || "not_applicable") as OrganizerFinancialProfileRow["payout_status"],
+    pricing_policy_enabled: row.pricing_policy_enabled === true || Number(row.pricing_policy_enabled || 0) === 1,
+    version: Number(row.version || 1),
+    created_at: mapSqliteTimestamp(row.created_at),
+    updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies OrganizerFinancialProfileRow;
 }
 
 function mapPageRow(row: Record<string, unknown>) {
@@ -449,7 +483,7 @@ function mapDirectPerformanceRow(row: Record<string, unknown>) {
 }
 
 function mapDirectSeatRow(row: Record<string, unknown>) {
-  return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), zone: String(row.zone || ""), section_label: typeof row.section_label === "string" ? row.section_label : null, row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""), external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null, face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y), status: String(row.status || "available") as DirectSeatRow["status"], allocation_status: String(row.allocation_status || "allocated") as DirectSeatRow["allocation_status"], source_status: String(row.source_status || "unknown") as DirectSeatRow["source_status"], created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at) } satisfies DirectSeatRow;
+  return { id: String(row.id || ""), event_id: String(row.event_id || ""), performance_id: String(row.performance_id || ""), zone: String(row.zone || ""), section_label: typeof row.section_label === "string" ? row.section_label : null, row_label: String(row.row_label || ""), seat_label: String(row.seat_label || ""), external_seat_ref: typeof row.external_seat_ref === "string" ? row.external_seat_ref : null, ticket_class: typeof row.ticket_class === "string" && row.ticket_class.trim() ? row.ticket_class : null, face_value: row.face_value == null ? null : Number(row.face_value), x: row.x == null ? null : Number(row.x), y: row.y == null ? null : Number(row.y), status: String(row.status || "available") as DirectSeatRow["status"], allocation_status: String(row.allocation_status || "allocated") as DirectSeatRow["allocation_status"], source_status: String(row.source_status || "unknown") as DirectSeatRow["source_status"], created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at) } satisfies DirectSeatRow;
 }
 
 function mapDirectTicketRow(row: Record<string, unknown>) {
@@ -466,6 +500,9 @@ function mapDirectOrderRow(row: Record<string, unknown>, tickets: DirectTicketRo
     tax_amount: Number(row.tax_amount || 0), discount_amount: Number(row.discount_amount || 0), total_amount: Number(row.total_amount || 0),
     fee_rule_version: String(row.fee_rule_version || "v1"), tax_snapshot_json: String(row.tax_snapshot_json || "{}"),
     billing_profile_json: String(row.billing_profile_json || "{}"), seller_snapshot_json: String(row.seller_snapshot_json || "{}"),
+    seller_organization_id: typeof row.seller_organization_id === "string" && row.seller_organization_id ? row.seller_organization_id : null,
+    payment_profile_version: Number(row.payment_profile_version || 1), payment_receiver_snapshot_json: String(row.payment_receiver_snapshot_json || "{}"),
+    payout_status: String(row.payout_status || "not_applicable") as DirectOrderRow["payout_status"],
     status: String(row.status || "pending_payment") as DirectOrderRow["status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null,
     payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null,
     payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null,
@@ -662,6 +699,52 @@ export class SqliteAppDatabase implements AppDatabase {
         verification_notes TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS organizer_profiles (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        legal_name TEXT,
+        public_display_name TEXT,
+        public_description TEXT,
+        public_logo_url TEXT,
+        public_website_url TEXT,
+        public_facebook_url TEXT,
+        public_line_url TEXT,
+        public_contact_text TEXT,
+        verification_status TEXT NOT NULL DEFAULT 'draft',
+        verification_notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (organization_id, slug),
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS organizer_financial_profiles (
+        organizer_id TEXT PRIMARY KEY,
+        payment_method TEXT NOT NULL DEFAULT 'promptpay',
+        promptpay_id TEXT,
+        promptpay_receiver_name TEXT,
+        payment_status TEXT NOT NULL DEFAULT 'draft',
+        legal_entity_type TEXT NOT NULL DEFAULT 'individual',
+        tax_id TEXT,
+        vat_status TEXT NOT NULL DEFAULT 'unknown',
+        vat_rate_percent REAL NOT NULL DEFAULT 0,
+        registered_address TEXT,
+        branch_number TEXT,
+        billing_document_mode TEXT NOT NULL DEFAULT 'not_required',
+        platform_fee_type TEXT NOT NULL DEFAULT 'percent',
+        platform_fee_value REAL NOT NULL DEFAULT 0,
+        platform_fee_payer TEXT NOT NULL DEFAULT 'customer',
+        payment_fee_value REAL NOT NULL DEFAULT 0,
+        payout_mode TEXT NOT NULL DEFAULT 'direct_to_organizer',
+        payout_schedule TEXT NOT NULL DEFAULT 'manual',
+        payout_status TEXT NOT NULL DEFAULT 'not_applicable',
+        pricing_policy_enabled INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (organizer_id) REFERENCES organizer_profiles(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -1008,7 +1091,7 @@ export class SqliteAppDatabase implements AppDatabase {
       );
       CREATE TABLE IF NOT EXISTS direct_seats (
         id TEXT PRIMARY KEY, event_id TEXT NOT NULL, performance_id TEXT NOT NULL, zone TEXT NOT NULL,
-        row_label TEXT NOT NULL, seat_label TEXT NOT NULL, section_label TEXT, external_seat_ref TEXT, face_value REAL,
+        row_label TEXT NOT NULL, seat_label TEXT NOT NULL, section_label TEXT, external_seat_ref TEXT, ticket_class TEXT, face_value REAL,
         x REAL, y REAL, status TEXT NOT NULL DEFAULT 'available', allocation_status TEXT NOT NULL DEFAULT 'allocated',
         source_status TEXT NOT NULL DEFAULT 'unknown', created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE (performance_id, zone, row_label, seat_label),
@@ -1052,6 +1135,32 @@ export class SqliteAppDatabase implements AppDatabase {
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (order_id, attempt_number),
         FOREIGN KEY (order_id) REFERENCES direct_orders(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS organization_financial_profiles (
+        organization_id TEXT PRIMARY KEY,
+        payment_method TEXT NOT NULL DEFAULT 'promptpay',
+        promptpay_id TEXT,
+        promptpay_receiver_name TEXT,
+        payment_status TEXT NOT NULL DEFAULT 'draft',
+        legal_entity_type TEXT NOT NULL DEFAULT 'individual',
+        tax_id TEXT,
+        vat_status TEXT NOT NULL DEFAULT 'unknown',
+        vat_rate_percent REAL NOT NULL DEFAULT 0,
+        registered_address TEXT,
+        branch_number TEXT,
+        billing_document_mode TEXT NOT NULL DEFAULT 'not_required',
+        platform_fee_type TEXT NOT NULL DEFAULT 'percent',
+        platform_fee_value REAL NOT NULL DEFAULT 0,
+        platform_fee_payer TEXT NOT NULL DEFAULT 'customer',
+        payment_fee_value REAL NOT NULL DEFAULT 0,
+        payout_mode TEXT NOT NULL DEFAULT 'direct_to_organizer',
+        payout_schedule TEXT NOT NULL DEFAULT 'manual',
+        payout_status TEXT NOT NULL DEFAULT 'not_applicable',
+        pricing_policy_enabled INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS event_document_chunks (
         id TEXT PRIMARY KEY,
@@ -1163,11 +1272,47 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("organizations", "verification_status", "TEXT NOT NULL DEFAULT 'draft'");
     this.ensureColumn("organizations", "verification_notes", "TEXT");
     this.ensureColumn("organizations", "updated_at", "DATETIME");
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_organizer_profiles_organization
+        ON organizer_profiles (organization_id, name);
+      CREATE INDEX IF NOT EXISTS idx_organizer_financial_profiles_payment_status
+        ON organizer_financial_profiles (payment_status);
+      INSERT OR IGNORE INTO organizer_profiles (
+        id, organization_id, name, slug, legal_name, public_display_name, public_description,
+        public_logo_url, public_website_url, public_facebook_url, public_line_url, public_contact_text,
+        verification_status, verification_notes
+      )
+      SELECT
+        'orgprof_' || o.id, o.id, o.name, o.slug, o.legal_name, o.public_display_name,
+        o.public_description, o.public_logo_url, o.public_website_url, o.public_facebook_url,
+        o.public_line_url, o.public_contact_text,
+        COALESCE(NULLIF(TRIM(o.verification_status), ''), 'draft'), o.verification_notes
+      FROM organizations o;
+      INSERT OR IGNORE INTO organizer_financial_profiles (
+        organizer_id, payment_method, promptpay_id, promptpay_receiver_name, payment_status,
+        legal_entity_type, tax_id, vat_status, vat_rate_percent, registered_address, branch_number,
+        billing_document_mode, platform_fee_type, platform_fee_value, platform_fee_payer,
+        payment_fee_value, payout_mode, payout_schedule, payout_status, pricing_policy_enabled, version
+      )
+      SELECT
+        p.id, COALESCE(f.payment_method, 'promptpay'), f.promptpay_id, f.promptpay_receiver_name,
+        COALESCE(f.payment_status, 'draft'), COALESCE(f.legal_entity_type, 'individual'), f.tax_id,
+        COALESCE(f.vat_status, 'unknown'), COALESCE(f.vat_rate_percent, 0), f.registered_address,
+        f.branch_number, COALESCE(f.billing_document_mode, 'not_required'),
+        COALESCE(f.platform_fee_type, 'percent'), COALESCE(f.platform_fee_value, 0),
+        COALESCE(f.platform_fee_payer, 'customer'), COALESCE(f.payment_fee_value, 0),
+        COALESCE(f.payout_mode, 'direct_to_organizer'), COALESCE(f.payout_schedule, 'manual'),
+        COALESCE(f.payout_status, 'not_applicable'), COALESCE(f.pricing_policy_enabled, 0),
+        COALESCE(f.version, 1)
+      FROM organizer_profiles p
+      LEFT JOIN organization_financial_profiles f ON f.organization_id = p.organization_id;
+    `);
     this.ensureColumn("checkin_sessions", "exchanged_at", "DATETIME");
     this.ensureColumn("event_performances", "seat_plan_image_url", "TEXT");
     this.ensureColumn("direct_seats", "allocation_status", "TEXT NOT NULL DEFAULT 'allocated'");
     this.ensureColumn("direct_seats", "source_status", "TEXT NOT NULL DEFAULT 'unknown'");
     this.ensureColumn("direct_seats", "section_label", "TEXT");
+    this.ensureColumn("direct_seats", "ticket_class", "TEXT");
     this.ensureColumn("direct_tickets", "hold_expires_at", "DATETIME");
     this.ensureColumn("direct_tickets", "payment_proof_mime", "TEXT");
     this.ensureColumn("direct_tickets", "payment_proof_base64", "TEXT");
@@ -1176,6 +1321,12 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("direct_tickets", "source", "TEXT NOT NULL DEFAULT 'admin'");
     this.ensureColumn("direct_tickets", "order_id", "TEXT");
     this.ensureColumn("direct_tickets", "customer_account_id", "TEXT");
+    this.ensureColumn("direct_orders", "customer_account_id", "TEXT");
+    this.ensureColumn("direct_orders", "seller_organization_id", "TEXT");
+    this.ensureColumn("direct_orders", "payment_profile_version", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("direct_orders", "payment_receiver_snapshot_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.ensureColumn("direct_orders", "payout_status", "TEXT NOT NULL DEFAULT 'not_applicable'");
+    this.ensureColumn("payment_attempts", "receiver_snapshot_json", "TEXT NOT NULL DEFAULT '{}'");
     this.migrateChannelEventAssignmentsToMany();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_events_organizer_id ON events (organizer_id);
@@ -1197,6 +1348,10 @@ export class SqliteAppDatabase implements AppDatabase {
         ON direct_orders (event_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_direct_tickets_order
         ON direct_tickets (order_id);
+      CREATE INDEX IF NOT EXISTS idx_direct_orders_seller_organization
+        ON direct_orders (seller_organization_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_organization_financial_profiles_payment_status
+        ON organization_financial_profiles (payment_status);
 
       UPDATE direct_tickets
       SET payment_status = 'awaiting_payment'
@@ -1205,6 +1360,12 @@ export class SqliteAppDatabase implements AppDatabase {
       UPDATE events
       SET organizer_id = '${DEFAULT_ORGANIZATION_ID}'
       WHERE organizer_id IS NULL OR TRIM(organizer_id) = '';
+
+      UPDATE direct_orders
+      SET seller_organization_id = (
+        SELECT organizer_id FROM events WHERE events.id = direct_orders.event_id
+      )
+      WHERE seller_organization_id IS NULL OR TRIM(seller_organization_id) = '';
 
       UPDATE organizations
       SET verification_status = 'draft'
@@ -1261,6 +1422,8 @@ export class SqliteAppDatabase implements AppDatabase {
     }
 
     await this.ensureDefaultOrganization();
+    await this.getOrganizerFinancialProfile(DEFAULT_ORGANIZATION_ID);
+    await this.ensureDefaultOrganizerDirectory();
     await this.ensureDefaultEvent();
     await this.bootstrapChannelAccounts();
     await this.ensureEventDocumentChunks();
@@ -1618,6 +1781,34 @@ export class SqliteAppDatabase implements AppDatabase {
     return mapNotificationDeliveryRow(row);
   }
 
+  async listNotificationDeliveries(options: { related_type?: string; related_id?: string; kind?: string; limit?: number } = {}) {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    const relatedType = String(options.related_type || "").trim();
+    const relatedId = String(options.related_id || "").trim();
+    const kind = String(options.kind || "").trim();
+    if (relatedType) {
+      clauses.push("related_type = ?");
+      params.push(relatedType);
+    }
+    if (relatedId) {
+      clauses.push("related_id = ?");
+      params.push(relatedId);
+    }
+    if (kind) {
+      clauses.push("kind = ?");
+      params.push(kind);
+    }
+    const limit = Math.min(Math.max(Number.parseInt(String(options.limit ?? 200), 10) || 200, 1), 1000);
+    params.push(limit);
+    const rows = this.db.prepare(
+      `SELECT * FROM notification_deliveries
+       ${clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""}
+       ORDER BY queued_at DESC, id DESC LIMIT ?`,
+    ).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapNotificationDeliveryRow(row)).filter((row): row is NotificationDeliveryRow => Boolean(row));
+  }
+
   async claimNotificationDeliveries(workerId: string, limit = 10) {
     const normalizedWorkerId = String(workerId || "").trim();
     const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 10, 1), 100);
@@ -1729,6 +1920,14 @@ export class SqliteAppDatabase implements AppDatabase {
   async getCustomerAccountByNormalizedEmail(normalizedEmail: string) {
     const row = this.db.prepare("SELECT * FROM customer_accounts WHERE normalized_email = ? LIMIT 1").get(String(normalizedEmail || "").trim()) as Record<string, unknown> | undefined;
     return mapCustomerAccountRow(row);
+  }
+
+  async listCustomerAccounts(limit = 200) {
+    const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 200, 1), 1000);
+    const rows = this.db.prepare(
+      "SELECT * FROM customer_accounts ORDER BY created_at DESC, id DESC LIMIT ?",
+    ).all(normalizedLimit) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapCustomerAccountRow(row)).filter((row): row is CustomerAccountRow => Boolean(row));
   }
 
   async createCustomerAccount(input: CreateCustomerAccountInput) {
@@ -2050,9 +2249,9 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean }) {
     const layoutUpdate = options?.replaceLayout ? "x=excluded.x,y=excluded.y" : "x=COALESCE(direct_seats.x,excluded.x),y=COALESCE(direct_seats.y,excluded.y)";
-    const insert = this.db.prepare(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,face_value,x,y,allocation_status,source_status)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=excluded.section_label,external_seat_ref=excluded.external_seat_ref,face_value=excluded.face_value,${layoutUpdate},allocation_status=excluded.allocation_status,source_status=excluded.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`);
-    this.db.transaction((items: ImportDirectSeatInput[]) => items.forEach((seat) => insert.run(generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated", seat.source_status || "unknown")))(seats);
+    const insert = this.db.prepare(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,ticket_class,face_value,x,y,allocation_status,source_status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=excluded.section_label,external_seat_ref=excluded.external_seat_ref,ticket_class=excluded.ticket_class,face_value=excluded.face_value,${layoutUpdate},allocation_status=excluded.allocation_status,source_status=excluded.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`);
+    this.db.transaction((items: ImportDirectSeatInput[]) => items.forEach((seat) => insert.run(generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.ticket_class || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated", seat.source_status || "unknown")))(seats);
     if (options?.replaceMissing && seats.length) {
       const keep = seats.map(() => "(zone=? AND row_label=? AND seat_label=?)").join(" OR ");
       const keepParams = seats.flatMap((seat) => [String(seat.zone).trim(), String(seat.row_label).trim(), String(seat.seat_label).trim()]);
@@ -2108,9 +2307,9 @@ export class SqliteAppDatabase implements AppDatabase {
       const subtotalAmount = Math.max(0, Number(input.subtotal_amount) || 0);
       const status = totalAmount === 0 ? "paid" : "pending_payment";
       const billingStatus = String(input.billing_profile_json || "{}").trim() !== "{}" ? "pending" : "not_required";
-      this.db.prepare(`INSERT INTO direct_orders (id,event_id,performance_id,customer_account_id,buyer_name,phone,email,currency,subtotal_amount,platform_fee_amount,payment_fee_amount,tax_amount,discount_amount,total_amount,fee_rule_version,tax_snapshot_json,billing_profile_json,seller_snapshot_json,status,hold_expires_at,billing_document_status)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='pending_payment' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?)`)
-        .run(orderId, input.event_id, input.performance_id, input.customer_account_id || null, String(input.buyer_name || "").trim(), String(input.phone || "").trim(), String(input.email || "").trim(), "THB", subtotalAmount, Math.max(0, Number(input.platform_fee_amount) || 0), Math.max(0, Number(input.payment_fee_amount) || 0), Math.max(0, Number(input.tax_amount) || 0), Math.max(0, Number(input.discount_amount) || 0), totalAmount, String(input.fee_rule_version || "v1"), String(input.tax_snapshot_json || "{}").trim() || "{}", String(input.billing_profile_json || "{}").trim() || "{}", String(input.seller_snapshot_json || "{}").trim() || "{}", status, status, `+${holdMinutes} minutes`, billingStatus);
+      this.db.prepare(`INSERT INTO direct_orders (id,event_id,performance_id,customer_account_id,buyer_name,phone,email,currency,subtotal_amount,platform_fee_amount,payment_fee_amount,tax_amount,discount_amount,total_amount,fee_rule_version,tax_snapshot_json,billing_profile_json,seller_snapshot_json,status,hold_expires_at,billing_document_status,seller_organization_id,payment_profile_version,payment_receiver_snapshot_json,payout_status)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='pending_payment' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?,?,?,?,?)`)
+        .run(orderId, input.event_id, input.performance_id, input.customer_account_id || null, String(input.buyer_name || "").trim(), String(input.phone || "").trim(), String(input.email || "").trim(), "THB", subtotalAmount, Math.max(0, Number(input.platform_fee_amount) || 0), Math.max(0, Number(input.payment_fee_amount) || 0), Math.max(0, Number(input.tax_amount) || 0), Math.max(0, Number(input.discount_amount) || 0), totalAmount, String(input.fee_rule_version || "v1"), String(input.tax_snapshot_json || "{}").trim() || "{}", String(input.billing_profile_json || "{}").trim() || "{}", String(input.seller_snapshot_json || "{}").trim() || "{}", status, status, `+${holdMinutes} minutes`, billingStatus, input.seller_organization_id || null, Math.max(1, Number(input.payment_profile_version) || 1), String(input.payment_receiver_snapshot_json || "{}").trim() || "{}", input.payout_status || "not_applicable");
       const ticketInsert = this.db.prepare(`INSERT INTO direct_tickets (id,event_id,order_id,customer_account_id,performance_id,seat_id,ticket_class,holder_name,buyer_name,phone,email,price_amount,payment_status,status,issued_at,hold_expires_at,source)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='issued' THEN CURRENT_TIMESTAMP END,CASE WHEN ?='held' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now',?) END,?)`);
       const ticketStatus = status === "paid" ? "issued" : "held";
@@ -2120,7 +2319,7 @@ export class SqliteAppDatabase implements AppDatabase {
         ticketInsert.run(generateEntityId("dtkt"), input.event_id, orderId, input.customer_account_id || null, input.performance_id, seatId, String(input.ticket_class || "Public").trim() || "Public", String(input.buyer_name || "").trim(), String(input.buyer_name || "").trim(), String(input.phone || "").trim(), String(input.email || "").trim(), seatPrice, paymentStatus, ticketStatus, ticketStatus, ticketStatus, `+${holdMinutes} minutes`, input.source === "admin" ? "admin" : "public");
         this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(ticketStatus, seatId);
       }
-      this.db.prepare("INSERT INTO payment_attempts (id,order_id,attempt_number,method,amount,status) VALUES (?,?,?,?,?,?)").run(generateEntityId("pay"), orderId, 1, "promptpay", totalAmount, status === "paid" ? "verified" : "pending");
+      this.db.prepare("INSERT INTO payment_attempts (id,order_id,attempt_number,method,amount,status,receiver_snapshot_json) VALUES (?,?,?,?,?,?,?)").run(generateEntityId("pay"), orderId, 1, "promptpay", totalAmount, status === "paid" ? "verified" : "pending", String(input.payment_receiver_snapshot_json || "{}").trim() || "{}");
       return { order: this.directOrderQuery("WHERE o.id = ?", [orderId])[0] };
     });
     try {
@@ -2412,7 +2611,8 @@ export class SqliteAppDatabase implements AppDatabase {
     ).all(senderId, limit) as MessageRow[];
   }
 
-  async listEvents() {
+  async listEvents(organizationId?: string) {
+    const normalizedOrganizationId = String(organizationId || "").trim();
     const rows = this.db.prepare(
       `SELECT
          e.id,
@@ -2426,8 +2626,9 @@ export class SqliteAppDatabase implements AppDatabase {
          e.updated_at
        FROM events e
        LEFT JOIN organizations o ON o.id = e.organizer_id
+       ${normalizedOrganizationId ? "WHERE e.organizer_id = ?" : ""}
        ORDER BY e.is_default DESC, e.created_at ASC`,
-    ).all() as Array<Record<string, unknown>>;
+    ).all(...(normalizedOrganizationId ? [normalizedOrganizationId] : [])) as Array<Record<string, unknown>>;
     return Promise.all(rows.map((row) => this.hydrateEventRow(row)));
   }
 
@@ -2551,6 +2752,178 @@ export class SqliteAppDatabase implements AppDatabase {
     ).run(...values);
     if (result.changes <= 0) return undefined;
     return this.getOrganizerProfile(organizationId);
+  }
+
+  async listOrganizerProfiles(organizationId: string) {
+    const rows = this.db.prepare(
+      `SELECT id, organization_id, name, slug, legal_name, public_display_name, public_description,
+              public_logo_url, public_website_url, public_facebook_url, public_line_url,
+              public_contact_text, verification_status, verification_notes, created_at, updated_at
+       FROM organizer_profiles
+       WHERE organization_id = ?
+       ORDER BY name COLLATE NOCASE ASC, created_at ASC`,
+    ).all(String(organizationId || "").trim()) as Array<Record<string, unknown>>;
+    return rows.map((row) => mapOrganizerProfileRow(row)).filter((row): row is OrganizerProfileRow => Boolean(row));
+  }
+
+  async getOrganizerProfileById(organizerProfileId: string, organizationId: string) {
+    const row = this.db.prepare(
+      `SELECT id, organization_id, name, slug, legal_name, public_display_name, public_description,
+              public_logo_url, public_website_url, public_facebook_url, public_line_url,
+              public_contact_text, verification_status, verification_notes, created_at, updated_at
+       FROM organizer_profiles
+       WHERE id = ? AND organization_id = ?`,
+    ).get(String(organizerProfileId || "").trim(), String(organizationId || "").trim()) as Record<string, unknown> | undefined;
+    return mapOrganizerProfileRow(row);
+  }
+
+  async createOrganizerProfile(organizationId: string, input: CreateOrganizerProfileInput) {
+    const ownerId = String(organizationId || "").trim();
+    const name = String(input.name || "").trim() || "New Organizer";
+    const baseSlug = slugifyText(input.slug || name);
+    let slug = baseSlug;
+    let suffix = 2;
+    while (this.db.prepare("SELECT 1 FROM organizer_profiles WHERE organization_id = ? AND slug = ? LIMIT 1").get(ownerId, slug)) {
+      slug = `${baseSlug}-${suffix}`;
+      suffix += 1;
+    }
+    const id = generateEntityId("orgp");
+    this.db.prepare(
+      `INSERT INTO organizer_profiles (
+         id, organization_id, name, slug, legal_name, public_display_name, public_description,
+         public_logo_url, public_website_url, public_facebook_url, public_line_url, public_contact_text,
+         verification_status, verification_notes
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id, ownerId, name, slug,
+      input.legal_name ?? null, input.public_display_name ?? null, input.public_description ?? null,
+      input.public_logo_url ?? null, input.public_website_url ?? null, input.public_facebook_url ?? null,
+      input.public_line_url ?? null, input.public_contact_text ?? null,
+      input.verification_status ?? "draft", input.verification_notes ?? null,
+    );
+    this.db.prepare("INSERT OR IGNORE INTO organizer_financial_profiles (organizer_id) VALUES (?)").run(id);
+    const profile = await this.getOrganizerProfileById(id, ownerId);
+    if (!profile) throw new Error("Failed to create organizer profile");
+    return profile;
+  }
+
+  async updateOrganizerProfileById(organizerProfileId: string, organizationId: string, input: UpdateOrganizerProfileInput & { name?: string; slug?: string }) {
+    const profileId = String(organizerProfileId || "").trim();
+    const ownerId = String(organizationId || "").trim();
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    if (typeof input.name === "string" && input.name.trim()) { updates.push("name = ?"); values.push(input.name.trim()); }
+    if (typeof input.slug === "string" && input.slug.trim()) { updates.push("slug = ?"); values.push(slugifyText(input.slug)); }
+    updates.push(
+      "legal_name = ?", "public_display_name = ?", "public_description = ?", "public_logo_url = ?",
+      "public_website_url = ?", "public_facebook_url = ?", "public_line_url = ?", "public_contact_text = ?",
+      "verification_status = ?", "verification_notes = ?", "updated_at = CURRENT_TIMESTAMP",
+    );
+    values.push(
+      input.legal_name ?? null, input.public_display_name ?? null, input.public_description ?? null,
+      input.public_logo_url ?? null, input.public_website_url ?? null, input.public_facebook_url ?? null,
+      input.public_line_url ?? null, input.public_contact_text ?? null,
+      input.verification_status ?? "draft", input.verification_notes ?? null,
+      profileId, ownerId,
+    );
+    const result = this.db.prepare(`UPDATE organizer_profiles SET ${updates.join(", ")} WHERE id = ? AND organization_id = ?`).run(...values);
+    if (result.changes <= 0) return undefined;
+    return this.getOrganizerProfileById(profileId, ownerId);
+  }
+
+  async getOrganizerFinancialProfile(organizationId: string) {
+    const normalizedOrganizationId = String(organizationId || "").trim();
+    if (!normalizedOrganizationId) return undefined;
+    this.db.prepare("INSERT OR IGNORE INTO organization_financial_profiles (organization_id) VALUES (?)").run(normalizedOrganizationId);
+    const row = this.db.prepare("SELECT * FROM organization_financial_profiles WHERE organization_id = ?").get(normalizedOrganizationId) as Record<string, unknown> | undefined;
+    return mapOrganizerFinancialProfileRow(row);
+  }
+
+  async updateOrganizerFinancialProfile(organizationId: string, input: UpdateOrganizerFinancialProfileInput) {
+    const current = await this.getOrganizerFinancialProfile(organizationId);
+    if (!current) return undefined;
+    const promptpayId = input.clear_promptpay_id ? null : input.promptpay_id === undefined ? current.promptpay_id : input.promptpay_id;
+    this.db.prepare(
+      `UPDATE organization_financial_profiles SET
+        payment_method = ?, promptpay_id = ?, promptpay_receiver_name = ?, payment_status = ?,
+        legal_entity_type = ?, tax_id = ?, vat_status = ?, vat_rate_percent = ?, registered_address = ?,
+        branch_number = ?, billing_document_mode = ?, platform_fee_type = ?, platform_fee_value = ?,
+        platform_fee_payer = ?, payment_fee_value = ?, payout_mode = ?, payout_schedule = ?,
+        payout_status = ?, pricing_policy_enabled = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
+       WHERE organization_id = ?`,
+    ).run(
+      input.payment_method || current.payment_method,
+      promptpayId,
+      input.promptpay_receiver_name === undefined ? current.promptpay_receiver_name : input.promptpay_receiver_name,
+      input.payment_status || current.payment_status,
+      input.legal_entity_type || current.legal_entity_type,
+      input.tax_id === undefined ? current.tax_id : input.tax_id,
+      input.vat_status || current.vat_status,
+      Number.isFinite(input.vat_rate_percent) ? input.vat_rate_percent : current.vat_rate_percent,
+      input.registered_address === undefined ? current.registered_address : input.registered_address,
+      input.branch_number === undefined ? current.branch_number : input.branch_number,
+      input.billing_document_mode || current.billing_document_mode,
+      input.platform_fee_type || current.platform_fee_type,
+      Number.isFinite(input.platform_fee_value) ? input.platform_fee_value : current.platform_fee_value,
+      input.platform_fee_payer || current.platform_fee_payer,
+      Number.isFinite(input.payment_fee_value) ? input.payment_fee_value : current.payment_fee_value,
+      input.payout_mode || current.payout_mode,
+      input.payout_schedule || current.payout_schedule,
+      input.payout_status || current.payout_status,
+      input.pricing_policy_enabled === undefined ? (current.pricing_policy_enabled ? 1 : 0) : input.pricing_policy_enabled ? 1 : 0,
+      current.organization_id,
+    );
+    return this.getOrganizerFinancialProfile(current.organization_id);
+  }
+
+  async getOrganizerFinancialProfileByOrganizerId(organizerProfileId: string, organizationId: string) {
+    const profile = await this.getOrganizerProfileById(organizerProfileId, organizationId);
+    if (!profile) return undefined;
+    this.db.prepare("INSERT OR IGNORE INTO organizer_financial_profiles (organizer_id) VALUES (?)").run(profile.id);
+    const row = this.db.prepare(
+      `SELECT f.*, p.organization_id, p.id AS organizer_profile_id
+       FROM organizer_financial_profiles f
+       JOIN organizer_profiles p ON p.id = f.organizer_id
+       WHERE f.organizer_id = ? AND p.organization_id = ?`,
+    ).get(profile.id, profile.organization_id) as Record<string, unknown> | undefined;
+    return mapOrganizerFinancialProfileRow(row);
+  }
+
+  async updateOrganizerFinancialProfileByOrganizerId(organizerProfileId: string, organizationId: string, input: UpdateOrganizerFinancialProfileInput) {
+    const current = await this.getOrganizerFinancialProfileByOrganizerId(organizerProfileId, organizationId);
+    if (!current || !current.organizer_profile_id) return undefined;
+    const promptpayId = input.clear_promptpay_id ? null : input.promptpay_id === undefined ? current.promptpay_id : input.promptpay_id;
+    this.db.prepare(
+      `UPDATE organizer_financial_profiles SET
+        payment_method = ?, promptpay_id = ?, promptpay_receiver_name = ?, payment_status = ?,
+        legal_entity_type = ?, tax_id = ?, vat_status = ?, vat_rate_percent = ?, registered_address = ?,
+        branch_number = ?, billing_document_mode = ?, platform_fee_type = ?, platform_fee_value = ?,
+        platform_fee_payer = ?, payment_fee_value = ?, payout_mode = ?, payout_schedule = ?,
+        payout_status = ?, pricing_policy_enabled = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
+       WHERE organizer_id = ?`,
+    ).run(
+      input.payment_method || current.payment_method,
+      promptpayId,
+      input.promptpay_receiver_name === undefined ? current.promptpay_receiver_name : input.promptpay_receiver_name,
+      input.payment_status || current.payment_status,
+      input.legal_entity_type || current.legal_entity_type,
+      input.tax_id === undefined ? current.tax_id : input.tax_id,
+      input.vat_status || current.vat_status,
+      Number.isFinite(input.vat_rate_percent) ? input.vat_rate_percent : current.vat_rate_percent,
+      input.registered_address === undefined ? current.registered_address : input.registered_address,
+      input.branch_number === undefined ? current.branch_number : input.branch_number,
+      input.billing_document_mode || current.billing_document_mode,
+      input.platform_fee_type || current.platform_fee_type,
+      Number.isFinite(input.platform_fee_value) ? input.platform_fee_value : current.platform_fee_value,
+      input.platform_fee_payer || current.platform_fee_payer,
+      Number.isFinite(input.payment_fee_value) ? input.payment_fee_value : current.payment_fee_value,
+      input.payout_mode || current.payout_mode,
+      input.payout_schedule || current.payout_schedule,
+      input.payout_status || current.payout_status,
+      input.pricing_policy_enabled === undefined ? (current.pricing_policy_enabled ? 1 : 0) : input.pricing_policy_enabled ? 1 : 0,
+      current.organizer_profile_id,
+    );
+    return this.getOrganizerFinancialProfileByOrganizerId(current.organizer_profile_id, organizationId);
   }
 
   async getEventDeletionImpact(eventId: string) {
@@ -4000,6 +4373,40 @@ export class SqliteAppDatabase implements AppDatabase {
       `INSERT OR IGNORE INTO organizations (id, name, slug)
        VALUES (?, ?, ?)`,
     ).run(DEFAULT_ORGANIZATION_ID, DEFAULT_ORGANIZATION_NAME, DEFAULT_ORGANIZATION_SLUG);
+  }
+
+  private async ensureDefaultOrganizerDirectory() {
+    this.db.prepare(
+      `INSERT OR IGNORE INTO organizer_profiles (
+         id, organization_id, name, slug, legal_name, public_display_name, public_description,
+         public_logo_url, public_website_url, public_facebook_url, public_line_url, public_contact_text,
+         verification_status, verification_notes
+       )
+       SELECT
+         'orgprof_' || id, id, name, slug, legal_name, public_display_name, public_description,
+         public_logo_url, public_website_url, public_facebook_url, public_line_url, public_contact_text,
+         COALESCE(NULLIF(TRIM(verification_status), ''), 'draft'), verification_notes
+       FROM organizations
+       WHERE id = ?`,
+    ).run(DEFAULT_ORGANIZATION_ID);
+    this.db.prepare(
+      `INSERT OR IGNORE INTO organizer_financial_profiles (
+         organizer_id, payment_method, promptpay_id, promptpay_receiver_name, payment_status,
+         legal_entity_type, tax_id, vat_status, vat_rate_percent, registered_address, branch_number,
+         billing_document_mode, platform_fee_type, platform_fee_value, platform_fee_payer,
+         payment_fee_value, payout_mode, payout_schedule, payout_status, pricing_policy_enabled, version
+       )
+       SELECT
+         'orgprof_' || organization_id, payment_method, promptpay_id, promptpay_receiver_name, payment_status,
+         legal_entity_type, tax_id, vat_status, vat_rate_percent, registered_address, branch_number,
+         billing_document_mode, platform_fee_type, platform_fee_value, platform_fee_payer,
+         payment_fee_value, payout_mode, payout_schedule, payout_status, pricing_policy_enabled, version
+       FROM organization_financial_profiles
+       WHERE organization_id = ?`,
+    ).run(DEFAULT_ORGANIZATION_ID);
+    this.db.prepare(
+      "INSERT OR IGNORE INTO organizer_financial_profiles (organizer_id) VALUES (?)",
+    ).run(`orgprof_${DEFAULT_ORGANIZATION_ID}`);
   }
 
   private async ensureDefaultEvent() {

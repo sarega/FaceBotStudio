@@ -1,5 +1,16 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.7.0",
+    date: "2026-08-11",
+    title: "Organizer directory and customer operations",
+    features: [
+      "Reusable organizer profiles now provide event-facing identity, logos, contact details, and per-organizer finance policies",
+      "Customer account verification and admin customer management show account status, delivery state, and purchase history",
+      "Public checkout reads performance, ticket class, price, zone, and seat availability from Direct Ticketing",
+      "Compact workspace layouts and dark-theme selection highlights improve daily use on 13-inch screens",
+    ],
+  },
+  {
     version: "0.5.1",
     date: "2026-08-03",
     title: "Compact workspace layout",

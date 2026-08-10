@@ -51,7 +51,13 @@ export interface AuthUser {
 }
 
 export interface OrganizerProfileRecord {
+  id?: string;
+  organizer_profile_id?: string;
   organization_id: string;
+  owner_organization_id?: string;
+  name?: string;
+  slug?: string;
+  finance?: Record<string, unknown> | null;
   organization_name: string;
   organization_slug: string;
   legal_name: string;
@@ -361,6 +367,7 @@ export interface Settings {
   event_public_brand_about_url: string;
   event_public_brand_privacy_url: string;
   event_public_brand_contact_url: string;
+  event_public_organizer_profile_id: string;
   event_public_organizer_name: string;
   event_public_organizer_description: string;
   event_public_organizer_logo_url: string;

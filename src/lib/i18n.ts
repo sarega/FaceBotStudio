@@ -25,7 +25,7 @@ const THAI_LABELS: Record<string, string> = {
   "nav.runtimeSetup": "ตั้งค่ารันไทม์",
   "nav.runtimeSetupDescription": "นโยบายการทำงานและช่องทางภายนอก",
   "nav.operations": "ปฏิบัติการ",
-  "nav.operationsDescription": "ลงทะเบียน กล่องข้อความ เช็กอิน และบันทึกระบบ",
+  "nav.operationsDescription": "ตั๋ว ลงทะเบียน เช็กอิน และรายงาน",
   "nav.workspaceSetup": "ตั้งค่าพื้นที่ทำงาน",
   "nav.workspaceSetupDescription": "การตั้งค่าองค์กร",
   "nav.navigation": "เมนูนำทาง",
