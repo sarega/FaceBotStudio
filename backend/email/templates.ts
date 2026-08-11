@@ -170,6 +170,8 @@ export function buildRegistrationConfirmationLinks(options: {
   eventId?: string | null;
   eventSlug?: string | null;
   includeTicketLinks?: boolean;
+  ticketPngUrl?: string | null;
+  ticketSvgUrl?: string | null;
 }) {
   if (!normalizeText(options.appUrl)) {
     return {
@@ -179,15 +181,14 @@ export function buildRegistrationConfirmationLinks(options: {
     };
   }
 
-  const encodedRegistrationId = encodeURIComponent(options.registrationId);
   const includeTicketLinks = options.includeTicketLinks !== false;
 
   return {
     ticketPngUrl: includeTicketLinks
-      ? buildAbsoluteAppUrl(options.appUrl, `/api/tickets/${encodedRegistrationId}.png`)
+      ? normalizeText(options.ticketPngUrl) || null
       : null,
     ticketSvgUrl: includeTicketLinks
-      ? buildAbsoluteAppUrl(options.appUrl, `/api/tickets/${encodedRegistrationId}.svg`)
+      ? normalizeText(options.ticketSvgUrl) || null
       : null,
     recoveryUrl: buildRecoveryUrl(options),
   };
@@ -220,6 +221,56 @@ export function renderRegistrationConfirmationEmail(
     }),
     event_page_url: recoveryUrl || normalizeText(input.appUrl),
   });
+}
+
+export function renderTicketRecoveryEmail(input: {
+  eventName: string;
+  eventDate?: string | null;
+  eventLocation?: string | null;
+  ticketUrl: string;
+  supportEmail?: string | null;
+}): RenderedTransactionalEmail {
+  const eventName = normalizeText(input.eventName) || "your event";
+  const eventDate = normalizeText(input.eventDate);
+  const eventLocation = normalizeText(input.eventLocation);
+  const ticketUrl = normalizeText(input.ticketUrl);
+  const supportEmail = normalizeText(input.supportEmail);
+  const subject = `Your secure ticket link for ${eventName}`;
+  const details = [
+    eventDate ? `Date: ${eventDate}` : "",
+    eventLocation ? `Location: ${eventLocation}` : "",
+  ].filter(Boolean);
+
+  return {
+    kind: "ticket_delivery",
+    subject,
+    text: [
+      `Your secure ticket link for ${eventName}`,
+      "",
+      "Use the link below to open your ticket. The link expires soon.",
+      ...details,
+      `Open ticket: ${ticketUrl}`,
+      supportEmail ? `Support: ${supportEmail}` : "",
+    ].filter(Boolean).join("\n"),
+    html: `<!DOCTYPE html>
+<html lang="en">
+  <body style="margin:0;padding:24px;background:#f8fafc;font-family:'Noto Sans Thai',system-ui,sans-serif;color:#0f172a;">
+    <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:24px;overflow:hidden;">
+      <div style="padding:24px;background:#0f172a;color:#ffffff;">
+        <p style="margin:0 0 8px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;opacity:.8;">Secure ticket recovery</p>
+        <h1 style="margin:0;font-size:28px;">${escapeHtml(eventName)}</h1>
+      </div>
+      <div style="padding:24px;">
+        <p style="margin:0 0 16px;font-size:16px;">Use the secure link below to open your ticket. The link expires soon.</p>
+        ${eventDate ? `<p style="margin:0 0 8px;"><strong>Date:</strong> ${escapeHtml(eventDate)}</p>` : ""}
+        ${eventLocation ? `<p style="margin:0 0 16px;"><strong>Location:</strong> ${escapeHtml(eventLocation)}</p>` : ""}
+        <p style="margin:0 0 16px;"><a href="${escapeHtml(ticketUrl)}" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#111827;color:#ffffff;text-decoration:none;font-weight:700;">Open Ticket</a></p>
+        ${supportEmail ? `<p style="margin:0;font-size:13px;color:#64748b;">Support: ${escapeHtml(supportEmail)}</p>` : ""}
+      </div>
+    </div>
+  </body>
+</html>`,
+  };
 }
 
 export function renderSampleTransactionalEmail(

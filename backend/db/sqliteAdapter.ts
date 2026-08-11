@@ -70,10 +70,13 @@ import type {
   UpdateOutreachTargetInput,
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
+  RegistrationActivityByDayRow,
+  RegistrationCountsByEventRow,
   RegistrationInput,
   RegistrationEmailDeliveryRow,
   RegistrationResult,
   RegistrationRow,
+  RegistrationSearchOptions,
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
@@ -96,7 +99,7 @@ const EVENT_SETTING_KEY_SET = new Set<string>(EVENT_SETTING_KEYS);
 const EVENT_ASSIGNMENT_RESTRICTED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
 
 function generateRegistrationId() {
-  return `REG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  return `REG-${randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase()}`;
 }
 
 function generateEntityId(prefix: string) {
@@ -599,6 +602,9 @@ export class SqliteAppDatabase implements AppDatabase {
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
+    this.db.pragma("foreign_keys = ON");
+    this.db.pragma("journal_mode = WAL");
+    this.db.pragma("busy_timeout = 5000");
   }
 
   async initialize() {
@@ -663,7 +669,7 @@ export class SqliteAppDatabase implements AppDatabase {
       );
       CREATE TABLE IF NOT EXISTS notification_deliveries (
         id TEXT PRIMARY KEY,
-        channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+        channel TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'facebook')),
         kind TEXT NOT NULL,
         recipient TEXT NOT NULL,
         recipient_snapshot TEXT,
@@ -1327,6 +1333,7 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("direct_orders", "payment_receiver_snapshot_json", "TEXT NOT NULL DEFAULT '{}'");
     this.ensureColumn("direct_orders", "payout_status", "TEXT NOT NULL DEFAULT 'not_applicable'");
     this.ensureColumn("payment_attempts", "receiver_snapshot_json", "TEXT NOT NULL DEFAULT '{}'");
+    this.migrateNotificationDeliveryChannels();
     this.migrateChannelEventAssignmentsToMany();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_events_organizer_id ON events (organizer_id);
@@ -1342,6 +1349,8 @@ export class SqliteAppDatabase implements AppDatabase {
         WHERE status = 'held';
       CREATE INDEX IF NOT EXISTS idx_registrations_customer_account
         ON registrations (customer_account_id, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_registrations_event_timestamp
+        ON registrations (event_id, timestamp DESC, id DESC);
       CREATE INDEX IF NOT EXISTS idx_direct_orders_customer
         ON direct_orders (customer_account_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_direct_orders_event_status
@@ -1559,6 +1568,104 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.db.prepare(
       "SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status FROM registrations ORDER BY timestamp DESC",
     ).all() as RegistrationRow[];
+  }
+
+  async getRegistrationCountsByEvent(eventId?: string): Promise<RegistrationCountsByEventRow[]> {
+    const normalizedEventId = String(eventId || "").trim();
+    const whereClause = normalizedEventId ? "WHERE event_id = ?" : "";
+    const rows = normalizedEventId
+      ? this.db.prepare(
+        `SELECT event_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'registered' THEN 1 ELSE 0 END) AS registered,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+                SUM(CASE WHEN status = 'checked-in' THEN 1 ELSE 0 END) AS checked_in
+         FROM registrations
+         ${whereClause}
+         GROUP BY event_id`,
+      ).all(normalizedEventId)
+      : this.db.prepare(
+        `SELECT event_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'registered' THEN 1 ELSE 0 END) AS registered,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+                SUM(CASE WHEN status = 'checked-in' THEN 1 ELSE 0 END) AS checked_in
+         FROM registrations
+         GROUP BY event_id`,
+      ).all();
+    return (rows as Array<Record<string, unknown>>).map((row) => ({
+      event_id: row.event_id == null ? null : String(row.event_id),
+      total: Number(row.total || 0),
+      registered: Number(row.registered || 0),
+      cancelled: Number(row.cancelled || 0),
+      checked_in: Number(row.checked_in || 0),
+    }));
+  }
+
+  async getRegistrationActivityByDay(eventId: string, limit = 14): Promise<RegistrationActivityByDayRow[]> {
+    const normalizedEventId = String(eventId || "").trim();
+    const normalizedLimit = Math.min(Math.max(Math.trunc(Number(limit) || 14), 1), 366);
+    if (!normalizedEventId) return [];
+    const rows = this.db.prepare(
+      `SELECT date(timestamp) AS date,
+              COUNT(*) AS registrations,
+              SUM(CASE WHEN status = 'checked-in' THEN 1 ELSE 0 END) AS checked_in
+       FROM registrations
+       WHERE event_id = ?
+       GROUP BY date(timestamp)
+       ORDER BY date(timestamp) DESC
+       LIMIT ?`,
+    ).all(normalizedEventId, normalizedLimit) as Array<Record<string, unknown>>;
+    return rows
+      .map((row) => ({
+        date: String(row.date || ""),
+        registrations: Number(row.registrations || 0),
+        checked_in: Number(row.checked_in || 0),
+      }))
+      .filter((row) => row.date.length > 0)
+      .reverse();
+  }
+
+  async searchRegistrations(options: RegistrationSearchOptions): Promise<RegistrationRow[]> {
+    const eventIds = [...new Set((options.eventIds || []).map((eventId) => String(eventId || "").trim()).filter(Boolean))];
+    if (options.eventIds && eventIds.length === 0) return [];
+    const limit = Math.min(Math.max(Math.trunc(Number(options.limit) || 30), 1), 200);
+    const offset = Math.min(Math.max(Math.trunc(Number(options.offset) || 0), 0), 5000);
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+    if (eventIds.length > 0) {
+      clauses.push(`event_id IN (${eventIds.map(() => "?").join(", ")})`);
+      values.push(...eventIds);
+    }
+    if (options.status) {
+      clauses.push("status = ?");
+      values.push(options.status);
+    }
+    const query = String(options.query || "").trim().slice(0, 160).toLowerCase();
+    if (query) {
+      const escapedQuery = query.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+      const pattern = "%" + escapedQuery + "%";
+      clauses.push(`(
+        LOWER(COALESCE(id, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(event_id, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(first_name, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(last_name, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(phone, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(email, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(sender_id, '')) LIKE ? ESCAPE '\\' OR
+        LOWER(COALESCE(status, '')) LIKE ? ESCAPE '\\'
+      )`);
+      values.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern);
+    }
+    const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    return this.db.prepare(
+      `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at, sms_opt_out_at, sms_consent_source, first_name, last_name, phone, email, timestamp, status
+       FROM registrations
+       ${whereClause}
+       ORDER BY timestamp DESC, id DESC
+       LIMIT ? OFFSET ?`,
+    ).all(...values, limit, offset) as RegistrationRow[];
   }
 
   async listRegistrationsBySenderIds(senderIds: string[], eventId?: string) {
@@ -4329,6 +4436,52 @@ export class SqliteAppDatabase implements AppDatabase {
     if (!columns.some((column) => column.name === columnName)) {
       this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
     }
+  }
+
+  private migrateNotificationDeliveryChannels() {
+    const table = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'notification_deliveries'",
+    ).get() as { sql?: string } | undefined;
+    if (!table?.sql || table.sql.includes("'facebook'")) return;
+
+    this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE notification_deliveries_with_facebook (
+          id TEXT PRIMARY KEY,
+          channel TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'facebook')),
+          kind TEXT NOT NULL,
+          recipient TEXT NOT NULL,
+          recipient_snapshot TEXT,
+          related_type TEXT,
+          related_id TEXT,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          idempotency_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'sent', 'failed')),
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          locked_at DATETIME,
+          locked_by TEXT,
+          provider TEXT,
+          provider_message_id TEXT,
+          last_error TEXT,
+          queued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          sent_at DATETIME,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO notification_deliveries_with_facebook (
+          id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+          payload_json, idempotency_key, status, attempt_count, available_at, locked_at,
+          locked_by, provider, provider_message_id, last_error, queued_at, sent_at, updated_at
+        )
+        SELECT
+          id, channel, kind, recipient, recipient_snapshot, related_type, related_id,
+          payload_json, idempotency_key, status, attempt_count, available_at, locked_at,
+          locked_by, provider, provider_message_id, last_error, queued_at, sent_at, updated_at
+        FROM notification_deliveries;
+        DROP TABLE notification_deliveries;
+        ALTER TABLE notification_deliveries_with_facebook RENAME TO notification_deliveries;
+      `);
+    })();
   }
 
   private migrateChannelEventAssignmentsToMany() {

@@ -85,6 +85,17 @@ export async function getRedisClient() {
   return connected;
 }
 
+export async function closeRedis() {
+  const client = generalRedis;
+  generalRedis = null;
+  if (!client) return;
+  try {
+    await client.quit();
+  } catch {
+    client.disconnect();
+  }
+}
+
 export function getBullConnectionOptions() {
   const redisUrl = getRedisUrl();
   if (!redisUrl) return null;

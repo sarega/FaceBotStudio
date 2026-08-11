@@ -1,11 +1,12 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import type { Server as HttpServer } from "node:http";
 import helmet from "helmet";
 import { createServer as createViteServer } from "vite";
 import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
 import { PDFDocument, rgb } from "pdf-lib";
 import QRCode from "qrcode";
-import { createHash, createHmac, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -29,8 +30,14 @@ import { enqueueLineInboundJob, startEmbeddedLineWorker, acquireLineWebhookDedup
 import { enqueueTelegramInboundJob, startEmbeddedTelegramWorker, acquireTelegramWebhookDedup, buildTelegramWebhookDedupKey, canUseTelegramWebhookQueue, type TelegramInboundJob } from "./backend/runtime/telegramQueue";
 import { enqueueWhatsAppInboundJob, startEmbeddedWhatsAppWorker, acquireWhatsAppWebhookDedup, buildWhatsAppWebhookDedupKey, canUseWhatsAppWebhookQueue, type WhatsAppInboundJob } from "./backend/runtime/whatsappQueue";
 import { startEmbeddedNotificationWorker } from "./backend/runtime/notificationWorker";
-import { createRateLimitMiddleware, resetRateLimitCounter } from "./backend/runtime/rateLimit";
-import { pingRedis } from "./backend/runtime/redis";
+import {
+  NotificationDeliveryError,
+  sendWithCurrentNotificationSender,
+  type NotificationSendResult,
+} from "./backend/notifications/outbox";
+import { createRateLimitMiddleware, resetRateLimitCounter, resolveRateLimitFallbackMode } from "./backend/runtime/rateLimit";
+import { closeRedis, pingRedis } from "./backend/runtime/redis";
+import { fetchWithTimeout } from "./backend/runtime/fetchWithTimeout";
 import { resolveStartupSecurityConfig } from "./backend/runtime/startupSecurity";
 import { SYSTEM_REVISION, SYSTEM_VERSION } from "./backend/runtime/systemInfo";
 import { buildEmbeddingHookPayload, getEmbeddingModelName } from "./backend/documents";
@@ -63,6 +70,7 @@ import {
   normalizeUsername,
   passwordHashNeedsRehash,
   parseCookies,
+  cookieSerialize,
   serializeAdminSessionCookie,
   serializeClearedCustomerCsrfTokenCookie,
   serializeClearedCustomerSessionCookie,
@@ -73,9 +81,15 @@ import {
   serializeClearedCheckinAccessSessionCookie,
   serializeClearedAdminSessionCookie,
   serializeClearedCsrfTokenCookie,
+  shouldUseSecureSessionCookie,
   verifyPasswordWithMetadata,
   type UserRole,
 } from "./backend/auth";
+import {
+  createPublicChatSessionToken,
+  verifyPublicChatSessionToken,
+  type PublicChatSession,
+} from "./backend/publicChatAccess";
 import {
   createCustomerAccountToken,
   getCustomerAccountTokenTtlMs,
@@ -97,6 +111,7 @@ import { sendTransactionalEmail } from "./backend/email/service";
 import {
   buildRegistrationConfirmationLinks,
   renderRegistrationConfirmationEmail,
+  renderTicketRecoveryEmail,
   renderSampleTransactionalEmail,
   type TransactionalEmailKind,
 } from "./backend/email/templates";
@@ -114,6 +129,7 @@ import {
   type EventStatus,
   type MessageAttachmentRow,
   type MessageRow,
+  type NotificationDeliveryRow,
   type OrganizerProfileRow,
   type OrganizerFinancialProfileRow,
   type UpdateOrganizerFinancialProfileInput,
@@ -141,6 +157,8 @@ import {
   matchEventSelection,
 } from "./backend/eventSelection";
 import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
+import { createPrivateMediaToken, verifyPrivateMediaToken, type PrivateMediaScope } from "./backend/privateMediaAccess";
+import { createTicketAccessToken, verifyTicketAccessToken, type TicketImageFormat } from "./backend/ticketAccess";
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor } from "./src/lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries } from "./src/lib/publicEventPageLayout";
@@ -188,6 +206,9 @@ const PUBLIC_CHAT_ATTENTION_SUPPRESSION_MS = 5 * 60 * 1000;
 const OUTREACH_REPLY_WINDOW_MS = Math.max(60 * 60 * 1000, Number.parseInt(process.env.OUTREACH_REPLY_WINDOW_HOURS || "24", 10) * 60 * 60 * 1000 || 24 * 60 * 60 * 1000);
 const IS_PRODUCTION = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
 const JSON_BODY_LIMIT = String(process.env.JSON_BODY_LIMIT || "256kb").trim() || "256kb";
+const SHUTDOWN_TIMEOUT_MS = Math.max(1_000, Number.parseInt(process.env.SHUTDOWN_TIMEOUT_MS || "10000", 10) || 10_000);
+const PROVIDER_REQUEST_TIMEOUT_MS = Math.min(120_000, Math.max(1_000, Number.parseInt(process.env.PROVIDER_REQUEST_TIMEOUT_MS || "15000", 10) || 15_000));
+const LLM_REQUEST_TIMEOUT_MS = Math.min(120_000, Math.max(5_000, Number.parseInt(process.env.LLM_REQUEST_TIMEOUT_MS || "60000", 10) || 60_000));
 const CSRF_ALLOWED_ORIGINS_RAW = String(process.env.CSRF_ALLOWED_ORIGINS || "").trim();
 const LOGIN_IP_RATE_LIMIT_NAME = "auth-login-ip";
 const LOGIN_USERNAME_RATE_LIMIT_NAME = "auth-login-username";
@@ -195,6 +216,14 @@ const CUSTOMER_LOGIN_IP_RATE_LIMIT_NAME = "customer-login-ip";
 const CUSTOMER_LOGIN_EMAIL_RATE_LIMIT_NAME = "customer-login-email";
 const CUSTOMER_ACCOUNT_IP_RATE_LIMIT_NAME = "customer-account-ip";
 const CUSTOMER_ACCOUNT_EMAIL_RATE_LIMIT_NAME = "customer-account-email";
+const PUBLIC_REGISTRATION_RATE_LIMIT_NAME = "public-registration";
+const PUBLIC_TICKET_RECOVERY_RATE_LIMIT_NAME = "public-ticket-recovery";
+const PUBLIC_TICKET_RENDER_RATE_LIMIT_NAME = "public-ticket-render";
+const PUBLIC_CHAT_SESSION_RATE_LIMIT_NAME = "public-chat-session";
+const PUBLIC_CHAT_HISTORY_RATE_LIMIT_NAME = "public-chat-history";
+const PUBLIC_CHAT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const PUBLIC_CHAT_SESSION_COOKIE_PREFIX = "fbs_public_chat_";
+const PUBLIC_CHAT_SESSION_ROUTE_ID = "public-event";
 const ALLOWED_SETTINGS_KEY_SET = new Set<string>([...EVENT_SETTING_KEYS, ...GLOBAL_SETTING_KEYS]);
 const CSRF_HEADER_NAME = "x-csrf-token";
 
@@ -450,9 +479,12 @@ type EventCapacitySnapshot = {
 };
 
 async function getEventCapacitySnapshot(eventId: string, settings: Record<string, any>): Promise<EventCapacitySnapshot> {
-  const registrations = await appDb.listRegistrations(undefined, eventId);
-  const activeCount = registrations.filter((registration) => registration.status !== "cancelled").length;
-  const cancelledCount = registrations.length - activeCount;
+  const registrationCounts = (await appDb.getRegistrationCountsByEvent(eventId))[0] || {
+    total: 0,
+    cancelled: 0,
+  };
+  const activeCount = Math.max(registrationCounts.total - registrationCounts.cancelled, 0);
+  const cancelledCount = registrationCounts.cancelled;
   const limit = parseRegistrationLimit(settings.reg_limit);
   const remainingCount = limit === null ? null : Math.max(limit - activeCount, 0);
   const isFull = limit !== null && activeCount >= limit;
@@ -967,7 +999,12 @@ async function hydrateMessageRowsWithAttachments<T extends MessageRow>(rows: T[]
 
   return rows.map((row) => ({
     ...row,
-    attachments: attachmentsByMessageId.get(Math.trunc(Number(row.id) || 0)) || [],
+    attachments: (attachmentsByMessageId.get(Math.trunc(Number(row.id) || 0)) || []).map((attachment) => {
+      const privateUrl = buildPrivateMediaUrlFromStoredUrl(attachment.url);
+      return privateUrl
+        ? { ...attachment, absolute_url: privateUrl }
+        : attachment;
+    }),
   }));
 }
 
@@ -1486,7 +1523,7 @@ async function optimizeEventContext(context: string, settings: Record<string, an
   const model = normalizeOptionalText(settings.llm_model)
     || normalizeOptionalText(settings.global_llm_model)
     || DEFAULT_OPENROUTER_MODEL;
-  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const upstream = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: openRouterHeaders(),
     body: JSON.stringify({
@@ -1520,7 +1557,7 @@ async function optimizeEventContext(context: string, settings: Record<string, an
       ],
       temperature: 0.1,
     }),
-  });
+  }, LLM_REQUEST_TIMEOUT_MS);
   const payload = await upstream.json().catch(() => ({}));
   if (!upstream.ok) throw new Error(payload?.error?.message || "Context optimization failed");
 
@@ -1570,7 +1607,7 @@ async function requestOpenRouterEmbeddings(
   const vectors: number[][] = [];
 
   for (const batch of splitIntoBatches(normalizedInputs, 32)) {
-    const upstream = await fetch("https://openrouter.ai/api/v1/embeddings", {
+    const upstream = await fetchWithTimeout("https://openrouter.ai/api/v1/embeddings", {
       method: "POST",
       headers: openRouterHeaders(),
       body: JSON.stringify({
@@ -1578,7 +1615,7 @@ async function requestOpenRouterEmbeddings(
         input: batch,
         encoding_format: "float",
       }),
-    });
+    }, LLM_REQUEST_TIMEOUT_MS);
 
     const payload = await upstream.json().catch(() => ({}));
     if (!upstream.ok) {
@@ -2265,7 +2302,7 @@ function readImageAttachments(
 
     attachments.push({
       kind: "image",
-      url: absoluteUrl || url,
+      url: url || absoluteUrl,
       ...(absoluteUrl ? { absolute_url: absoluteUrl } : {}),
       ...(trimStringInput(value.name, 240) ? { name: trimStringInput(value.name, 240) } : {}),
       ...(mimeType ? { mime_type: mimeType } : {}),
@@ -3249,6 +3286,8 @@ function buildRegistrationConfirmationEmailTemplate(options: {
     eventId: options.eventId,
     eventSlug: options.eventSlug,
     includeTicketLinks: options.includeTicketLinks,
+    ticketPngUrl: options.includeTicketLinks === false ? null : buildTicketImageUrl(options.registrationId, "png"),
+    ticketSvgUrl: options.includeTicketLinks === false ? null : buildTicketImageUrl(options.registrationId, "svg"),
   });
 
   return renderRegistrationConfirmationEmail({
@@ -3440,6 +3479,108 @@ function buildAbsoluteAppAssetUrl(relativeUrl: string) {
   }
 }
 
+function getPrivateMediaAccessSecret() {
+  const configured = String(process.env.MEDIA_ACCESS_SECRET || "").trim();
+  return configured || getTicketAccessSecret();
+}
+
+function getPublicChatSessionSecret() {
+  const configured = String(process.env.PUBLIC_CHAT_SESSION_SECRET || "").trim();
+  return configured || getPrivateMediaAccessSecret();
+}
+
+function buildPublicChatSessionCookieName(eventId: string) {
+  const normalizedEventId = normalizeOptionalText(eventId);
+  if (!normalizedEventId) return "";
+  return `${PUBLIC_CHAT_SESSION_COOKIE_PREFIX}${createHash("sha256").update(normalizedEventId).digest("hex").slice(0, 32)}`;
+}
+
+function issuePublicChatSession(eventId: string, routeId: string, senderPrefix: string) {
+  const normalizedEventId = normalizeOptionalText(eventId);
+  const normalizedRouteId = normalizeOptionalText(routeId);
+  const normalizedSenderPrefix = normalizeOptionalText(senderPrefix);
+  const secret = getPublicChatSessionSecret();
+  if (!secret || !normalizedEventId || !normalizedRouteId || !normalizedSenderPrefix) return null;
+
+  const nowMs = Date.now();
+  const senderId = `${normalizedSenderPrefix}:${normalizedEventId}:${randomUUID()}`;
+  const token = createPublicChatSessionToken(
+    secret,
+    normalizedEventId,
+    senderId,
+    normalizedRouteId,
+    nowMs,
+    PUBLIC_CHAT_SESSION_TTL_SECONDS,
+  );
+  if (!token) return null;
+
+  return {
+    token,
+    session: {
+      version: 1 as const,
+      eventId: normalizedEventId,
+      senderId,
+      routeId: normalizedRouteId,
+      expiresAt: Math.floor(nowMs / 1000) + PUBLIC_CHAT_SESSION_TTL_SECONDS,
+    } satisfies PublicChatSession,
+  };
+}
+
+function resolvePublicEventChatSession(req: Request, eventId: string) {
+  const secret = getPublicChatSessionSecret();
+  const cookieName = buildPublicChatSessionCookieName(eventId);
+  if (!secret || !cookieName) return null;
+  const token = parseCookies(req.headers.cookie).get(cookieName);
+  return verifyPublicChatSessionToken(secret, eventId, PUBLIC_CHAT_SESSION_ROUTE_ID, token);
+}
+
+function resolveWebChatSession(req: Request, eventId: string, widgetKey: string) {
+  const secret = getPublicChatSessionSecret();
+  const normalizedWidgetKey = normalizeOptionalText(widgetKey);
+  if (!secret || !normalizedWidgetKey) return null;
+  const headerValue = req.headers["x-public-chat-capability"];
+  const token = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  return verifyPublicChatSessionToken(secret, eventId, `webchat:${normalizedWidgetKey}`, token);
+}
+
+function setPublicEventChatSessionCookie(res: Response, req: Request, eventId: string, token: string) {
+  const cookieName = buildPublicChatSessionCookieName(eventId);
+  if (!cookieName || !token) return;
+  appendSetCookieHeader(res, cookieSerialize(cookieName, token, {
+    httpOnly: true,
+    secure: shouldUseSecureSessionCookie(req),
+    sameSite: "Lax",
+    path: "/api/public/events",
+    maxAgeSeconds: PUBLIC_CHAT_SESSION_TTL_SECONDS,
+  }));
+}
+
+function buildPrivateMediaUrl(scope: PrivateMediaScope, fileName: string, allowRelative = false) {
+  const token = createPrivateMediaToken(getPrivateMediaAccessSecret(), scope, fileName);
+  if (!token) return "";
+
+  const pathname = `/api/private-media/${scope}/${encodeURIComponent(path.basename(fileName))}`;
+  const query = `?token=${encodeURIComponent(token)}`;
+  if (!process.env.APP_URL) return allowRelative ? `${pathname}${query}` : "";
+
+  try {
+    const url = new URL(process.env.APP_URL);
+    url.pathname = pathname;
+    url.search = query;
+    return url.toString();
+  } catch {
+    return allowRelative ? `${pathname}${query}` : "";
+  }
+}
+
+function buildPrivateMediaUrlFromStoredUrl(storedUrl: string) {
+  const normalized = normalizeOptionalText(storedUrl);
+  const match = normalized.match(/^\/uploads\/(channel-images|admin-agent-images)\/([^/?#]+)$/);
+  if (!match) return "";
+  const scope = match[1] === "channel-images" ? "channel" : "admin-agent";
+  return buildPrivateMediaUrl(scope, match[2], true);
+}
+
 function sanitizeImageFileNameBase(value: string, fallback = "image") {
   return path.basename(String(value || "").trim() || fallback)
     .replace(/\.[^.]+$/, "")
@@ -3449,8 +3590,46 @@ function sanitizeImageFileNameBase(value: string, fallback = "image") {
     || fallback;
 }
 
+function buildSessionBoundChannelKey(channelKey: string, senderId: string) {
+  const normalizedChannelKey = sanitizeImageFileNameBase(channelKey, "channel");
+  const senderHash = createHash("sha256").update(normalizeOptionalText(senderId)).digest("hex").slice(0, 24);
+  return `${normalizedChannelKey}-${senderHash}`;
+}
+
+function isSessionBoundChannelImageUrl(url: string, eventId: string, channelKey: string) {
+  const normalizedUrl = normalizeOptionalText(url);
+  const match = normalizedUrl.match(/^\/uploads\/channel-images\/([^/?#]+)$/);
+  if (!match) return false;
+
+  const expectedPrefix = `${sanitizeImageFileNameBase(eventId, "event")}-${sanitizeImageFileNameBase(channelKey, "channel")}-`;
+  return match[1].startsWith(expectedPrefix);
+}
+
+function filterSessionBoundChannelAttachments(
+  attachments: CreateMessageAttachmentInput[],
+  eventId: string,
+  channelKey: string,
+  issues: ValidationIssue[],
+) {
+  const valid: CreateMessageAttachmentInput[] = [];
+  attachments.forEach((attachment, index) => {
+    if (!isSessionBoundChannelImageUrl(attachment.url, eventId, channelKey)) {
+      issues.push({
+        field: `attachments[${index}].url`,
+        message: "attachment was not uploaded in this chat session",
+      });
+      return;
+    }
+
+    const safeAttachment = { ...attachment };
+    delete safeAttachment.absolute_url;
+    valid.push(safeAttachment);
+  });
+  return valid;
+}
+
 async function fetchBinaryImage(url: string, init?: RequestInit) {
-  const response = await fetch(url, init);
+  const response = await fetchWithTimeout(url, init, PROVIDER_REQUEST_TIMEOUT_MS);
   if (!response.ok) {
     throw new Error(`Image fetch failed (${response.status})`);
   }
@@ -3501,7 +3680,7 @@ async function storeInboundChannelImageBuffer(options: {
   ].join("-") + `.${extension}`;
   const nextAbsolutePath = path.join(CHANNEL_IMAGE_UPLOAD_DIR, nextFileName);
   const nextRelativeUrl = buildChannelImageRelativeUrl(nextFileName);
-  const nextPublicUrl = buildAbsoluteAppAssetUrl(nextRelativeUrl);
+  const nextPublicUrl = buildPrivateMediaUrl("channel", nextFileName, true);
   writeFileSync(nextAbsolutePath, options.fileBuffer);
 
   return {
@@ -3845,7 +4024,26 @@ async function resolveAttendeeCancellationTarget(options: {
     };
   }
 
-  const eventRows = await appDb.listRegistrations(undefined, eventId);
+  const hasContactLookup = Boolean(phone || email);
+  const hasNameLookup = Boolean(fullName);
+  const senderRows = senderId
+    ? await appDb.listRegistrationsBySenderIds([senderId], eventId)
+    : [];
+  const lookupQueries = [...new Set([
+    email,
+    phone,
+    phone.replace(/\D/g, ""),
+    fullName,
+  ].map((value) => String(value || "").trim()).filter(Boolean))];
+  const searchedRows = hasContactLookup || hasNameLookup
+    ? (await Promise.all(lookupQueries.map((query) => appDb.searchRegistrations({
+        eventIds: [eventId],
+        query,
+        limit: 200,
+      })))).flat()
+    : [];
+  const eventRows = [...senderRows, ...searchedRows]
+    .filter((row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index);
   const activeRows = eventRows.filter(isActiveLookupRegistration);
   const senderScopedRows = senderId
     ? activeRows.filter((row) => normalizeOptionalText(row.sender_id) === senderId)
@@ -3855,9 +4053,6 @@ async function resolveAttendeeCancellationTarget(options: {
         normalizeOptionalText(row.sender_id) === senderId
         && normalizeComparableText(row.status) === "cancelled")
     : [];
-  const hasContactLookup = Boolean(phone || email);
-  const hasNameLookup = Boolean(fullName);
-
   if (senderScopedRows.length > 0 && !hasContactLookup && !hasNameLookup) {
     const resolvedFromSender = resolveSinglePublicLookupMatch(senderScopedRows, eventId);
     if (resolvedFromSender.status === "single" && resolvedFromSender.registration) {
@@ -3943,10 +4138,9 @@ async function resolveAttendeeCancellationTarget(options: {
 }
 
 function buildTicketArtifactUrls(registrationId: string) {
-  const encodedId = encodeURIComponent(registrationId);
   return {
-    png_url: buildTicketImageUrl(registrationId, "png") || `/api/tickets/${encodedId}.png`,
-    svg_url: buildTicketImageUrl(registrationId, "svg") || `/api/tickets/${encodedId}.svg`,
+    png_url: buildTicketImageUrl(registrationId, "png", true),
+    svg_url: buildTicketImageUrl(registrationId, "svg", true),
   };
 }
 
@@ -4050,10 +4244,6 @@ function buildPublicRegistrationResponsePayload(
     map_url: payload?.location.map_url || "",
     registration: {
       id: registrationId,
-      first_name: normalizeOptionalText(registration.first_name),
-      last_name: normalizeOptionalText(registration.last_name),
-      phone: normalizeOptionalText(registration.phone),
-      email: normalizeOptionalText(registration.email),
     },
     ticket: buildTicketArtifactUrls(registrationId),
     event: {
@@ -4083,6 +4273,67 @@ function buildPublicVerifiedRecoveryRequiredPayload() {
     verification_channel: "otp_or_reference" as const,
     message: "This event requires additional verification before a ticket can be released online. Use the contact options below for manual help for now.",
   };
+}
+
+function buildPublicTicketRecoveryEmailSentPayload() {
+  return {
+    status: "recovery_email_sent" as const,
+    recovery_mode: "verified_contact" as const,
+    verification_channel: "email" as const,
+    message: "If the details match an attendee record with an email address, a secure ticket link has been sent. Check your inbox and spam folder.",
+  };
+}
+
+function resolvePublicTicketRecoveryRegistration(
+  rows: RegistrationRow[],
+  options: { phone?: string; email: string; attendeeName?: string },
+) {
+  const normalizedEmail = normalizeComparableText(options.email);
+  if (!normalizedEmail) return undefined;
+
+  let matches = rows.filter((row) =>
+    isActiveLookupRegistration(row)
+    && normalizeComparableText(row.email) === normalizedEmail,
+  );
+  if (options.phone) {
+    matches = matches.filter((row) => phonesRoughlyMatch(row.phone, options.phone));
+  }
+  if (options.attendeeName) {
+    matches = matches.filter((row) => matchesPublicLookupAttendeeName(row, options.attendeeName || ""));
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+async function sendPublicTicketRecoveryEmail(registration: RegistrationRow, settings: Record<string, string>) {
+  const email = normalizeOptionalText(registration.email);
+  const emailConfig = getEmailConfig();
+  const ticketUrl = buildTicketImageUrl(registration.id, "png");
+  if (!email || !emailConfig.ready || !ticketUrl) return false;
+
+  const template = renderTicketRecoveryEmail({
+    eventName: normalizeOptionalText(settings.event_name) || "Event",
+    eventDate: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
+    eventLocation: formatEventLocationCompact(settings, ""),
+    ticketUrl,
+    supportEmail: emailConfig.replyToAddress,
+  });
+
+  try {
+    const delivery = await sendTransactionalEmail({
+      db: appDb,
+      to: email,
+      template,
+      delivery: {
+        registrationId: registration.id,
+        eventId: normalizeOptionalText(registration.event_id) || DEFAULT_EVENT_ID,
+        kind: `ticket_recovery:${Date.now()}:${randomUUID()}`,
+      },
+    });
+    return !delivery.skipped;
+  } catch (error) {
+    console.error(`Failed to send ticket recovery email for registration ${registration.id}:`, error);
+    return false;
+  }
 }
 
 async function findConflictingPublicSlug(slug: string, excludeEventId?: string) {
@@ -4617,6 +4868,18 @@ function serializeChannelAccount(channel: ChannelAccountRow) {
   };
 }
 
+function getRequestOrganizationId(req: AuthenticatedRequest) {
+  return normalizeOptionalText(req.auth?.user.organization_id) || DEFAULT_ORGANIZATION_ID;
+}
+
+function getEventOrganizationId(event?: { organizer_id?: string | null } | null) {
+  return normalizeOptionalText(event?.organizer_id) || DEFAULT_ORGANIZATION_ID;
+}
+
+function channelBelongsToOrganization(channel: ChannelAccountRow, organizationId: string) {
+  return (normalizeOptionalText(channel.organizer_id) || DEFAULT_ORGANIZATION_ID) === organizationId;
+}
+
 type CheckinAccessPayloadSource = {
   id: string;
   label: string;
@@ -4962,7 +5225,7 @@ async function buildWhatsAppImageAttachments(phoneNumberId: string, message: any
   if (!accessToken) return [] as InboundImageReference[];
 
   const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
-  const metaResponse = await fetch(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
+  const metaResponse = await fetchWithTimeout(`https://graph.facebook.com/${apiVersion}/${mediaId}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
@@ -4998,7 +5261,7 @@ async function buildTelegramImageAttachments(botKey: string, update: any) {
   const accessToken = await getTelegramAccessToken(botKey);
   if (!accessToken) return [] as InboundImageReference[];
 
-  const fileResponse = await fetch(`https://api.telegram.org/bot${accessToken}/getFile?file_id=${encodeURIComponent(fileId)}`);
+  const fileResponse = await fetchWithTimeout(`https://api.telegram.org/bot${accessToken}/getFile?file_id=${encodeURIComponent(fileId)}`, undefined, PROVIDER_REQUEST_TIMEOUT_MS);
   const filePayload = await fileResponse.json().catch(() => ({}));
   if (!fileResponse.ok || filePayload?.ok === false) {
     throw new Error(filePayload?.description || "Failed to load Telegram file metadata");
@@ -5091,10 +5354,25 @@ async function resolveManualOutboundTarget(
   throw new Error("Selected log row is not linked to an active channel for this event");
 }
 
-async function sendTextToOutboundTarget(target: ManualOutboundTarget, text: string) {
+type FacebookOutboundSendOptions = {
+  durableFacebook?: boolean;
+  idempotencyKey?: string;
+  kind?: string;
+};
+
+function getFacebookOutboundDeliveryStatus(target: ManualOutboundTarget, payload: unknown) {
+  if (target.platform !== "facebook" || !payload || typeof payload !== "object") return "sent" as const;
+  const row = payload as Partial<NotificationDeliveryRow>;
+  if (row.channel !== "facebook") return "sent" as const;
+  return row.status === "sent" ? "sent" as const : "queued" as const;
+}
+
+async function sendTextToOutboundTarget(target: ManualOutboundTarget, text: string, options?: FacebookOutboundSendOptions) {
   switch (target.platform) {
     case "facebook":
-      return sendFacebookTextMessage(target.senderId, text, target.externalId);
+      return options?.durableFacebook
+        ? enqueueFacebookTextMessage(target.senderId, text, target.externalId, options)
+        : sendFacebookTextMessage(target.senderId, text, target.externalId);
     case "line_oa":
       return sendLinePushTextMessage(target.senderId, text, target.externalId);
     case "instagram":
@@ -5110,10 +5388,12 @@ async function sendTextToOutboundTarget(target: ManualOutboundTarget, text: stri
   }
 }
 
-async function sendImageToOutboundTarget(target: ManualOutboundTarget, imageUrl: string) {
+async function sendImageToOutboundTarget(target: ManualOutboundTarget, imageUrl: string, options?: FacebookOutboundSendOptions) {
   switch (target.platform) {
     case "facebook":
-      return sendFacebookImageMessage(target.senderId, imageUrl, target.externalId);
+      return options?.durableFacebook
+        ? enqueueFacebookImageMessage(target.senderId, imageUrl, target.externalId, options)
+        : sendFacebookImageMessage(target.senderId, imageUrl, target.externalId);
     case "line_oa":
       return sendLinePushImageMessage(target.senderId, imageUrl, target.externalId);
     case "instagram":
@@ -5134,10 +5414,14 @@ async function sendManualOutboundText(target: ManualOutboundTarget, text: string
   if (!trimmed) {
     throw new Error("Manual reply text is required");
   }
-  await sendTextToOutboundTarget(target, trimmed);
+  const payload = await sendTextToOutboundTarget(target, trimmed, {
+    durableFacebook: target.platform === "facebook",
+    kind: "facebook.manual.text",
+  });
   await saveMessage(target.senderId, `[manual-reply] ${trimmed}`, "outgoing", target.eventId, target.externalId);
   return {
     steps: ["text"],
+    delivery_status: getFacebookOutboundDeliveryStatus(target, payload),
   };
 }
 
@@ -5159,8 +5443,17 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
 
   const settings = await getSettingsMap(target.eventId);
   const steps: string[] = [];
+  const manualOperationId = randomUUID();
+  let deliveryStatus: "queued" | "sent" = "sent";
+  const trackDeliveryStatus = (payload: unknown) => {
+    if (getFacebookOutboundDeliveryStatus(target, payload) === "queued") deliveryStatus = "queued";
+  };
   const ticketSummaryText = buildTicketSummaryText(registration, settings);
-  await sendTextToOutboundTarget(target, ticketSummaryText);
+  trackDeliveryStatus(await sendTextToOutboundTarget(target, ticketSummaryText, {
+    durableFacebook: target.platform === "facebook",
+    kind: "facebook.manual.ticket_summary",
+    idempotencyKey: `facebook:manual:${manualOperationId}:ticket-summary`,
+  }));
   await saveMessage(target.senderId, `[manual-ticket-summary] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
   steps.push("summary");
 
@@ -5170,7 +5463,11 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
 
   if (ticketPngUrl) {
     try {
-      await sendImageToOutboundTarget(target, ticketPngUrl);
+      trackDeliveryStatus(await sendImageToOutboundTarget(target, ticketPngUrl, {
+        durableFacebook: target.platform === "facebook",
+        kind: "facebook.manual.ticket_image_png",
+        idempotencyKey: `facebook:manual:${manualOperationId}:ticket-image-png`,
+      }));
       await saveMessage(target.senderId, `[manual-ticket-image-png] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
       steps.push("image");
     } catch (error) {
@@ -5179,14 +5476,22 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
   }
 
   if (!steps.includes("image") && ticketFallbackUrl) {
-    await sendTextToOutboundTarget(target, `ตั๋วของคุณ: ${ticketFallbackUrl}`);
+    trackDeliveryStatus(await sendTextToOutboundTarget(target, `ตั๋วของคุณ: ${ticketFallbackUrl}`, {
+      durableFacebook: target.platform === "facebook",
+      kind: "facebook.manual.ticket_link",
+      idempotencyKey: `facebook:manual:${manualOperationId}:ticket-link`,
+    }));
     await saveMessage(target.senderId, `[manual-ticket-link] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
     steps.push("link");
   }
 
   const mapUrl = resolveEventMapUrlFromSettings(settings);
   if ((steps.includes("image") || steps.includes("link")) && mapUrl) {
-    await sendTextToOutboundTarget(target, `แผนที่สถานที่: ${mapUrl}`);
+    trackDeliveryStatus(await sendTextToOutboundTarget(target, `แผนที่สถานที่: ${mapUrl}`, {
+      durableFacebook: target.platform === "facebook",
+      kind: "facebook.manual.map_link",
+      idempotencyKey: `facebook:manual:${manualOperationId}:map-link`,
+    }));
     await saveMessage(target.senderId, `[manual-map-link] ${mapUrl}`, "outgoing", target.eventId, target.externalId);
     steps.push("map");
   }
@@ -5194,6 +5499,7 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
   return {
     registration_id: normalizedRegistrationId,
     steps,
+    delivery_status: deliveryStatus as "queued" | "sent",
   };
 }
 
@@ -5218,14 +5524,20 @@ async function retryBotReplyForOutboundTarget(target: ManualOutboundTarget) {
     );
 
     const replyText = String(result.text || "").trim();
+    let deliveryStatus: "queued" | "sent" = "sent";
     if (replyText) {
-      await sendTextToOutboundTarget(target, replyText);
+      const payload = await sendTextToOutboundTarget(target, replyText, {
+        durableFacebook: target.platform === "facebook",
+        kind: "facebook.manual.retry",
+      });
+      deliveryStatus = getFacebookOutboundDeliveryStatus(target, payload);
       await saveMessage(target.senderId, replyText, "outgoing", target.eventId, target.externalId);
     }
 
     const uniqueTicketIds = [...new Set(result.ticketRegistrationIds.map((id) => String(id || "").trim().toUpperCase()).filter(Boolean))];
     for (const registrationId of uniqueTicketIds) {
-      await resendTicketArtifactsToOutboundTarget(target, registrationId);
+      const ticketResult = await resendTicketArtifactsToOutboundTarget(target, registrationId);
+      if (ticketResult.delivery_status === "queued") deliveryStatus = "queued";
     }
 
     clearFailedInboundTurn(conversationKey);
@@ -5237,6 +5549,7 @@ async function retryBotReplyForOutboundTarget(target: ManualOutboundTarget) {
       replay_source: retryTurn.source,
       replay_reason: retryTurn.reason,
       ticket_count: uniqueTicketIds.length,
+      delivery_status: deliveryStatus,
     };
   });
 }
@@ -5499,13 +5812,42 @@ async function findRegistrationsForAdminAction(
   rawMessage: string,
   options?: { defaultToRecent?: boolean; limit?: number; offset?: number },
 ) {
-  const rows = await appDb.listRegistrations(undefined, eventId);
   const filters = buildRegistrationLookupFilters(args, rawMessage);
   const limitCandidate = Number.isFinite(options?.limit) ? Number(options?.limit) : filters.limit;
   const limit = Number.isFinite(limitCandidate) && limitCandidate > 0
     ? Math.floor(limitCandidate)
     : 8;
-  const offset = parseNonNegativeInteger(options?.offset, 0, Math.max(rows.length, 0));
+  const offset = parseNonNegativeInteger(options?.offset, 0, 5000);
+  const hasLookupFilter = Boolean(
+    filters.registrationId
+      || filters.senderId
+      || filters.fullName
+      || filters.query
+      || filters.phone
+      || filters.email
+      || filters.status
+      || filters.fromMs !== null
+      || filters.toMs !== null,
+  );
+  if (options?.defaultToRecent && !hasLookupFilter && limit < Number.MAX_SAFE_INTEGER) {
+    const [rows, countRows] = await Promise.all([
+      appDb.listRegistrations(Math.min(limit + offset + 1, 5001), eventId),
+      appDb.getRegistrationCountsByEvent(eventId),
+    ]);
+    const pageRows = rows.slice(offset, offset + limit);
+    const totalMatches = countRows[0]?.total ?? rows.length;
+    return {
+      totalMatches,
+      matches: pageRows,
+      usedFilters: [],
+      limit,
+      offset,
+    };
+  }
+
+  const rows = await appDb.listRegistrations(undefined, eventId);
+  const boundedOffset = Math.min(offset, rows.length);
+  const effectiveOffset = boundedOffset;
   let matches = rows.slice();
   const usedFilters: string[] = [];
 
@@ -5570,7 +5912,7 @@ async function findRegistrationsForAdminAction(
   }
 
   const slicedRows = (source: RegistrationRow[]) => {
-    const start = Math.min(offset, source.length);
+    const start = Math.min(effectiveOffset, source.length);
     const end = Math.min(start + limit, source.length);
     return source.slice(start, end);
   };
@@ -5581,7 +5923,7 @@ async function findRegistrationsForAdminAction(
       matches: slicedRows(rows),
       usedFilters,
       limit,
-      offset,
+      offset: effectiveOffset,
     };
   }
 
@@ -5590,7 +5932,7 @@ async function findRegistrationsForAdminAction(
     matches: slicedRows(matches),
     usedFilters,
     limit,
-    offset,
+    offset: effectiveOffset,
   };
 }
 
@@ -5622,7 +5964,7 @@ async function resolveSingleRegistrationForAdminAction(eventId: string, args: Re
 
   const senderId = normalizeOptionalText(args.sender_id);
   if (senderId) {
-    const rows = await appDb.listRegistrations(undefined, eventId);
+    const rows = await appDb.listRegistrationsBySenderIds([senderId], eventId);
     const latestFromSender = rows.find((row) => String(row.sender_id || "").trim() === senderId);
     if (latestFromSender) {
       return latestFromSender;
@@ -5923,9 +6265,10 @@ function sliceAdminAgentDefaultEventCandidates(candidates: AdminAgentEventCandid
   return result;
 }
 
-async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> | null }): Promise<AdminAgentEventCandidate[]> {
+async function listAdminAgentEventCandidates(options?: { eventIds?: Set<string> | null; organizationId?: string | null }): Promise<AdminAgentEventCandidate[]> {
   const filterEventIds = options?.eventIds && options.eventIds.size > 0 ? options.eventIds : null;
-  const events = (await appDb.listEvents()).filter((event) => (
+  const organizationId = normalizeOptionalText(options?.organizationId);
+  const events = (await appDb.listEvents(organizationId || undefined)).filter((event) => (
     !filterEventIds || filterEventIds.has(String(event.id || "").trim())
   ));
   const candidates = await Promise.all(events.map(async (event) => {
@@ -6078,7 +6421,7 @@ async function searchAdminAgentEvents(
   query: string,
   limit = 5,
   options?: AdminAgentEventSearchOptions,
-  scope?: { eventIds?: Set<string> | null },
+  scope?: { eventIds?: Set<string> | null; organizationId?: string | null },
 ): Promise<AdminAgentEventCandidate[]> {
   const normalizedQuery = normalizeComparableText(query);
   const maxResults = parsePositiveInteger(limit, 5, 20);
@@ -6179,12 +6522,17 @@ function buildAdminAgentFindEventReply(matches: AdminAgentEventCandidate[], quer
   return `${header}\n${lines.join("\n")}`;
 }
 
-async function buildAdminAgentDashboard(selectedEventId?: string | null) {
-  const normalizedSelectedEventId = normalizeOptionalText(selectedEventId) || null;
-  const [events, registrations] = await Promise.all([
-    appDb.listEvents(),
-    appDb.listRegistrations(undefined),
+async function buildAdminAgentDashboard(selectedEventId?: string | null, organizationId?: string | null) {
+  const requestedSelectedEventId = normalizeOptionalText(selectedEventId) || null;
+  const normalizedOrganizationId = normalizeOptionalText(organizationId);
+  const [events, registrationCountRows] = await Promise.all([
+    appDb.listEvents(normalizedOrganizationId || undefined),
+    appDb.getRegistrationCountsByEvent(),
   ]);
+  const visibleEventIds = new Set(events.map((event) => event.id));
+  const normalizedSelectedEventId = requestedSelectedEventId && visibleEventIds.has(requestedSelectedEventId)
+    ? requestedSelectedEventId
+    : null;
 
   const registrationCountsByEvent = new Map<string, {
     total: number;
@@ -6193,24 +6541,23 @@ async function buildAdminAgentDashboard(selectedEventId?: string | null) {
     checkedIn: number;
   }>();
 
-  for (const registration of registrations) {
-    const eventId = normalizeOptionalText(registration.event_id) || DEFAULT_EVENT_ID;
-    const current = registrationCountsByEvent.get(eventId) || {
-      total: 0,
-      registered: 0,
-      cancelled: 0,
-      checkedIn: 0,
-    };
-    current.total += 1;
-    if (registration.status === "cancelled") {
-      current.cancelled += 1;
-    } else if (registration.status === "checked-in") {
-      current.checkedIn += 1;
-    } else {
-      current.registered += 1;
-    }
-    registrationCountsByEvent.set(eventId, current);
+  for (const row of registrationCountRows) {
+    const eventId = normalizeOptionalText(row.event_id) || DEFAULT_EVENT_ID;
+    if (!visibleEventIds.has(eventId)) continue;
+    registrationCountsByEvent.set(eventId, {
+      total: row.total,
+      registered: row.registered,
+      cancelled: row.cancelled,
+      checkedIn: row.checked_in,
+    });
   }
+
+  const registrationTotals = [...registrationCountsByEvent.values()].reduce((totals, counts) => ({
+    total: totals.total + counts.total,
+    registered: totals.registered + counts.registered,
+    cancelled: totals.cancelled + counts.cancelled,
+    checkedIn: totals.checkedIn + counts.checkedIn,
+  }), { total: 0, registered: 0, cancelled: 0, checkedIn: 0 });
 
   const eventRows = events
     .map((event) => {
@@ -6265,10 +6612,10 @@ async function buildAdminAgentDashboard(selectedEventId?: string | null) {
     closed_events: eventRows.filter((event) => event.effective_status === "closed").length,
     cancelled_events: eventRows.filter((event) => event.effective_status === "cancelled").length,
     archived_events: eventRows.filter((event) => event.effective_status === "archived").length,
-    total_registrations: registrations.length,
-    registered_registrations: registrations.filter((registration) => registration.status === "registered").length,
-    cancelled_registrations: registrations.filter((registration) => registration.status === "cancelled").length,
-    checked_in_registrations: registrations.filter((registration) => registration.status === "checked-in").length,
+    total_registrations: registrationTotals.total,
+    registered_registrations: registrationTotals.registered,
+    cancelled_registrations: registrationTotals.cancelled,
+    checked_in_registrations: registrationTotals.checkedIn,
     selected_event_registrations: 0,
     selected_event_registered: 0,
     selected_event_cancelled: 0,
@@ -6293,10 +6640,11 @@ async function buildAdminAgentDashboard(selectedEventId?: string | null) {
   };
 }
 
-async function resolveAdminAgentEventId(eventId: string, options?: { allowedEventId?: string; allowCrossEventSearch?: boolean }) {
+async function resolveAdminAgentEventId(eventId: string, options?: { allowedEventId?: string; allowCrossEventSearch?: boolean; organizationId?: string | null }) {
   const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
   const allowedEventId = normalizeOptionalText(options?.allowedEventId) || "";
   const allowCrossEventSearch = options?.allowCrossEventSearch !== false;
+  const organizationId = normalizeOptionalText(options?.organizationId);
 
   if (allowedEventId && !allowCrossEventSearch && normalizedEventId !== allowedEventId) {
     throw new Error(`Cross-event override is disabled by Agent policy. Current event: ${allowedEventId}`);
@@ -6304,6 +6652,9 @@ async function resolveAdminAgentEventId(eventId: string, options?: { allowedEven
 
   const exactEvent = await appDb.getEventById(normalizedEventId);
   if (exactEvent) {
+    if (organizationId && getEventOrganizationId(exactEvent) !== organizationId) {
+      throw new Error(`Event ${normalizedEventId} was not found`);
+    }
     if (allowedEventId && !allowCrossEventSearch && normalizedEventId !== allowedEventId) {
       throw new Error(`Cross-event override is disabled by Agent policy. Current event: ${allowedEventId}`);
     }
@@ -6311,8 +6662,8 @@ async function resolveAdminAgentEventId(eventId: string, options?: { allowedEven
   }
 
   const searchScope = allowedEventId && !allowCrossEventSearch
-    ? { eventIds: new Set([allowedEventId]) }
-    : undefined;
+    ? { eventIds: new Set([allowedEventId]), organizationId }
+    : organizationId ? { organizationId } : undefined;
   const matches = await searchAdminAgentEvents(normalizedEventId, 5, undefined, searchScope);
   if (matches.length === 1) {
     return matches[0]!.id;
@@ -6824,11 +7175,22 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
     throw new Error(`Event ${eventId} was not found`);
   }
   const state = getEventState(settings);
-  const registrations = await appDb.listRegistrations(undefined, eventId);
-  const total = registrations.length;
-  const active = registrations.filter((row) => row.status !== "cancelled").length;
-  const cancelled = registrations.filter((row) => row.status === "cancelled").length;
-  const checkedIn = registrations.filter((row) => row.status === "checked-in").length;
+  const recentLimit = Math.min(Math.max(0, includeRecentRegistrations), 10);
+  const [registrationCountRows, registrations] = await Promise.all([
+    appDb.getRegistrationCountsByEvent(eventId),
+    appDb.listRegistrations(recentLimit, eventId),
+  ]);
+  const registrationCounts = registrationCountRows[0] || {
+    event_id: eventId,
+    total: 0,
+    registered: 0,
+    cancelled: 0,
+    checked_in: 0,
+  };
+  const total = registrationCounts.total;
+  const active = total - registrationCounts.cancelled;
+  const cancelled = registrationCounts.cancelled;
+  const checkedIn = registrationCounts.checked_in;
   const duplicateNameGuard = isTruthySetting(settings.reg_unique_name ?? "1");
   const registrationLimit = parseRegistrationLimit(settings.reg_limit);
   const registrationStartLabel = formatStoredDateForDisplay(settings.reg_start || "", state.timeZone);
@@ -6842,7 +7204,7 @@ async function buildAdminAgentEventOverview(eventId: string, includeRecentRegist
   const locationSummary = buildEventLocationSummaryFromSettings(settings);
   const locationLabel = formatEventLocationFromSettings(settings);
   const confirmationEmailEnabled = isTruthySetting(settings.confirmation_email_enabled);
-  const recent = registrations.slice(0, Math.min(Math.max(0, includeRecentRegistrations), 10)).map((row) => ({
+  const recent = registrations.map((row) => ({
     id: row.id,
     full_name: formatRegistrationDisplayName(row),
     status: row.status,
@@ -7049,7 +7411,7 @@ async function requestAdminAgentPlan(
     ? `${basePlannerPrompt}\n\nCustom Planner Prompt:\n${customPlannerPrompt}`
     : basePlannerPrompt;
 
-  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const upstream = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: openRouterHeaders(),
     body: JSON.stringify({
@@ -7576,7 +7938,7 @@ async function requestAdminAgentPlan(
       parallel_tool_calls: false,
       ...(webSearchEnabled ? { max_tool_calls: 20 } : {}),
     }),
-  });
+  }, LLM_REQUEST_TIMEOUT_MS);
 
   const payload = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {
@@ -7635,8 +7997,9 @@ async function executeAdminAgentToolCall(
   eventId: string,
   call: AdminAgentToolCall,
   rawMessage: string,
-  options: { policy: AdminAgentPolicy; historyScopeKey?: string | null; actorUserId?: string | null },
+  options: { policy: AdminAgentPolicy; historyScopeKey?: string | null; actorUserId?: string | null; organizationId?: string | null },
 ) {
+  const organizationId = normalizeOptionalText(options.organizationId);
   switch (call.name) {
     case "create_event": {
       const eventName = normalizeOptionalText(call.args.name) || normalizeOptionalText(call.args.event_name);
@@ -7644,7 +8007,7 @@ async function executeAdminAgentToolCall(
         throw new Error("Event name is required to create event");
       }
 
-      const created = await appDb.createEvent({ name: eventName });
+      const created = await appDb.createEvent({ name: eventName, organizer_id: organizationId || undefined });
       const setupPatch = parseAdminAgentEventSetupPatch(call.args);
       if (Object.keys(setupPatch.patch).length > 0) {
         const baseSettings = await getSettingsMap(created.id);
@@ -7675,7 +8038,7 @@ async function executeAdminAgentToolCall(
         throw new Error(`Cross-event setup update is disabled by policy. Current event: ${eventId}`);
       }
       const targetEvent = await appDb.getEventById(targetEventId);
-      if (!targetEvent) {
+      if (!targetEvent || (organizationId && getEventOrganizationId(targetEvent) !== organizationId)) {
         throw new Error(`Event ${targetEventId} was not found`);
       }
 
@@ -7715,6 +8078,10 @@ async function executeAdminAgentToolCall(
       if (!status) {
         throw new Error("Valid event status is required (pending/active/inactive/cancelled/archived)");
       }
+      const targetEvent = await appDb.getEventById(targetEventId);
+      if (!targetEvent || (organizationId && getEventOrganizationId(targetEvent) !== organizationId)) {
+        throw new Error(`Event ${targetEventId} was not found`);
+      }
       const updated = await appDb.updateEvent(targetEventId, { status });
       if (!updated) {
         throw new Error(`Failed to update event status for ${targetEventId}`);
@@ -7741,6 +8108,10 @@ async function executeAdminAgentToolCall(
         throw new Error("Context text is required");
       }
       const mode = normalizeComparableText(call.args.mode) === "append" ? "append" : "replace";
+      const targetEvent = await appDb.getEventById(targetEventId);
+      if (!targetEvent || (organizationId && getEventOrganizationId(targetEvent) !== organizationId)) {
+        throw new Error(`Event ${targetEventId} was not found`);
+      }
       const currentSettings = await getSettingsMap(targetEventId);
       const currentContext = normalizeOptionalText(currentSettings.context);
       const nextContext = mode === "append" && currentContext
@@ -7767,7 +8138,7 @@ async function executeAdminAgentToolCall(
         throw new Error(`Cross-event outreach setup is disabled by policy. Current event: ${eventId}`);
       }
       const targetEvent = await appDb.getEventById(targetEventId);
-      if (!targetEvent) {
+      if (!targetEvent || (organizationId && getEventOrganizationId(targetEvent) !== organizationId)) {
         throw new Error(`Event ${targetEventId} was not found`);
       }
       const normalized = normalizeAdminAgentOutreachDraft(call.args, targetEventId);
@@ -7815,7 +8186,9 @@ async function executeAdminAgentToolCall(
         );
       const limit = parsePositiveInteger(call.args.limit, 5, 20);
       const searchOptions = parseAdminAgentEventSearchOptions(call.args, rawMessage);
-      const searchScope = options.policy.searchAllEvents ? undefined : { eventIds: new Set([eventId]) };
+      const searchScope = options.policy.searchAllEvents
+        ? (organizationId ? { organizationId } : undefined)
+        : { eventIds: new Set([eventId]), organizationId };
       const matches = await searchAdminAgentEvents(query, limit, searchOptions, searchScope);
       return {
         reply: buildAdminAgentFindEventReply(matches, query, limit),
@@ -7849,36 +8222,25 @@ async function executeAdminAgentToolCall(
       if (!shouldSearchEvents && !shouldSearchRegistrations) {
         throw new Error("Search scope is disabled by policy (event-read and registration-read are both off)");
       }
-      const eventRows = shouldSearchEvents ? await appDb.listEvents() : [];
+      const eventRows = (shouldSearchEvents || shouldSearchRegistrations)
+        ? await appDb.listEvents(organizationId || undefined)
+        : [];
       const eventRowMap = new Map(eventRows.map((event) => [event.id, event]));
       const eventNameMap = new Map(eventRows.map((event) => [event.id, event.name]));
 
       const eventMatches = shouldSearchEvents
-        ? (await searchAdminAgentEvents(query, limit, eventSearchOptions)).map((candidate) =>
+        ? (await searchAdminAgentEvents(query, limit, eventSearchOptions, organizationId ? { organizationId } : undefined)).map((candidate) =>
             eventRowMap.get(candidate.id),
           ).filter((row): row is NonNullable<typeof row> => Boolean(row))
         : [];
 
       const registrationMatches = shouldSearchRegistrations
-        ? (await appDb.listRegistrations(undefined))
-            .filter((row) => {
-              if (targetStatus && row.status !== targetStatus) return false;
-              if (!query) return true;
-              const haystack = [
-                row.id,
-                row.event_id || "",
-                eventNameMap.get(String(row.event_id || "")) || "",
-                row.first_name,
-                row.last_name,
-                `${row.first_name || ""} ${row.last_name || ""}`,
-                row.phone,
-                row.email,
-                row.sender_id,
-                row.status,
-              ].map(normalizeComparableText).join("\n");
-              return haystack.includes(query);
-            })
-            .slice(0, limit)
+        ? (await appDb.searchRegistrations({
+            eventIds: eventRows.map((event) => event.id),
+            query,
+            status: targetStatus || undefined,
+            limit,
+          }))
             .map((row) => ({
               id: row.id,
               event_id: row.event_id || DEFAULT_EVENT_ID,
@@ -8092,16 +8454,27 @@ async function executeAdminAgentToolCall(
       };
     }
     case "count_registrations": {
-      const rows = await appDb.listRegistrations(undefined, eventId);
+      const countRows = (await appDb.getRegistrationCountsByEvent(eventId))[0] || {
+        total: 0,
+        registered: 0,
+        checked_in: 0,
+        cancelled: 0,
+      };
       const totals = {
-        total: rows.length,
-        active: rows.filter((row) => row.status !== "cancelled").length,
-        registered: rows.filter((row) => row.status === "registered").length,
-        checked_in: rows.filter((row) => row.status === "checked-in").length,
-        cancelled: rows.filter((row) => row.status === "cancelled").length,
+        total: countRows.total,
+        active: Math.max(countRows.total - countRows.cancelled, 0),
+        registered: countRows.registered,
+        checked_in: countRows.checked_in,
+        cancelled: countRows.cancelled,
       };
       const status = normalizeRegistrationStatusInput(call.args.status);
-      const statusCount = status ? rows.filter((row) => row.status === status).length : null;
+      const statusCount = status
+        ? status === "registered"
+          ? countRows.registered
+          : status === "checked-in"
+            ? countRows.checked_in
+            : countRows.cancelled
+        : null;
       return {
         reply: status
           ? `จำนวนผู้ลงทะเบียนสถานะ ${status}: ${statusCount ?? 0} คน`
@@ -8546,7 +8919,7 @@ async function sendTelegramTextWithBotToken(botToken: string, chatId: string, te
     throw new Error("Admin Agent Telegram bot token is missing");
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  const response = await fetchWithTimeout(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -8578,7 +8951,7 @@ async function sendTelegramPhotoWithBotToken(botToken: string, chatId: string, p
     body.caption = normalizeLineText(safeCaption);
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+  const response = await fetchWithTimeout(`https://api.telegram.org/bot${token}/sendPhoto`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -8611,7 +8984,7 @@ async function sendTelegramDocumentWithBotToken(
     formData.set("caption", normalizeLineText(safeCaption));
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+  const response = await fetchWithTimeout(`https://api.telegram.org/bot${token}/sendDocument`, {
     method: "POST",
     body: formData,
   });
@@ -8776,6 +9149,7 @@ async function runAdminAgentCommand(options: {
   message: string;
   messageParts?: ChatPart[];
   eventId: string;
+  organizationId?: string | null;
   history?: ChatHistoryMessage[];
   settings?: Record<string, any>;
   actorUserId?: string | null;
@@ -8784,6 +9158,7 @@ async function runAdminAgentCommand(options: {
   historyScopeKey?: string | null;
 }) {
   const requestedEventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
+  const organizationId = normalizeOptionalText(options.organizationId);
   const parsedCommand = parseAdminAgentEventOverride(options.message, requestedEventId);
   const rawMessage = normalizeOptionalText(parsedCommand.command);
   const messageParts = Array.isArray(options.messageParts) && options.messageParts.length > 0
@@ -8802,14 +9177,20 @@ async function runAdminAgentCommand(options: {
   }
   const historyScopeKey = normalizeAdminAgentHistoryScopeKey(options.historyScopeKey);
 
+  if (organizationId) {
+    const requestedEvent = await appDb.getEventById(requestedEventId);
+    if (requestedEvent && getEventOrganizationId(requestedEvent) !== organizationId) {
+      throw new Error(`Event ${requestedEventId} was not found`);
+    }
+  }
+
   const providedSettings = options.settings && typeof options.settings === "object"
     ? options.settings as Record<string, any>
     : null;
   const requestedSettings = await getSettingsMap(requestedEventId);
-  const requestedPolicy = parseAdminAgentPolicy({
-    ...requestedSettings,
-    ...(providedSettings || {}),
-  });
+  // Policy is an authorization boundary. Never let a client-provided settings
+  // snapshot elevate the actions available to the Admin Agent.
+  const requestedPolicy = parseAdminAgentPolicy(requestedSettings);
 
   const overrideEventId = normalizeOptionalText(parsedCommand.eventId);
   const hasCrossEventOverride = Boolean(overrideEventId) && overrideEventId !== requestedEventId;
@@ -8822,13 +9203,14 @@ async function runAdminAgentCommand(options: {
   const scopedEventId = await resolveAdminAgentEventId(parsedCommand.eventId || requestedEventId, {
     allowedEventId: requestedEventId,
     allowCrossEventSearch: requestedPolicy.searchAllEvents,
+    organizationId,
   });
   const eventSettings = await getSettingsMap(scopedEventId);
   const settings = {
     ...eventSettings,
     ...(providedSettings || {}),
   };
-  const policy = parseAdminAgentPolicy(settings);
+  const policy = parseAdminAgentPolicy(eventSettings);
   const allowedActions = getAllowedAdminAgentActions(policy);
   if (allowedActions.length === 0) {
     throw new Error("Admin Agent has no allowed actions. Enable at least one action in Advanced Policy.");
@@ -8899,6 +9281,7 @@ async function runAdminAgentCommand(options: {
       executionEventId = await resolveAdminAgentEventId(actionEventId, {
         allowedEventId: scopedEventId,
         allowCrossEventSearch: policy.searchAllEvents,
+        organizationId,
       });
     }
     const action: AdminAgentToolCall = actionUsesEventScope
@@ -8914,6 +9297,7 @@ async function runAdminAgentCommand(options: {
       policy,
       historyScopeKey,
       actorUserId: options.actorUserId,
+      organizationId,
     });
     appendAdminAgentSharedHistory(historyScopeKey, "user", messageParts.length > 0 ? messageParts : message);
     appendAdminAgentSharedHistory(historyScopeKey, "model", `[${action.name}] ${execution.reply}`);
@@ -8973,13 +9357,14 @@ async function runAdminAgentCommand(options: {
   const actionUsesEventScope = !new Set<AdminAgentActionName>(["find_event", "search_system", "create_event"]).has(plan.toolCall.name);
   let executionEventId = scopedEventId;
   if (actionUsesEventScope) {
-    const actionEventId = normalizeOptionalText(plan.toolCall.args.event_id);
-    if (actionEventId) {
-      executionEventId = await resolveAdminAgentEventId(actionEventId, {
-        allowedEventId: scopedEventId,
-        allowCrossEventSearch: policy.searchAllEvents,
-      });
-    }
+      const actionEventId = normalizeOptionalText(plan.toolCall.args.event_id);
+      if (actionEventId) {
+        executionEventId = await resolveAdminAgentEventId(actionEventId, {
+          allowedEventId: scopedEventId,
+          allowCrossEventSearch: policy.searchAllEvents,
+          organizationId,
+        });
+      }
   }
 
   const action: AdminAgentToolCall = actionUsesEventScope
@@ -8996,6 +9381,7 @@ async function runAdminAgentCommand(options: {
     policy,
     historyScopeKey,
     actorUserId: options.actorUserId,
+    organizationId,
   });
   const webSources = Array.isArray(plan.webSources) ? plan.webSources : [];
   const executionReply = action.name === "configure_outreach"
@@ -9071,7 +9457,7 @@ async function fetchLineBotProfile(accessToken: string): Promise<LineBotProfile>
     throw new Error("LINE channel access token is not configured");
   }
 
-  const response = await fetch("https://api.line.me/v2/bot/info", {
+  const response = await fetchWithTimeout("https://api.line.me/v2/bot/info", {
     headers: {
       Authorization: `Bearer ${trimmedToken}`,
     },
@@ -9114,7 +9500,7 @@ function buildWebChatPublicConfig(widgetKey: string, settings: Record<string, st
     widget_key: widgetKey,
     event_name: String(settings.event_name || "Event Assistant").trim() || "Event Assistant",
     welcome_text: String(config.welcome_text || "").trim() || "สวัสดีค่ะ มีอะไรให้ช่วยเกี่ยวกับงานนี้ได้บ้าง",
-    theme_color: String(config.theme_color || "").trim() || "#2563eb",
+    theme_color: resolvePublicThemeColor(config.theme_color),
   };
 }
 
@@ -9130,7 +9516,7 @@ function applyWebChatCorsHeaders(res: Response, origin: string | undefined, conf
 
   res.setHeader("Access-Control-Allow-Origin", requestOrigin);
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Public-Chat-Capability, X-Upload-Filename");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   return true;
 }
@@ -9274,7 +9660,7 @@ async function findPublicOutreachLink(query: string, matcher: (url: URL) => bool
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 7000);
   try {
-    const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { signal: controller.signal, headers: { "User-Agent": "Meetrix Outreach URL resolver" } });
+    const response = await fetchWithTimeout(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { signal: controller.signal, headers: { "User-Agent": "Meetrix Outreach URL resolver" } }, PROVIDER_REQUEST_TIMEOUT_MS);
     const html = response.ok ? await response.text() : "";
     for (const match of html.matchAll(/class="result__a"[^>]*href="([^"]+)"/g)) {
       const candidate = decodeSearchUrl(match[1]);
@@ -9492,12 +9878,40 @@ async function buildKnowledgeContext(
   return buildKnowledgeContextFromMatches(rankedChunks.matches);
 }
 
-function buildTicketImageUrl(registrationId: string, format: "svg" | "png" = "png") {
-  if (!process.env.APP_URL) return null;
-  const url = new URL(process.env.APP_URL);
-  url.pathname = `/api/tickets/${encodeURIComponent(registrationId)}.${format}`;
-  url.search = "";
-  return url.toString();
+function getTicketAccessSecret() {
+  const configured = String(process.env.TICKET_ACCESS_SECRET || "").trim();
+  if (configured) return configured;
+  const compatibleSecret = String(process.env.DIRECT_TICKET_SECRET || "").trim();
+  if (compatibleSecret) return compatibleSecret;
+  return IS_PRODUCTION ? "" : "facebotstudio-ticket-development-only";
+}
+
+function buildTicketImageUrl(
+  registrationId: string,
+  format: TicketImageFormat = "png",
+  allowRelative = false,
+) {
+  const token = createTicketAccessToken(getTicketAccessSecret(), registrationId, format);
+  if (!token) return null;
+
+  const pathname = `/api/tickets/${encodeURIComponent(registrationId)}.${format}`;
+  const query = `?token=${encodeURIComponent(token)}`;
+  if (!process.env.APP_URL) return allowRelative ? `${pathname}${query}` : null;
+
+  try {
+    const url = new URL(process.env.APP_URL);
+    url.pathname = pathname;
+    url.search = query;
+    return url.toString();
+  } catch {
+    return allowRelative ? `${pathname}${query}` : null;
+  }
+}
+
+function hasTicketImageAccess(req: Request, registrationId: string, format: TicketImageFormat) {
+  const authenticatedRequest = req as AuthenticatedRequest;
+  if (authenticatedRequest.auth?.user) return true;
+  return verifyTicketAccessToken(getTicketAccessSecret(), registrationId, format, req.query.token);
 }
 
 let cachedTicketFontPaths: string[] | null = null;
@@ -9624,9 +10038,10 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
 function getDirectTicketTokenSecret() {
   const configured = String(process.env.DIRECT_TICKET_SECRET || "").trim();
   if (configured) return configured;
+  if (IS_PRODUCTION) return "";
   const stableIdentity = [process.env.APP_URL, process.env.PUBLIC_APP_URL, process.env.DATABASE_URL, process.env.RAILWAY_PROJECT_ID, process.env.RAILWAY_ENVIRONMENT_ID].map((value) => String(value || "").trim()).filter(Boolean).join("|");
   if (stableIdentity) return createHash("sha256").update(`facebotstudio-direct-ticket:${stableIdentity}`).digest("hex");
-  return IS_PRODUCTION ? "" : "facebotstudio-direct-ticket-development-only";
+  return "facebotstudio-direct-ticket-development-only";
 }
 
 function buildDirectTicketToken(scope: "view" | "checkin", ticketId: string) {
@@ -10743,7 +11158,7 @@ async function generateOutreachDraftText(
     additionalInstruction.trim() ? `Human instruction for this draft:\n${additionalInstruction.trim()}` : "",
   ].filter(Boolean).join("\n\n");
 
-  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const upstream = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: openRouterHeaders(),
     body: JSON.stringify({
@@ -10754,7 +11169,7 @@ async function generateOutreachDraftText(
         { role: "user", content: userPrompt },
       ],
     }),
-  });
+  }, LLM_REQUEST_TIMEOUT_MS);
   const payload = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {
     throw new Error(payload?.error?.message || "Outreach draft generation failed");
@@ -10819,7 +11234,7 @@ async function requestOpenRouterChat(
     ? buildOpenRouterMessageContent(currentUserParts)
     : message;
 
-  const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const upstream = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: openRouterHeaders(),
     body: JSON.stringify({
@@ -10942,7 +11357,7 @@ async function requestOpenRouterChat(
       tool_choice: "auto",
       parallel_tool_calls: false,
     }),
-  });
+  }, LLM_REQUEST_TIMEOUT_MS);
 
   const payload = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {
@@ -11227,17 +11642,184 @@ async function generateBotReplyForSender(
   };
 }
 
+class FacebookGraphDeliveryError extends Error {
+  readonly retryable: boolean;
+
+  constructor(message: string, retryable: boolean) {
+    super(message);
+    this.name = "FacebookGraphDeliveryError";
+    this.retryable = retryable;
+  }
+}
+
+function isRetryableFacebookGraphError(status: number, payload: unknown) {
+  if (status === 408 || status === 409 || status === 425 || status === 429 || status >= 500) return true;
+  const errorCode = payload && typeof payload === "object"
+    ? Number((payload as Record<string, any>).error?.code)
+    : NaN;
+  return [4, 17, 32, 613].includes(errorCode);
+}
+
+type FacebookNotificationPayload = {
+  type: "text" | "image";
+  pageId?: string;
+  recipientId: string;
+  text?: string;
+  imageUrl?: string;
+};
+
+function parseFacebookNotificationPayload(delivery: NotificationDeliveryRow): FacebookNotificationPayload {
+  if (delivery.channel !== "facebook") {
+    throw new NotificationDeliveryError(`Unsupported notification channel: ${delivery.channel}`, false);
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(delivery.payload_json);
+  } catch {
+    throw new NotificationDeliveryError("Facebook notification payload is not valid JSON", false);
+  }
+
+  const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const type = record.type === "image" || record.type === "text" ? record.type : "";
+  const recipientId = normalizeOptionalText(record.recipient_id) || normalizeOptionalText(delivery.recipient);
+  const pageId = normalizeOptionalText(record.page_id);
+  if (!type || !recipientId) {
+    throw new NotificationDeliveryError("Facebook notification payload is incomplete", false);
+  }
+
+  if (type === "text") {
+    const text = normalizeOptionalText(record.text);
+    if (!text) throw new NotificationDeliveryError("Facebook text notification payload is incomplete", false);
+    return { type, pageId: pageId || undefined, recipientId, text };
+  }
+
+  const imageUrl = normalizeOptionalText(record.image_url);
+  try {
+    const parsedUrl = new URL(imageUrl);
+    if (!imageUrl || !["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("invalid protocol");
+  } catch {
+    throw new NotificationDeliveryError("Facebook image notification URL is invalid", false);
+  }
+  return { type, pageId: pageId || undefined, recipientId, imageUrl };
+}
+
+async function sendFacebookNotificationDelivery(delivery: NotificationDeliveryRow): Promise<NotificationSendResult> {
+  const payload = parseFacebookNotificationPayload(delivery);
+  try {
+    const result = payload.type === "image"
+      ? await sendFacebookImageMessage(payload.recipientId, payload.imageUrl || "", payload.pageId)
+      : await sendFacebookTextMessage(payload.recipientId, payload.text || "", payload.pageId);
+    return {
+      provider: "facebook_graph",
+      providerMessageId: extractOutboundMessageId(result),
+    };
+  } catch (error) {
+    if (error instanceof FacebookGraphDeliveryError) {
+      throw new NotificationDeliveryError(error.message, error.retryable);
+    }
+    throw error;
+  }
+}
+
+async function sendCurrentNotificationDelivery(delivery: NotificationDeliveryRow): Promise<NotificationSendResult> {
+  if (delivery.channel === "facebook") return sendFacebookNotificationDelivery(delivery);
+  return sendWithCurrentNotificationSender(delivery);
+}
+
+function buildFacebookOutboundIdempotencyKey(eventKey: string | undefined, kind: string, suffix = "") {
+  const normalizedEventKey = normalizeOptionalText(eventKey);
+  if (!normalizedEventKey) return undefined;
+  return `facebook:${createHash("sha256").update(`${normalizedEventKey}|${kind}|${suffix}`).digest("hex")}`;
+}
+
+async function enqueueFacebookNotification(
+  payload: { type: "text" | "image"; recipientId: string; pageId?: string; text?: string; imageUrl?: string },
+  options: { kind: string; idempotencyKey?: string },
+) {
+  const recipientId = normalizeOptionalText(payload.recipientId);
+  const pageId = normalizeOptionalText(payload.pageId);
+  if (!recipientId) throw new Error("Facebook recipient ID is required");
+  if (!(await getFacebookAccessToken(pageId || undefined))) {
+    throw new FacebookGraphDeliveryError("PAGE_ACCESS_TOKEN is not configured", false);
+  }
+
+  const idempotencyKey = normalizeOptionalText(options.idempotencyKey) || `facebook:${randomUUID()}`;
+  const relatedType = "facebook_outbound";
+  const queued = await appDb.enqueueNotificationDelivery({
+    channel: "facebook",
+    kind: options.kind,
+    recipient: recipientId,
+    recipient_snapshot: JSON.stringify({ page_id: pageId || null, recipient_id: recipientId }),
+    related_type: relatedType,
+    related_id: idempotencyKey,
+    payload_json: JSON.stringify({
+      type: payload.type,
+      page_id: pageId || null,
+      recipient_id: recipientId,
+      ...(payload.type === "text" ? { text: normalizeOptionalText(payload.text) } : { image_url: normalizeOptionalText(payload.imageUrl) }),
+    }),
+    idempotency_key: idempotencyKey,
+    provider: "facebook_graph",
+  });
+  if (queued) return queued;
+
+  const existing = (await appDb.listNotificationDeliveries({
+    related_type: relatedType,
+    related_id: idempotencyKey,
+    limit: 1,
+  }))[0];
+  if (existing?.status === "failed") {
+    throw new Error(existing.last_error || "Facebook notification previously failed");
+  }
+  if (existing) return existing;
+  throw new Error("Facebook notification could not be queued");
+}
+
+async function enqueueFacebookTextMessage(
+  recipientId: string,
+  text: string,
+  pageId?: string,
+  options?: { idempotencyKey?: string; kind?: string },
+) {
+  const normalizedText = normalizeOptionalText(text);
+  if (!normalizedText) throw new Error("Facebook message text is required");
+  return enqueueFacebookNotification(
+    { type: "text", recipientId, pageId, text: normalizedText },
+    { kind: options?.kind || "facebook.message.text", idempotencyKey: options?.idempotencyKey },
+  );
+}
+
+async function enqueueFacebookImageMessage(
+  recipientId: string,
+  imageUrl: string,
+  pageId?: string,
+  options?: { idempotencyKey?: string; kind?: string },
+) {
+  const normalizedImageUrl = normalizeOptionalText(imageUrl);
+  try {
+    const parsedUrl = new URL(normalizedImageUrl);
+    if (!normalizedImageUrl || !["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("invalid protocol");
+  } catch {
+    throw new Error("Facebook image URL is invalid");
+  }
+  return enqueueFacebookNotification(
+    { type: "image", recipientId, pageId, imageUrl: normalizedImageUrl },
+    { kind: options?.kind || "facebook.message.image", idempotencyKey: options?.idempotencyKey },
+  );
+}
+
 async function sendFacebookTextMessage(recipientId: string, text: string, pageId?: string) {
   const pageAccessToken = await getFacebookAccessToken(pageId);
   if (!pageAccessToken) {
-    throw new Error("PAGE_ACCESS_TOKEN is not configured");
+    throw new FacebookGraphDeliveryError("PAGE_ACCESS_TOKEN is not configured", false);
   }
 
   const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
   const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
   url.searchParams.set("access_token", pageAccessToken);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -11249,7 +11831,10 @@ async function sendFacebookTextMessage(recipientId: string, text: string, pageId
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.error?.message || "Failed to send message to Facebook");
+    throw new FacebookGraphDeliveryError(
+      payload?.error?.message || "Failed to send message to Facebook",
+      isRetryableFacebookGraphError(response.status, payload),
+    );
   }
 
   return payload;
@@ -11258,14 +11843,14 @@ async function sendFacebookTextMessage(recipientId: string, text: string, pageId
 async function sendFacebookImageMessage(recipientId: string, imageUrl: string, pageId?: string) {
   const pageAccessToken = await getFacebookAccessToken(pageId);
   if (!pageAccessToken) {
-    throw new Error("PAGE_ACCESS_TOKEN is not configured");
+    throw new FacebookGraphDeliveryError("PAGE_ACCESS_TOKEN is not configured", false);
   }
 
   const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
   const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
   url.searchParams.set("access_token", pageAccessToken);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -11285,7 +11870,10 @@ async function sendFacebookImageMessage(recipientId: string, imageUrl: string, p
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.error?.message || "Failed to send image to Facebook");
+    throw new FacebookGraphDeliveryError(
+      payload?.error?.message || "Failed to send image to Facebook",
+      isRetryableFacebookGraphError(response.status, payload),
+    );
   }
 
   return payload;
@@ -11303,7 +11891,7 @@ async function sendLineReplyTextMessage(replyToken: string, text: string, destin
     throw new Error("LINE channel access token is not configured");
   }
 
-  const response = await fetch("https://api.line.me/v2/bot/message/reply", {
+  const response = await fetchWithTimeout("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -11333,7 +11921,7 @@ async function sendLinePushTextMessage(recipientId: string, text: string, destin
     throw new Error("LINE channel access token is not configured");
   }
 
-  const response = await fetch("https://api.line.me/v2/bot/message/push", {
+  const response = await fetchWithTimeout("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -11363,7 +11951,7 @@ async function sendLinePushImageMessage(recipientId: string, imageUrl: string, d
     throw new Error("LINE channel access token is not configured");
   }
 
-  const response = await fetch("https://api.line.me/v2/bot/message/push", {
+  const response = await fetchWithTimeout("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -11398,7 +11986,7 @@ async function sendInstagramTextMessage(recipientId: string, text: string, accou
   const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
   url.searchParams.set("access_token", accessToken);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -11427,7 +12015,7 @@ async function sendInstagramImageMessage(recipientId: string, imageUrl: string, 
   const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
   url.searchParams.set("access_token", accessToken);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -11466,7 +12054,7 @@ async function sendWhatsAppTextMessage(recipientId: string, text: string, phoneN
   const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
   const url = new URL(`https://graph.facebook.com/${apiVersion}/${targetPhoneNumberId}/messages`);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -11504,7 +12092,7 @@ async function sendWhatsAppImageMessage(recipientId: string, imageUrl: string, p
   const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
   const url = new URL(`https://graph.facebook.com/${apiVersion}/${targetPhoneNumberId}/messages`);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -11534,7 +12122,7 @@ async function sendTelegramTextMessage(chatId: string, text: string, botKey?: st
     throw new Error("Telegram bot token is not configured");
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${accessToken}/sendMessage`, {
+  const response = await fetchWithTimeout(`https://api.telegram.org/bot${accessToken}/sendMessage`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -11559,7 +12147,7 @@ async function sendTelegramImageMessage(chatId: string, imageUrl: string, botKey
     throw new Error("Telegram bot token is not configured");
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${accessToken}/sendPhoto`, {
+  const response = await fetchWithTimeout(`https://api.telegram.org/bot${accessToken}/sendPhoto`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -11650,6 +12238,8 @@ async function handleIncomingFacebookText(
   text: string,
   pageId?: string,
   attachments: CreateMessageAttachmentInput[] = [],
+  messageMid?: string,
+  dedupKey?: string,
 ) {
   const trimmed = String(text || "").trim();
   if (!trimmed && attachments.length === 0) return;
@@ -11680,12 +12270,18 @@ async function handleIncomingFacebookText(
     return;
   }
 
+  const outboundIdempotencyKey = (kind: string, suffix = "") =>
+    buildFacebookOutboundIdempotencyKey(messageMid || dedupKey, kind, suffix);
+
   const selection = await resolveFacebookEventForSender(routing, senderId, trimmed);
   if (selection.responseText) {
     if (selection.eventId && selection.selectionCompleted) {
       await saveMessage(senderId, trimmed, "incoming", selection.eventId, pageId, attachments);
     }
-    await sendFacebookTextMessage(senderId, selection.responseText, pageId);
+    await enqueueFacebookTextMessage(senderId, selection.responseText, pageId, {
+      kind: "facebook.inbound.selection",
+      idempotencyKey: outboundIdempotencyKey("selection"),
+    });
     if (selection.eventId && selection.selectionCompleted) {
       await saveMessage(senderId, selection.responseText, "outgoing", selection.eventId, pageId);
     }
@@ -11729,7 +12325,10 @@ async function handleIncomingFacebookText(
     }
 
     if (replyText) {
-      await sendFacebookTextMessage(senderId, replyText, pageId);
+      await enqueueFacebookTextMessage(senderId, replyText, pageId, {
+        kind: "facebook.inbound.reply",
+        idempotencyKey: outboundIdempotencyKey("reply"),
+      });
       await saveMessage(senderId, replyText, "outgoing", eventId, pageId);
     }
     markPendingConversationHandled(preparedTurn.conversationKey, preparedTurn.highestPendingMessageId);
@@ -11742,7 +12341,10 @@ async function handleIncomingFacebookText(
       if (reg && settings) {
         const ticketSummaryText = buildTicketSummaryText(reg, settings);
         try {
-          await sendFacebookTextMessage(senderId, ticketSummaryText, pageId);
+          await enqueueFacebookTextMessage(senderId, ticketSummaryText, pageId, {
+            kind: "facebook.inbound.ticket_summary",
+            idempotencyKey: outboundIdempotencyKey("ticket-summary", registrationId),
+          });
           await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, pageId);
         } catch (error) {
           console.error("Failed to send ticket summary text:", error);
@@ -11758,14 +12360,20 @@ async function handleIncomingFacebookText(
 
       try {
         if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
-        await sendFacebookImageMessage(senderId, ticketPngUrl, pageId);
+        await enqueueFacebookImageMessage(senderId, ticketPngUrl, pageId, {
+          kind: "facebook.inbound.ticket_image_png",
+          idempotencyKey: outboundIdempotencyKey("ticket-image-png", registrationId),
+        });
         await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, pageId);
         sentTicketArtifact = true;
       } catch (error) {
         console.error("Failed to send PNG ticket image:", error);
         try {
           if (!ticketSvgUrl) throw new Error("SVG ticket URL is not available");
-          await sendFacebookImageMessage(senderId, ticketSvgUrl, pageId);
+          await enqueueFacebookImageMessage(senderId, ticketSvgUrl, pageId, {
+            kind: "facebook.inbound.ticket_image_svg",
+            idempotencyKey: outboundIdempotencyKey("ticket-image-svg", registrationId),
+          });
           await saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing", eventId, pageId);
           sentTicketArtifact = true;
         } catch (svgError) {
@@ -11773,7 +12381,10 @@ async function handleIncomingFacebookText(
           try {
             const textUrl = ticketPngUrl || ticketSvgUrl;
             if (!textUrl) throw new Error("No ticket URL available");
-            await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, pageId);
+            await enqueueFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, pageId, {
+              kind: "facebook.inbound.ticket_link",
+              idempotencyKey: outboundIdempotencyKey("ticket-link", registrationId),
+            });
             await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, pageId);
             sentTicketArtifact = true;
           } catch (fallbackError) {
@@ -11787,7 +12398,10 @@ async function handleIncomingFacebookText(
       const mapUrl = resolveEventMapUrlFromSettings(settings || {});
       if (mapUrl) {
         try {
-          await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId);
+          await enqueueFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId, {
+            kind: "facebook.inbound.map_link",
+            idempotencyKey: outboundIdempotencyKey("map-link"),
+          });
           await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, pageId);
         } catch (error) {
           console.error("Failed to send map link:", error);
@@ -12395,7 +13009,14 @@ async function normalizeTelegramInboundJob(update: any, botKey: string) {
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
-  await handleIncomingFacebookText(job.senderId, job.text, job.pageId || undefined, job.attachments || []);
+  await handleIncomingFacebookText(
+    job.senderId,
+    job.text,
+    job.pageId || undefined,
+    job.attachments || [],
+    job.messageMid || undefined,
+    job.dedupKey,
+  );
 }
 
 async function processInstagramInboundJob(job: InstagramInboundJob) {
@@ -12514,7 +13135,7 @@ async function processEmbeddingJob(job: EmbeddingJob) {
   }
 
   try {
-    const response = await fetch(hookUrl, {
+    const response = await fetchWithTimeout(hookUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -12531,16 +13152,56 @@ async function processEmbeddingJob(job: EmbeddingJob) {
 }
 
 async function startServer() {
+  type ShutdownHandle = { close: () => Promise<void> };
+  const shutdownHandles: ShutdownHandle[] = [];
+  let notificationTimer: ReturnType<typeof setInterval> | null = null;
+  let httpServer: HttpServer | null = null;
+  let shuttingDown = false;
+  const registerShutdownHandle = (value: unknown) => {
+    if (!value || typeof (value as { close?: unknown }).close !== "function") return;
+    shutdownHandles.push(value as ShutdownHandle);
+  };
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Shutdown requested by ${signal}`);
+    const forceExitTimer = setTimeout(() => {
+      console.error(`Graceful shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms; forcing process exit`);
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExitTimer.unref?.();
+
+    if (httpServer) {
+      await new Promise<void>((resolve) => {
+        httpServer?.close(() => resolve());
+      });
+    }
+    if (notificationTimer) {
+      clearInterval(notificationTimer);
+      notificationTimer = null;
+    }
+    await Promise.allSettled(shutdownHandles.map((handle) => handle.close()));
+    await closeRedis();
+    await appDb.close();
+    clearTimeout(forceExitTimer);
+    process.exit(0);
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+
   await appDb.initialize();
 
   if (RUN_EMBEDDED_WORKER) {
-    await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true });
-    await startEmbeddedInstagramWorker(processInstagramInboundJob, { enabled: true });
-    await startEmbeddedLineWorker(processLineInboundJob, { enabled: true });
-    await startEmbeddedWhatsAppWorker(processWhatsAppInboundJob, { enabled: true });
-    await startEmbeddedTelegramWorker(processTelegramInboundJob, { enabled: true });
-    await startEmbeddedEmbeddingWorker(processEmbeddingJob, { enabled: true });
-    startEmbeddedNotificationWorker(appDb, { enabled: true });
+    registerShutdownHandle(await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true }));
+    registerShutdownHandle(await startEmbeddedInstagramWorker(processInstagramInboundJob, { enabled: true }));
+    registerShutdownHandle(await startEmbeddedLineWorker(processLineInboundJob, { enabled: true }));
+    registerShutdownHandle(await startEmbeddedWhatsAppWorker(processWhatsAppInboundJob, { enabled: true }));
+    registerShutdownHandle(await startEmbeddedTelegramWorker(processTelegramInboundJob, { enabled: true }));
+    registerShutdownHandle(await startEmbeddedEmbeddingWorker(processEmbeddingJob, { enabled: true }));
+    notificationTimer = startEmbeddedNotificationWorker(appDb, {
+      enabled: true,
+      sender: sendCurrentNotificationDelivery,
+    });
   }
 
   if (!RUN_WEB_SERVER) {
@@ -12602,7 +13263,12 @@ async function startServer() {
     return next(error);
   });
   mkdirSync(PUBLIC_POSTER_UPLOAD_DIR, { recursive: true });
-  app.use("/uploads", express.static(PUBLIC_UPLOADS_ROOT_DIR));
+  app.use("/uploads/event-posters", express.static(PUBLIC_POSTER_UPLOAD_DIR));
+  app.use("/uploads/event-public-assets", express.static(PUBLIC_EVENT_MEDIA_UPLOAD_DIR));
+  // These folders may live under public/ in local development, but their files
+  // must only be served through /api/private-media with staff or signed access.
+  app.use("/uploads/channel-images", (_req, res) => res.status(404).send("Media not found"));
+  app.use("/uploads/admin-agent-images", (_req, res) => res.status(404).send("Media not found"));
   app.use(express.static(path.join(__dirname, "public")));
   app.use(attachSession);
   app.use(attachCustomerSession);
@@ -12774,6 +13440,60 @@ async function startServer() {
     keyFn: (req) => getRequestIp(req) || "unknown",
     errorMessage: "Too many web chat requests. Please retry later.",
   });
+  const publicRegistrationRateLimit = createRateLimitMiddleware({
+    name: PUBLIC_REGISTRATION_RATE_LIMIT_NAME,
+    windowMs: 10 * 60 * 1000,
+    max: 20,
+    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown", req.params.slug || "unknown"),
+    errorMessage: "Too many registration attempts. Please wait and try again.",
+  });
+  const publicTicketRecoveryRateLimit = createRateLimitMiddleware({
+    name: PUBLIC_TICKET_RECOVERY_RATE_LIMIT_NAME,
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    keyFn: (req) => {
+      const body = readObjectBody(req);
+      const contact = `${String(body.phone || "").trim()}|${String(body.email || "").trim()}`;
+      return buildRateLimitKey(
+        getRequestIp(req) || "unknown",
+        req.params.slug || "unknown",
+        getRateLimitTokenHash(contact),
+      );
+    },
+    errorMessage: "Too many ticket recovery attempts. Please wait and try again.",
+  });
+  const publicTicketRenderRateLimit = createRateLimitMiddleware({
+    name: PUBLIC_TICKET_RENDER_RATE_LIMIT_NAME,
+    windowMs: 60 * 1000,
+    max: 30,
+    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown"),
+    errorMessage: "Too many ticket image requests. Please retry shortly.",
+  });
+  const publicChatSessionRateLimit = createRateLimitMiddleware({
+    name: PUBLIC_CHAT_SESSION_RATE_LIMIT_NAME,
+    windowMs: 60 * 1000,
+    max: 20,
+    keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown", req.params.slug || "unknown"),
+    errorMessage: "Too many chat session requests. Please retry shortly.",
+  });
+  const publicChatHistoryRateLimit = createRateLimitMiddleware({
+    name: PUBLIC_CHAT_HISTORY_RATE_LIMIT_NAME,
+    windowMs: 60 * 1000,
+    max: 30,
+    keyFn: (req) => buildRateLimitKey(
+      getRequestIp(req) || "unknown",
+      req.params.slug || "unknown",
+      getRateLimitTokenHash(req.headers["cookie"]),
+    ),
+    errorMessage: "Too many chat history requests. Please retry shortly.",
+  });
+  const privateMediaRateLimit = createRateLimitMiddleware({
+    name: "private-media",
+    windowMs: 60 * 1000,
+    max: 120,
+    keyFn: (req) => getRequestIp(req) || "unknown",
+    errorMessage: "Too many media requests. Please retry shortly.",
+  });
 
   // API Routes
   app.get("/api/health", async (_req, res) => {
@@ -12785,6 +13505,7 @@ async function startServer() {
         time: new Date().toISOString(),
         database: appDb.driver,
         runtime: APP_RUNTIME || "all",
+        notification_worker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
         queue: canUseFacebookWebhookQueue() ? "redis" : "inline",
         instagram_queue: canUseInstagramWebhookQueue() ? "redis" : "inline",
         line_queue: canUseLineWebhookQueue() ? "redis" : "inline",
@@ -12797,6 +13518,61 @@ async function startServer() {
       console.error("Health check failed:", error);
       res.status(500).json({ status: "error", time: new Date().toISOString(), database: appDb.driver, runtime: APP_RUNTIME || "all" });
     }
+  });
+
+  app.get("/api/ready", async (_req, res) => {
+    const rateLimitFallbackMode = resolveRateLimitFallbackMode();
+    try {
+      await appDb.ping();
+      const redis = await pingRedis();
+      const rateLimitReady = redis.healthy || rateLimitFallbackMode === "memory_single_instance";
+      const productionStorageReady = !IS_PRODUCTION
+        || (appDb.driver === "postgres" && (redis.healthy || rateLimitFallbackMode === "memory_single_instance"));
+      const payload = {
+        status: rateLimitReady && productionStorageReady ? "ready" : "not_ready",
+        time: new Date().toISOString(),
+        database: appDb.driver,
+        redis: redis.configured ? (redis.healthy ? "ok" : "error") : "disabled",
+        notification_worker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
+        rate_limit_fallback: rateLimitFallbackMode,
+      };
+      return res.status(rateLimitReady && productionStorageReady ? 200 : 503).json(payload);
+    } catch (error) {
+      console.error("Readiness check failed:", error);
+      return res.status(503).json({
+        status: "not_ready",
+        time: new Date().toISOString(),
+        database: appDb.driver,
+        rate_limit_fallback: rateLimitFallbackMode,
+      });
+    }
+  });
+
+  app.get("/api/private-media/:scope/:fileName", privateMediaRateLimit, async (req: AuthenticatedRequest, res) => {
+    const scope = String(req.params.scope || "").trim() as PrivateMediaScope;
+    const fileName = path.basename(String(req.params.fileName || "").trim());
+    if (scope !== "channel" && scope !== "admin-agent") {
+      return res.status(404).send("Media not found");
+    }
+
+    const authenticated = Boolean(req.auth?.user);
+    if (!authenticated && !verifyPrivateMediaToken(getPrivateMediaAccessSecret(), scope, fileName, req.query.token)) {
+      return res.status(404).send("Media not found");
+    }
+
+    const root = scope === "channel" ? CHANNEL_IMAGE_UPLOAD_DIR : ADMIN_AGENT_IMAGE_UPLOAD_DIR;
+    const filePath = path.join(root, fileName);
+    if (!existsSync(filePath)) {
+      return res.status(404).send("Media not found");
+    }
+
+    const contentType = resolveChatImageMimeType({ url: fileName, name: fileName });
+    if (!contentType) {
+      return res.status(404).send("Media not found");
+    }
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(readFileSync(filePath));
   });
 
   app.post("/api/customer/account/register", customerAccountIpRateLimit, customerAccountEmailRateLimit, async (req: AuthenticatedRequest, res) => {
@@ -14064,20 +14840,23 @@ async function startServer() {
     },
   );
 
-  app.get("/api/facebook-pages", requireAuth, async (_req, res) => {
+  app.get("/api/facebook-pages", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const pages = await appDb.listFacebookPages();
+      const organizationId = getRequestOrganizationId(req);
+      const pages = (await appDb.listChannelAccounts("facebook"))
+        .filter((channel) => channelBelongsToOrganization(channel, organizationId))
+        .map((channel) => ({
+          id: channel.id,
+          page_id: channel.external_id,
+          page_name: channel.display_name,
+          event_id: channel.event_id,
+          is_active: channel.is_active,
+          has_page_access_token: Boolean(channel.access_token),
+          created_at: channel.created_at,
+          updated_at: channel.updated_at,
+        }));
       return res.json(
-        pages.map((page) => ({
-          id: page.id,
-          page_id: page.page_id,
-          page_name: page.page_name,
-          event_id: page.event_id,
-          is_active: page.is_active,
-          has_page_access_token: Boolean(page.page_access_token),
-          created_at: page.created_at,
-          updated_at: page.updated_at,
-        })),
+        pages,
       );
     } catch (error) {
       console.error("Failed to fetch Facebook pages:", error);
@@ -14085,11 +14864,16 @@ async function startServer() {
     }
   });
 
-  app.get("/api/facebook-pages/:pageId/routing", requireAuth, async (req, res) => {
+  app.get("/api/facebook-pages/:pageId/routing", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const pageId = String(req.params.pageId || "").trim();
       if (!pageId) {
         return res.status(400).json({ error: "pageId is required" });
+      }
+
+      const channel = await appDb.getChannelAccount("facebook", pageId);
+      if (!channel || !channelBelongsToOrganization(channel, getRequestOrganizationId(req))) {
+        return res.status(404).json({ error: "Facebook page not found" });
       }
 
       const routing = await resolveFacebookInboundRouting(pageId);
@@ -14109,19 +14893,23 @@ async function startServer() {
     }
   });
 
-  app.get("/api/channels", requireAuth, async (req, res) => {
+  app.get("/api/channels", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const platform = typeof req.query.platform === "string" ? req.query.platform.trim() as ChannelPlatform : undefined;
+      if (platform && !ALLOWED_CHANNEL_PLATFORMS.includes(platform)) {
+        return res.status(400).json({ error: "Invalid channel platform" });
+      }
       const eventId = typeof req.query.event_id === "string" ? req.query.event_id.trim() : "";
       const event = eventId ? await appDb.getEventById(eventId) : undefined;
       if (eventId && !event) {
         return res.status(404).json({ error: "Event not found" });
       }
+      const organizationId = getRequestOrganizationId(req);
+      if (event && getEventOrganizationId(event) !== organizationId) {
+        return res.status(404).json({ error: "Event not found" });
+      }
       const channels = await appDb.listChannelAccounts(platform);
-      const organizerId = normalizeOptionalText(event?.organizer_id);
-      const visibleChannels = organizerId
-        ? channels.filter((channel) => (normalizeOptionalText(channel.organizer_id) || DEFAULT_ORGANIZATION_ID) === organizerId)
-        : channels;
+      const visibleChannels = channels.filter((channel) => channelBelongsToOrganization(channel, organizationId));
       return res.json(visibleChannels.map(serializeChannelAccount));
     } catch (error) {
       console.error("Failed to fetch channels:", error);
@@ -14249,6 +15037,10 @@ async function startServer() {
       if (originalPlatform && !originalChannel) {
         return res.status(404).json({ error: "Original channel not found" });
       }
+      const requestOrganizationId = getRequestOrganizationId(req);
+      if (originalChannel && !channelBelongsToOrganization(originalChannel, requestOrganizationId)) {
+        return res.status(404).json({ error: "Original channel not found" });
+      }
 
       const initialCredentialSource =
         originalChannel && originalChannel.platform === platform
@@ -14282,6 +15074,9 @@ async function startServer() {
       const existingChannel = isSameIdentityAsOriginal
         ? originalChannel
         : await appDb.getChannelAccount(platform, resolvedExternalId);
+      if (existingChannel && !channelBelongsToOrganization(existingChannel, requestOrganizationId)) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
       if (existingChannel && originalChannel && existingChannel.id !== originalChannel.id) {
         return res.status(409).json({ error: "A channel with this platform and external ID already exists" });
       }
@@ -14308,11 +15103,14 @@ async function startServer() {
       if (targetAssignedEventId && !targetAssignedEvent) {
         return res.status(404).json({ error: "Assigned event not found" });
       }
+      if (targetAssignedEvent && getEventOrganizationId(targetAssignedEvent) !== requestOrganizationId) {
+        return res.status(404).json({ error: "Assigned event not found" });
+      }
       const existingOrganizerId = normalizeOptionalText(originalChannel?.organizer_id || existingChannel?.organizer_id);
       const targetOrganizerId = normalizeOptionalText(targetAssignedEvent?.organizer_id)
         || existingOrganizerId
-        || DEFAULT_ORGANIZATION_ID;
-      if (targetAssignedEvent && existingOrganizerId && existingOrganizerId !== targetAssignedEvent.organizer_id) {
+        || requestOrganizationId;
+      if (targetAssignedEvent && existingOrganizerId && existingOrganizerId !== getEventOrganizationId(targetAssignedEvent)) {
         return res.status(409).json({
           error: "This channel belongs to a different organizer and cannot be linked to the selected event",
         });
@@ -14405,7 +15203,14 @@ async function startServer() {
       if (!existingChannel) {
         return res.status(404).json({ error: "Channel not found" });
       }
+      const requestOrganizationId = getRequestOrganizationId(req);
+      if (!channelBelongsToOrganization(existingChannel, requestOrganizationId)) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
       if (!targetEvent) {
+        return res.status(404).json({ error: "Event not found" });
+      }
+      if (getEventOrganizationId(targetEvent) !== requestOrganizationId) {
         return res.status(404).json({ error: "Event not found" });
       }
       if (
@@ -14416,7 +15221,7 @@ async function startServer() {
         return res.status(400).json({ error: "Archived, closed, or cancelled events cannot link channels" });
       }
       const channelOrganizerId = normalizeOptionalText(existingChannel.organizer_id) || DEFAULT_ORGANIZATION_ID;
-      if (channelOrganizerId !== targetEvent.organizer_id) {
+      if (channelOrganizerId !== getEventOrganizationId(targetEvent)) {
         return res.status(409).json({
           error: "This channel belongs to a different organizer and cannot be linked to the selected event",
         });
@@ -14455,6 +15260,16 @@ async function startServer() {
       const existingChannel = allChannels.find((channel) => channel.id === channelId);
       if (!existingChannel) {
         return res.status(404).json({ error: "Channel not found" });
+      }
+      const requestOrganizationId = getRequestOrganizationId(req);
+      if (!channelBelongsToOrganization(existingChannel, requestOrganizationId)) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
+      if (eventId) {
+        const event = await appDb.getEventById(eventId);
+        if (!event || getEventOrganizationId(event) !== requestOrganizationId) {
+          return res.status(404).json({ error: "Event not found" });
+        }
       }
 
       const previousEventIds = existingChannel.event_ids || (existingChannel.event_id ? [existingChannel.event_id] : []);
@@ -14786,7 +15601,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/public/events/:slug/register", async (req: AuthenticatedRequest, res) => {
+  app.post("/api/public/events/:slug/register", publicRegistrationRateLimit, async (req: AuthenticatedRequest, res) => {
     try {
       const match = await resolvePublicEventBySlug(req.params.slug);
       if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
@@ -14814,13 +15629,7 @@ async function startServer() {
         return respondValidationError(res, issues);
       }
 
-      const senderSeed = [phone, email, firstName, lastName]
-        .map((value) => String(value || "").trim().toLowerCase())
-        .filter(Boolean)
-        .join(":")
-        .replace(/[^a-z0-9:@._+-]+/g, "-")
-        .slice(0, 80);
-      const senderId = `public-web:${match.event.id}:${senderSeed || Date.now().toString(36)}:${Date.now().toString(36)}`;
+      const senderId = `public-web:${match.event.id}:${randomUUID()}`;
 
       const creation = await createRegistration({
         sender_id: senderId,
@@ -14879,7 +15688,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/public/events/:slug/find-ticket", async (req, res) => {
+  app.post("/api/public/events/:slug/find-ticket", publicTicketRecoveryRateLimit, async (req, res) => {
     try {
       const match = await resolvePublicEventBySlug(req.params.slug);
       if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
@@ -14897,7 +15706,7 @@ async function startServer() {
       const email = readOptionalString(body, "email", 320);
       const attendeeName = readOptionalString(body, "attendee_name", 180);
       if (!phone && !email) {
-        issues.push({ field: "phone", message: "Enter your phone number or email to find your ticket" });
+        issues.push({ field: "email", message: "Enter the email address used for registration" });
       }
       if (email && !isLikelyEmailAddress(email)) {
         issues.push({ field: "email", message: "email is invalid" });
@@ -14906,209 +15715,89 @@ async function startServer() {
         return respondValidationError(res, issues);
       }
 
-      const recoveryMode = resolvePublicTicketRecoveryMode(match.settings.event_public_ticket_recovery_mode);
-      if (recoveryMode === "verified_contact") {
-        return res.json(buildPublicVerifiedRecoveryRequiredPayload());
-      }
-
-      const normalizedEmail = normalizeComparableText(email);
-      const filterMatchingRows = (rows: RegistrationRow[]) => rows.filter((row) => {
-        if (!isActiveLookupRegistration(row)) {
-          return false;
-        }
-        if (phone && !phonesRoughlyMatch(row.phone, phone)) {
-          return false;
-        }
-        if (normalizedEmail && normalizeComparableText(row.email) !== normalizedEmail) {
-          return false;
-        }
-        return true;
+      const contactQueries = [...new Set([
+        email,
+        phone.replace(/\D/g, ""),
+        phone,
+      ].map((value) => String(value || "").trim()).filter(Boolean))];
+      const scopedRows = (await Promise.all(contactQueries.map((query) => appDb.searchRegistrations({
+        eventIds: [match.event.id],
+        query,
+        limit: 100,
+      })))).flat().filter((row, index, rows) => rows.findIndex((candidate) => candidate.id === row.id) === index);
+      const registration = resolvePublicTicketRecoveryRegistration(scopedRows, {
+        phone,
+        email,
+        attendeeName,
       });
-      const filterRowsByAttendeeName = (rows: RegistrationRow[]) => {
-        if (!attendeeName.trim()) return rows;
-        return rows.filter((row) => matchesPublicLookupAttendeeName(row, attendeeName));
-      };
-
-      const scopedRows = await appDb.listRegistrations(undefined, match.event.id);
-      const scopedMatches = filterMatchingRows(scopedRows);
-      const scopedCandidateCount = countDistinctPublicLookupIdentities(scopedMatches);
-      const resolvedScoped = resolveSinglePublicLookupMatch(scopedMatches, match.event.id);
-      if (resolvedScoped.status === "single" && resolvedScoped.registration) {
-        const registration = resolvedScoped.registration;
-        await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", registration.id, {
+      if (registration) {
+        await recordAudit(req as AuthenticatedRequest, "public.registration.recovery_requested", "registration", registration.id, {
           event_id: match.event.id,
           public_slug: payload.event.slug,
-          lookup_phone: phone ? normalizeComparablePhone(phone) : null,
-          lookup_email: normalizedEmail || null,
-          match_source: normalizeOptionalText(registration.event_id) === normalizeOptionalText(match.event.id) ? "event" : "legacy-sender-fallback",
-          scoped_match_count: resolvedScoped.scopedMatchCount,
+          verification_channel: "email",
         });
-        return res.json(
-          buildPublicRegistrationResponsePayload(payload, registration, {
-            status: "recovered",
-            message: "We found your ticket",
-            successMessage: "We found your ticket. Save it again below.",
-          }),
-        );
-      }
-
-      if (resolvedScoped.status === "ambiguous") {
-        const namedScopedMatches = filterRowsByAttendeeName(scopedMatches);
-        if (!attendeeName.trim()) {
-          return res.json(buildPublicNameVerificationRequiredPayload(
-            scopedCandidateCount,
-            "We found more than one attendee under this contact in this event. Enter the attendee name to continue.",
-          ));
-        }
-        if (namedScopedMatches.length === 0) {
-          return res.status(404).json({
-            error: "We found tickets under this contact in this event, but none matched that attendee name.",
-          });
-        }
-        const resolvedNamedScoped = resolveSinglePublicLookupMatch(namedScopedMatches, match.event.id);
-        if (resolvedNamedScoped.status === "single" && resolvedNamedScoped.registration) {
-          const registration = resolvedNamedScoped.registration;
-          await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", registration.id, {
-            event_id: match.event.id,
-            public_slug: payload.event.slug,
-            lookup_phone: phone ? normalizeComparablePhone(phone) : null,
-            lookup_email: normalizedEmail || null,
-            lookup_attendee_name: normalizeComparableText(attendeeName),
-            match_source: normalizeOptionalText(registration.event_id) === normalizeOptionalText(match.event.id) ? "event-name-verified" : "legacy-sender-name-verified",
-            scoped_match_count: resolvedNamedScoped.scopedMatchCount,
-          });
-          return res.json(
-            buildPublicRegistrationResponsePayload(payload, registration, {
-              status: "recovered",
-              message: "We found your ticket",
-              successMessage: "We found your ticket. Save it again below.",
-            }),
-          );
-        }
-        return res.status(409).json({
-          error: "More than one attendee still matches that contact and name. Please use the contact options on this page for manual help.",
+        void sendPublicTicketRecoveryEmail(registration, match.settings).catch((error) => {
+          console.error("Failed to process public ticket recovery email:", error);
         });
       }
 
-      const globalRows = await appDb.listRegistrations();
-      const globalMatches = filterMatchingRows(globalRows);
-      const globalCandidateCount = countDistinctPublicLookupIdentities(globalMatches);
-      const globalResolved = resolveSinglePublicLookupMatch(globalMatches, match.event.id);
-
-      if (globalResolved.status === "single" && globalResolved.registration) {
-        const recoveredRegistration = globalResolved.registration;
-        if (isPublicLookupLegacyEventMatch(recoveredRegistration, match.event.id)) {
-          await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", recoveredRegistration.id, {
-            event_id: match.event.id,
-            public_slug: payload.event.slug,
-            lookup_phone: phone ? normalizeComparablePhone(phone) : null,
-            lookup_email: normalizedEmail || null,
-            match_source: "legacy-global-fallback",
-            global_match_count: globalMatches.length,
-          });
-          return res.json(
-            buildPublicRegistrationResponsePayload(payload, recoveredRegistration, {
-              status: "recovered",
-              message: "We found your ticket",
-              successMessage: "We found your ticket. Save it again below.",
-            }),
-          );
-        }
-      }
-
-      if (globalMatches.length === 0) {
-        return res.status(404).json({
-          error: "No ticket was found for that phone number or email in this event",
-        });
-      }
-
-      const matchedEventIds = [...new Set(
-        globalMatches
-          .map((row) => normalizeOptionalText(row.event_id) || DEFAULT_EVENT_ID)
-          .filter(Boolean),
-      )];
-      if (matchedEventIds.length === 1 && matchedEventIds[0] !== (normalizeOptionalText(match.event.id) || DEFAULT_EVENT_ID)) {
-        return res.status(404).json({
-          error: "A ticket was found with these details, but it belongs to a different event. Please open the correct event page or use the contact options below.",
-        });
-      }
-
-      if (!attendeeName.trim() && globalCandidateCount > 1) {
-        return res.json(buildPublicNameVerificationRequiredPayload(
-          globalCandidateCount,
-          "We found more than one attendee under this contact. Enter the attendee name to continue.",
-        ));
-      }
-
-      if (attendeeName.trim()) {
-        const namedGlobalMatches = filterRowsByAttendeeName(globalMatches);
-        if (namedGlobalMatches.length === 0) {
-          return res.status(404).json({
-            error: "We found tickets under this contact, but none matched that attendee name in this event.",
-          });
-        }
-
-        const resolvedNamedGlobal = resolveSinglePublicLookupMatch(namedGlobalMatches, match.event.id);
-        if (resolvedNamedGlobal.status === "single" && resolvedNamedGlobal.registration) {
-          const recoveredRegistration = resolvedNamedGlobal.registration;
-          if (isPublicLookupLegacyEventMatch(recoveredRegistration, match.event.id)) {
-            await recordAudit(req as AuthenticatedRequest, "public.registration.recovered", "registration", recoveredRegistration.id, {
-              event_id: match.event.id,
-              public_slug: payload.event.slug,
-              lookup_phone: phone ? normalizeComparablePhone(phone) : null,
-              lookup_email: normalizedEmail || null,
-              lookup_attendee_name: normalizeComparableText(attendeeName),
-              match_source: "legacy-global-name-verified",
-              global_match_count: namedGlobalMatches.length,
-            });
-            return res.json(
-              buildPublicRegistrationResponsePayload(payload, recoveredRegistration, {
-                status: "recovered",
-                message: "We found your ticket",
-                successMessage: "We found your ticket. Save it again below.",
-              }),
-            );
-          }
-        }
-      }
-
-      if (globalResolved.status === "ambiguous" || globalMatches.length > 1) {
-        return res.status(409).json({
-          error: "More than one ticket matches these details. Please use the contact options on this page for manual help.",
-        });
-      }
-
-      return res.status(404).json({
-        error: "No ticket was found for that phone number or email in this event",
-      });
+      return res.status(202).json(buildPublicTicketRecoveryEmailSentPayload());
     } catch (error) {
       console.error("Failed to recover public event ticket:", error);
-      return res.status(500).json({ error: "Failed to recover ticket" });
+      return res.status(500).json({ error: "Failed to process ticket recovery request" });
     }
   });
 
-  app.get("/api/public/events/:slug/chat/history", async (req, res) => {
+  app.get("/api/public/events/:slug/chat/session", publicChatSessionRateLimit, async (req, res) => {
     try {
       const match = await resolvePublicEventBySlug(req.params.slug);
       if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
         return res.status(404).json({ error: "Public event page unavailable" });
       }
 
-      const senderId = normalizeOptionalText(req.query?.sender_id);
-      if (!senderId) {
-        return res.status(400).json({ error: "sender_id is required" });
+      const existingSession = resolvePublicEventChatSession(req, match.event.id);
+      if (existingSession) {
+        res.setHeader("Cache-Control", "private, no-store");
+        return res.json({ status: "ok", sender_id: existingSession.senderId });
+      }
+
+      const issued = issuePublicChatSession(match.event.id, PUBLIC_CHAT_SESSION_ROUTE_ID, "public-web");
+      if (!issued) {
+        return res.status(503).json({ error: "Public chat is temporarily unavailable" });
+      }
+
+      setPublicEventChatSessionCookie(res, req, match.event.id, issued.token);
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.json({ status: "ok", sender_id: issued.session.senderId });
+    } catch (error) {
+      console.error("Failed to create public chat session:", error);
+      return res.status(500).json({ error: "Failed to create public chat session" });
+    }
+  });
+
+  app.get("/api/public/events/:slug/chat/history", publicChatHistoryRateLimit, async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "Public event page unavailable" });
+      }
+
+      const session = resolvePublicEventChatSession(req, match.event.id);
+      if (!session) {
+        return res.status(401).json({ error: "Public chat session is required" });
       }
 
       const afterId = parseNonNegativeInteger(req.query?.after_id, 0, Number.MAX_SAFE_INTEGER);
-      const rows = await listPublicConversationRows(match.event.id, senderId, 240);
+      const rows = await listPublicConversationRows(match.event.id, session.senderId, 240);
       const latestMessageId = rows.reduce((max, row) => {
         const nextId = Number(row.id || 0);
         return Number.isFinite(nextId) ? Math.max(max, nextId) : max;
       }, 0);
       const items = rows.filter((row) => Number(row.id || 0) > afterId);
 
+      res.setHeader("Cache-Control", "private, no-store");
       return res.json({
-        sender_id: senderId,
+        sender_id: session.senderId,
         latest_message_id: latestMessageId || null,
         items,
       });
@@ -15132,6 +15821,11 @@ async function startServer() {
         return res.status(400).json({ error: "Bot help is disabled for this event" });
       }
 
+      const session = resolvePublicEventChatSession(req, match.event.id);
+      if (!session) {
+        return res.status(401).json({ error: "Public chat session is required" });
+      }
+
       const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
       const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
       if (!fileBuffer || fileBuffer.length === 0) {
@@ -15142,7 +15836,7 @@ async function startServer() {
         : req.headers["x-upload-filename"];
       const attachment = await storeInboundChannelImageBuffer({
         eventId: match.event.id,
-        channelKey: `public-${match.event.id}`,
+        channelKey: buildSessionBoundChannelKey(`public-${match.event.id}`, session.senderId),
         contentType,
         fileBuffer,
         originalFileName: normalizeOptionalText(rawFileNameHeader),
@@ -15170,11 +15864,18 @@ async function startServer() {
         return res.status(400).json({ error: "Bot help is disabled for this event" });
       }
 
+      const session = resolvePublicEventChatSession(req, match.event.id);
+      if (!session) {
+        return res.status(401).json({ error: "Public chat session is required" });
+      }
+
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
-      const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 240 });
+      const senderId = session.senderId;
       const text = readOptionalString(body, "text", 4000);
-      const attachments = readImageAttachments(body, "attachments", issues);
+      const rawAttachments = readImageAttachments(body, "attachments", issues);
+      const attachmentChannelKey = buildSessionBoundChannelKey(`public-${match.event.id}`, senderId);
+      const attachments = filterSessionBoundChannelAttachments(rawAttachments, match.event.id, attachmentChannelKey, issues);
       if (!text && attachments.length === 0) {
         issues.push({ field: "text", message: "text or attachments is required" });
       }
@@ -15273,6 +15974,40 @@ async function startServer() {
     async (req, res) => {
     try {
       const eventId = getRequestedEventId(req);
+      const search = normalizeOptionalText(req.query?.search || req.query?.q).slice(0, 160);
+      const pageRequested = req.query?.limit !== undefined || req.query?.offset !== undefined || Boolean(search);
+      if (pageRequested) {
+        const pageSize = parsePositiveInteger(req.query?.limit, 120, 200);
+        const offset = parseNonNegativeInteger(req.query?.offset, 0, 5000);
+        const [countRows, rows] = await Promise.all([
+          appDb.getRegistrationCountsByEvent(eventId),
+          search
+            ? appDb.searchRegistrations({
+                eventIds: [eventId],
+                query: search,
+                limit: Math.min(pageSize + 1, 200),
+                offset,
+              })
+            : appDb.searchRegistrations({
+                eventIds: [eventId],
+                limit: pageSize,
+                offset,
+              }),
+        ]);
+        const counts = countRows[0] || { total: 0, registered: 0, cancelled: 0, checked_in: 0 };
+        const items = search ? rows.slice(0, pageSize) : rows;
+        const hasMore = search
+          ? rows.length > pageSize
+          : offset + items.length < counts.total;
+        res.setHeader("X-Registration-Page-Size", String(pageSize));
+        res.setHeader("X-Registration-Offset", String(offset));
+        res.setHeader("X-Registration-Has-More", String(hasMore));
+        res.setHeader("X-Registration-Total", String(counts.total));
+        res.setHeader("X-Registration-Registered", String(counts.registered));
+        res.setHeader("X-Registration-Cancelled", String(counts.cancelled));
+        res.setHeader("X-Registration-Checked-In", String(counts.checked_in));
+        return res.json(items);
+      }
       const rows = await appDb.listRegistrations(undefined, eventId);
       res.json(rows);
     } catch (error) {
@@ -15291,22 +16026,12 @@ async function startServer() {
         const event = await appDb.getEventById(eventId);
         if (!event) return res.status(404).json({ error: "Event not found" });
 
-        const [registrations, seats, tickets] = await Promise.all([
-          appDb.listRegistrations(undefined, eventId),
+        const [registrationCountRows, registrationActivity, seats, tickets] = await Promise.all([
+          appDb.getRegistrationCountsByEvent(eventId),
+          appDb.getRegistrationActivityByDay(eventId, 14),
           appDb.listDirectSeats(eventId),
           appDb.listDirectTickets(eventId),
         ]);
-
-        const registrationByDay = new Map<string, { registrations: number; checked_in: number }>();
-        for (const registration of registrations) {
-          const date = new Date(registration.timestamp);
-          if (Number.isNaN(date.getTime())) continue;
-          const key = date.toISOString().slice(0, 10);
-          const current = registrationByDay.get(key) || { registrations: 0, checked_in: 0 };
-          current.registrations += 1;
-          if (registration.status === "checked-in") current.checked_in += 1;
-          registrationByDay.set(key, current);
-        }
 
         const byPerformance = new Map<string, { id: string; label: string; tickets: number; issued: number; checked_in: number; revenue_verified: number }>();
         const byClass = new Map<string, { label: string; tickets: number; issued: number; revenue_verified: number }>();
@@ -15340,21 +16065,27 @@ async function startServer() {
         for (const seat of seats) {
           if (seat.status in seatCounts) seatCounts[seat.status as keyof typeof seatCounts] += 1;
         }
-        const activeRegistrations = registrations.filter((row) => row.status !== "cancelled").length;
-        const checkedInRegistrations = registrations.filter((row) => row.status === "checked-in").length;
+        const registrationCounts = registrationCountRows[0] || {
+          total: 0,
+          registered: 0,
+          cancelled: 0,
+          checked_in: 0,
+        };
+        const activeRegistrations = Math.max(registrationCounts.total - registrationCounts.cancelled, 0);
+        const checkedInRegistrations = registrationCounts.checked_in;
         const checkInRate = activeRegistrations > 0 ? Math.round((checkedInRegistrations / activeRegistrations) * 100) : 0;
 
         return res.json({
           generated_at: new Date().toISOString(),
           event: { id: event.id, name: event.name, event_date: event.event_date || null, event_end_date: event.event_end_date || null },
           registrations: {
-            total: registrations.length,
-            registered: registrations.filter((row) => row.status === "registered").length,
-            cancelled: registrations.filter((row) => row.status === "cancelled").length,
+            total: registrationCounts.total,
+            registered: registrationCounts.registered,
+            cancelled: registrationCounts.cancelled,
             checked_in: checkedInRegistrations,
             active: activeRegistrations,
             check_in_rate: checkInRate,
-            by_day: [...registrationByDay.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-14).map(([date, values]) => ({ date, ...values })),
+            by_day: registrationActivity,
           },
           direct_tickets: {
             seats: seatCounts,
@@ -15585,7 +16316,27 @@ async function startServer() {
         "x and y are pixel coordinates of the seat center in the uploaded image. Keep confidence between 0 and 1. If the zone is visible, use it; otherwise use an empty string and warn.",
       ].join("\n");
       const imageUrl = `data:${mime};base64,${bytes.toString("base64")}`;
-      const requestVision = (instruction: string, maxTokens: number, structured: boolean) => fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: openRouterHeaders(), body: JSON.stringify({ model, temperature: 0, max_tokens: maxTokens, ...(structured ? { response_format: { type: "json_object" } } : {}), messages: [{ role: "user", content: [{ type: "text", text: instruction }, { type: "image_url", image_url: { url: imageUrl } }] }] }) });
+      const requestVision = (instruction: string, maxTokens: number, structured: boolean) => fetchWithTimeout(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          method: "POST",
+          headers: openRouterHeaders(),
+          body: JSON.stringify({
+            model,
+            temperature: 0,
+            max_tokens: maxTokens,
+            ...(structured ? { response_format: { type: "json_object" } } : {}),
+            messages: [{
+              role: "user",
+              content: [
+                { type: "text", text: instruction },
+                { type: "image_url", image_url: { url: imageUrl } },
+              ],
+            }],
+          }),
+        },
+        LLM_REQUEST_TIMEOUT_MS,
+      );
       let upstream = await requestVision(prompt, 20000, true);
       let payload = await upstream.json().catch(() => ({}));
       if (!upstream.ok) return res.status(502).json({ error: payload?.error?.message || "Vision model request failed" });
@@ -16046,7 +16797,9 @@ async function startServer() {
 
   app.get("/api/outreach/channel-readiness", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
-    const channels = await appDb.listChannelAccounts();
+    const event = await appDb.getEventById(eventId);
+    const organizationId = getEventOrganizationId(event);
+    const channels = (await appDb.listChannelAccounts()).filter((channel) => channelBelongsToOrganization(channel, organizationId));
     const readiness = ALLOWED_CHANNEL_PLATFORMS.map((platform) => {
       const definition = getChannelPlatformDefinition(platform);
       const assigned = channels.filter((channel) => {
@@ -16410,11 +17163,14 @@ async function startServer() {
     },
   );
 
-  app.get("/api/tickets/:id.png", async (req, res) => {
+  app.get("/api/tickets/:id.png", publicTicketRenderRateLimit, async (req, res) => {
     try {
       const registrationId = String(req.params.id || "").trim().toUpperCase();
       if (!registrationId) {
         return res.status(400).send("Missing registration ID");
+      }
+      if (!hasTicketImageAccess(req, registrationId, "png")) {
+        return res.status(404).send("Ticket not found");
       }
 
       const reg = await getRegistrationById(registrationId);
@@ -16435,7 +17191,7 @@ async function startServer() {
       }
 
       res.setHeader("Content-Type", "image/png");
-      res.setHeader("Cache-Control", "private, max-age=60");
+      res.setHeader("Cache-Control", "private, no-store");
       res.send(png);
     } catch (error) {
       console.error("Failed to render ticket PNG:", error);
@@ -16443,11 +17199,14 @@ async function startServer() {
     }
   });
 
-  app.get("/api/tickets/:id.svg", async (req, res) => {
+  app.get("/api/tickets/:id.svg", publicTicketRenderRateLimit, async (req, res) => {
     try {
       const registrationId = String(req.params.id || "").trim().toUpperCase();
       if (!registrationId) {
         return res.status(400).send("Missing registration ID");
+      }
+      if (!hasTicketImageAccess(req, registrationId, "svg")) {
+        return res.status(404).send("Ticket not found");
       }
 
       const reg = await getRegistrationById(registrationId);
@@ -16460,7 +17219,7 @@ async function startServer() {
       const svg = renderTicketSvg(reg, settings, qrDataUrl);
 
       res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
-      res.setHeader("Cache-Control", "private, max-age=60");
+      res.setHeader("Cache-Control", "private, no-store");
       res.send(svg);
     } catch (error) {
       console.error("Failed to render ticket image:", error);
@@ -18099,7 +18858,9 @@ async function startServer() {
 
       await recordAudit(
         req,
-        mode === "text" ? "message.manual_sent" : "registration.ticket_resent_manual",
+        result.delivery_status === "queued"
+          ? mode === "text" ? "message.manual_queued" : "registration.ticket_queued_manual"
+          : mode === "text" ? "message.manual_sent" : "registration.ticket_resent_manual",
         mode === "text" ? "message" : "registration",
         mode === "text" ? senderId : registrationId,
         {
@@ -18160,7 +18921,7 @@ async function startServer() {
 
       await recordAudit(
         req,
-        "message.manual_retry",
+        result.delivery_status === "queued" ? "message.manual_retry_queued" : "message.manual_retry",
         "message",
         senderId,
         {
@@ -18258,7 +19019,7 @@ async function startServer() {
     }
 
     try {
-      const upstream = await fetch("https://openrouter.ai/api/v1/models", {
+      const upstream = await fetchWithTimeout("https://openrouter.ai/api/v1/models", {
         headers: openRouterHeaders(),
       });
 
@@ -18478,7 +19239,7 @@ async function startServer() {
     async (req: AuthenticatedRequest, res) => {
       try {
         const selectedEventId = normalizeOptionalText(req.query?.event_id);
-        const dashboard = await buildAdminAgentDashboard(selectedEventId);
+        const dashboard = await buildAdminAgentDashboard(selectedEventId, getRequestOrganizationId(req));
         return res.json(dashboard);
       } catch (error) {
         console.error("Admin agent dashboard error:", error);
@@ -18531,7 +19292,7 @@ async function startServer() {
       const nextFileName = `${eventId}-${Date.now().toString(36)}-${normalizedNameBase}.${extension}`;
       const nextAbsolutePath = path.join(ADMIN_AGENT_IMAGE_UPLOAD_DIR, nextFileName);
       const nextRelativeUrl = buildAdminAgentImageRelativeUrl(nextFileName);
-      const nextPublicUrl = buildAbsoluteAppAssetUrl(nextRelativeUrl);
+      const nextPublicUrl = buildPrivateMediaUrl("admin-agent", nextFileName, true);
 
       writeFileSync(nextAbsolutePath, fileBuffer);
 
@@ -18593,14 +19354,15 @@ async function startServer() {
       }
 
       try {
-        const execution = await runAdminAgentCommand({
-          message,
-          messageParts: [
+          const execution = await runAdminAgentCommand({
+            message,
+            messageParts: [
             ...(message ? [{ text: message } satisfies ChatPart] : []),
             ...attachments.map((image) => ({ image } satisfies ChatPart)),
-          ],
-          eventId,
-          history,
+            ],
+            eventId,
+            organizationId: getRequestOrganizationId(req),
+            history,
           settings: {
             ...settings,
             ...(globalAgentSettings.systemPrompt ? { admin_agent_system_prompt: globalAgentSettings.systemPrompt } : {}),
@@ -18916,8 +19678,6 @@ async function startServer() {
       for (const entry of entries) {
         const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
         for (const webhookEvent of messagingEvents) {
-          console.log("Received webhook event:", webhookEvent);
-
           const normalized = normalizeFacebookInboundJob(webhookEvent);
           if (!normalized) continue;
 
@@ -19270,10 +20030,20 @@ async function startServer() {
       }
 
       const settings = await getSettingsMap(eventId);
+      const issuedSession = issuePublicChatSession(eventId, `webchat:${widgetKey}`, "webchat");
+      if (!issuedSession) {
+        return res.status(503).json({ error: "Web chat is temporarily unavailable" });
+      }
+
+      res.setHeader("Cache-Control", "private, no-store");
       return res.json({
         status: "ok",
         event_id: eventId,
         widget: buildWebChatPublicConfig(widgetKey, settings, config),
+        chat_session: {
+          sender_id: issuedSession.session.senderId,
+          capability: issuedSession.token,
+        },
       });
     } catch (error) {
       console.error("Failed to load web chat config:", error);
@@ -19306,6 +20076,10 @@ async function startServer() {
       if (!eventId) {
         return res.status(404).json({ error: "No active event mapping found for this widget" });
       }
+      const session = resolveWebChatSession(req, eventId, widgetKey);
+      if (!session) {
+        return res.status(401).json({ error: "Web chat session is required" });
+      }
 
       const contentType = String(req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
       const fileBuffer = Buffer.isBuffer(req.body) ? req.body : null;
@@ -19317,7 +20091,7 @@ async function startServer() {
         : req.headers["x-upload-filename"];
       const attachment = await storeInboundChannelImageBuffer({
         eventId,
-        channelKey: `webchat-${widgetKey}`,
+        channelKey: buildSessionBoundChannelKey(`webchat-${widgetKey}`, session.senderId),
         contentType,
         fileBuffer,
         originalFileName: normalizeOptionalText(rawFileNameHeader),
@@ -19338,14 +20112,13 @@ async function startServer() {
   app.post("/api/webchat/messages", webChatRateLimit, async (req, res) => {
     try {
       const widgetKey = String(req.body?.widget_key || req.query.widget_key || "").trim();
-      const senderId = String(req.body?.sender_id || "").trim();
       const text = String(req.body?.text || "").trim();
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
-      const attachments = readImageAttachments(body, "attachments", issues);
+      const rawAttachments = readImageAttachments(body, "attachments", issues);
 
-      if (!widgetKey || !senderId || (!text && attachments.length === 0)) {
-        return res.status(400).json({ error: "widget_key, sender_id, and text or attachments are required" });
+      if (!widgetKey || (!text && rawAttachments.length === 0)) {
+        return res.status(400).json({ error: "widget_key and text or attachments are required" });
       }
       if (issues.length > 0) {
         return respondValidationError(res, issues);
@@ -19364,6 +20137,16 @@ async function startServer() {
       const eventId = await appDb.resolveEventIdForChannel("web_chat", widgetKey);
       if (!eventId) {
         return res.status(404).json({ error: "No active event mapping found for this widget" });
+      }
+      const session = resolveWebChatSession(req, eventId, widgetKey);
+      if (!session) {
+        return res.status(401).json({ error: "Web chat session is required" });
+      }
+      const senderId = session.senderId;
+      const attachmentChannelKey = buildSessionBoundChannelKey(`webchat-${widgetKey}`, senderId);
+      const attachments = filterSessionBoundChannelAttachments(rawAttachments, eventId, attachmentChannelKey, issues);
+      if (issues.length > 0) {
+        return respondValidationError(res, issues);
       }
 
       await saveMessage(senderId, text, "incoming", eventId, widgetKey, attachments);
@@ -19440,7 +20223,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

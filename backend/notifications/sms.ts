@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "../runtime/fetchWithTimeout";
+
 export type SmsProviderConfig = {
   enabled: boolean;
   url: string;
@@ -87,7 +89,7 @@ export async function sendProviderSms(
   config: SmsProviderConfig = getSmsConfig(),
 ): Promise<ProviderSmsSendResult> {
   if (!config.ready) throw new Error(config.errorMessage || "SMS provider is not configured");
-  const response = await fetch(config.url, {
+  const response = await fetchWithTimeout(config.url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.token}`,

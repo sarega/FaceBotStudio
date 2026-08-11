@@ -1,13 +1,7 @@
 import { Building2, Globe, Link2, MessageSquare } from "lucide-react";
 
+import { normalizeExternalHref } from "../../../lib/externalHref";
 import type { PublicEventPageResponse } from "../../../types";
-
-function normalizeExternalHref(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
-  return `https://${trimmed.replace(/^\/+/, "")}`;
-}
 
 function LogoPanel({ name, logoUrl }: { name: string; logoUrl: string }) {
   if (logoUrl) {

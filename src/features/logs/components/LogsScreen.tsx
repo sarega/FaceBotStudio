@@ -116,6 +116,7 @@ export function LogsScreen({
               </HelpPopover>
             )}
             <button
+              type="button"
               onClick={() => void onLoadOlderLogs()}
               disabled={!logsHasMore || logsLoadingMore || messages.length === 0}
               className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -123,7 +124,7 @@ export function LogsScreen({
               {logsLoadingMore ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
               Older
             </button>
-            <button onClick={() => void onRefreshMessages()} className="rounded-lg p-2 transition-colors hover:bg-slate-100">
+            <button type="button" aria-label="Refresh logs" onClick={() => void onRefreshMessages()} className="rounded-lg p-2 transition-colors hover:bg-slate-100">
               <RefreshCw className="h-4 w-4 text-slate-400" />
             </button>
           </div>
@@ -131,7 +132,9 @@ export function LogsScreen({
         <div className="mt-2 flex flex-col gap-2 lg:flex-row lg:items-center">
           <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <label htmlFor="log-search" className="sr-only">Search logs</label>
             <input
+              id="log-search"
               value={logListQuery}
               onChange={(event) => onLogListQueryChange(event.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
@@ -139,6 +142,7 @@ export function LogsScreen({
             />
             {logListQuery && (
               <button
+                type="button"
                 onClick={() => onLogListQueryChange("")}
                 className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
                 aria-label="Clear log search"

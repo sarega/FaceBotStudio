@@ -610,10 +610,6 @@ export interface PublicEventRecoveredRegistrationResponse {
   map_url: string;
   registration: {
     id: string;
-    first_name: string;
-    last_name: string;
-    phone: string;
-    email: string;
   };
   ticket: {
     png_url: string;
@@ -641,10 +637,18 @@ export interface PublicEventVerificationRequiredResponse {
   verification_channel: "otp_or_reference";
 }
 
+export interface PublicEventTicketRecoveryEmailSentResponse {
+  status: "recovery_email_sent";
+  message: string;
+  recovery_mode: "verified_contact";
+  verification_channel: "email";
+}
+
 export type PublicEventRegistrationResponse =
   | PublicEventRecoveredRegistrationResponse
   | PublicEventNameVerificationRequiredResponse
-  | PublicEventVerificationRequiredResponse;
+  | PublicEventVerificationRequiredResponse
+  | PublicEventTicketRecoveryEmailSentResponse;
 
 export interface PublicEventChatResponse {
   status: "ok";

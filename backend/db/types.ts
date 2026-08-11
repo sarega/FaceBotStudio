@@ -257,6 +257,28 @@ export interface RegistrationRow {
   status: RegistrationStatus;
 }
 
+export interface RegistrationCountsByEventRow {
+  event_id: string | null;
+  total: number;
+  registered: number;
+  cancelled: number;
+  checked_in: number;
+}
+
+export interface RegistrationActivityByDayRow {
+  date: string;
+  registrations: number;
+  checked_in: number;
+}
+
+export interface RegistrationSearchOptions {
+  eventIds?: string[];
+  query?: string;
+  status?: RegistrationStatus;
+  limit?: number;
+  offset?: number;
+}
+
 export interface RegistrationInput {
   sender_id: string;
   event_id?: string;
@@ -538,7 +560,7 @@ export interface CreateRegistrationEmailDeliveryInput {
   provider?: string | null;
 }
 
-export type NotificationChannel = "email" | "sms";
+export type NotificationChannel = "email" | "sms" | "facebook";
 export type NotificationDeliveryStatus = "queued" | "processing" | "sent" | "failed";
 
 export interface NotificationDeliveryRow {
@@ -1018,6 +1040,9 @@ export interface AppDatabase {
   upsertSettings(entries: Record<string, string>, eventId?: string): Promise<void>;
   getRegistrationById(id: string): Promise<RegistrationRow | undefined>;
   listRegistrations(limit?: number, eventId?: string): Promise<RegistrationRow[]>;
+  getRegistrationCountsByEvent(eventId?: string): Promise<RegistrationCountsByEventRow[]>;
+  getRegistrationActivityByDay(eventId: string, limit?: number): Promise<RegistrationActivityByDayRow[]>;
+  searchRegistrations(options: RegistrationSearchOptions): Promise<RegistrationRow[]>;
   listRegistrationsBySenderIds(senderIds: string[], eventId?: string): Promise<RegistrationRow[]>;
   exportRegistrations(eventId?: string): Promise<RegistrationRow[]>;
   createRegistration(input: RegistrationInput): Promise<RegistrationResult>;

@@ -73,10 +73,13 @@ import type {
   UpdateOutreachTargetInput,
   PersistChunkEmbeddingInput,
   RecordLlmUsageInput,
+  RegistrationActivityByDayRow,
+  RegistrationCountsByEventRow,
   RegistrationInput,
   RegistrationEmailDeliveryRow,
   RegistrationResult,
   RegistrationRow,
+  RegistrationSearchOptions,
   RegistrationStatus,
   SettingRow,
   UpdateEventInput,
@@ -100,7 +103,7 @@ const EVENT_ASSIGNMENT_RESTRICTED_ROLES: UserRole[] = ["operator", "checker", "v
 type QueryableClient = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 
 function generateRegistrationId() {
-  return `REG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  return `REG-${randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase()}`;
 }
 
 function generateEntityId(prefix: string) {
@@ -618,7 +621,7 @@ export class PostgresAppDatabase implements AppDatabase {
 
     this.pool = new Pool({
       connectionString: databaseUrl,
-      ssl: shouldUseSsl ? { rejectUnauthorized: false } : false,
+      ssl: shouldUseSsl ? { rejectUnauthorized: true } : false,
       max: Number(process.env.PGPOOL_MAX || 10),
     });
     this.sqliteBootstrapPath = sqliteBootstrapPath;
@@ -785,6 +788,113 @@ export class PostgresAppDatabase implements AppDatabase {
 
     const result = await this.pool.query<RegistrationRow>(
       `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status FROM registrations ${whereClause} ORDER BY timestamp DESC`,
+      values,
+    );
+    return result.rows;
+  }
+
+  async getRegistrationCountsByEvent(eventId?: string): Promise<RegistrationCountsByEventRow[]> {
+    const normalizedEventId = String(eventId || "").trim();
+    const values = normalizedEventId ? [normalizedEventId] : [];
+    const whereClause = normalizedEventId ? "WHERE event_id = $1" : "";
+    const result = await this.pool.query<{
+      event_id: string | null;
+      total: string;
+      registered: string;
+      cancelled: string;
+      checked_in: string;
+    }>(
+      `SELECT event_id,
+              COUNT(*)::text AS total,
+              COUNT(*) FILTER (WHERE status = 'registered')::text AS registered,
+              COUNT(*) FILTER (WHERE status = 'cancelled')::text AS cancelled,
+              COUNT(*) FILTER (WHERE status = 'checked-in')::text AS checked_in
+       FROM registrations
+       ${whereClause}
+       GROUP BY event_id`,
+      values,
+    );
+    return result.rows.map((row) => ({
+      event_id: row.event_id,
+      total: Number.parseInt(row.total || "0", 10),
+      registered: Number.parseInt(row.registered || "0", 10),
+      cancelled: Number.parseInt(row.cancelled || "0", 10),
+      checked_in: Number.parseInt(row.checked_in || "0", 10),
+    }));
+  }
+
+  async getRegistrationActivityByDay(eventId: string, limit = 14): Promise<RegistrationActivityByDayRow[]> {
+    const normalizedEventId = String(eventId || "").trim();
+    const normalizedLimit = Math.min(Math.max(Math.trunc(Number(limit) || 14), 1), 366);
+    if (!normalizedEventId) return [];
+    const result = await this.pool.query<{
+      date: string;
+      registrations: string;
+      checked_in: string;
+    }>(
+      `SELECT TO_CHAR(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+              COUNT(*)::text AS registrations,
+              COUNT(*) FILTER (WHERE status = 'checked-in')::text AS checked_in
+       FROM registrations
+       WHERE event_id = $1
+       GROUP BY TO_CHAR(timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+       ORDER BY date DESC
+       LIMIT $2`,
+      [normalizedEventId, normalizedLimit],
+    );
+    return result.rows
+      .map((row) => ({
+        date: String(row.date || ""),
+        registrations: Number.parseInt(row.registrations || "0", 10),
+        checked_in: Number.parseInt(row.checked_in || "0", 10),
+      }))
+      .filter((row) => row.date.length > 0)
+      .reverse();
+  }
+
+  async searchRegistrations(options: RegistrationSearchOptions): Promise<RegistrationRow[]> {
+    const eventIds = [...new Set((options.eventIds || []).map((eventId) => String(eventId || "").trim()).filter(Boolean))];
+    if (options.eventIds && eventIds.length === 0) return [];
+    const limit = Math.min(Math.max(Math.trunc(Number(options.limit) || 30), 1), 200);
+    const offset = Math.min(Math.max(Math.trunc(Number(options.offset) || 0), 0), 5000);
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+    if (eventIds.length > 0) {
+      values.push(eventIds);
+      clauses.push(`event_id = ANY($${values.length}::text[])`);
+    }
+    if (options.status) {
+      values.push(options.status);
+      clauses.push(`status = $${values.length}`);
+    }
+    const query = String(options.query || "").trim().slice(0, 160);
+    if (query) {
+      const escapedQuery = query.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+      values.push("%" + escapedQuery + "%");
+      const queryParam = `$${values.length}`;
+      clauses.push(`(
+        id ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        event_id ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        first_name ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        last_name ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        (first_name || ' ' || last_name) ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        phone ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        email ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        sender_id ILIKE ${queryParam} ESCAPE E'\\\\' OR
+        status ILIKE ${queryParam} ESCAPE E'\\\\'
+      )`);
+    }
+    values.push(limit);
+    const limitPlaceholder = `$${values.length}`;
+    values.push(offset);
+    const offsetPlaceholder = `$${values.length}`;
+    const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const result = await this.pool.query<RegistrationRow>(
+      `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
+       FROM registrations
+       ${whereClause}
+       ORDER BY timestamp DESC, id DESC
+       LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
       values,
     );
     return result.rows;

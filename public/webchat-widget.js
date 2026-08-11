@@ -70,6 +70,11 @@
       .replace(/'/g, "&#39;");
   }
 
+  function resolveThemeColor(value) {
+    var normalized = String(value || "").trim().toLowerCase();
+    return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : "#2563eb";
+  }
+
   function renderTicketLinks(tickets) {
     if (!Array.isArray(tickets) || tickets.length === 0) return "";
 
@@ -114,7 +119,7 @@
     document.body.appendChild(root);
 
     var shadow = root.attachShadow({ mode: "open" });
-    var themeColor = config.theme_color || "#2563eb";
+    var themeColor = resolveThemeColor(config.theme_color);
     shadow.innerHTML = [
       "<style>",
       ":host{all:initial}",
@@ -208,11 +213,6 @@
 
   async function bootstrap() {
     var config = getScriptConfig();
-    var senderId = window.localStorage.getItem(storageKey(config.widgetKey, "senderId"));
-    if (!senderId) {
-      senderId = createId("visitor");
-      window.localStorage.setItem(storageKey(config.widgetKey, "senderId"), senderId);
-    }
 
     var response = await fetch(config.apiBase + "/api/webchat/config/" + encodeURIComponent(config.widgetKey), {
       method: "GET",
@@ -223,6 +223,12 @@
     }
 
     var payload = await response.json();
+    var chatSession = payload.chat_session || {};
+    var senderId = String(chatSession.sender_id || "").trim();
+    var chatCapability = String(chatSession.capability || "").trim();
+    if (!senderId || !chatCapability) {
+      throw new Error("Web chat session is unavailable");
+    }
     var widget = payload.widget || {};
     var ui = createWidgetUi({
       widgetKey: config.widgetKey,
@@ -322,6 +328,7 @@
         headers: {
           "Content-Type": file.type,
           "x-upload-filename": encodeURIComponent(file.name || "image"),
+          "x-public-chat-capability": chatCapability,
         },
         body: file,
         credentials: "omit",
@@ -365,6 +372,7 @@
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "x-public-chat-capability": chatCapability,
           },
           body: JSON.stringify({
             widget_key: config.widgetKey,

@@ -1,4 +1,4 @@
-import { useDeferredValue, useState, useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { lazy, Suspense, useDeferredValue, useState, useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
 import QRCode from "qrcode";
@@ -81,30 +81,30 @@ import {
 } from "./components/shared/AppUi";
 import { LoadingScreen } from "./components/shared/LoadingScreen";
 import { AuthScreen } from "./features/auth/components/AuthScreen";
-import { AgentConsoleScreen } from "./features/agent/components/AgentConsoleScreen";
-import { AgentSetupScreen } from "./features/agent/components/AgentSetupScreen";
+const AgentConsoleScreen = lazy(() => import("./features/agent/components/AgentConsoleScreen").then(({ AgentConsoleScreen }) => ({ default: AgentConsoleScreen })));
+const AgentSetupScreen = lazy(() => import("./features/agent/components/AgentSetupScreen").then(({ AgentSetupScreen }) => ({ default: AgentSetupScreen })));
 import { CheckinAccessRoute } from "./features/checkin/components/CheckinAccessRoute";
-import { CheckinScreen } from "./features/checkin/components/CheckinScreen";
+const CheckinScreen = lazy(() => import("./features/checkin/components/CheckinScreen").then(({ CheckinScreen }) => ({ default: CheckinScreen })));
 import { CustomerAppScreen } from "./features/customer-account/components/CustomerAppScreen";
 import { CustomerAccountScreen } from "./features/customer-account/components/CustomerAccountScreen";
 import { CustomerCheckoutScreen } from "./features/customer-account/components/CustomerCheckoutScreen";
-import { CustomerManagementScreen } from "./features/customer-management/components/CustomerManagementScreen";
-import { ContextScreen } from "./features/context/components/ContextScreen";
-import { DirectTicketingScreen } from "./features/direct-ticketing/components/DirectTicketingScreen";
-import { EventWorkspaceScreen } from "./features/event/components/EventWorkspaceScreen";
-import { EventWorkspacePanel } from "./features/event-workspace/components/EventWorkspacePanel";
-import { EventMailScreen } from "./features/mail/components/EventMailScreen";
-import { PublicInboxScreen } from "./features/inbox/components/PublicInboxScreen";
-import { OutreachScreen } from "./features/outreach/components/OutreachScreen";
-import { OrganizerScreen } from "./features/organizer/components/OrganizerScreen";
-import { LogsScreen } from "./features/logs/components/LogsScreen";
+const CustomerManagementScreen = lazy(() => import("./features/customer-management/components/CustomerManagementScreen").then(({ CustomerManagementScreen }) => ({ default: CustomerManagementScreen })));
+const ContextScreen = lazy(() => import("./features/context/components/ContextScreen").then(({ ContextScreen }) => ({ default: ContextScreen })));
+const DirectTicketingScreen = lazy(() => import("./features/direct-ticketing/components/DirectTicketingScreen").then(({ DirectTicketingScreen }) => ({ default: DirectTicketingScreen })));
+const EventWorkspaceScreen = lazy(() => import("./features/event/components/EventWorkspaceScreen").then(({ EventWorkspaceScreen }) => ({ default: EventWorkspaceScreen })));
+const EventWorkspacePanel = lazy(() => import("./features/event-workspace/components/EventWorkspacePanel").then(({ EventWorkspacePanel }) => ({ default: EventWorkspacePanel })));
+const EventMailScreen = lazy(() => import("./features/mail/components/EventMailScreen").then(({ EventMailScreen }) => ({ default: EventMailScreen })));
+const PublicInboxScreen = lazy(() => import("./features/inbox/components/PublicInboxScreen").then(({ PublicInboxScreen }) => ({ default: PublicInboxScreen })));
+const OutreachScreen = lazy(() => import("./features/outreach/components/OutreachScreen").then(({ OutreachScreen }) => ({ default: OutreachScreen })));
+const OrganizerScreen = lazy(() => import("./features/organizer/components/OrganizerScreen").then(({ OrganizerScreen }) => ({ default: OrganizerScreen })));
+const LogsScreen = lazy(() => import("./features/logs/components/LogsScreen").then(({ LogsScreen }) => ({ default: LogsScreen })));
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { PublicEventCatalog } from "./features/public-event/components/PublicEventCatalog";
-import { RegistrationsScreen } from "./features/registrations/components/RegistrationsScreen";
-import { ReportsScreen } from "./features/reports/components/ReportsScreen";
-import { SettingsScreen } from "./features/settings/components/SettingsScreen";
-import { TestConsoleScreen } from "./features/test/components/TestConsoleScreen";
-import { TeamAccessPanel } from "./features/team/components/TeamAccessPanel";
+const RegistrationsScreen = lazy(() => import("./features/registrations/components/RegistrationsScreen").then(({ RegistrationsScreen }) => ({ default: RegistrationsScreen })));
+const ReportsScreen = lazy(() => import("./features/reports/components/ReportsScreen").then(({ ReportsScreen }) => ({ default: ReportsScreen })));
+const SettingsScreen = lazy(() => import("./features/settings/components/SettingsScreen").then(({ SettingsScreen }) => ({ default: SettingsScreen })));
+const TestConsoleScreen = lazy(() => import("./features/test/components/TestConsoleScreen").then(({ TestConsoleScreen }) => ({ default: TestConsoleScreen })));
+const TeamAccessPanel = lazy(() => import("./features/team/components/TeamAccessPanel").then(({ TeamAccessPanel }) => ({ default: TeamAccessPanel })));
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, OrganizerProfileRecord, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
 import { buildEventLocationSummary, buildGoogleMapsEmbedUrl, formatEventLocationCompact, resolveEventMapUrl } from "./lib/eventLocation";
@@ -112,6 +112,7 @@ import { splitContextForEditor } from "./lib/contextEditor";
 import { PUBLIC_SUMMARY_MAX_CHARS, countPublicSummaryChars, resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput, truncatePublicSummary } from "./lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor, serializePublicSponsorEntries } from "./lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries, serializePublicEventSections, serializePublicSpeakerEntries } from "./lib/publicEventPageLayout";
+import { normalizeExternalHref } from "./lib/externalHref";
 import { translate, type AppLanguage } from "./lib/i18n";
 
 interface Registration {
@@ -134,6 +135,15 @@ interface Registration {
     seat: string;
   };
 }
+
+type RegistrationCounts = {
+  total: number;
+  registered: number;
+  cancelled: number;
+  checked_in: number;
+};
+
+const REGISTRATION_PAGE_SIZE = 120;
 
 interface LlmModelOption {
   id: string;
@@ -817,7 +827,6 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
-const PUBLIC_EVENT_CHAT_SENDER_STORAGE_KEY_PREFIX = "facebotstudio-public-event-chat-sender-v1";
 const PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX = "facebotstudio-public-event-chat-history-v1";
 const LOG_PAGE_SIZE = 200;
 const COLLAPSED_SECTION_STORAGE_KEY = "facebotstudio-collapsed-sections-v1";
@@ -912,10 +921,6 @@ function getStoredLanguage(): AppLanguage {
   return window.localStorage.getItem("meetrix-language") === "en" ? "en" : "th";
 }
 
-function getPublicEventChatSenderStorageKey(slug: string) {
-  return `${PUBLIC_EVENT_CHAT_SENDER_STORAGE_KEY_PREFIX}:${slug}`;
-}
-
 function getPublicEventChatHistoryStorageKey(slug: string) {
   return `${PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX}:${slug}`;
 }
@@ -973,13 +978,6 @@ function createPublicChatMessage(
     attachments: normalizeImageAttachments(options?.attachments),
     serverMessageId: typeof options?.serverMessageId === "number" ? options.serverMessageId : undefined,
   };
-}
-
-function normalizeExternalHref(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
-  return `https://${trimmed.replace(/^\/+/, "")}`;
 }
 
 function normalizePhoneHref(value: string) {
@@ -1083,20 +1081,6 @@ function writePublicEventChatHistory(slug: string, messages: PublicChatMessage[]
   } catch {
     // ignore storage write failures
   }
-}
-
-function getOrCreatePublicEventChatSenderId(slug: string) {
-  if (typeof window === "undefined" || !slug) return "";
-  const storageKey = getPublicEventChatSenderStorageKey(slug);
-  const existing = window.localStorage.getItem(storageKey)?.trim() || "";
-  if (existing) return existing;
-  const next = `public-web:${slug}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
-  try {
-    window.localStorage.setItem(storageKey, next);
-  } catch {
-    // ignore storage write failures
-  }
-  return next;
 }
 
 function readAdminAgentChatStore() {
@@ -3244,6 +3228,9 @@ export default function App() {
   const [embeddingEnqueueLoading, setEmbeddingEnqueueLoading] = useState(false);
   const [knowledgeResetting, setKnowledgeResetting] = useState(false);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
+  const [registrationCounts, setRegistrationCounts] = useState<RegistrationCounts>({ total: 0, registered: 0, cancelled: 0, checked_in: 0 });
+  const [registrationHasMore, setRegistrationHasMore] = useState(false);
+  const [registrationLoadingMore, setRegistrationLoadingMore] = useState(false);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: ChatPart[], timestamp: string }[]>([]);
   const [inputText, setInputText] = useState("");
@@ -3379,6 +3366,10 @@ export default function App() {
   const scannerCooldownRef = useRef(false);
   const documentFileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedEventIdRef = useRef("");
+  const registrationRowsRef = useRef<Registration[]>([]);
+  const registrationSearchQueryRef = useRef("");
+  const registrationFetchSequenceRef = useRef(0);
+  const registrationQueryInitializedRef = useRef(false);
   const selectedPublicInboxSenderIdRef = useRef("");
   const publicChatLastMessageIdRef = useRef(0);
   const settingsRef = useRef(INITIAL_SETTINGS);
@@ -3457,6 +3448,8 @@ export default function App() {
   const deferredLogListQuery = useDeferredValue(normalizeSearchQuery(logListQuery));
   const deferredPublicInboxQuery = useDeferredValue(normalizeSearchQuery(publicInboxSearchQuery));
   const deferredAdminCommandPaletteQuery = useDeferredValue(normalizeSearchQuery(adminCommandPaletteQuery));
+  registrationRowsRef.current = registrations;
+  registrationSearchQueryRef.current = deferredRegistrationListQuery;
   const adminAgentChatStorageKey = authUser?.id
     ? `${authUser.id}:global`
     : "";
@@ -3495,9 +3488,9 @@ export default function App() {
   const selectedEventUsage = llmUsageSummary?.selected_event || null;
   const overallLlmUsage = llmUsageSummary?.overall || null;
   const selectedEventTopModel = llmUsageSummary?.selected_event_models?.[0] || null;
-  const registeredCount = registrations.filter((reg) => reg.status === "registered").length;
-  const cancelledCount = registrations.filter((reg) => reg.status === "cancelled").length;
-  const checkedInCount = registrations.filter((reg) => reg.status === "checked-in").length;
+  const registeredCount = registrationCounts.registered;
+  const cancelledCount = registrationCounts.cancelled;
+  const checkedInCount = registrationCounts.checked_in;
   const activeAgentMessageCount = adminAgentMessages.length;
   const filteredAdminCommandTemplates = ADMIN_AGENT_COMMAND_TEMPLATES.filter((template) =>
     matchesSearchQuery(deferredAdminCommandPaletteQuery, [
@@ -3545,7 +3538,7 @@ export default function App() {
       : "Enable Admin Agent in setup before running commands from UI or Telegram.";
   const isAgentMobileFocusMode = activeTab === "agent" && agentWorkspaceView === "console" && agentMobileFocusMode;
   const selectedAdminAgentDashboardEvent = adminAgentDashboard?.events.find((event) => event.is_selected) || null;
-  const activeAttendeeCount = registrations.filter((reg) => reg.status !== "cancelled").length;
+  const activeAttendeeCount = Math.max(registrationCounts.total - registrationCounts.cancelled, 0);
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
   const latestResultState: "success" | "already" | "invalid" | "cancelled" | "idle" =
     checkinStatus === "error" && checkinErrorMessage.toLowerCase().includes("already")
@@ -4030,7 +4023,7 @@ export default function App() {
     ]),
   );
   const visibleRegistrations = filteredRegistrations.slice(0, registrationVisibleCount);
-  const hasMoreRegistrations = filteredRegistrations.length > visibleRegistrations.length;
+  const hasMoreRegistrations = registrationHasMore || filteredRegistrations.length > visibleRegistrations.length;
   const filteredDocuments = documents.filter((document) =>
     matchesSearchQuery(deferredDocumentListQuery, [
       document.title,
@@ -4991,7 +4984,7 @@ export default function App() {
       current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
       return [];
     });
-    setPublicChatSenderId(getOrCreatePublicEventChatSenderId(publicEventSlug));
+    setPublicChatSenderId("");
     const storedHistory = readPublicEventChatHistory(publicEventSlug);
     setPublicChatMessages(storedHistory);
     setPublicChatLastMessageId(
@@ -5018,6 +5011,23 @@ export default function App() {
         }
         if (cancelled) return;
         setPublicEventPage(data as PublicEventPageResponse);
+
+        if ((data as PublicEventPageResponse).support.bot_enabled) {
+          try {
+            const sessionRes = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}/chat/session`);
+            const sessionData = await sessionRes.json().catch(() => ({}));
+            if (!sessionRes.ok) {
+              throw new Error((sessionData as { error?: string }).error || "Failed to create event chat session");
+            }
+            if (!cancelled) {
+              setPublicChatSenderId(String((sessionData as { sender_id?: string }).sender_id || "").trim());
+            }
+          } catch (sessionError) {
+            if (!cancelled) {
+              setPublicChatError(sessionError instanceof Error ? sessionError.message : "Failed to create event chat session");
+            }
+          }
+        }
       } catch (err) {
         if (cancelled) return;
         setPublicEventPage(null);
@@ -5163,7 +5173,7 @@ export default function App() {
     const interval = setInterval(() => {
       void Promise.all([
         canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
-        fetchRegistrations(selectedEventId),
+        fetchRegistrations(selectedEventId, { preserveLoaded: true }),
         fetchDocuments(selectedEventId),
         canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
         canManageCheckinAccess ? fetchCheckinSessions(selectedEventId) : Promise.resolve([]),
@@ -5174,8 +5184,17 @@ export default function App() {
   }, [authStatus, selectedEventId, canRunTest, canViewLogs, canManageCheckinAccess, canEditSettings, publicEventSlug]);
 
   useEffect(() => {
-    setRegistrationVisibleCount(120);
+    setRegistrationVisibleCount(REGISTRATION_PAGE_SIZE);
   }, [selectedEventId, deferredRegistrationListQuery]);
+
+  useEffect(() => {
+    if (!registrationQueryInitializedRef.current) {
+      registrationQueryInitializedRef.current = true;
+      return;
+    }
+    if (publicEventSlug || authStatus !== "authenticated" || !selectedEventId || checkinAccessMode) return;
+    void fetchRegistrations(selectedEventId, { query: deferredRegistrationListQuery });
+  }, [authStatus, checkinAccessMode, deferredRegistrationListQuery, publicEventSlug]);
 
   useEffect(() => {
     const nextSettings = {
@@ -6147,11 +6166,12 @@ export default function App() {
       if (mode === "text") {
         setManualOverrideText("");
       }
+      const deliveryQueued = String((data as any)?.delivery_status || "") === "queued";
       await fetchMessages(eventId);
       setManualOverrideMessage(
         mode === "text"
-          ? "Manual reply sent to the live chat"
-          : "Ticket resent to the selected sender",
+          ? deliveryQueued ? "Manual reply queued for Facebook delivery" : "Manual reply sent to the live chat"
+          : deliveryQueued ? "Ticket queued for Facebook delivery" : "Ticket resent to the selected sender",
       );
       return true;
     } catch (err) {
@@ -6208,9 +6228,12 @@ export default function App() {
         : [];
       const sentText = steps.includes("text");
       const sentTicket = steps.includes("ticket");
+      const deliveryQueued = String((data as any)?.delivery_status || "") === "queued";
 
       if (!sentText && !sentTicket) {
         setManualOverrideMessage("Retry completed but no outbound message was generated");
+      } else if (deliveryQueued) {
+        setManualOverrideMessage("Facebook reply queued for delivery");
       } else if (String((data as any)?.replay_source || "") === "failed-turn") {
         setManualOverrideMessage("Bot resumed from the last failed turn");
       } else {
@@ -6305,7 +6328,12 @@ export default function App() {
 
       await Promise.all([fetchRegistrations(eventId), fetchEvents(), fetchMessages(eventId)]);
       setManualOverrideRegistrationId(registrationId);
-      setLogRegistrationMessage(`Registration ${registrationId} created and ticket sent`);
+      const deliveryQueued = String((resendData as any)?.delivery_status || "") === "queued";
+      setLogRegistrationMessage(
+        deliveryQueued
+          ? `Registration ${registrationId} created and ticket queued for Facebook delivery`
+          : `Registration ${registrationId} created and ticket sent`,
+      );
       return true;
     } catch (err) {
       console.error("Failed to create registration from logs", err);
@@ -6810,7 +6838,11 @@ export default function App() {
     setPublicTicketLookupError("");
     if (field !== "attendee_name") {
       setPublicRegistrationResult((current) => {
-        if (current?.status === "name_verification_required" || current?.status === "verification_required") {
+        if (
+          current?.status === "name_verification_required"
+          || current?.status === "verification_required"
+          || current?.status === "recovery_email_sent"
+        ) {
           return null;
         }
         return current;
@@ -6844,9 +6876,7 @@ export default function App() {
     if (!publicEventSlug || !publicChatSenderId) return null;
     const afterId = Math.max(0, options?.afterId ?? 0);
     try {
-      const params = new URLSearchParams({
-        sender_id: publicChatSenderId,
-      });
+      const params = new URLSearchParams();
       if (afterId > 0) {
         params.set("after_id", String(afterId));
       }
@@ -6972,9 +7002,10 @@ export default function App() {
     const trimmed = publicChatInput.trim();
     if (!trimmed && publicChatPendingImages.length === 0) return;
 
-    const senderId = publicChatSenderId || getOrCreatePublicEventChatSenderId(publicEventSlug);
-    if (!publicChatSenderId && senderId) {
-      setPublicChatSenderId(senderId);
+    const senderId = publicChatSenderId.trim();
+    if (!senderId) {
+      setPublicChatError("Event chat is still starting. Please try again in a moment.");
+      return;
     }
 
     setPublicChatError("");
@@ -6997,7 +7028,6 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sender_id: senderId,
           text: trimmed,
           attachments: uploadedAttachments,
         }),
@@ -7117,7 +7147,12 @@ export default function App() {
       }
       const result = data as PublicEventRegistrationResponse;
       setPublicRegistrationResult(result);
-      if (result.status === "success" || result.status === "duplicate" || result.status === "recovered") {
+      if (
+        result.status === "success"
+        || result.status === "duplicate"
+        || result.status === "recovered"
+        || result.status === "recovery_email_sent"
+      ) {
         window.setTimeout(() => {
           document.getElementById("public-ticket-ready")?.scrollIntoView({ behavior: "smooth", block: "start" });
         }, 40);
@@ -7500,23 +7535,83 @@ export default function App() {
     }
   };
 
-  const fetchRegistrations = async (eventId = selectedEventId) => {
+  const fetchRegistrations = async (
+    eventId = selectedEventId,
+    options: { append?: boolean; preserveLoaded?: boolean; query?: string } = {},
+  ) => {
+    const append = Boolean(options.append);
+    const preserveLoaded = Boolean(options.preserveLoaded);
+    const query = options.query === undefined ? registrationSearchQueryRef.current : normalizeSearchQuery(options.query);
+    const requestId = ++registrationFetchSequenceRef.current;
+    const existingRows = registrationRowsRef.current;
+    const offset = append ? existingRows.length : 0;
+    if (append) setRegistrationLoadingMore(true);
+
     try {
-      const res = await apiFetch(`/api/registrations?event_id=${encodeURIComponent(eventId)}`);
+      const params = new URLSearchParams({
+        event_id: eventId,
+        limit: String(REGISTRATION_PAGE_SIZE),
+        offset: String(offset),
+      });
+      if (query) params.set("search", query);
+      const res = await apiFetch(`/api/registrations?${params.toString()}`);
       if (!res.ok) {
         throw new Error("Failed to fetch registrations");
       }
       const data = await res.json();
-      if (selectedEventIdRef.current !== eventId) return;
-      setRegistrations(Array.isArray(data) ? data : []);
-      setSelectedRegistrationId((prev) => {
-        const rows = Array.isArray(data) ? (data as Registration[]) : [];
-        if (prev && rows.some((r) => r.id === prev)) return prev;
-        return rows[0]?.id || "";
+      if (selectedEventIdRef.current !== eventId || requestId !== registrationFetchSequenceRef.current) return;
+      const rows = Array.isArray(data) ? data as Registration[] : [];
+      const nextRows = append || preserveLoaded
+        ? (() => {
+            const seen = new Set<string>();
+            return [...(append ? existingRows : rows), ...(append ? rows : existingRows)]
+              .filter((row) => {
+                if (seen.has(row.id)) return false;
+                seen.add(row.id);
+                return true;
+              });
+          })()
+        : rows;
+      registrationRowsRef.current = nextRows;
+      setRegistrations(nextRows);
+
+      const headerNumber = (name: string, fallback: number) => {
+        const raw = res.headers.get(name);
+        if (raw === null) return fallback;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : fallback;
+      };
+      setRegistrationCounts({
+        total: headerNumber("X-Registration-Total", append || preserveLoaded ? registrationCounts.total : rows.length),
+        registered: headerNumber("X-Registration-Registered", append || preserveLoaded ? registrationCounts.registered : rows.filter((row) => row.status === "registered").length),
+        cancelled: headerNumber("X-Registration-Cancelled", append || preserveLoaded ? registrationCounts.cancelled : rows.filter((row) => row.status === "cancelled").length),
+        checked_in: headerNumber("X-Registration-Checked-In", append || preserveLoaded ? registrationCounts.checked_in : rows.filter((row) => row.status === "checked-in").length),
       });
+      setRegistrationHasMore(res.headers.get("X-Registration-Has-More") === "true");
+      if (append) {
+        setRegistrationVisibleCount((count) => count + REGISTRATION_PAGE_SIZE);
+      } else if (!preserveLoaded) {
+        setRegistrationVisibleCount(REGISTRATION_PAGE_SIZE);
+        setSelectedRegistrationId((prev) => {
+          if (prev && nextRows.some((row) => row.id === prev)) return prev;
+          return nextRows[0]?.id || "";
+        });
+      } else {
+        setSelectedRegistrationId((prev) => {
+          if (prev && nextRows.some((row) => row.id === prev)) return prev;
+          return nextRows[0]?.id || "";
+        });
+      }
     } catch (err) {
       console.error("Failed to fetch registrations", err);
+    } finally {
+      if (append && requestId === registrationFetchSequenceRef.current) setRegistrationLoadingMore(false);
     }
+  };
+
+  const loadMoreRegistrations = async () => {
+    if (registrationLoadingMore || !registrationHasMore) return;
+    await fetchRegistrations(selectedEventId, { append: true });
   };
 
   const fetchPublicInboxConversations = async (eventId = selectedEventId, options?: { silent?: boolean }) => {
@@ -10026,7 +10121,8 @@ export default function App() {
           />
         )}
       >
-        <AnimatePresence mode="wait">
+        <Suspense fallback={<LoadingScreen fullHeightClass="min-h-[20rem]" />}>
+          <AnimatePresence mode="wait">
           {activeTab === "event" && (
             <EventWorkspaceScreen
               eventWorkspaceView={eventWorkspaceView}
@@ -10422,8 +10518,9 @@ export default function App() {
                 isSearchFocused={isSearchFocused}
                 getRegistrationStatusTone={getRegistrationStatusTone}
                 hasMoreRegistrations={hasMoreRegistrations}
-                onLoadMoreRegistrations={() => setRegistrationVisibleCount((count) => count + 120)}
-                registrationsCount={registrations.length}
+                onLoadMoreRegistrations={loadMoreRegistrations}
+                registrationListLoadingMore={registrationLoadingMore}
+                registrationsCount={registrationCounts.total}
                 registeredCount={registeredCount}
                 checkedInCount={checkedInCount}
                 cancelledCount={cancelledCount}
@@ -10712,7 +10809,8 @@ export default function App() {
               {teamAccessPanel}
             </motion.div>
           )}
-        </AnimatePresence>
+          </AnimatePresence>
+        </Suspense>
       </AdminWorkspaceFrame>
 
       <AppOverlays

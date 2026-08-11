@@ -67,6 +67,7 @@ type RegistrationsScreenProps = {
   getRegistrationStatusTone: (status: string) => BadgeTone;
   hasMoreRegistrations: boolean;
   onLoadMoreRegistrations: () => void;
+  registrationListLoadingMore: boolean;
   registrationsCount: number;
   registeredCount: number;
   checkedInCount: number;
@@ -103,6 +104,7 @@ export function RegistrationsScreen({
   getRegistrationStatusTone,
   hasMoreRegistrations,
   onLoadMoreRegistrations,
+  registrationListLoadingMore,
   registrationsCount,
   registeredCount,
   checkedInCount,
@@ -159,7 +161,9 @@ export function RegistrationsScreen({
           <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <label htmlFor="registration-search" className="sr-only">{t("searchLabel", "Search registrations")}</label>
               <input
+                id="registration-search"
                 value={registrationListQuery}
                 onChange={(event) => onRegistrationListQueryChange(event.target.value)}
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-10 text-xs outline-none focus:ring-2 focus:ring-blue-500"
@@ -167,6 +171,7 @@ export function RegistrationsScreen({
               />
               {registrationListQuery && (
                 <button
+                  type="button"
                   onClick={() => onRegistrationListQueryChange("")}
                   className="absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600"
                   aria-label={t("clearSearch", "Clear registration search")}
@@ -289,10 +294,12 @@ export function RegistrationsScreen({
             {hasMoreRegistrations && (
               <ActionButton
                 onClick={onLoadMoreRegistrations}
+                disabled={registrationListLoadingMore}
                 tone="neutral"
                 className="w-full text-sm sm:w-auto"
               >
-                {t("loadMore", "Load 120 More")}
+                {registrationListLoadingMore && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                {registrationListLoadingMore ? t("loadingMore", "Loading...") : t("loadMore", "Load 120 More")}
               </ActionButton>
             )}
           </div>

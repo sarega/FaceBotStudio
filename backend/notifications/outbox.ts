@@ -124,9 +124,9 @@ export async function sendWithCurrentSmsSender(delivery: NotificationDeliveryRow
 }
 
 export async function sendWithCurrentNotificationSender(delivery: NotificationDeliveryRow): Promise<NotificationSendResult> {
-  return delivery.channel === "sms"
-    ? sendWithCurrentSmsSender(delivery)
-    : sendWithCurrentEmailSender(delivery);
+  if (delivery.channel === "sms") return sendWithCurrentSmsSender(delivery);
+  if (delivery.channel === "email") return sendWithCurrentEmailSender(delivery);
+  throw new NotificationDeliveryError(`Unsupported notification channel: ${delivery.channel}`, false);
 }
 
 export async function dispatchNotificationDeliveries(

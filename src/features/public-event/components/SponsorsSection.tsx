@@ -1,14 +1,8 @@
 import { ExternalLink, Handshake } from "lucide-react";
 
+import { normalizeExternalHref } from "../../../lib/externalHref";
 import { groupPublicSponsorsByTier } from "../../../lib/publicEventPageBranding";
 import type { PublicEventPageResponse } from "../../../types";
-
-function normalizeExternalHref(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
-  return `https://${trimmed.replace(/^\/+/, "")}`;
-}
 
 function SponsorLogo({ name, logoUrl }: { name: string; logoUrl: string }) {
   if (logoUrl) {

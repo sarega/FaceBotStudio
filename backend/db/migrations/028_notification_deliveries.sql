@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS notification_deliveries (
   id TEXT PRIMARY KEY,
-  channel TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+  channel TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'facebook')),
   kind TEXT NOT NULL,
   recipient TEXT NOT NULL,
   recipient_snapshot TEXT,

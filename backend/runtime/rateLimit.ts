@@ -15,6 +15,8 @@ type MemoryEntry = {
   resetAt: number;
 };
 
+export type RateLimitFallbackMode = "fail_closed" | "memory_single_instance";
+
 export type RateLimitBlockedContext = {
   req: Request;
   res: Response;
@@ -33,26 +35,34 @@ function buildStoreKey(name: string, scopeKey: string) {
 }
 
 async function incrementWithRedis(key: string, windowMs: number) {
-  const client = await getRedisClient();
-  if (!client) return null;
+  try {
+    const client = await getRedisClient();
+    if (!client) return null;
 
-  const multi = client.multi();
-  multi.incr(key);
-  multi.pttl(key);
-  const result = await multi.exec();
-  if (!result || !result[0] || !result[1]) {
+    const multi = client.multi();
+    multi.incr(key);
+    multi.pttl(key);
+    const result = await multi.exec();
+    if (!result || !result[0] || !result[1]) {
+      return null;
+    }
+
+    const count = Number(result[0][1] || 0);
+    let ttlMs = Number(result[1][1] || -1);
+
+    if (count === 1 || ttlMs < 0) {
+      await client.pexpire(key, windowMs);
+      ttlMs = windowMs;
+    }
+
+    if (!Number.isFinite(count) || !Number.isFinite(ttlMs) || ttlMs < 0) {
+      return null;
+    }
+    return { count, resetAt: Date.now() + ttlMs };
+  } catch (error) {
+    console.error("Redis rate limiter unavailable:", error);
     return null;
   }
-
-  const count = Number(result[0][1] || 0);
-  let ttlMs = Number(result[1][1] || -1);
-
-  if (count === 1 || ttlMs < 0) {
-    await client.pexpire(key, windowMs);
-    ttlMs = windowMs;
-  }
-
-  return { count, resetAt: Date.now() + ttlMs };
 }
 
 function incrementInMemory(key: string, windowMs: number) {
@@ -69,12 +79,32 @@ function incrementInMemory(key: string, windowMs: number) {
   return current;
 }
 
+export function resolveRateLimitFallbackMode(env: Record<string, unknown> = process.env): RateLimitFallbackMode {
+  const configured = String(env.RATE_LIMIT_FALLBACK_MODE || "").trim().toLowerCase();
+  if (configured === "fail_closed") return "fail_closed";
+  if (configured === "memory_single_instance") return "memory_single_instance";
+
+  return String(env.NODE_ENV || "").trim().toLowerCase() === "production"
+    ? "fail_closed"
+    : "memory_single_instance";
+}
+
 export function createRateLimitMiddleware(config: RateLimitConfig) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       const scopeKey = config.keyFn(req) || "unknown";
       const storeKey = buildStoreKey(config.name, scopeKey);
-      const result = (await incrementWithRedis(storeKey, config.windowMs)) || incrementInMemory(storeKey, config.windowMs);
+      const redisResult = await incrementWithRedis(storeKey, config.windowMs);
+      const result = redisResult || (
+        resolveRateLimitFallbackMode() === "memory_single_instance"
+          ? incrementInMemory(storeKey, config.windowMs)
+          : null
+      );
+
+      if (!result) {
+        res.setHeader("Retry-After", "30");
+        return res.status(503).json({ error: "Rate limiting service unavailable. Please retry shortly." });
+      }
 
       if (result.count > config.max) {
         const retryAfterSeconds = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
@@ -101,7 +131,8 @@ export function createRateLimitMiddleware(config: RateLimitConfig) {
       return next();
     } catch (error) {
       console.error(`Rate limiter ${config.name} failed:`, error);
-      return next();
+      res.setHeader("Retry-After", "30");
+      return res.status(503).json({ error: "Rate limiting service unavailable. Please retry shortly." });
     }
   };
 }

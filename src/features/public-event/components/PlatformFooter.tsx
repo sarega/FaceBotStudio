@@ -1,13 +1,7 @@
 import { ExternalLink, Info, Phone, Shield } from "lucide-react";
 
+import { normalizeExternalHref } from "../../../lib/externalHref";
 import type { PublicEventPageResponse } from "../../../types";
-
-function normalizeExternalHref(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
-  return `https://${trimmed.replace(/^\/+/, "")}`;
-}
 
 type PlatformFooterProps = {
   brand: PublicEventPageResponse["brand"];

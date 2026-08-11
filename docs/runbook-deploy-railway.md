@@ -44,6 +44,18 @@ The migration runner will:
 7. Test ticket preview/download.
 8. If `FACEBOOK_APP_SECRET` is configured, confirm Meta webhook signature verification passes.
 9. Test Facebook webhook verification and a live message.
+10. Confirm the Facebook outbound row is claimed and reaches `sent` in `notification_deliveries`.
+
+## Production acceptance gate
+
+Do not approve the release until all of these checks are recorded:
+
+- `/api/ready` returns HTTP 200 with `database: postgres` and `redis: ok`.
+- A registration can be created, cancelled, checked in, and recovered through the public flow.
+- Private channel/admin-agent media returns 404 without staff auth or a valid short-lived token.
+- A backup is restored into a separate database and the restored event, registrations, messages, and settings are readable.
+- A load/soak test covers login, public registration, public chat, admin registration list, and webhook retry paths.
+- Customer flows are checked on a real iOS Safari and Android Chrome device; admin flows are checked at 1280x800.
 
 ## Optional split runtime
 When ready to separate web and worker services:
@@ -59,6 +71,7 @@ When ready to separate web and worker services:
 ## Runtime notes
 - Login and webhook rate limiting use Redis when available, with in-memory fallback.
 - Facebook inbound webhook events are deduplicated before processing.
+- Facebook bot replies and inbox admin ticket/reply actions are queued in `notification_deliveries` with retry/backoff; the worker must be running for delivery.
 - If Redis is unavailable, the app falls back to inline processing.
 - Document embedding jobs generate local vectors through OpenRouter; `EMBEDDING_HOOK_URL` is optional and only mirrors payloads outward.
 - In `NODE_ENV=production`, startup now fails fast for invalid security config (for example missing `TRUST_PROXY`, invalid `APP_URL`, invalid `SESSION_TTL_DAYS`, or missing worker `OPENROUTER_API_KEY`).
@@ -67,3 +80,4 @@ When ready to separate web and worker services:
 - Keep the SQLite volume in place during Sprint 1.
 - If Postgres startup fails, unset `DATABASE_URL` to fall back to SQLite temporarily.
 - Do not remove the SQLite volume until the Postgres cutover is fully validated.
+- Treat SQLite fallback as a recovery/development mode, not the final multi-instance production database.

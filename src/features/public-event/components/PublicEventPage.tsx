@@ -333,13 +333,13 @@ export function PublicEventPage({
     && page.event.registration_enabled
     && page.event.registration_availability === "open",
   );
-  const ticketRecoveryMode = page?.event.ticket_recovery_mode || "shared_contact";
   const recoveredRegistrationResult = isRecoveredPublicRegistrationResult(registrationResult)
     ? registrationResult
     : null;
   const ticketReady = Boolean(recoveredRegistrationResult);
   const nameVerificationRequired = registrationResult?.status === "name_verification_required";
   const verifiedRecoveryRequired = registrationResult?.status === "verification_required";
+  const recoveryEmailSent = registrationResult?.status === "recovery_email_sent";
   const availabilityHelper = (() => {
     if (customerTicketing) {
       return customerCheckoutEnabled
@@ -631,11 +631,11 @@ export function PublicEventPage({
             </section>
 
             <section className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,21.5rem)]">
-              <div className="divide-y divide-slate-200">
+              <div className="order-2 divide-y divide-slate-200 xl:order-1">
                 {mainColumnSections}
               </div>
 
-              <aside id={customerTicketing ? "public-ticketing" : "public-registration"} className="space-y-4 xl:sticky xl:top-5 xl:self-start">
+              <aside id={customerTicketing ? "public-ticketing" : "public-registration"} className="order-1 space-y-4 xl:order-2 xl:sticky xl:top-5 xl:self-start">
                 {customerTicketing ? (
                   <TicketSalesCard event={page.event} />
                 ) : externalTicketing ? (
@@ -660,6 +660,11 @@ export function PublicEventPage({
                   </div>
                 ) : (
                 <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
+                  {recoveryEmailSent && (
+                    <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-4" role="status">
+                      <p className="text-sm leading-6 text-blue-900">{registrationResult?.message}</p>
+                    </div>
+                  )}
                   {!ticketReady ? (
                     <>
                       <div className="flex items-start justify-between gap-3">
@@ -772,9 +777,7 @@ export function PublicEventPage({
                           <div>
                             <p className="text-sm font-semibold text-slate-900">Find My Ticket</p>
                             <p className="mt-1 text-sm leading-6 text-slate-500">
-                              {ticketRecoveryMode === "verified_contact"
-                                ? "This event is set up for verified ticket recovery. OTP or reference-based release will plug in here for paid events."
-                                : "Already registered? Enter your phone number or email. If that contact has multiple attendees, we will ask for the attendee name next."}
+                              Enter the email used for registration and we will send a secure ticket link. Phone and attendee name can help narrow the match.
                             </p>
                           </div>
                           <StatusBadge tone="neutral">Recovery</StatusBadge>

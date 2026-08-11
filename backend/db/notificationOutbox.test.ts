@@ -24,6 +24,25 @@ function notificationInput(idempotencyKey: string) {
   };
 }
 
+function facebookNotificationInput(idempotencyKey: string) {
+  return {
+    channel: "facebook" as const,
+    kind: "facebook.inbound.reply",
+    recipient: "psid_123",
+    recipient_snapshot: JSON.stringify({ page_id: "page_123", recipient_id: "psid_123" }),
+    related_type: "facebook_outbound",
+    related_id: idempotencyKey,
+    payload_json: JSON.stringify({
+      type: "text",
+      page_id: "page_123",
+      recipient_id: "psid_123",
+      text: "Hello",
+    }),
+    idempotency_key: idempotencyKey,
+    provider: "facebook_graph",
+  };
+}
+
 test("notification outbox deduplicates and enforces worker ownership across retry and success", async () => {
   const db = new SqliteAppDatabase(":memory:");
   await db.initialize();
@@ -99,4 +118,37 @@ test("notification dispatcher records provider success and message id", async ()
   assert.equal(readDelivery(db, delivery.id)?.status, "sent");
   assert.equal(readDelivery(db, delivery.id)?.provider, "test-provider");
   assert.equal(readDelivery(db, delivery.id)?.provider_message_id, "provider-msg-1");
+});
+
+test("notification outbox accepts Facebook deliveries without changing retry ownership", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const delivery = await db.enqueueNotificationDelivery(facebookNotificationInput("facebook:reply:1"));
+  assert.ok(delivery);
+  assert.equal(delivery.channel, "facebook");
+
+  const result = await dispatchNotificationDeliveries(
+    db,
+    "worker-facebook",
+    async (claimed) => {
+      assert.equal(claimed.channel, "facebook");
+      assert.equal(JSON.parse(claimed.payload_json).recipient_id, "psid_123");
+      return { provider: "facebook_graph", providerMessageId: "mid.123" };
+    },
+  );
+
+  assert.deepEqual(result, { claimed: 1, sent: 1, retried: 0, failed: 0 });
+  assert.equal(readDelivery(db, delivery.id)?.status, "sent");
+  assert.equal(readDelivery(db, delivery.id)?.provider_message_id, "mid.123");
+});
+
+test("default notification sender never misroutes Facebook payloads through email", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const delivery = await db.enqueueNotificationDelivery(facebookNotificationInput("facebook:unsupported:1"));
+  assert.ok(delivery);
+
+  const result = await dispatchNotificationDeliveries(db, "worker-default", undefined, { maxAttempts: 1 });
+  assert.deepEqual(result, { claimed: 1, sent: 0, retried: 0, failed: 1 });
+  assert.equal(readDelivery(db, delivery.id)?.last_error, "Unsupported notification channel: facebook");
 });

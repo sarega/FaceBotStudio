@@ -1,4 +1,5 @@
 import { assertEmailConfigReady, getEmailConfig, type EmailConfig, type EmailProviderName } from "./config";
+import { fetchWithTimeout } from "../runtime/fetchWithTimeout";
 
 export type ProviderEmailInput = {
   to: string | string[];
@@ -43,7 +44,7 @@ async function parseProviderResponseBody(response: Response) {
 
 async function sendWithResend(config: EmailConfig, input: ProviderEmailInput): Promise<ProviderEmailSendResult> {
   const recipients = Array.isArray(input.to) ? input.to : [input.to];
-  const response = await fetch("https://api.resend.com/emails", {
+  const response = await fetchWithTimeout("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
