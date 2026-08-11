@@ -7,6 +7,7 @@
 
 ## Required variables on the web service
 - `DATABASE_URL`
+- `PGSSLMODE=require` (Railway private Postgres TLS; use `verify-full` only when a trusted CA is configured)
 - `REDIS_URL`
 - `OPENROUTER_API_KEY`
 - `PAGE_ACCESS_TOKEN`

@@ -617,11 +617,12 @@ export class PostgresAppDatabase implements AppDatabase {
   private readonly sqliteBootstrapPath?: string;
 
   constructor(databaseUrl: string, sqliteBootstrapPath?: string) {
-    const shouldUseSsl = process.env.PGSSLMODE !== "disable" && !/localhost|127\.0\.0\.1/i.test(databaseUrl);
+    const sslMode = String(process.env.PGSSLMODE || "require").toLowerCase();
+    const shouldUseSsl = sslMode !== "disable" && !/localhost|127\.0\.0\.1/i.test(databaseUrl);
 
     this.pool = new Pool({
       connectionString: databaseUrl,
-      ssl: shouldUseSsl ? { rejectUnauthorized: true } : false,
+      ssl: shouldUseSsl ? { rejectUnauthorized: sslMode === "verify-ca" || sslMode === "verify-full" } : false,
       max: Number(process.env.PGPOOL_MAX || 10),
     });
     this.sqliteBootstrapPath = sqliteBootstrapPath;
