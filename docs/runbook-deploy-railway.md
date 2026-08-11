@@ -20,6 +20,7 @@
 - `CHECKIN_ACCESS_SESSION_TTL_MINUTES` (optional; default `120`)
 - `JSON_BODY_LIMIT` (optional; default `256kb`)
 - `CSRF_ALLOWED_ORIGINS` (optional comma-separated origin allow-list)
+- `DIRECT_TICKET_SECRET` (required only when `PUBLIC_DIRECT_TICKETING_ENABLED=1`; public direct ticketing remains disabled until this generated secret is configured)
 
 ## Database migration
 Run after pulling a new version that changes the schema:

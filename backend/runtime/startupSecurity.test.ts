@@ -10,18 +10,29 @@ const productionWebEnv = {
   TRUST_PROXY: "1",
 };
 
-test("public direct ticketing requires an independent production secret", () => {
-  assert.throws(
-    () => resolveStartupSecurityConfig({ ...productionWebEnv, PUBLIC_DIRECT_TICKETING_ENABLED: "1" }),
-    /DIRECT_TICKET_SECRET is required/,
+test("missing public direct-ticket secret does not take the production web server down", () => {
+  const config = resolveStartupSecurityConfig({ ...productionWebEnv, PUBLIC_DIRECT_TICKETING_ENABLED: "1" });
+  assert.equal(config.appRuntime, "web");
+  assert.equal(
+    config.warnings.some((warning) => warning.includes("public direct ticketing is disabled")),
+    true,
   );
 
-  const config = resolveStartupSecurityConfig({
+  const configured = resolveStartupSecurityConfig({
     ...productionWebEnv,
     PUBLIC_DIRECT_TICKETING_ENABLED: "1",
     DIRECT_TICKET_SECRET: "s".repeat(32),
   });
-  assert.equal(config.appRuntime, "web");
+  assert.equal(configured.warnings.some((warning) => warning.includes("public direct ticketing is disabled")), false);
+
+  assert.throws(
+    () => resolveStartupSecurityConfig({
+      ...productionWebEnv,
+      PUBLIC_DIRECT_TICKETING_ENABLED: "1",
+      DIRECT_TICKET_SECRET: "short",
+    }),
+    /DIRECT_TICKET_SECRET must be an independently generated secret/,
+  );
 });
 
 test("production ticket links warn when their signing secret is missing", () => {

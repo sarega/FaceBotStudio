@@ -201,9 +201,8 @@ export function resolveStartupSecurityConfig(env: StartupEnv): StartupSecurityCo
     }
     if (publicDirectTicketingEnabled) {
       if (!directTicketSecret) {
-        throw new Error("DIRECT_TICKET_SECRET is required in production when public direct ticketing is enabled.");
-      }
-      if (directTicketSecret.length < 32 || isLikelyPlaceholderSecret(directTicketSecret)) {
+        warnings.push("PUBLIC_DIRECT_TICKETING_ENABLED is set but DIRECT_TICKET_SECRET is missing; public direct ticketing is disabled until a generated secret is provided.");
+      } else if (directTicketSecret.length < 32 || isLikelyPlaceholderSecret(directTicketSecret)) {
         throw new Error("DIRECT_TICKET_SECRET must be an independently generated secret of at least 32 characters.");
       }
     }

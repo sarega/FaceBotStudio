@@ -10614,13 +10614,13 @@ function isCustomerAccountRegistrationEnabled() {
 // experience is explicitly enabled for an event and the deployment.
 function isPublicDirectTicketingEnabled(settings?: Record<string, string>) {
   return isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")
+    && Boolean(getDirectTicketTokenSecret())
     && isTruthySetting(settings?.direct_ticketing_public_enabled ?? "0");
 }
 
 function isCustomerPaidCheckoutEnabled(settings?: Record<string, string>) {
   return isCustomerAppEnabled()
-    && isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")
-    && isTruthySetting(settings?.direct_ticketing_public_enabled ?? "0")
+    && isPublicDirectTicketingEnabled(settings)
     && isTruthySetting(settings?.customer_ticketing_enabled ?? "0")
     && String(settings?.event_public_ticketing_mode || "inline").trim().toLowerCase() === "customer";
 }
@@ -15497,7 +15497,7 @@ async function startServer() {
   });
 
   app.get("/api/public/direct-orders/:id", async (req, res) => {
-    if (!isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")) return res.status(404).json({ error: "Order not found" });
+    if (!isPublicDirectTicketingEnabled()) return res.status(404).json({ error: "Order not found" });
     const id = String(req.params.id || "").trim();
     if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).json({ error: "Order not found" });
     await appDb.releaseExpiredDirectTicketHolds();
@@ -15507,7 +15507,7 @@ async function startServer() {
   });
 
   app.get("/api/public/direct-orders/:id/payment-qr", async (req, res) => {
-    if (!isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")) return res.status(404).send("Order not found");
+    if (!isPublicDirectTicketingEnabled()) return res.status(404).send("Order not found");
     const id = String(req.params.id || "").trim();
     if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).send("Order not found");
     await appDb.releaseExpiredDirectTicketHolds();
@@ -15529,7 +15529,7 @@ async function startServer() {
     webChatRateLimit,
     express.raw({ type: "application/octet-stream", limit: "4mb" }),
     async (req: AuthenticatedRequest, res) => {
-      if (!isTruthySetting(process.env.PUBLIC_DIRECT_TICKETING_ENABLED ?? "0")) return res.status(404).json({ error: "Order not found" });
+      if (!isPublicDirectTicketingEnabled()) return res.status(404).json({ error: "Order not found" });
       const id = String(req.params.id || "").trim();
       if (!verifyDirectTicketToken("view", id, req.query.token)) return res.status(404).json({ error: "Order not found" });
       const mime = String(req.headers["x-proof-mime"] || "").trim().toLowerCase();

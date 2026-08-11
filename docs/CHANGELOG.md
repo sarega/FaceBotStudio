@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2 - 2026-08-11
+
+- Kept production startup available when the optional public direct-ticketing flag is enabled without `DIRECT_TICKET_SECRET`; direct ticketing now stays disabled until its signing secret is configured, instead of taking down the whole web service.
+- Added regression coverage for the deployment configuration failure and tightened public direct-ticketing route guards to require a signing secret.
+
 ## 0.7.1 - 2026-08-11
 
 - Hardened production security with scoped public chat/media/ticket access, CSRF/session protections, safer external links, provider timeouts, rate-limit fail-closed behavior, and reduced sensitive logging.
