@@ -77,6 +77,35 @@ test("ticket delivery batches are idempotent and new tickets for the same recipi
   assert.equal(later.ticket?.delivery_method, null);
 });
 
+test("direct-ticket recipient profiles are separate from customers and event-scoped", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const firstEvent = await db.createEvent({ name: "Recipient profile event", organizer_id: "org_default" });
+  const secondEvent = await db.createEvent({ name: "Other event", organizer_id: "org_default" });
+
+  const saved = await db.upsertDirectTicketRecipient({
+    event_id: firstEvent.id,
+    recipient_key: "same recipient",
+    display_name: "Same recipient",
+    email: "recipient@example.com",
+    phone: "0812345678",
+    address: "Bangkok",
+    notes: "Send the new batch only",
+  });
+  assert.equal(saved.email, "recipient@example.com");
+  assert.equal((await db.getDirectTicketRecipientByKey(firstEvent.id, "same recipient"))?.phone, "0812345678");
+  assert.equal((await db.getDirectTicketRecipientByKey(secondEvent.id, "same recipient")), undefined);
+
+  const updated = await db.upsertDirectTicketRecipient({
+    event_id: firstEvent.id,
+    recipient_key: "same recipient",
+    display_name: "Same recipient",
+    email: "new-recipient@example.com",
+  });
+  assert.equal(updated.email, "new-recipient@example.com");
+  assert.equal((await db.listDirectTicketRecipients(firstEvent.id)).length, 1);
+});
+
 test("payment proof waits for review and one bank reference cannot issue two tickets", async () => {
   const db = new SqliteAppDatabase(":memory:");
   await db.initialize();

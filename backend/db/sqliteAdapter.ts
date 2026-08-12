@@ -36,6 +36,7 @@ import type {
   DirectOrderRow,
   DirectSeatRow,
   DirectTicketRow,
+  DirectTicketRecipientRow,
   DirectTicketDeliveryMethod,
   FacebookPageRow,
   ManualEventStatus,
@@ -85,6 +86,7 @@ import type {
   UpsertDirectPerformanceInput,
   ImportDirectSeatInput,
   UpdateOrganizerProfileInput,
+  UpsertDirectTicketRecipientInput,
   UpsertChannelAccountInput,
   UpsertEventDocumentInput,
   UpsertFacebookPageInput,
@@ -490,6 +492,21 @@ function mapDirectSeatRow(row: Record<string, unknown>) {
 
 function mapDirectTicketRow(row: Record<string, unknown>) {
   return { id: String(row.id || ""), event_id: String(row.event_id || ""), order_id: typeof row.order_id === "string" && row.order_id ? row.order_id : null, customer_account_id: typeof row.customer_account_id === "string" && row.customer_account_id ? row.customer_account_id : null, performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""), ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null, payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null, rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null, source: row.source === "public" ? "public" : "admin", status: String(row.status || "held") as DirectTicketRow["status"], delivery_status: String(row.delivery_status || "unsent") as DirectTicketRow["delivery_status"], delivery_method: row.delivery_method === "email" || row.delivery_method === "manual" ? row.delivery_method : null, delivery_sent_at: typeof row.delivery_sent_at === "string" ? mapSqliteTimestamp(row.delivery_sent_at) : null, issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null, payment_verified_at: typeof row.payment_verified_at === "string" ? mapSqliteTimestamp(row.payment_verified_at) : null, issued_at: typeof row.issued_at === "string" ? mapSqliteTimestamp(row.issued_at) : null, checked_in_at: typeof row.checked_in_at === "string" ? mapSqliteTimestamp(row.checked_in_at) : null, voided_at: typeof row.voided_at === "string" ? mapSqliteTimestamp(row.voided_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined, zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined, seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined } satisfies DirectTicketRow;
+}
+
+function mapDirectTicketRecipientRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""),
+    event_id: String(row.event_id || ""),
+    recipient_key: String(row.recipient_key || ""),
+    display_name: String(row.display_name || ""),
+    email: String(row.email || ""),
+    phone: String(row.phone || ""),
+    address: String(row.address || ""),
+    notes: String(row.notes || ""),
+    created_at: mapSqliteTimestamp(row.created_at),
+    updated_at: mapSqliteTimestamp(row.updated_at),
+  } satisfies DirectTicketRecipientRow;
 }
 
 function mapDirectOrderRow(row: Record<string, unknown>, tickets: DirectTicketRow[] = []) {
@@ -1116,6 +1133,14 @@ export class SqliteAppDatabase implements AppDatabase {
         FOREIGN KEY (performance_id) REFERENCES event_performances(id) ON DELETE RESTRICT,
         FOREIGN KEY (seat_id) REFERENCES direct_seats(id) ON DELETE RESTRICT
       );
+      CREATE TABLE IF NOT EXISTS direct_ticket_recipients (
+        id TEXT PRIMARY KEY, event_id TEXT NOT NULL, recipient_key TEXT NOT NULL,
+        display_name TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
+        address TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (event_id, recipient_key),
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS direct_orders (
         id TEXT PRIMARY KEY, event_id TEXT NOT NULL, performance_id TEXT NOT NULL, customer_account_id TEXT,
         buyer_name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
@@ -1227,6 +1252,7 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_user_event_assignments_event_id ON user_event_assignments (event_id);
       CREATE INDEX IF NOT EXISTS idx_direct_seats_event_performance ON direct_seats (event_id, performance_id, status);
       CREATE INDEX IF NOT EXISTS idx_direct_tickets_event ON direct_tickets (event_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_direct_ticket_recipients_event ON direct_ticket_recipients (event_id, display_name);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_direct_tickets_active_seat ON direct_tickets (seat_id) WHERE status IN ('held', 'issued', 'checked_in');
     `);
 
@@ -2382,6 +2408,24 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketQuery("WHERE t.event_id = ? ORDER BY t.created_at DESC", [eventId]); }
+  async listDirectTicketRecipients(eventId: string) {
+    const rows = this.db.prepare("SELECT * FROM direct_ticket_recipients WHERE event_id = ? ORDER BY display_name COLLATE NOCASE").all(eventId);
+    return rows.map((row) => mapDirectTicketRecipientRow(row as Record<string, unknown>));
+  }
+  async getDirectTicketRecipientByKey(eventId: string, recipientKey: string) {
+    const row = this.db.prepare("SELECT * FROM direct_ticket_recipients WHERE event_id = ? AND recipient_key = ? LIMIT 1").get(eventId, recipientKey) as Record<string, unknown> | undefined;
+    return row ? mapDirectTicketRecipientRow(row) : undefined;
+  }
+  async upsertDirectTicketRecipient(input: UpsertDirectTicketRecipientInput) {
+    const id = generateEntityId("dtr");
+    this.db.prepare(`INSERT INTO direct_ticket_recipients (id,event_id,recipient_key,display_name,email,phone,address,notes)
+      VALUES (?,?,?,?,?,?,?,?)
+      ON CONFLICT(event_id,recipient_key) DO UPDATE SET display_name=excluded.display_name,email=excluded.email,phone=excluded.phone,address=excluded.address,notes=excluded.notes,updated_at=CURRENT_TIMESTAMP`)
+      .run(id, input.event_id, input.recipient_key, input.display_name, input.email || "", input.phone || "", input.address || "", input.notes || "");
+    const row = this.db.prepare("SELECT * FROM direct_ticket_recipients WHERE event_id = ? AND recipient_key = ? LIMIT 1").get(input.event_id, input.recipient_key) as Record<string, unknown> | undefined;
+    if (!row) throw new Error("Direct ticket recipient was not saved");
+    return mapDirectTicketRecipientRow(row);
+  }
   async getDirectTicketById(id: string) { return this.directTicketQuery("WHERE t.id = ?", [id])[0]; }
   async markDirectTicketsDelivered(ids: string[], method: DirectTicketDeliveryMethod) {
     const normalizedIds = [...new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean))];

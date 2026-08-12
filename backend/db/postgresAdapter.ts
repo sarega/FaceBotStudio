@@ -39,6 +39,7 @@ import type {
   DirectOrderRow,
   DirectSeatRow,
   DirectTicketRow,
+  DirectTicketRecipientRow,
   DirectTicketDeliveryMethod,
   FacebookPageRow,
   ManualEventStatus,
@@ -88,6 +89,7 @@ import type {
   UpsertDirectPerformanceInput,
   ImportDirectSeatInput,
   UpdateOrganizerProfileInput,
+  UpsertDirectTicketRecipientInput,
   UpsertChannelAccountInput,
   UpsertEventDocumentInput,
   UpsertFacebookPageInput,
@@ -522,6 +524,21 @@ function mapDirectTicketRow(row: Record<string, unknown>) {
     zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined,
     seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined,
   } satisfies DirectTicketRow;
+}
+
+function mapDirectTicketRecipientRow(row: Record<string, unknown>) {
+  return {
+    id: String(row.id || ""),
+    event_id: String(row.event_id || ""),
+    recipient_key: String(row.recipient_key || ""),
+    display_name: String(row.display_name || ""),
+    email: String(row.email || ""),
+    phone: String(row.phone || ""),
+    address: String(row.address || ""),
+    notes: String(row.notes || ""),
+    created_at: mapPostgresTimestamp(row.created_at) || "",
+    updated_at: mapPostgresTimestamp(row.updated_at) || "",
+  } satisfies DirectTicketRecipientRow;
 }
 
 function mapDirectOrderRow(row: Record<string, unknown>, tickets: DirectTicketRow[] = []) {
@@ -1701,6 +1718,22 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketRows("WHERE t.event_id=$1 ORDER BY t.created_at DESC", [eventId]); }
+  async listDirectTicketRecipients(eventId: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM direct_ticket_recipients WHERE event_id=$1 ORDER BY display_name", [eventId]);
+    return result.rows.map(mapDirectTicketRecipientRow);
+  }
+  async getDirectTicketRecipientByKey(eventId: string, recipientKey: string) {
+    const result = await this.pool.query<Record<string, unknown>>("SELECT * FROM direct_ticket_recipients WHERE event_id=$1 AND recipient_key=$2 LIMIT 1", [eventId, recipientKey]);
+    return result.rows[0] ? mapDirectTicketRecipientRow(result.rows[0]) : undefined;
+  }
+  async upsertDirectTicketRecipient(input: UpsertDirectTicketRecipientInput) {
+    const result = await this.pool.query<Record<string, unknown>>(`INSERT INTO direct_ticket_recipients (id,event_id,recipient_key,display_name,email,phone,address,notes)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (event_id,recipient_key) DO UPDATE SET display_name=EXCLUDED.display_name,email=EXCLUDED.email,phone=EXCLUDED.phone,address=EXCLUDED.address,notes=EXCLUDED.notes,updated_at=CURRENT_TIMESTAMP
+      RETURNING *`, [generateEntityId("dtr"), input.event_id, input.recipient_key, input.display_name, input.email || "", input.phone || "", input.address || "", input.notes || ""]);
+    if (!result.rows[0]) throw new Error("Direct ticket recipient was not saved");
+    return mapDirectTicketRecipientRow(result.rows[0]);
+  }
   async getDirectTicketById(id: string) { return (await this.directTicketRows("WHERE t.id=$1", [id]))[0]; }
   async markDirectTicketsDelivered(ids: string[], method: DirectTicketDeliveryMethod) {
     const normalizedIds = [...new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean))];

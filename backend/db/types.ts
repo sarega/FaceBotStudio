@@ -386,6 +386,29 @@ export interface DirectTicketRow {
   seat_label?: string;
 }
 
+export interface DirectTicketRecipientRow {
+  id: string;
+  event_id: string;
+  recipient_key: string;
+  display_name: string;
+  email: string;
+  phone: string;
+  address: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertDirectTicketRecipientInput {
+  event_id: string;
+  recipient_key: string;
+  display_name: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  notes?: string | null;
+}
+
 export interface UpsertDirectPerformanceInput {
   event_id: string;
   code: string;
@@ -1097,6 +1120,9 @@ export interface AppDatabase {
   listDirectSeats(eventId: string, performanceId?: string): Promise<DirectSeatRow[]>;
   importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean; replaceZones?: string[] }): Promise<DirectSeatRow[]>;
   listDirectTickets(eventId: string): Promise<DirectTicketRow[]>;
+  listDirectTicketRecipients(eventId: string): Promise<DirectTicketRecipientRow[]>;
+  getDirectTicketRecipientByKey(eventId: string, recipientKey: string): Promise<DirectTicketRecipientRow | undefined>;
+  upsertDirectTicketRecipient(input: UpsertDirectTicketRecipientInput): Promise<DirectTicketRecipientRow>;
   getDirectTicketById(id: string): Promise<DirectTicketRow | undefined>;
   markDirectTicketsDelivered(ids: string[], method: DirectTicketDeliveryMethod): Promise<DirectTicketRow[]>;
   createDirectTicket(input: CreateDirectTicketInput): Promise<{ ticket?: DirectTicketRow; error?: "seat_unavailable" | "invalid_seat" }>;

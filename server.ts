@@ -10186,8 +10186,18 @@ function serializeAdminDirectTicket(ticket: DirectTicketRow) {
   };
 }
 
+function normalizeDirectTicketRecipientKey(value: unknown) {
+  return String(value ?? "").normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
+function directTicketRecipientName(ticket: Pick<DirectTicketRow, "holder_name" | "buyer_name">) {
+  return normalizeOptionalText(ticket.holder_name) || normalizeOptionalText(ticket.buyer_name);
+}
+
 async function sendDirectTicketDecisionEmail(ticket: DirectTicketRow) {
-  if (!ticket.email?.trim()) return false;
+  const recipient = await appDb.getDirectTicketRecipientByKey(ticket.event_id, normalizeDirectTicketRecipientKey(directTicketRecipientName(ticket)));
+  const recipientEmail = normalizeOptionalText(recipient?.email) || normalizeOptionalText(ticket.email);
+  if (!recipientEmail) return false;
   const settings = await getSettingsMap(ticket.event_id);
   const eventName = String(settings.event_name || "Event").trim() || "Event";
   const delivery = buildDirectTicketDelivery(ticket);
@@ -10199,7 +10209,7 @@ async function sendDirectTicketDecisionEmail(ticket: DirectTicketRow) {
     : `Payment was not approved for ${eventName}. ${ticket.rejection_reason || "Please contact the organizer for help."}`;
   try {
     await sendTransactionalEmail({
-      to: ticket.email,
+      to: recipientEmail,
       template: {
         kind: approved ? "ticket_delivery" : "payment_confirmation",
         subject: approved ? `${eventName}: your ticket is ready` : `${eventName}: payment needs attention`,
@@ -17351,6 +17361,29 @@ async function startServer() {
     return res.json(imported);
   });
   app.get("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
+  app.get("/api/direct-ticketing/recipients", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    return res.json(await appDb.listDirectTicketRecipients(getRequestedEventId(req)));
+  });
+  app.post("/api/direct-ticketing/recipients", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const issues: ValidationIssue[] = [];
+    const displayName = readRequiredString(body, "display_name", issues, { label: "Recipient name", maxLength: 180 });
+    const email = readOptionalString(body, "email", 320).toLowerCase();
+    if (email && !isValidCustomerEmail(email)) issues.push({ field: "email", message: "Email is invalid" });
+    if (issues.length) return respondValidationError(res, issues);
+    const eventId = getRequestedEventId(req);
+    const recipient = await appDb.upsertDirectTicketRecipient({
+      event_id: eventId,
+      recipient_key: normalizeDirectTicketRecipientKey(displayName),
+      display_name: displayName,
+      email,
+      phone: readOptionalString(body, "phone", 64),
+      address: readOptionalString(body, "address", 500),
+      notes: readOptionalString(body, "notes", 1000),
+    });
+    await recordAudit(req, "direct_ticket.recipient_updated", "direct_ticket_recipient", recipient.id, { event_id: eventId, recipient_key: recipient.recipient_key });
+    return res.json(recipient);
+  });
   app.post("/api/direct-ticketing/tickets/delivery/batch", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const body = readObjectBody(req);
     const method = body.method === "email" || body.method === "manual" ? body.method : null;
@@ -17368,10 +17401,13 @@ async function startServer() {
       return res.json({ method, requested: tickets.length, sent: updated.length, skipped_without_email: 0, failed: 0 });
     }
 
+    const recipients = await appDb.listDirectTicketRecipients(eventId);
+    const recipientByKey = new Map(recipients.map((recipient) => [recipient.recipient_key, recipient]));
     const groups = new Map<string, DirectTicketRow[]>();
     let skippedWithoutEmail = 0;
     for (const ticket of tickets) {
-      const email = String(ticket.email || "").trim().toLowerCase();
+      const profileEmail = recipientByKey.get(normalizeDirectTicketRecipientKey(directTicketRecipientName(ticket)))?.email;
+      const email = String(profileEmail || ticket.email || "").trim().toLowerCase();
       if (!isValidCustomerEmail(email)) {
         skippedWithoutEmail += 1;
         continue;
@@ -17409,7 +17445,7 @@ async function startServer() {
       if (!updated) return res.status(404).json({ error: "Order not found" });
       await recordAudit(req, "direct_order.payment_updated", "direct_order", updated.id, { event_id: updated.event_id, payment_status: paymentStatus, payment_reference: paymentReference });
       if (paymentStatus !== "refunded") {
-        await Promise.all(updated.tickets.filter((ticket) => ticket.email).map((ticket) => sendDirectTicketDecisionEmail(ticket)));
+        await Promise.all(updated.tickets.map((ticket) => sendDirectTicketDecisionEmail(ticket)));
       }
       return res.json(serializeCustomerOrder(updated));
     } catch (error) {
