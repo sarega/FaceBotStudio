@@ -10045,7 +10045,9 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
   const seatZone = escapeXml(ticket.zone || "Assigned at door");
   const rowLabel = escapeXml(ticket.row_label || "-");
   const seatNumber = escapeXml(ticket.seat_label || "-");
-  const ticketClass = escapeXml(ticket.ticket_class || "VIP");
+  const ticketClassLabel = String(ticket.ticket_class || "VIP").trim() || "VIP";
+  const ticketClass = escapeXml(ticketClassLabel);
+  const ticketClassFit = ticketClassLabel.length > 10 ? ` textLength="220" lengthAdjust="spacingAndGlyphs"` : "";
   const ticketId = escapeXml(ticket.id);
   const performanceDate = escapeXml(formatStoredDateForDisplay(ticket.performance_starts_at || "", normalizeTimeZone(settings.event_timezone)));
   const performanceEnd = ticket.performance_ends_at ? escapeXml(formatStoredDateForDisplay(ticket.performance_ends_at, normalizeTimeZone(settings.event_timezone))) : "";
@@ -10073,7 +10075,7 @@ function renderDirectTicketSvg(ticket: DirectTicketRow, settings: Record<string,
     <text x="88" y="158" font-family="sans-serif" font-size="40" font-weight="900" fill="#fff" stroke="#fff" stroke-width="1.1" paint-order="stroke fill">${eventName}</text><text x="88" y="250" font-family="sans-serif" font-size="24" fill="#fff" opacity=".86">${heading}</text>${panelArtwork}
     <text x="88" y="350" font-family="sans-serif" font-size="22" fill="#7a6f66">GUEST</text><text x="88" y="392" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${holder}</text>
     <text x="88" y="460" font-family="sans-serif" font-size="22" fill="#7a6f66">PERFORMANCE</text><text x="88" y="500" font-family="sans-serif" font-size="32" font-weight="700" fill="#251b16">${performance}</text><text x="88" y="570" font-family="sans-serif" font-size="23" fill="#5b5148">${eventTime}</text>${venue ? `<text x="88" y="604" font-family="sans-serif" font-size="21" fill="#6b625b">${venue}</text>` : ""}
-    <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="708" font-family="sans-serif" font-size="40" font-weight="700" fill="#251b16">${ticketClass}</text>${hasPrice ? `<text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>` : ""}
+    <text x="88" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">TICKET TYPE</text><text x="88" y="708" font-family="sans-serif" font-size="40"${ticketClassFit} font-weight="700" fill="#251b16">${ticketClass}</text>${hasPrice ? `<text x="330" y="662" font-family="sans-serif" font-size="18" fill="#7a6f66">PRICE</text><text x="330" y="700" font-family="sans-serif" font-size="28" font-weight="700" fill="#251b16">${price}</text>` : ""}
     <rect x="490" y="622" width="320" height="174" rx="16" fill="${primaryColor}" opacity=".1" stroke="${primaryColor}" stroke-width="3"/><text x="515" y="653" font-family="sans-serif" font-size="21" font-weight="700" fill="${primaryColor}">${seatZone}</text><text x="515" y="686" font-family="sans-serif" font-size="18" font-weight="700" fill="#7a6f66">ROW</text><text x="515" y="774" font-family="sans-serif" font-size="92" font-weight="800" fill="${primaryColor}">${rowLabel}</text><text x="660" y="686" font-family="sans-serif" font-size="18" font-weight="700" fill="#7a6f66">SEAT</text><text x="660" y="776" font-family="sans-serif" font-size="108" font-weight="800" fill="${primaryColor}">${seatNumber}</text>
     ${note ? `<text x="88" y="758" font-family="sans-serif" font-size="15" fill="#6b625b">${note}</text>` : ""}
     <rect x="840" y="300" width="326" height="516" fill="#f1e7d6" opacity=".58"/><path d="M840 300 V816" stroke="#8e7d68" stroke-width="3" stroke-dasharray="4 10"/>
