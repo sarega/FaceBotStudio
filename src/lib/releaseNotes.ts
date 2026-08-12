@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.7.3",
+    date: "2026-08-12",
+    title: "Event-scoped Gatekeeper access",
+    features: [
+      "Gatekeeper accounts can check registrations only in explicitly assigned Events",
+      "Owners and Admins can assign or remove Event access from Team Access",
+      "Authorization checks now block cross-Event registration, check-in, outreach, ticketing, document, and agent access",
+    ],
+  },
+  {
     version: "0.7.0",
     date: "2026-08-11",
     title: "Organizer directory and customer operations",

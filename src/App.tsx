@@ -825,6 +825,7 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
 };
 
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
+const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
 const PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX = "facebotstudio-public-event-chat-history-v1";
@@ -3206,7 +3207,8 @@ export default function App() {
   const [newUserUsername, setNewUserUsername] = useState("");
   const [newUserDisplayName, setNewUserDisplayName] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
-  const [newUserRole, setNewUserRole] = useState<UserRole>("operator");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("checker");
+  const [newUserEventIds, setNewUserEventIds] = useState<string[]>([]);
   const [documents, setDocuments] = useState<EventDocumentRecord[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsMessage, setDocumentsMessage] = useState("");
@@ -3422,7 +3424,9 @@ export default function App() {
   const canRunTest = role === "owner" || role === "admin" || role === "operator";
   const canRunAgent = role === "owner" || role === "admin" || role === "operator";
   const canViewLogs = role === "owner" || role === "admin" || role === "operator" || role === "viewer";
-  const canManageRegistrations = role === "owner" || role === "admin" || role === "operator" || role === "checker";
+  const canViewRegistrations = role === "owner" || role === "admin" || role === "operator" || role === "checker";
+  const canManageRegistrations = role === "owner" || role === "admin" || role === "operator";
+  const canCheckinRegistrations = canViewRegistrations;
   const canChangeRegistrationStatus = role === "owner" || role === "admin" || role === "operator";
   const canManageKnowledge = role === "owner" || role === "admin" || role === "operator";
   const canManageUsers = role === "owner" || role === "admin";
@@ -3610,10 +3614,10 @@ export default function App() {
   ];
   const operationsTabs = [
     ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: translate(language, "nav.reports", "Reports") }] : []),
-    ...(canManageRegistrations ? [{ id: "registrations" as const, icon: Users, label: translate(language, "nav.registrations", "Registrations") }] : []),
+    ...(canViewRegistrations ? [{ id: "registrations" as const, icon: Users, label: translate(language, "nav.registrations", "Registrations") }] : []),
     ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: translate(language, "nav.directTickets", "Direct Tickets") }] : []),
     ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: translate(language, "nav.inbox", "Public Inbox") }] : []),
-    ...(canManageRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: translate(language, "nav.checkin", "Check-in") }] : []),
+    ...(canCheckinRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: translate(language, "nav.checkin", "Check-in") }] : []),
     ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: translate(language, "nav.logs", "Logs") }] : []),
   ];
   const helpContent = TAB_HELP_CONTENT[activeTab];
@@ -4563,6 +4567,10 @@ export default function App() {
   };
 
   const fetchChannels = async (eventId = selectedEventId) => {
+    if (!canEditSettings) {
+      setChannels([]);
+      return [] as ChannelAccountRecord[];
+    }
     try {
       const scopedEventId = String(eventId || "").trim();
       const endpoint = scopedEventId
@@ -5158,8 +5166,8 @@ export default function App() {
           fetchChannels(selectedEventId),
           fetchSettings(selectedEventId),
           canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
-          fetchRegistrations(selectedEventId),
-          fetchDocuments(selectedEventId),
+          canViewRegistrations ? fetchRegistrations(selectedEventId) : Promise.resolve(),
+          canManageKnowledge ? fetchDocuments(selectedEventId) : Promise.resolve(),
           canRunTest ? fetchLlmModels() : Promise.resolve(),
           canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
           canEditSettings ? fetchEmailStatus(selectedEventId) : Promise.resolve(null),
@@ -5173,15 +5181,15 @@ export default function App() {
     const interval = setInterval(() => {
       void Promise.all([
         canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
-        fetchRegistrations(selectedEventId, { preserveLoaded: true }),
-        fetchDocuments(selectedEventId),
+        canViewRegistrations ? fetchRegistrations(selectedEventId, { preserveLoaded: true }) : Promise.resolve(),
+        canManageKnowledge ? fetchDocuments(selectedEventId) : Promise.resolve(),
         canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
         canManageCheckinAccess ? fetchCheckinSessions(selectedEventId) : Promise.resolve([]),
       ]);
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canManageCheckinAccess, canEditSettings, publicEventSlug]);
+  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canViewRegistrations, canManageKnowledge, canManageCheckinAccess, canEditSettings, publicEventSlug]);
 
   useEffect(() => {
     setRegistrationVisibleCount(REGISTRATION_PAGE_SIZE);
@@ -5243,10 +5251,10 @@ export default function App() {
   }, [selectedEventId]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !selectedEventId || !selectedDocumentForChunksId) return;
+    if (authStatus !== "authenticated" || !canManageKnowledge || !selectedEventId || !selectedDocumentForChunksId) return;
     void fetchDocumentChunks(selectedDocumentForChunksId, selectedEventId);
     void fetchEmbeddingPreview(selectedDocumentForChunksId, selectedEventId);
-  }, [authStatus, selectedEventId, selectedDocumentForChunksId]);
+  }, [authStatus, canManageKnowledge, selectedEventId, selectedDocumentForChunksId]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || publicEventSlug || checkinAccessMode || activeTab !== "inbox" || !selectedEventId) {
@@ -5649,7 +5657,9 @@ export default function App() {
       ...(canRunAgent ? ["agent"] : []),
       ...(canEditSettings ? ["organizer"] : []),
       ...(canManageCustomers ? ["customers"] : []),
-      ...(canManageRegistrations ? ["registrations", "direct_tickets", "checkin"] : []),
+      ...(canViewRegistrations ? ["registrations"] : []),
+      ...(canManageRegistrations ? ["direct_tickets"] : []),
+      ...(canCheckinRegistrations ? ["checkin"] : []),
       ...(canViewLogs ? ["reports"] : []),
       ...(canViewLogs ? ["inbox"] : []),
       ...(canViewLogs ? ["logs", "outreach"] : []),
@@ -5660,7 +5670,7 @@ export default function App() {
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || getDefaultTabForRole(role));
     }
-  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canManageRegistrations, canManageCustomers, canManageUsers, role]);
+  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canViewRegistrations, canManageRegistrations, canCheckinRegistrations, canManageCustomers, canManageUsers, role]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
@@ -5872,6 +5882,12 @@ export default function App() {
   };
 
   const fetchDocuments = async (eventId = selectedEventId) => {
+    if (!canManageKnowledge) {
+      setDocuments([]);
+      setSelectedDocumentForChunksId("");
+      setDocumentChunks([]);
+      return [] as EventDocumentRecord[];
+    }
     if (!eventId) {
       setDocuments([]);
       setSelectedDocumentForChunksId("");
@@ -7840,7 +7856,7 @@ export default function App() {
     setCheckinStatus("loading");
     setCheckinErrorMessage("");
     try {
-      const requestBody = { id: normalizedId };
+      const requestBody = { id: normalizedId, event_id: selectedEventId };
       const res = directTicketId
         ? await (checkinAccessMode ? fetch("/api/checkin-access/checkin-direct", {
           method: "POST",
@@ -8058,6 +8074,8 @@ export default function App() {
     try {
       const res = await apiFetch(`/api/checkin-sessions/${encodeURIComponent(sessionId)}/revoke`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: selectedEventId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -8079,7 +8097,7 @@ export default function App() {
       const res = await apiFetch("/api/registrations/status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: registrationId, status }),
+        body: JSON.stringify({ id: registrationId, status, event_id: selectedEventId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -8132,7 +8150,7 @@ export default function App() {
       const res = await apiFetch("/api/registrations/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: registrationId }),
+        body: JSON.stringify({ id: registrationId, event_id: selectedEventId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -8294,7 +8312,7 @@ export default function App() {
                   const res = await apiFetch("/api/registrations/cancel", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ id: registration_id }),
+                    body: JSON.stringify({ id: registration_id, event_id: selectedEventId }),
                   });
                   return res.json();
                 })()
@@ -9060,6 +9078,7 @@ export default function App() {
           display_name: newUserDisplayName,
           password: newUserPassword,
           role: newUserRole,
+          event_ids: newUserEventIds,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -9070,7 +9089,8 @@ export default function App() {
       setNewUserUsername("");
       setNewUserDisplayName("");
       setNewUserPassword("");
-      setNewUserRole("operator");
+      setNewUserRole("checker");
+      setNewUserEventIds([]);
       await fetchTeamUsers();
       window.setTimeout(() => setTeamMessage(""), 2500);
     } catch (err) {
@@ -9098,6 +9118,29 @@ export default function App() {
       window.setTimeout(() => setTeamMessage(""), 2500);
     } catch (err) {
       setTeamMessage(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const handleUserEventAccessChange = async (userId: string, eventIds: string[]) => {
+    setTeamLoading(true);
+    setTeamMessage("");
+    try {
+      const res = await apiFetch(`/api/auth/users/${encodeURIComponent(userId)}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_ids: eventIds }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to update event access");
+      }
+      setTeamMessage("Updated event access");
+      await fetchTeamUsers();
+      window.setTimeout(() => setTeamMessage(""), 2500);
+    } catch (err) {
+      setTeamMessage(err instanceof Error ? err.message : "Failed to update event access");
     } finally {
       setTeamLoading(false);
     }
@@ -9479,6 +9522,7 @@ export default function App() {
       authUser={authUser}
       teamLoading={teamLoading}
       teamUsers={teamUsers}
+      events={events}
       teamMessage={teamMessage}
       canManageUsers={canManageUsers}
       manageableRoles={MANAGEABLE_ROLES}
@@ -9489,12 +9533,22 @@ export default function App() {
       newUserPassword={newUserPassword}
       onNewUserPasswordChange={setNewUserPassword}
       newUserRole={newUserRole}
-      onNewUserRoleChange={setNewUserRole}
+      newUserEventIds={newUserEventIds}
+      onNewUserRoleChange={(nextRole) => {
+        setNewUserRole(nextRole);
+        if (EVENT_SCOPED_ROLES.includes(nextRole)) {
+          if (!newUserEventIds.length && selectedEventId) setNewUserEventIds([selectedEventId]);
+        } else {
+          setNewUserEventIds([]);
+        }
+      }}
+      onNewUserEventIdsChange={setNewUserEventIds}
       canManageTargetRole={canManageTargetRole}
       canManageTargetAccess={canManageTargetAccess}
       canDeleteTeamUser={canDeleteTeamUser}
       onRefresh={fetchTeamUsers}
       onUserRoleChange={handleUserRoleChange}
+      onUserEventAccessChange={handleUserEventAccessChange}
       onUserAccessToggle={handleUserAccessToggle}
       onDeleteUser={handleDeleteUser}
       onCreateUser={handleCreateUser}

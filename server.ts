@@ -2615,6 +2615,27 @@ function resolveTrustedCsrfOrigins() {
 const TRUSTED_CSRF_ORIGINS = resolveTrustedCsrfOrigins();
 const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
+const EVENT_ASSIGNMENT_ROLES = new Set<UserRole>(["operator", "checker", "viewer"]);
+const SENSITIVE_SETTINGS_KEYS = new Set([
+  "verify_token",
+  "admin_agent_telegram_bot_token",
+  "admin_agent_telegram_webhook_secret",
+  "admin_agent_telegram_allowed_chat_ids",
+]);
+
+function sanitizeSettingsForRole(settings: Record<string, string>, role?: UserRole) {
+  if (role === "owner" || role === "admin") {
+    return settings;
+  }
+
+  const sanitized = { ...settings };
+  for (const key of SENSITIVE_SETTINGS_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(sanitized, key)) {
+      sanitized[key] = "";
+    }
+  }
+  return sanitized;
+}
 
 function getOriginFromHeaders(req: Request) {
   const originHeader = req.headers.origin;
@@ -3010,6 +3031,7 @@ function toPublicAuthUser(user: AuthUserRow) {
     organization_id: user.organization_id,
     organization_name: user.organization_name,
     is_active: user.is_active,
+    assigned_event_ids: user.assigned_event_ids || [],
     created_at: user.created_at,
     last_login_at: user.last_login_at,
     system_version: SYSTEM_VERSION,
@@ -3201,6 +3223,18 @@ function requireRoles(allowedRoles: UserRole[]) {
     }
     return next();
   };
+}
+
+function normalizeEventAssignmentIds(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  return [...new Set(value
+    .map((eventId) => String(eventId || "").trim())
+    .filter(Boolean))];
+}
+
+async function eventIdsBelongToOrganization(eventIds: string[], organizationId: string) {
+  const events = await Promise.all(eventIds.map((eventId) => appDb.getEventById(eventId)));
+  return events.every((event) => event && getEventOrganizationId(event) === organizationId);
 }
 
 function canManageTargetUser(actor: AuthUserRow, target: AuthUserRow, action: "status" | "role") {
@@ -6522,13 +6556,21 @@ function buildAdminAgentFindEventReply(matches: AdminAgentEventCandidate[], quer
   return `${header}\n${lines.join("\n")}`;
 }
 
-async function buildAdminAgentDashboard(selectedEventId?: string | null, organizationId?: string | null) {
+async function buildAdminAgentDashboard(
+  selectedEventId?: string | null,
+  organizationId?: string | null,
+  allowedEventIds?: string[],
+) {
   const requestedSelectedEventId = normalizeOptionalText(selectedEventId) || null;
   const normalizedOrganizationId = normalizeOptionalText(organizationId);
-  const [events, registrationCountRows] = await Promise.all([
+  const allowedEventIdSet = allowedEventIds ? new Set(allowedEventIds.map((eventId) => normalizeOptionalText(eventId)).filter(Boolean)) : null;
+  const [listedEvents, registrationCountRows] = await Promise.all([
     appDb.listEvents(normalizedOrganizationId || undefined),
     appDb.getRegistrationCountsByEvent(),
   ]);
+  const events = allowedEventIdSet
+    ? listedEvents.filter((event) => allowedEventIdSet.has(event.id))
+    : listedEvents;
   const visibleEventIds = new Set(events.map((event) => event.id));
   const normalizedSelectedEventId = requestedSelectedEventId && visibleEventIds.has(requestedSelectedEventId)
     ? requestedSelectedEventId
@@ -9156,6 +9198,7 @@ async function runAdminAgentCommand(options: {
   source: string;
   metadata?: Record<string, unknown>;
   historyScopeKey?: string | null;
+  forceSingleEvent?: boolean;
 }) {
   const requestedEventId = normalizeOptionalText(options.eventId) || DEFAULT_EVENT_ID;
   const organizationId = normalizeOptionalText(options.organizationId);
@@ -9190,7 +9233,10 @@ async function runAdminAgentCommand(options: {
   const requestedSettings = await getSettingsMap(requestedEventId);
   // Policy is an authorization boundary. Never let a client-provided settings
   // snapshot elevate the actions available to the Admin Agent.
-  const requestedPolicy = parseAdminAgentPolicy(requestedSettings);
+  const configuredPolicy = parseAdminAgentPolicy(requestedSettings);
+  const requestedPolicy = options.forceSingleEvent
+    ? { ...configuredPolicy, searchAllEvents: false }
+    : configuredPolicy;
 
   const overrideEventId = normalizeOptionalText(parsedCommand.eventId);
   const hasCrossEventOverride = Boolean(overrideEventId) && overrideEventId !== requestedEventId;
@@ -9210,7 +9256,10 @@ async function runAdminAgentCommand(options: {
     ...eventSettings,
     ...(providedSettings || {}),
   };
-  const policy = parseAdminAgentPolicy(eventSettings);
+  const configuredEventPolicy = parseAdminAgentPolicy(eventSettings);
+  const policy = options.forceSingleEvent
+    ? { ...configuredEventPolicy, searchAllEvents: false }
+    : configuredEventPolicy;
   const allowedActions = getAllowedAdminAgentActions(policy);
   if (allowedActions.length === 0) {
     throw new Error("Admin Agent has no allowed actions. Enable at least one action in Advanced Policy.");
@@ -14199,7 +14248,11 @@ async function startServer() {
   app.get("/api/auth/users", requireRoles(["owner", "admin"]), async (_req: AuthenticatedRequest, res) => {
     try {
       const users = await appDb.listUsers();
-      return res.json(users.map(toPublicAuthUser));
+      const usersWithAssignments = await Promise.all(users.map(async (user) => ({
+        ...user,
+        assigned_event_ids: await appDb.listUserEventIds(user.id),
+      })));
+      return res.json(usersWithAssignments.map(toPublicAuthUser));
     } catch (error) {
       console.error("Failed to list users:", error);
       return res.status(500).json({ error: "Failed to list users" });
@@ -14214,6 +14267,7 @@ async function startServer() {
       const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
       const role = readEnumValue(body, "role", ALL_USER_ROLES, issues, { required: true, label: "role" }) as UserRole | "";
       const displayName = readOptionalString(body, "display_name", 180) || username;
+      const assignedEventIds = normalizeEventAssignmentIds(body.event_ids);
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
@@ -14231,18 +14285,28 @@ async function startServer() {
       if (req.auth?.user.role === "admin" && normalizedRole === "admin") {
         return res.status(403).json({ error: "Admins can only create operator, checker, or viewer accounts" });
       }
+      if (EVENT_ASSIGNMENT_ROLES.has(normalizedRole) && (!assignedEventIds || assignedEventIds.length === 0)) {
+        return res.status(400).json({ error: "Select at least one event for this account" });
+      }
+      if (assignedEventIds && !(await eventIdsBelongToOrganization(assignedEventIds, req.auth!.user.organization_id))) {
+        return res.status(400).json({ error: "One or more selected events are invalid" });
+      }
 
       const user = await appDb.createUser({
         username,
         display_name: displayName,
         password_hash: hashPassword(password),
         role: normalizedRole,
+        assigned_event_ids: EVENT_ASSIGNMENT_ROLES.has(normalizedRole) ? assignedEventIds || [] : [],
       });
       await recordAudit(req, "auth.user_created", "user", user.id, {
         username: user.username,
         role: user.role,
+        event_ids: assignedEventIds || [],
       });
-      return res.status(201).json({ user: toPublicAuthUser(user) });
+      return res.status(201).json({
+        user: toPublicAuthUser({ ...user, assigned_event_ids: assignedEventIds || [] }),
+      });
     } catch (error: any) {
       console.error("Failed to create user:", error);
       const conflict = error?.code === "23505" || String(error?.message || "").includes("UNIQUE");
@@ -14322,6 +14386,34 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to update user status:", error);
       return res.status(500).json({ error: "Failed to update user status" });
+    }
+  });
+
+  app.post("/api/auth/users/:id/events", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = String(req.params.id || "").trim();
+      const eventIds = normalizeEventAssignmentIds(readObjectBody(req).event_ids);
+      if (!userId) return res.status(400).json({ error: "User ID is required" });
+      if (!eventIds) return res.status(400).json({ error: "event_ids must be an array" });
+
+      const targetUser = await appDb.getUserById(userId);
+      if (!targetUser) return res.status(404).json({ error: "User not found" });
+      if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "status")) {
+        return res.status(403).json({ error: "You cannot change this user's event access" });
+      }
+      if (!EVENT_ASSIGNMENT_ROLES.has(targetUser.role)) {
+        return res.status(400).json({ error: "Only event-scoped accounts can have event assignments" });
+      }
+      if (!(await eventIdsBelongToOrganization(eventIds, req.auth.user.organization_id))) {
+        return res.status(400).json({ error: "One or more selected events are invalid" });
+      }
+
+      await appDb.setUserEventAssignments(userId, eventIds);
+      await recordAudit(req, "auth.user_events_updated", "user", userId, { event_ids: eventIds });
+      return res.json({ status: "ok", event_ids: eventIds });
+    } catch (error) {
+      console.error("Failed to update user event access:", error);
+      return res.status(500).json({ error: "Failed to update user event access" });
     }
   });
 
@@ -14442,23 +14534,33 @@ async function startServer() {
     },
   );
 
-  app.post("/api/checkin-sessions/:id/revoke", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/checkin-sessions/:id/revoke",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
       const sessionId = String(req.params.id || "").trim().slice(0, 120);
       if (!sessionId) {
         return respondValidationError(res, [{ field: "id", message: "Session ID is required" }]);
       }
+      const eventId = getRequestedEventId(req);
+      const session = (await appDb.listCheckinSessions(eventId)).find((item) => item.id === sessionId);
+      if (!session) {
+        return res.status(404).json({ error: "Check-in session not found" });
+      }
       const revoked = await appDb.revokeCheckinSession(sessionId);
       if (!revoked) {
         return res.status(404).json({ error: "Check-in session not found" });
       }
-      await recordAudit(req, "checkin.session_revoked", "checkin_session", sessionId);
+      await recordAudit(req, "checkin.session_revoked", "checkin_session", sessionId, { event_id: session.event_id });
       return res.json({ status: "ok" });
     } catch (error) {
       console.error("Failed to revoke check-in session:", error);
       return res.status(500).json({ error: "Failed to revoke check-in session" });
     }
-  });
+    },
+  );
 
   app.post("/api/checkin-access/exchange", checkinAccessIpRateLimit, checkinAccessExchangeRateLimit, async (req: AuthenticatedRequest, res) => {
     try {
@@ -14622,7 +14724,11 @@ async function startServer() {
 
   app.get("/api/events", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const events = await appDb.listEvents(req.auth?.user.organization_id);
+      let events = await appDb.listEvents(req.auth?.user.organization_id);
+      if (req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)) {
+        const assignedEventIds = new Set(await appDb.listUserEventIds(req.auth.user.id));
+        events = events.filter((event) => assignedEventIds.has(event.id));
+      }
       const enrichedEvents = await Promise.all(
         events.map(async (event) => {
           const settings = await getSettingsMap(event.id);
@@ -14840,7 +14946,7 @@ async function startServer() {
     },
   );
 
-  app.get("/api/facebook-pages", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/facebook-pages", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const organizationId = getRequestOrganizationId(req);
       const pages = (await appDb.listChannelAccounts("facebook"))
@@ -14864,7 +14970,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/facebook-pages/:pageId/routing", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/facebook-pages/:pageId/routing", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const pageId = String(req.params.pageId || "").trim();
       if (!pageId) {
@@ -14893,7 +14999,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/channels", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/channels", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const platform = typeof req.query.platform === "string" ? req.query.platform.trim() as ChannelPlatform : undefined;
       if (platform && !ALLOWED_CHANNEL_PLATFORMS.includes(platform)) {
@@ -15969,7 +16075,7 @@ async function startServer() {
 
   app.get(
     "/api/registrations",
-    requireAuth,
+    requireRoles(["owner", "admin", "operator", "checker"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     async (req, res) => {
     try {
@@ -16018,7 +16124,7 @@ async function startServer() {
 
   app.get(
     "/api/reports/summary",
-    requireAuth,
+    requireRoles(["owner", "admin", "operator", "viewer"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     async (req, res) => {
       try {
@@ -16157,7 +16263,11 @@ async function startServer() {
     },
   );
 
-  app.post("/api/registrations/checkin", requireRoles(["owner", "admin", "operator", "checker"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/registrations/checkin",
+    requireRoles(["owner", "admin", "operator", "checker"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
@@ -16165,7 +16275,7 @@ async function startServer() {
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
-      const result = await performCheckinForRegistration(registrationId, undefined, {
+      const result = await performCheckinForRegistration(registrationId, getRequestedEventId(req), {
         source: "registrations_checkin_api",
       });
       if (result.statusCode === 200) {
@@ -16183,9 +16293,14 @@ async function startServer() {
     } catch (error) {
       res.status(500).json({ error: "Failed to check in" });
     }
-  });
+    },
+  );
 
-  app.post("/api/registrations/cancel", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/registrations/cancel",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
@@ -16193,20 +16308,29 @@ async function startServer() {
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
+      const eventId = getRequestedEventId(req);
       const existing = registrationId ? await getRegistrationById(registrationId) : null;
+      if (!existing || normalizeOptionalText(existing.event_id) !== eventId) {
+        return res.status(404).json({ error: "Registration not found" });
+      }
       const result = await cancelRegistration(registrationId, { source: "registrations_cancel_api" });
       if (result.statusCode === 200) {
         await recordAudit(req, "registration.cancelled", "registration", registrationId, {
-          event_id: existing?.event_id || null,
+          event_id: existing.event_id || null,
         });
       }
       res.status(result.statusCode).json(result.content);
     } catch (error) {
       res.status(500).json({ error: "Failed to cancel registration" });
     }
-  });
+    },
+  );
 
-  app.post("/api/registrations/status", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/registrations/status",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
@@ -16220,6 +16344,10 @@ async function startServer() {
       );
       if (issues.length > 0) {
         return respondValidationError(res, issues);
+      }
+      const registration = await getRegistrationById(id);
+      if (!registration || normalizeOptionalText(registration.event_id) !== getRequestedEventId(req)) {
+        return res.status(404).json({ error: "Registration not found" });
       }
 
       const updated = await updateRegistrationStatusWithNotification(id, status as RegistrationStatus, {
@@ -16238,7 +16366,8 @@ async function startServer() {
       console.error("Failed to update registration status:", error);
       res.status(500).json({ error: "Failed to update registration status" });
     }
-  });
+    },
+  );
 
   app.post(
     "/api/registrations/sms-consent",
@@ -16269,7 +16398,11 @@ async function startServer() {
     },
   );
 
-  app.post("/api/registrations/delete", requireRoles(["owner", "admin", "operator"]), async (req: AuthenticatedRequest, res) => {
+  app.post(
+    "/api/registrations/delete",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
@@ -16277,19 +16410,24 @@ async function startServer() {
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
+      const registration = await getRegistrationById(id);
+      if (!registration || normalizeOptionalText(registration.event_id) !== getRequestedEventId(req)) {
+        return res.status(404).json({ error: "Registration not found" });
+      }
 
       const deleted = await appDb.deleteRegistration(id);
       if (!deleted) {
         return res.status(404).json({ error: "Registration not found" });
       }
 
-      await recordAudit(req, "registration.deleted", "registration", id);
+      await recordAudit(req, "registration.deleted", "registration", id, { event_id: registration.event_id || null });
       return res.json({ status: "success", id });
     } catch (error) {
       console.error("Failed to delete registration:", error);
       return res.status(500).json({ error: "Failed to delete registration" });
     }
-  });
+    },
+  );
 
   app.post("/api/direct-ticketing/seat-map/analyze", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), express.raw({ type: ["image/png", "image/jpeg", "image/webp"], limit: PUBLIC_EVENT_MEDIA_MAX_BYTES }), async (req: AuthenticatedRequest, res) => {
     try {
@@ -16375,7 +16513,7 @@ async function startServer() {
 
   // Outreach is additive to the existing channel stack. Phase 1 intentionally stops at
   // human-first-contact: no cold Facebook send is exposed here.
-  app.get("/api/outreach/campaigns", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/campaigns", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     try {
       return res.json(await appDb.listOutreachCampaigns(getRequestedEventId(req)));
     } catch (error) {
@@ -16417,7 +16555,7 @@ async function startServer() {
     return res.json(campaign);
   });
 
-  app.get("/api/outreach/campaigns/:id", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/campaigns/:id", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const campaign = await appDb.getOutreachCampaign(String(req.params.id || "").trim(), eventId);
     if (!campaign) return res.status(404).json({ error: "Outreach campaign not found" });
@@ -16425,7 +16563,7 @@ async function startServer() {
     return res.json({ campaign, targets, assets });
   });
 
-  app.get("/api/outreach/targets", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/targets", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const campaignId = typeof req.query.campaign_id === "string" ? req.query.campaign_id.trim() : "";
     if (!campaignId) return res.status(400).json({ error: "campaign_id is required" });
@@ -16476,7 +16614,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/outreach/targets/:id", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/targets/:id", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
     if (!target) return res.status(404).json({ error: "Outreach target not found" });
@@ -16554,7 +16692,7 @@ async function startServer() {
     return res.json(target);
   });
 
-  app.get("/api/outreach/targets/:id/drafts", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/targets/:id/drafts", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
     if (!target) return res.status(404).json({ error: "Outreach target not found" });
@@ -16607,7 +16745,7 @@ async function startServer() {
     return res.json(draft);
   });
 
-  app.get("/api/outreach/targets/:id/eligibility", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/targets/:id/eligibility", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const target = await appDb.getOutreachTarget(String(req.params.id || "").trim(), eventId);
     if (!target) return res.status(404).json({ error: "Outreach target not found" });
@@ -16730,7 +16868,7 @@ async function startServer() {
     return res.status(errors.length > 0 ? 207 : 200).json({ status: errors.length > 0 ? "partial" : "sent", deliveries, errors, target: updatedTarget, manual_fallback: errors.length > 0 });
   });
 
-  app.get("/api/outreach/assets", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/assets", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const campaignId = typeof req.query.campaign_id === "string" ? req.query.campaign_id.trim() : "";
     if (!campaignId) return res.status(400).json({ error: "campaign_id is required" });
@@ -16757,7 +16895,7 @@ async function startServer() {
     return res.status(201).json(asset);
   });
 
-  app.get("/api/outreach/dashboard", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/dashboard", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const [campaigns, targets] = await Promise.all([appDb.listOutreachCampaigns(eventId), appDb.listOutreachTargetsForEvent(eventId)]);
     const now = Date.now();
@@ -16777,14 +16915,14 @@ async function startServer() {
     return res.json({ counts, campaigns, due_targets: dueTargets.slice(0, 250) });
   });
 
-  app.get("/api/outreach/reminders", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/reminders", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const targets = await appDb.listOutreachTargetsForEvent(eventId);
     const due = targets.filter((target) => !["published", "declined", "no_response"].includes(target.status) && target.next_follow_up_at && Number.isFinite(Date.parse(target.next_follow_up_at)) && Date.parse(target.next_follow_up_at) <= Date.now());
     return res.json({ items: due.slice(0, 250), count: due.length });
   });
 
-  app.get("/api/outreach/assignees", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/assignees", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const users = await appDb.listUsers();
     const assignees = [];
@@ -16795,7 +16933,7 @@ async function startServer() {
     return res.json(assignees);
   });
 
-  app.get("/api/outreach/channel-readiness", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/outreach/channel-readiness", requireRoles(["owner", "admin", "operator", "viewer"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const event = await appDb.getEventById(eventId);
     const organizationId = getEventOrganizationId(event);
@@ -16906,7 +17044,7 @@ async function startServer() {
 
   // Direct seats are inventory explicitly withheld from Ticketmelon. These routes are
   // intentionally admin/operator-only; public self-service checkout is a later phase.
-  app.get("/api/direct-ticketing/performances", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/performances", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     return res.json(await appDb.listDirectPerformances(getRequestedEventId(req)));
   });
   app.post("/api/direct-ticketing/performances", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
@@ -16944,7 +17082,7 @@ async function startServer() {
       return res.status(500).json({ error: "Failed to reset performance" });
     }
   });
-  app.get("/api/direct-ticketing/seats", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/seats", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const performanceId = typeof req.query.performance_id === "string" ? req.query.performance_id.trim() : undefined;
     return res.json(await appDb.listDirectSeats(getRequestedEventId(req), performanceId));
   });
@@ -16957,8 +17095,8 @@ async function startServer() {
     await recordAudit(req, "direct_seats.imported", "direct_performance", performanceId, { event_id: getRequestedEventId(req), imported_count: seats.length, replace_layout: body.replace_layout === true });
     return res.json(imported);
   });
-  app.get("/api/direct-ticketing/tickets", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
-  app.get("/api/direct-ticketing/orders", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
+  app.get("/api/direct-ticketing/orders", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const orders = await appDb.listDirectOrders(getRequestedEventId(req));
     return res.json(orders.map((order) => serializeCustomerOrder(order)));
   });
@@ -16984,7 +17122,7 @@ async function startServer() {
       return res.status(500).json({ error: "Failed to update order payment" });
     }
   });
-  app.get("/api/direct-ticketing/payment-qr", requireAuth, requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/payment-qr", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const event = await appDb.getEventById(getRequestedEventId(req));
     const settings = event ? await getSettingsMap(event.id) : {};
     const profile = event ? await resolveEventOrganizerFinancialProfile(event, settings) : undefined;
@@ -17138,7 +17276,7 @@ async function startServer() {
 
   app.get(
     "/api/registrations/export",
-    requireAuth,
+    requireRoles(["owner", "admin", "operator", "checker"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     registrationsExportRateLimit,
     async (req: AuthenticatedRequest, res) => {
@@ -17277,7 +17415,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/organizers", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/organizers", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const organizationId = String(req.auth?.user.organization_id || "").trim();
       const profiles = await appDb.listOrganizerProfiles(organizationId);
@@ -17346,7 +17484,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/organizers/:id/financial-profile", requireAuth, async (req: AuthenticatedRequest, res) => {
+  app.get("/api/organizers/:id/financial-profile", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
     try {
       const organizationId = String(req.auth?.user.organization_id || "").trim();
       const organizer = await appDb.getOrganizerProfileById(String(req.params.id || ""), organizationId);
@@ -17382,7 +17520,7 @@ async function startServer() {
 
   app.get(
     "/api/organization/financial-profile",
-    requireAuth,
+    requireRoles(["owner", "admin"]),
     async (req: AuthenticatedRequest, res) => {
       try {
         const organizationId = String(req.auth?.user.organization_id || "").trim();
@@ -17553,10 +17691,10 @@ async function startServer() {
     "/api/settings",
     requireAuth,
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
-    async (req, res) => {
+    async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
-      res.json(await getSettingsMap(eventId));
+      res.json(sanitizeSettingsForRole(await getSettingsMap(eventId), req.auth?.user.role));
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
@@ -18099,7 +18237,7 @@ async function startServer() {
 
   app.get(
     "/api/documents",
-    requireAuth,
+    requireRoles(["owner", "admin", "operator"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     async (req, res) => {
     try {
@@ -18115,7 +18253,7 @@ async function startServer() {
 
   app.get(
     "/api/documents/:id/chunks",
-    requireAuth,
+    requireRoles(["owner", "admin", "operator"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     async (req, res) => {
     try {
@@ -18142,7 +18280,7 @@ async function startServer() {
 
   app.get(
     "/api/documents/:id/embedding-preview",
-    requireAuth,
+    requireRoles(["owner", "admin", "operator"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     async (req, res) => {
     try {
@@ -18247,7 +18385,7 @@ async function startServer() {
 
   app.get(
     "/api/documents/retrieval-debug",
-    requireAuth,
+    requireRoles(["owner", "admin", "operator"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     retrievalDebugRateLimit,
     async (req, res) => {
@@ -18961,6 +19099,7 @@ async function startServer() {
   app.post(
     "/api/messages/runtime-reset",
     requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }),
     manualOutboundActionRateLimit,
     async (req: AuthenticatedRequest, res) => {
     try {
@@ -18974,7 +19113,7 @@ async function startServer() {
         issues,
         { required: false, label: "platform" },
       );
-      const eventId = readOptionalString(body, "event_id", 128);
+      const eventId = getRequestedEventId(req);
       const pageId = readOptionalString(body, "page_id", 255);
       if (issues.length > 0) {
         return respondValidationError(res, issues);
@@ -19239,7 +19378,10 @@ async function startServer() {
     async (req: AuthenticatedRequest, res) => {
       try {
         const selectedEventId = normalizeOptionalText(req.query?.event_id);
-        const dashboard = await buildAdminAgentDashboard(selectedEventId, getRequestOrganizationId(req));
+        const allowedEventIds = req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)
+          ? await appDb.listUserEventIds(req.auth.user.id)
+          : undefined;
+        const dashboard = await buildAdminAgentDashboard(selectedEventId, getRequestOrganizationId(req), allowedEventIds);
         return res.json(dashboard);
       } catch (error) {
         console.error("Admin agent dashboard error:", error);
@@ -19354,15 +19496,15 @@ async function startServer() {
       }
 
       try {
-          const execution = await runAdminAgentCommand({
-            message,
-            messageParts: [
+        const execution = await runAdminAgentCommand({
+          message,
+          messageParts: [
             ...(message ? [{ text: message } satisfies ChatPart] : []),
             ...attachments.map((image) => ({ image } satisfies ChatPart)),
-            ],
-            eventId,
-            organizationId: getRequestOrganizationId(req),
-            history,
+          ],
+          eventId,
+          organizationId: getRequestOrganizationId(req),
+          history,
           settings: {
             ...settings,
             ...(globalAgentSettings.systemPrompt ? { admin_agent_system_prompt: globalAgentSettings.systemPrompt } : {}),
@@ -19372,6 +19514,7 @@ async function startServer() {
           source: "admin_agent_planner",
           metadata: { mode: "ui" },
           historyScopeKey: `ui:${req.auth?.user.id || "anonymous"}`,
+          forceSingleEvent: Boolean(req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)),
         });
         const effectiveEventId = normalizeOptionalText(execution.eventId) || requestedEventId;
 

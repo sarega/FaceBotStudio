@@ -41,6 +41,7 @@ export interface AuthUser {
   username: string;
   display_name: string;
   role: UserRole;
+  assigned_event_ids?: string[];
   organization_id: string;
   organization_name: string;
   is_active: boolean;

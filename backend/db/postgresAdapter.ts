@@ -99,7 +99,6 @@ const DEFAULT_ORGANIZATION_ID = "org_default";
 const DEFAULT_ORGANIZATION_NAME = process.env.ORGANIZATION_NAME || "Default Organization";
 const DEFAULT_ORGANIZATION_SLUG = "default";
 const EVENT_SETTING_KEY_SET = new Set<string>(EVENT_SETTING_KEYS);
-const EVENT_ASSIGNMENT_RESTRICTED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
 type QueryableClient = Pick<Pool, "query"> | Pick<PoolClient, "query">;
 
 function generateRegistrationId() {
@@ -639,7 +638,6 @@ export class PostgresAppDatabase implements AppDatabase {
     await this.ensureChannelEventAssignmentsBootstrap();
     await this.ensureEventDocumentChunks();
     await this.ensureBootstrapOwner();
-    await this.bootstrapEventAssignmentsIfEmpty();
     await this.deleteExpiredSessions();
     await this.deleteExpiredCheckinSessions();
     await this.deleteExpiredCheckinAccessSessions();
@@ -2096,7 +2094,6 @@ export class PostgresAppDatabase implements AppDatabase {
           [id, key, NEW_EVENT_TEMPLATE_ENTRIES[key] ?? DEFAULT_SETTINGS_ENTRIES[key]],
         );
       }
-      await this.assignEventToAllRestrictedUsers(id, client);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -3375,6 +3372,39 @@ export class PostgresAppDatabase implements AppDatabase {
     return Boolean(result.rows[0]?.exists);
   }
 
+  async listUserEventIds(userId: string) {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return [];
+    const result = await this.pool.query<{ event_id: string }>(
+      `SELECT event_id
+       FROM user_event_assignments
+       WHERE user_id = $1
+       ORDER BY event_id ASC`,
+      [normalizedUserId],
+    );
+    return result.rows.map((row) => String(row.event_id || "").trim()).filter(Boolean);
+  }
+
+  async setUserEventAssignments(userId: string, eventIds: string[]) {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return;
+    const normalizedEventIds = [...new Set(eventIds.map((eventId) => String(eventId || "").trim()).filter(Boolean))];
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM user_event_assignments WHERE user_id = $1", [normalizedUserId]);
+      for (const eventId of normalizedEventIds) {
+        await this.assignUserToEvent(normalizedUserId, eventId, client);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getUserPasswordHash(username: string) {
     const result = await this.pool.query<{ password_hash: string }>(
       "SELECT password_hash FROM users WHERE username = $1",
@@ -3454,8 +3484,8 @@ export class PostgresAppDatabase implements AppDatabase {
          VALUES ($1, $2, $3, $4)`,
         [membershipId, DEFAULT_ORGANIZATION_ID, userId, input.role],
       );
-      if (EVENT_ASSIGNMENT_RESTRICTED_ROLES.includes(input.role)) {
-        await this.assignUserToAllEvents(userId, client);
+      for (const eventId of input.assigned_event_ids || []) {
+        await this.assignUserToEvent(userId, eventId, client);
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -3475,9 +3505,6 @@ export class PostgresAppDatabase implements AppDatabase {
       "UPDATE memberships SET role = $1 WHERE organization_id = $2 AND user_id = $3",
       [role, DEFAULT_ORGANIZATION_ID, String(userId || "").trim()],
     );
-    if (result.rowCount > 0 && EVENT_ASSIGNMENT_RESTRICTED_ROLES.includes(role)) {
-      await this.assignUserToAllEvents(userId);
-    }
     return result.rowCount > 0;
   }
 
@@ -4145,53 +4172,6 @@ export class PostgresAppDatabase implements AppDatabase {
        ON CONFLICT (user_id, event_id) DO NOTHING`,
       [generateEntityId("uea"), normalizedUserId, normalizedEventId],
     );
-  }
-
-  private async assignUserToAllEvents(userId: string, client: QueryableClient = this.pool) {
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId) return;
-    const eventsResult = await client.query<{ id: string }>("SELECT id FROM events");
-    for (const row of eventsResult.rows) {
-      await this.assignUserToEvent(normalizedUserId, row.id, client);
-    }
-  }
-
-  private async assignEventToAllRestrictedUsers(eventId: string, client: QueryableClient = this.pool) {
-    const normalizedEventId = String(eventId || "").trim();
-    if (!normalizedEventId) return;
-    const usersResult = await client.query<{ user_id: string }>(
-      `SELECT user_id
-       FROM memberships
-       WHERE organization_id = $1
-         AND role = ANY($2::text[])`,
-      [DEFAULT_ORGANIZATION_ID, EVENT_ASSIGNMENT_RESTRICTED_ROLES],
-    );
-    for (const row of usersResult.rows) {
-      await this.assignUserToEvent(row.user_id, normalizedEventId, client);
-    }
-  }
-
-  private async bootstrapEventAssignmentsIfEmpty() {
-    const countResult = await this.pool.query<{ total: string }>(
-      "SELECT COUNT(*)::text AS total FROM user_event_assignments",
-    );
-    if (Number.parseInt(countResult.rows[0]?.total || "0", 10) > 0) {
-      return;
-    }
-
-    const usersResult = await this.pool.query<{ user_id: string }>(
-      `SELECT user_id
-       FROM memberships
-       WHERE organization_id = $1
-         AND role = ANY($2::text[])`,
-      [DEFAULT_ORGANIZATION_ID, EVENT_ASSIGNMENT_RESTRICTED_ROLES],
-    );
-    const eventsResult = await this.pool.query<{ id: string }>("SELECT id FROM events");
-    for (const userRow of usersResult.rows) {
-      for (const eventRow of eventsResult.rows) {
-        await this.assignUserToEvent(userRow.user_id, eventRow.id);
-      }
-    }
   }
 
   private async queryAuthUser(whereClause: string, values: unknown[]) {

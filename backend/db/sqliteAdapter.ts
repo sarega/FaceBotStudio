@@ -96,8 +96,6 @@ const DEFAULT_ORGANIZATION_ID = "org_default";
 const DEFAULT_ORGANIZATION_NAME = process.env.ORGANIZATION_NAME || "Default Organization";
 const DEFAULT_ORGANIZATION_SLUG = "default";
 const EVENT_SETTING_KEY_SET = new Set<string>(EVENT_SETTING_KEYS);
-const EVENT_ASSIGNMENT_RESTRICTED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
-
 function generateRegistrationId() {
   return `REG-${randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase()}`;
 }
@@ -1437,7 +1435,6 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.bootstrapChannelAccounts();
     await this.ensureEventDocumentChunks();
     await this.ensureBootstrapOwner();
-    await this.bootstrapEventAssignmentsIfEmpty();
     await this.deleteExpiredSessions();
     await this.deleteExpiredCheckinSessions();
     await this.deleteExpiredCheckinAccessSessions();
@@ -2772,8 +2769,6 @@ export class SqliteAppDatabase implements AppDatabase {
       Object.fromEntries(EVENT_SETTING_KEYS.map((key) => [key, NEW_EVENT_TEMPLATE_ENTRIES[key] ?? DEFAULT_SETTINGS_ENTRIES[key]])),
       id,
     );
-    await this.assignEventToAllRestrictedUsers(id);
-
     const event = await this.getEventById(id);
     if (!event) throw new Error("Failed to create event");
     return event;
@@ -3914,6 +3909,35 @@ export class SqliteAppDatabase implements AppDatabase {
     return Boolean(row);
   }
 
+  async listUserEventIds(userId: string) {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return [];
+    const rows = this.db.prepare(
+      `SELECT event_id
+       FROM user_event_assignments
+       WHERE user_id = ?
+       ORDER BY event_id ASC`,
+    ).all(normalizedUserId) as Array<{ event_id?: string }>;
+    return rows.map((row) => String(row.event_id || "").trim()).filter(Boolean);
+  }
+
+  async setUserEventAssignments(userId: string, eventIds: string[]) {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return;
+    const normalizedEventIds = [...new Set(eventIds.map((eventId) => String(eventId || "").trim()).filter(Boolean))];
+    const update = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM user_event_assignments WHERE user_id = ?").run(normalizedUserId);
+      const insert = this.db.prepare(
+        `INSERT OR IGNORE INTO user_event_assignments (id, user_id, event_id)
+         VALUES (?, ?, ?)`,
+      );
+      for (const eventId of normalizedEventIds) {
+        insert.run(generateEntityId("uea"), normalizedUserId, eventId);
+      }
+    });
+    update();
+  }
+
   async getUserPasswordHash(username: string) {
     const row = this.db.prepare("SELECT password_hash FROM users WHERE username = ?").get(
       normalizeUsername(username),
@@ -3984,8 +4008,8 @@ export class SqliteAppDatabase implements AppDatabase {
       `INSERT INTO memberships (id, organization_id, user_id, role)
        VALUES (?, ?, ?, ?)`,
     ).run(membershipId, DEFAULT_ORGANIZATION_ID, userId, input.role);
-    if (EVENT_ASSIGNMENT_RESTRICTED_ROLES.includes(input.role)) {
-      await this.assignUserToAllEvents(userId);
+    for (const eventId of input.assigned_event_ids || []) {
+      await this.assignUserToEvent(userId, eventId);
     }
 
     const user = await this.getUserById(userId);
@@ -3997,9 +4021,6 @@ export class SqliteAppDatabase implements AppDatabase {
     const result = this.db.prepare(
       "UPDATE memberships SET role = ? WHERE organization_id = ? AND user_id = ?",
     ).run(role, DEFAULT_ORGANIZATION_ID, String(userId || "").trim());
-    if (result.changes > 0 && EVENT_ASSIGNMENT_RESTRICTED_ROLES.includes(role)) {
-      await this.assignUserToAllEvents(userId);
-    }
     return result.changes > 0;
   }
 
@@ -4700,48 +4721,6 @@ export class SqliteAppDatabase implements AppDatabase {
       `INSERT OR IGNORE INTO user_event_assignments (id, user_id, event_id)
        VALUES (?, ?, ?)`,
     ).run(generateEntityId("uea"), normalizedUserId, normalizedEventId);
-  }
-
-  private async assignUserToAllEvents(userId: string) {
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId) return;
-    const events = this.db.prepare("SELECT id FROM events").all() as Array<{ id: string }>;
-    for (const event of events) {
-      await this.assignUserToEvent(normalizedUserId, event.id);
-    }
-  }
-
-  private async assignEventToAllRestrictedUsers(eventId: string) {
-    const normalizedEventId = String(eventId || "").trim();
-    if (!normalizedEventId) return;
-    const placeholders = EVENT_ASSIGNMENT_RESTRICTED_ROLES.map(() => "?").join(", ");
-    const rows = this.db.prepare(
-      `SELECT user_id
-       FROM memberships
-       WHERE organization_id = ?
-         AND role IN (${placeholders})`,
-    ).all(DEFAULT_ORGANIZATION_ID, ...EVENT_ASSIGNMENT_RESTRICTED_ROLES) as Array<{ user_id: string }>;
-    for (const row of rows) {
-      await this.assignUserToEvent(row.user_id, normalizedEventId);
-    }
-  }
-
-  private async bootstrapEventAssignmentsIfEmpty() {
-    const existing = this.db.prepare("SELECT COUNT(*) AS total FROM user_event_assignments").get() as { total?: number };
-    if (Number(existing.total || 0) > 0) return;
-    const placeholders = EVENT_ASSIGNMENT_RESTRICTED_ROLES.map(() => "?").join(", ");
-    const users = this.db.prepare(
-      `SELECT user_id
-       FROM memberships
-       WHERE organization_id = ?
-         AND role IN (${placeholders})`,
-    ).all(DEFAULT_ORGANIZATION_ID, ...EVENT_ASSIGNMENT_RESTRICTED_ROLES) as Array<{ user_id: string }>;
-    const events = this.db.prepare("SELECT id FROM events").all() as Array<{ id: string }>;
-    for (const user of users) {
-      for (const event of events) {
-        await this.assignUserToEvent(user.user_id, event.id);
-      }
-    }
   }
 
   private queryAuthUser(whereClause: string, params: unknown[]) {

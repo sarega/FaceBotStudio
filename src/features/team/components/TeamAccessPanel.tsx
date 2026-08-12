@@ -1,13 +1,21 @@
-import { RefreshCw, Shield, Trash2, UserPlus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CalendarRange, RefreshCw, Save, Shield, Trash2, UserPlus } from "lucide-react";
 
 import { ActionButton, StatusLine } from "../../../components/shared/AppUi";
-import type { AuthUser, UserRole } from "../../../types";
+import type { AuthUser, EventRecord, UserRole } from "../../../types";
+
+const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
+
+function roleLabel(role: UserRole) {
+  return role === "checker" ? "Gatekeeper" : role;
+}
 
 type TeamAccessPanelProps = {
   role: UserRole | undefined;
   authUser: AuthUser | null;
   teamLoading: boolean;
   teamUsers: AuthUser[];
+  events: EventRecord[];
   teamMessage: string;
   canManageUsers: boolean;
   manageableRoles: readonly UserRole[];
@@ -19,11 +27,14 @@ type TeamAccessPanelProps = {
   onNewUserPasswordChange: (value: string) => void;
   newUserRole: UserRole;
   onNewUserRoleChange: (value: UserRole) => void;
+  newUserEventIds: string[];
+  onNewUserEventIdsChange: (value: string[]) => void;
   canManageTargetRole: (user: AuthUser) => boolean;
   canManageTargetAccess: (user: AuthUser) => boolean;
   canDeleteTeamUser: (user: AuthUser) => boolean;
   onRefresh: () => void | Promise<void>;
   onUserRoleChange: (userId: string, role: UserRole) => void | Promise<void>;
+  onUserEventAccessChange: (userId: string, eventIds: string[]) => void | Promise<void>;
   onUserAccessToggle: (userId: string, nextIsActive: boolean) => void | Promise<void>;
   onDeleteUser: (user: AuthUser) => void | Promise<void>;
   onCreateUser: () => void | Promise<void>;
@@ -34,6 +45,7 @@ export function TeamAccessPanel({
   authUser,
   teamLoading,
   teamUsers,
+  events,
   teamMessage,
   canManageUsers,
   manageableRoles,
@@ -45,15 +57,27 @@ export function TeamAccessPanel({
   onNewUserPasswordChange,
   newUserRole,
   onNewUserRoleChange,
+  newUserEventIds,
+  onNewUserEventIdsChange,
   canManageTargetRole,
   canManageTargetAccess,
   canDeleteTeamUser,
   onRefresh,
   onUserRoleChange,
+  onUserEventAccessChange,
   onUserAccessToggle,
   onDeleteUser,
   onCreateUser,
 }: TeamAccessPanelProps) {
+  const [draftEventIds, setDraftEventIds] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    setDraftEventIds(Object.fromEntries(teamUsers.map((user) => [user.id, user.assigned_event_ids || []])));
+  }, [teamUsers]);
+
+  const toggleEventId = (eventIds: string[], eventId: string) =>
+    eventIds.includes(eventId) ? eventIds.filter((id) => id !== eventId) : [...eventIds, eventId];
+
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sm:p-5">
@@ -105,7 +129,7 @@ export function TeamAccessPanel({
                       <StatusLine
                         items={[
                           user.is_active ? "active" : "disabled",
-                          user.role,
+                          roleLabel(user.role),
                         ]}
                       />
                     </div>
@@ -124,7 +148,7 @@ export function TeamAccessPanel({
                             .filter((roleOption) => authUser?.role === "owner" || (roleOption !== "owner" && roleOption !== "admin"))
                             .map((roleOption) => (
                               <option key={roleOption} value={roleOption}>
-                                {roleOption}
+                                {roleLabel(roleOption)}
                               </option>
                             ))}
                         </select>
@@ -158,6 +182,54 @@ export function TeamAccessPanel({
                       </div>
                     )}
                   </div>
+
+                  {EVENT_SCOPED_ROLES.includes(user.role) && (
+                    <div className="rounded-xl border border-blue-100 bg-white p-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-2">
+                          <CalendarRange className="h-4 w-4 text-blue-600" />
+                          <div>
+                            <p className="text-xs font-semibold text-slate-800">Event access</p>
+                            <p className="text-[11px] text-slate-500">
+                              {(draftEventIds[user.id] || user.assigned_event_ids || []).length} selected Event(s)
+                            </p>
+                          </div>
+                        </div>
+                        {canManageTargetAccess(user) && (
+                          <ActionButton
+                            onClick={() => void onUserEventAccessChange(user.id, draftEventIds[user.id] || user.assigned_event_ids || [])}
+                            disabled={teamLoading}
+                            tone="blue"
+                            className="text-xs"
+                          >
+                            <Save className="h-3.5 w-3.5" />
+                            Save Event Access
+                          </ActionButton>
+                        )}
+                      </div>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {events.map((event) => {
+                          const selected = (draftEventIds[user.id] || user.assigned_event_ids || []).includes(event.id);
+                          return (
+                            <label key={event.id} className="flex items-start gap-2 rounded-lg border border-slate-100 px-2.5 py-2 text-xs text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => setDraftEventIds((current) => ({
+                                  ...current,
+                                  [user.id]: toggleEventId(current[user.id] || user.assigned_event_ids || [], event.id),
+                                }))}
+                                disabled={!canManageTargetAccess(user) || teamLoading}
+                                className="mt-0.5 accent-blue-600"
+                              />
+                              <span>{event.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {!events.length && <p className="mt-2 text-xs text-amber-700">No Event is available to assign.</p>}
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -170,7 +242,7 @@ export function TeamAccessPanel({
               <UserPlus className="w-4 h-4 text-blue-600" />
               <p className="text-sm font-semibold text-slate-900">Add Team Member</p>
             </div>
-            <p className="mt-1 text-xs text-slate-500">Create a new admin workspace account with a role and temporary password.</p>
+            <p className="mt-1 text-xs text-slate-500">Create an account, then limit event-scoped roles to selected Events.</p>
             <div className="mt-3 space-y-2.5">
               <input
                 value={newUserDisplayName}
@@ -200,13 +272,34 @@ export function TeamAccessPanel({
                   .filter((roleOption) => roleOption !== "owner" && (role !== "admin" || roleOption !== "admin"))
                   .map((roleOption) => (
                     <option key={roleOption} value={roleOption}>
-                      {roleOption}
+                      {roleLabel(roleOption)}
                     </option>
                   ))}
               </select>
+              {EVENT_SCOPED_ROLES.includes(newUserRole) && (
+                <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3">
+                  <p className="text-xs font-semibold text-slate-800">Gatekeeper Event access</p>
+                  <p className="mt-1 text-[11px] text-slate-500">เลือก Event ที่บัญชีนี้จะเห็นและเช็ครายชื่อได้เท่านั้น</p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {events.map((event) => (
+                      <label key={event.id} className="flex items-start gap-2 rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-xs text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={newUserEventIds.includes(event.id)}
+                          onChange={() => onNewUserEventIdsChange(toggleEventId(newUserEventIds, event.id))}
+                          disabled={teamLoading}
+                          className="mt-0.5 accent-blue-600"
+                        />
+                        <span>{event.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {!events.length && <p className="mt-2 text-xs text-amber-700">No Event is available to assign.</p>}
+                </div>
+              )}
               <ActionButton
                 onClick={() => void onCreateUser()}
-                disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8}
+                disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8 || (EVENT_SCOPED_ROLES.includes(newUserRole) && !newUserEventIds.length)}
                 tone="blue"
                 active
                 className="w-full text-sm"

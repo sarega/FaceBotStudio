@@ -680,6 +680,7 @@ export interface AuthUserRow {
   username: string;
   display_name: string;
   role: UserRole;
+  assigned_event_ids?: string[];
   organization_id: string;
   organization_name: string;
   is_active: boolean;
@@ -707,6 +708,7 @@ export interface CreateUserInput {
   display_name: string;
   password_hash: string;
   role: UserRole;
+  assigned_event_ids?: string[];
 }
 
 export interface AuditLogEntryInput {
@@ -1199,6 +1201,8 @@ export interface AppDatabase {
   getUserByUsername(username: string): Promise<AuthUserRow | undefined>;
   getUserById(userId: string): Promise<AuthUserRow | undefined>;
   isUserAssignedToEvent(userId: string, eventId: string): Promise<boolean>;
+  listUserEventIds(userId: string): Promise<string[]>;
+  setUserEventAssignments(userId: string, eventIds: string[]): Promise<void>;
   getUserPasswordHash(username: string): Promise<string | undefined>;
   updateUserPasswordHash(userId: string, passwordHash: string): Promise<boolean>;
   getUserPreferences(userId: string): Promise<UserPreferencesRow | undefined>;
