@@ -10138,6 +10138,7 @@ function buildDirectTicketDelivery(ticket: DirectTicketRow) {
   return {
     png_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.png${query}`,
     pdf_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.pdf${query}`,
+    email_pdf_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.email.pdf${query}`,
     svg_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.svg${query}`,
   };
 }
@@ -10149,6 +10150,7 @@ function buildAdminDirectTicketDelivery(ticket: DirectTicketRow) {
   return {
     png_url: `/api/direct-ticketing/tickets/${id}.png${query}`,
     pdf_url: `/api/direct-ticketing/tickets/${id}.pdf${query}`,
+    email_pdf_url: `/api/direct-ticketing/tickets/${id}.email.pdf${query}`,
     svg_url: `/api/direct-ticketing/tickets/${id}.svg${query}`,
   };
 }
@@ -10190,10 +10192,10 @@ async function sendDirectTicketDecisionEmail(ticket: DirectTicketRow) {
   const eventName = String(settings.event_name || "Event").trim() || "Event";
   const delivery = buildDirectTicketDelivery(ticket);
   const pngUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.png_url) : "";
-  const pdfUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.pdf_url) : "";
+  const pdfUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.email_pdf_url) : "";
   const approved = ticket.status === "issued";
   const message = approved
-    ? `Payment verified. Your ${eventName} ticket for ${ticket.zone || ""} ${ticket.row_label || ""}-${ticket.seat_label || ""} is ready.${pngUrl ? `\nPNG: ${pngUrl}` : ""}${pdfUrl ? `\nPDF: ${pdfUrl}` : ""}`
+    ? `Payment verified. Your ${eventName} ticket for ${ticket.zone || ""} ${ticket.row_label || ""}-${ticket.seat_label || ""} is ready.${pngUrl ? `\nPNG: ${pngUrl}` : ""}${pdfUrl ? `\nPDF (A4 print): ${pdfUrl}` : ""}`
     : `Payment was not approved for ${eventName}. ${ticket.rejection_reason || "Please contact the organizer for help."}`;
   try {
     await sendTransactionalEmail({
@@ -10214,7 +10216,7 @@ async function sendDirectTicketDecisionEmail(ticket: DirectTicketRow) {
 }
 
 async function sendDirectTicketBatchEmail(to: string, tickets: DirectTicketRow[]) {
-  // ponytail: Reuse the existing secure PNG/PDF links; the current email provider has no attachment contract.
+  // ponytail: Keep the provider link-based; the print-ready PDF is rendered on demand.
   if (!tickets.length) return;
   const settings = await getSettingsMap(tickets[0].event_id);
   const eventName = String(settings.event_name || "Event").trim() || "Event";
@@ -10222,7 +10224,7 @@ async function sendDirectTicketBatchEmail(to: string, tickets: DirectTicketRow[]
   const items = tickets.map((ticket) => {
     const delivery = buildDirectTicketDelivery(ticket);
     const pngUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.png_url) : "";
-    const pdfUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.pdf_url) : "";
+    const pdfUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.email_pdf_url) : "";
     if (!pngUrl || !pdfUrl) throw new Error("Direct ticket links are not configured");
     return {
       ticket,
@@ -10239,11 +10241,11 @@ async function sendDirectTicketBatchEmail(to: string, tickets: DirectTicketRow[]
     ...items.flatMap((item, index) => [
       `${index + 1}. ${item.performance} · ${item.seat}`,
       `PNG: ${item.pngUrl}`,
-      `PDF: ${item.pdfUrl}`,
+      `PDF (A4 print): ${item.pdfUrl}`,
       "",
     ]),
   ].join("\n");
-  const html = `<p>Hello ${escapeXml(recipientName)},</p><p>Your ${escapeXml(eventName)} tickets are ready.</p><ol>${items.map((item) => `<li><strong>${escapeXml(item.performance)}</strong> · ${escapeXml(item.seat)}<br><a href="${escapeXml(item.pngUrl)}">PNG</a> · <a href="${escapeXml(item.pdfUrl)}">PDF</a> <small>${escapeXml(item.ticket.id)}</small></li>`).join("")}</ol>`;
+  const html = `<p>Hello ${escapeXml(recipientName)},</p><p>Your ${escapeXml(eventName)} tickets are ready. The PDF link is formatted for A4 printing, one ticket per sheet.</p><ol>${items.map((item) => `<li><strong>${escapeXml(item.performance)}</strong> · ${escapeXml(item.seat)}<br><a href="${escapeXml(item.pngUrl)}">PNG</a> · <a href="${escapeXml(item.pdfUrl)}">PDF สำหรับพิมพ์ A4</a> <small>${escapeXml(item.ticket.id)}</small></li>`).join("")}</ol>`;
   await sendTransactionalEmail({
     to,
     template: {
@@ -10641,6 +10643,141 @@ async function renderDirectTicketPdfBuffer(svg: string) {
   return Buffer.from(await pdf.save());
 }
 
+type DirectTicketEmailPageOptions = {
+  organizerName: string;
+  organizerLinks: Array<{ label: string; value: string }>;
+  organizerContact: string;
+  eventPageUrl: string;
+  mapQrDataUrl: string;
+};
+
+function renderDirectTicketEmailPageSvg(
+  ticket: DirectTicketRow,
+  settings: Record<string, string>,
+  ticketPng: Buffer,
+  options: DirectTicketEmailPageOptions,
+) {
+  const timeZone = normalizeTimeZone(settings.event_timezone);
+  const ticketX = 30.75;
+  const ticketY = 178;
+  const renderTextLines = (lines: string[], x: number, y: number, lineHeight: number, attributes: string) =>
+    `<text x="${x}" y="${y}" ${attributes}>${lines.map((line, index) => `<tspan x="${x}" dy="${index ? lineHeight : 0}">${escapeXml(line)}</tspan>`).join("")}</text>`;
+  const eventNameLines = wrapTextLines(String(settings.event_name || "Event Ticket").trim() || "Event Ticket", 32, 2);
+  const eventName = renderTextLines(eventNameLines, 14, 36, 8, 'font-size="7.4" font-weight="900" fill="#251b16"');
+  const performance = escapeXml(truncateText(ticket.performance_title || ticket.performance_code || "Performance", 32));
+  const eventDate = escapeXml(truncateText(formatTicketDate(ticket.performance_starts_at || "", ticket.performance_ends_at || "", timeZone), 28));
+  const locationLines = formatEventLocationFromSettings(settings, "")
+    ? wrapTextLines(formatEventLocationFromSettings(settings, ""), 42, 2)
+    : [];
+  const travelLines = normalizeOptionalText(settings.event_travel)
+    ? wrapTextLines(settings.event_travel, 48, 2)
+    : [];
+  const recipient = escapeXml(truncateText(ticket.holder_name || ticket.buyer_name || "Guest", 34));
+  const seat = escapeXml(`${ticket.zone || ""} ${ticket.row_label || ""}-${ticket.seat_label || ""}`.trim() || "-");
+  const organizerName = escapeXml(truncateText(options.organizerName || "-", 24));
+  const organizerLinks = options.organizerLinks.slice(0, 3).map((link, index) =>
+    `<text x="157" y="${94 + index * 6}" font-size="2.1" fill="#6b625b">${escapeXml(`${link.label}: ${truncateText(link.value, 26)}`)}</text>`
+  ).join("");
+  const organizerContactLines = options.organizerContact
+    ? wrapTextLines(options.organizerContact, 27, 2)
+    : [];
+  const organizerContact = organizerContactLines.length > 0
+    ? renderTextLines(organizerContactLines, 157, 124, 6, 'font-size="2.15" fill="#251b16"')
+    : "";
+  const eventPageLines = options.eventPageUrl
+    ? wrapTextLines(options.eventPageUrl, 27, 1)
+    : [];
+  const eventPage = eventPageLines.length > 0
+    ? renderTextLines(eventPageLines, 157, 148, 5, 'font-size="2.05" fill="#6b625b"')
+    : "";
+  const mapQr = options.mapQrDataUrl
+    ? `<rect x="159" y="37" width="32" height="32" rx="2" fill="#ffffff" stroke="#dfd0b9" stroke-width=".35"/><image x="161" y="39" width="28" height="28" href="${escapeXml(options.mapQrDataUrl)}" preserveAspectRatio="none"/>`
+    : `<text x="175" y="54" text-anchor="middle" font-size="2.1" fill="#8b6b36">ยังไม่ได้ตั้งค่าแผนที่</text>`;
+  const location = locationLines.length > 0
+    ? renderTextLines(locationLines, 14, 112, 6, 'font-size="3.45" fill="#251b16"')
+    : "";
+  const travel = travelLines.length > 0
+    ? renderTextLines(travelLines, 14, 135, 6, 'font-size="3.05" fill="#251b16"')
+    : `<text x="14" y="135" font-size="3.05" fill="#6b625b">-</text>`;
+  const ticketImage = ticketPng.toString("base64");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="210mm" height="297mm" viewBox="0 0 210 297"><style>${buildEmbeddedTicketFontCss()}text{font-family:"Noto Sans Thai",sans-serif!important}</style>
+    <rect width="210" height="297" fill="#f7f2e9"/>
+    <rect x="8" y="8" width="194" height="154" rx="5" fill="#fffdf8" stroke="#dfd0b9" stroke-width=".45"/>
+    <rect x="154" y="13" width="42" height="144" rx="3" fill="#fbf5ea" stroke="#eadcc7" stroke-width=".35"/>
+    <text x="14" y="19" font-size="3.3" font-weight="700" letter-spacing=".8" fill="#8b6b36">E-TICKET · PRINT COPY</text>
+    ${eventName}
+    <text x="14" y="60" font-size="2.7" font-weight="700" fill="#8b6b36">รอบการแสดง</text><text x="14" y="67" font-size="3.8" font-weight="700" fill="#251b16">${performance}</text>
+    <text x="87" y="60" font-size="2.7" font-weight="700" fill="#8b6b36">วันและเวลา</text><text x="87" y="67" font-size="3.35" font-weight="700" fill="#251b16">${eventDate}</text>
+    <text x="14" y="83" font-size="2.7" font-weight="700" fill="#8b6b36">ผู้รับบัตร</text><text x="14" y="90" font-size="4.1" font-weight="700" fill="#251b16">${recipient}</text>
+    <text x="87" y="83" font-size="2.7" font-weight="700" fill="#8b6b36">ที่นั่ง</text><text x="87" y="90" font-size="3.7" font-weight="700" fill="#251b16">${seat}</text>
+    <text x="14" y="105" font-size="2.7" font-weight="700" fill="#8b6b36">สถานที่</text>${location}
+    <text x="14" y="128" font-size="2.7" font-weight="700" fill="#8b6b36">การเดินทาง</text>${travel}
+    <path d="M14 148 H148" stroke="#dfd0b9" stroke-width=".35"/>
+    <text x="14" y="156" font-size="2.45" fill="#6b625b">พิมพ์ที่ขนาดจริง 100% · PDF นี้มีตั๋ว A6 1 ใบต่อ 1 แผ่น A4</text>
+    <text x="157" y="20" font-size="2.35" font-weight="700" letter-spacing=".35" fill="#8b6b36">ORGANIZER / PAGE</text>
+    <text x="157" y="28" font-size="3.5" font-weight="800" fill="#251b16">${organizerName}</text>
+    ${mapQr}
+    <text x="157" y="76" font-size="2.25" font-weight="700" fill="#8b6b36">สแกนดูแผนที่ Google Maps</text>
+    <text x="157" y="87" font-size="2.25" font-weight="700" fill="#8b6b36">หน้า Organizer</text>
+    ${organizerLinks || `<text x="157" y="94" font-size="2.1" fill="#6b625b">ยังไม่ได้ตั้งค่าลิงก์</text>`}
+    <text x="157" y="117" font-size="2.25" font-weight="700" fill="#8b6b36">ติดต่อ</text>
+    ${organizerContact || `<text x="157" y="124" font-size="2.1" fill="#6b625b">-</text>`}
+    ${options.eventPageUrl ? `<text x="157" y="141" font-size="2.25" font-weight="700" fill="#8b6b36">EVENT PAGE</text>${eventPage}` : ""}
+    <text x="${ticketX}" y="169" font-size="2.8" font-weight="700" letter-spacing=".6" fill="#8b6b36">A6 TICKET · PRINT / CUT</text>
+    <rect x="${ticketX - 2}" y="${ticketY - 2}" width="152.5" height="109" rx="3" fill="#fffdf8" stroke="#dfd0b9" stroke-width=".45"/>
+    <image x="${ticketX}" y="${ticketY}" width="148.5" height="105" href="data:image/png;base64,${ticketImage}" preserveAspectRatio="none"/>
+    <text x="${ticketX}" y="291" font-size="2.8" fill="#6b625b">พิมพ์ 100% · ไม่ต้องเลือก Fit to page</text>
+  </svg>`;
+}
+
+async function renderDirectTicketEmailPdfBuffer(ticket: DirectTicketRow, qrValue: string) {
+  const settings = await getSettingsMap(ticket.event_id);
+  const event = await appDb.getEventById(ticket.event_id);
+  const organizerProfile = event ? await resolveEventOrganizerProfile(event, settings) : undefined;
+  const organizer = buildOrganizerProfileResponse(
+    organizerProfile,
+    settings,
+    event?.organizer_id || "",
+    event?.organizer_name || "",
+  );
+  const organizerLinks = [
+    { label: "Web", value: organizer.website_url },
+    { label: "FB", value: organizer.facebook_url },
+    { label: "LINE", value: organizer.line_url },
+  ].filter((link) => Boolean(normalizeOptionalText(link.value)));
+  const publicSlug = resolveEnglishPublicSlug({
+    customSlug: settings.event_public_slug,
+    eventName: settings.event_name || event?.name || "",
+    eventSlug: event?.slug || "",
+    eventId: event?.id || ticket.event_id,
+  });
+  const eventPageUrl = isTruthySetting(settings.event_public_page_enabled)
+    ? buildAbsoluteAppAssetUrl(`/events/${encodeURIComponent(publicSlug)}`)
+    : "";
+  const mapUrl = resolveEventMapUrlFromSettings(settings);
+  const mapQrDataUrl = mapUrl
+    ? await QRCode.toDataURL(mapUrl, { width: 240, margin: 1, errorCorrectionLevel: "M" })
+    : "";
+  const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
+  const ticketSvg = renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings));
+  const ticketPng = renderTicketPngBuffer(ticketSvg, 1800);
+  const pageSvg = renderDirectTicketEmailPageSvg(ticket, settings, ticketPng, {
+    organizerName: organizer.display_name,
+    organizerLinks,
+    organizerContact: organizer.contact_text,
+    eventPageUrl,
+    mapQrDataUrl,
+  });
+  const pdf = await PDFDocument.create();
+  const pageWidth = 210 / 25.4 * 72;
+  const pageHeight = 297 / 25.4 * 72;
+  const page = pdf.addPage([pageWidth, pageHeight]);
+  const image = await pdf.embedPng(renderTicketPngBuffer(pageSvg, 1800));
+  page.drawImage(image, { x: 0, y: 0, width: pageWidth, height: pageHeight });
+  return Buffer.from(await pdf.save());
+}
+
 type DirectTicketAssetFormat = "png" | "pdf" | "svg";
 
 async function renderDirectTicketAsset(ticket: DirectTicketRow, format: DirectTicketAssetFormat, qrValue: string) {
@@ -10658,6 +10795,14 @@ async function sendDirectTicketAsset(res: Response, ticket: DirectTicketRow, for
   res.setHeader("Content-Disposition", `inline; filename="${ticket.id}.${format}"`);
   res.setHeader("Cache-Control", cacheControl);
   return res.send(asset.body);
+}
+
+async function sendDirectTicketEmailPdfAsset(res: Response, ticket: DirectTicketRow, qrValue: string, cacheControl: string) {
+  const body = await renderDirectTicketEmailPdfBuffer(ticket, qrValue);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${ticket.id}-print.pdf"`);
+  res.setHeader("Cache-Control", cacheControl);
+  return res.send(body);
 }
 
 async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
@@ -17445,6 +17590,16 @@ async function startServer() {
       return res.status(503).json({ error: "Direct ticket A4 PDF is temporarily unavailable" });
     }
   });
+  app.get("/api/direct-ticketing/tickets/:id.email.pdf", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    try {
+      const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
+      if (!ticket || ticket.event_id !== getRequestedEventId(req) || !["issued", "checked_in"].includes(ticket.status)) return res.status(404).send("Direct ticket not found");
+      return await sendDirectTicketEmailPdfAsset(res, ticket, buildAdminDirectTicketQrValue(ticket.id), "private, no-store");
+    } catch (error) {
+      console.error("Failed to render admin direct ticket email PDF:", error);
+      return res.status(500).json({ error: "Failed to render direct ticket email PDF" });
+    }
+  });
   for (const format of ["png", "pdf", "svg"] as const) {
     app.get(`/api/direct-ticketing/tickets/:id.${format}`, requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
       try {
@@ -17572,6 +17727,19 @@ async function startServer() {
     } catch (error) {
       console.error("Failed to render direct ticket SVG:", error);
       return res.status(500).send("Failed to render ticket SVG");
+    }
+  });
+
+  app.get("/api/direct-tickets/:id.email.pdf", async (req, res) => {
+    try {
+      const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
+      if (!ticket || !["issued", "checked_in"].includes(ticket.status) || !verifyDirectTicketToken("view", ticket.id, req.query.token)) return res.status(404).send("Ticket not found");
+      const qrValue = buildDirectTicketQrValue(ticket.id);
+      if (!qrValue) return res.status(503).send("Direct ticket security is not configured");
+      return await sendDirectTicketEmailPdfAsset(res, ticket, qrValue, "private, max-age=60");
+    } catch (error) {
+      console.error("Failed to render direct ticket email PDF:", error);
+      return res.status(500).send("Failed to render ticket email PDF");
     }
   });
 
