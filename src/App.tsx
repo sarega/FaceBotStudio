@@ -5679,8 +5679,8 @@ export default function App() {
   };
 
   const extractDirectTicketId = (rawValue: string) => {
-    const match = String(rawValue || "").trim().match(/^DIRECT:(dtkt_[a-z0-9]+):[A-Za-z0-9_-]+$/i);
-    return match?.[1] || "";
+    const match = String(rawValue || "").trim().match(/^(?:DIRECT:(dtkt_[a-z0-9]+):[A-Za-z0-9_-]+|DIRECT-ADMIN:(dtkt_[a-z0-9]+))$/i);
+    return match?.[1] || match?.[2] || "";
   };
 
   const loadOrganizerProfile = async (eventId: string) => {

@@ -10113,10 +10113,19 @@ function buildDirectTicketQrValue(ticketId: string) {
   return token ? `DIRECT:${ticketId}:${token}` : "";
 }
 
+function buildAdminDirectTicketQrValue(ticketId: string) {
+  return buildDirectTicketQrValue(ticketId) || `DIRECT-ADMIN:${ticketId}`;
+}
+
 function parseDirectTicketQrValue(rawValue: unknown) {
   const match = String(rawValue || "").trim().match(/^DIRECT:(dtkt_[a-z0-9]+):([A-Za-z0-9_-]+)$/i);
   if (!match || !verifyDirectTicketToken("checkin", match[1], match[2])) return null;
   return { ticketId: match[1] };
+}
+
+function parseAdminDirectTicketQrValue(rawValue: unknown) {
+  const match = String(rawValue || "").trim().match(/^DIRECT-ADMIN:(dtkt_[a-z0-9]+)$/i);
+  return match ? { ticketId: match[1] } : null;
 }
 
 function buildDirectTicketDelivery(ticket: DirectTicketRow) {
@@ -10127,6 +10136,17 @@ function buildDirectTicketDelivery(ticket: DirectTicketRow) {
     png_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.png${query}`,
     pdf_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.pdf${query}`,
     svg_url: `/api/direct-tickets/${encodeURIComponent(ticket.id)}.svg${query}`,
+  };
+}
+
+function buildAdminDirectTicketDelivery(ticket: DirectTicketRow) {
+  if (!["issued", "checked_in"].includes(ticket.status)) return null;
+  const id = encodeURIComponent(ticket.id);
+  const query = `?event_id=${encodeURIComponent(ticket.event_id)}`;
+  return {
+    png_url: `/api/direct-ticketing/tickets/${id}.png${query}`,
+    pdf_url: `/api/direct-ticketing/tickets/${id}.pdf${query}`,
+    svg_url: `/api/direct-ticketing/tickets/${id}.svg${query}`,
   };
 }
 
@@ -10156,7 +10176,7 @@ function serializeAdminDirectTicket(ticket: DirectTicketRow) {
   return {
     ...safeTicket,
     has_payment_proof: Boolean(ticket.payment_proof_base64 && ticket.payment_proof_mime),
-    delivery: buildDirectTicketDelivery(ticket),
+    delivery: buildAdminDirectTicketDelivery(ticket),
   };
 }
 
@@ -10563,16 +10583,32 @@ async function renderTicketPngScreenshotBuffer(reg: RegistrationRow, settings: R
 }
 
 async function renderDirectTicketPdfBuffer(svg: string) {
-  const { browser } = await launchTicketBrowser();
-  try {
-    const page = await browser.newPage();
-    await page.setContent(`<!doctype html><html><head><style>@page{size:148.5mm 105mm;margin:0}html,body{margin:0;width:148.5mm;height:105mm;overflow:hidden}svg{position:absolute;inset:0;display:block;width:148.5mm;height:105mm}</style></head><body>${svg}</body></html>`, { waitUntil: "domcontentloaded" });
-    await page.evaluate(async () => {
-      const fonts = (document as any).fonts;
-      if (fonts?.ready) await fonts.ready;
-    });
-    return Buffer.from(await page.pdf({ printBackground: true, preferCSSPageSize: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
-  } finally { await browser.close(); }
+  const pdf = await PDFDocument.create();
+  const pageWidth = 148.5 / 25.4 * 72;
+  const pageHeight = 105 / 25.4 * 72;
+  const page = pdf.addPage([pageWidth, pageHeight]);
+  const image = await pdf.embedPng(renderTicketPngBuffer(svg, 1200));
+  page.drawImage(image, { x: 0, y: 0, width: pageWidth, height: pageHeight });
+  return Buffer.from(await pdf.save());
+}
+
+type DirectTicketAssetFormat = "png" | "pdf" | "svg";
+
+async function renderDirectTicketAsset(ticket: DirectTicketRow, format: DirectTicketAssetFormat, qrValue: string) {
+  const settings = await getSettingsMap(ticket.event_id);
+  const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
+  const svg = renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings));
+  if (format === "svg") return { body: svg, contentType: "image/svg+xml; charset=utf-8" };
+  if (format === "png") return { body: Buffer.from(renderTicketPngBuffer(svg)), contentType: "image/png" };
+  return { body: await renderDirectTicketPdfBuffer(svg), contentType: "application/pdf" };
+}
+
+async function sendDirectTicketAsset(res: Response, ticket: DirectTicketRow, format: DirectTicketAssetFormat, qrValue: string, cacheControl: string) {
+  const asset = await renderDirectTicketAsset(ticket, format, qrValue);
+  res.setHeader("Content-Type", asset.contentType);
+  res.setHeader("Content-Disposition", `inline; filename="${ticket.id}.${format}"`);
+  res.setHeader("Cache-Control", cacheControl);
+  return res.send(asset.body);
 }
 
 async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
@@ -14705,7 +14741,8 @@ async function startServer() {
     async (req: AuthenticatedRequest, res) => {
       try {
         if (!req.checkinAccess) return res.status(401).json({ error: "Check-in access session not found or expired" });
-        const parsed = parseDirectTicketQrValue(readObjectBody(req).qr_value);
+        const qrValue = readObjectBody(req).qr_value;
+        const parsed = parseDirectTicketQrValue(qrValue) || parseAdminDirectTicketQrValue(qrValue);
         if (!parsed) return res.status(400).json({ error: "Invalid or altered direct-ticket QR" });
         const existing = await appDb.getDirectTicketById(parsed.ticketId);
         if (!existing || existing.event_id !== req.checkinAccess.eventId) return res.status(404).json({ error: "Direct ticket not found" });
@@ -17097,6 +17134,18 @@ async function startServer() {
     return res.json(imported);
   });
   app.get("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
+  for (const format of ["png", "pdf", "svg"] as const) {
+    app.get(`/api/direct-ticketing/tickets/:id.${format}`, requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+      try {
+        const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
+        if (!ticket || ticket.event_id !== getRequestedEventId(req) || !["issued", "checked_in"].includes(ticket.status)) return res.status(404).send("Direct ticket not found");
+        return await sendDirectTicketAsset(res, ticket, format, buildAdminDirectTicketQrValue(ticket.id), "private, no-store");
+      } catch (error) {
+        console.error(`Failed to render admin direct ticket ${format}:`, error);
+        return res.status(500).json({ error: `Failed to render direct ticket ${format.toUpperCase()}` });
+      }
+    });
+  }
   app.get("/api/direct-ticketing/orders", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const orders = await appDb.listDirectOrders(getRequestedEventId(req));
     return res.json(orders.map((order) => serializeCustomerOrder(order)));
@@ -17191,7 +17240,8 @@ async function startServer() {
     return res.status(201).json(serializeAdminDirectTicket(ticket));
   });
   app.post("/api/direct-ticketing/tickets/:id/checkin", requireRoles(["owner", "admin", "operator", "checker"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
-    const parsed = parseDirectTicketQrValue(readObjectBody(req).qr_value);
+    const qrValue = readObjectBody(req).qr_value;
+    const parsed = parseDirectTicketQrValue(qrValue) || parseAdminDirectTicketQrValue(qrValue);
     if (!parsed || parsed.ticketId !== req.params.id) return res.status(400).json({ error: "Invalid or altered direct-ticket QR" });
     const existing = await appDb.getDirectTicketById(parsed.ticketId);
     if (!existing || existing.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Direct ticket not found" });
@@ -17243,8 +17293,7 @@ async function startServer() {
       const settings = await getSettingsMap(eventId);
       const artwork = resolveDirectTicketArtworkDataUrl(settings);
       const renderSvg = async (ticket: DirectTicketRow) => {
-        const qrValue = buildDirectTicketQrValue(ticket.id);
-        if (!qrValue) throw new Error("Direct ticket security is not configured");
+        const qrValue = buildAdminDirectTicketQrValue(ticket.id);
         return renderDirectTicketSvg(ticket, settings, await QRCode.toDataURL(qrValue, { width: 240, margin: 1 }), artwork, false);
       };
       if (tickets.length > 200) {
@@ -17370,13 +17419,9 @@ async function startServer() {
     try {
       const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
       if (!ticket || !["issued", "checked_in"].includes(ticket.status) || !verifyDirectTicketToken("view", ticket.id, req.query.token)) return res.status(404).send("Ticket not found");
-      const settings = await getSettingsMap(ticket.event_id);
       const qrValue = buildDirectTicketQrValue(ticket.id);
       if (!qrValue) return res.status(503).send("Direct ticket security is not configured");
-      const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
-      res.setHeader("Content-Type", "image/png");
-      res.setHeader("Cache-Control", "private, max-age=60");
-      return res.send(Buffer.from(renderTicketPngBuffer(renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings)))));
+      return await sendDirectTicketAsset(res, ticket, "png", qrValue, "private, max-age=60");
     } catch (error) {
       console.error("Failed to render direct ticket PNG:", error);
       return res.status(500).send("Failed to render ticket PNG");
@@ -17387,13 +17432,9 @@ async function startServer() {
     try {
       const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
       if (!ticket || !["issued", "checked_in"].includes(ticket.status) || !verifyDirectTicketToken("view", ticket.id, req.query.token)) return res.status(404).send("Ticket not found");
-      const settings = await getSettingsMap(ticket.event_id);
       const qrValue = buildDirectTicketQrValue(ticket.id);
       if (!qrValue) return res.status(503).send("Direct ticket security is not configured");
-      const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
-      res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
-      res.setHeader("Cache-Control", "private, max-age=60");
-      return res.send(renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings)));
+      return await sendDirectTicketAsset(res, ticket, "svg", qrValue, "private, max-age=60");
     } catch (error) {
       console.error("Failed to render direct ticket SVG:", error);
       return res.status(500).send("Failed to render ticket SVG");
@@ -17404,12 +17445,9 @@ async function startServer() {
     try {
       const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
       if (!ticket || !["issued", "checked_in"].includes(ticket.status) || !verifyDirectTicketToken("view", ticket.id, req.query.token)) return res.status(404).send("Ticket not found");
-      const settings = await getSettingsMap(ticket.event_id);
       const qrValue = buildDirectTicketQrValue(ticket.id);
       if (!qrValue) return res.status(503).send("Direct ticket security is not configured");
-      const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
-      const pdf = await renderDirectTicketPdfBuffer(renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings)));
-      res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", `inline; filename="${ticket.id}.pdf"`); res.setHeader("Cache-Control", "private, max-age=60"); return res.send(pdf);
+      return await sendDirectTicketAsset(res, ticket, "pdf", qrValue, "private, max-age=60");
     } catch (error) {
       console.error("Failed to render direct ticket PDF:", error);
       return res.status(500).send("Failed to render ticket PDF");
