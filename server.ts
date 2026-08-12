@@ -14,6 +14,7 @@ import { createRequire } from "module";
 import dotenv from "dotenv";
 import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
 import { parseOutreachCsv } from "./backend/outreachCsv";
+import { buildStoredZipArchive } from "./backend/zipArchive";
 import {
   formatAdminAgentOutreachDraftSummary,
   getAdminAgentOutreachIdentityKeys,
@@ -10656,6 +10657,29 @@ function directTicketMatchesZones(ticketZone: unknown, requestedZones: string[])
   return requestedZones.some((zone) => value === zone || value.startsWith(`${zone} `));
 }
 
+function filterDirectTicketsForExport(tickets: DirectTicketRow[], rawQuery: unknown) {
+  const query = rawQuery && typeof rawQuery === "object" ? rawQuery as Record<string, unknown> : {};
+  const requestedIds = String(query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
+  const requestedStatus = String(query.status || "").trim();
+  const requestedPerformanceId = String(query.performance_id || "").trim();
+  const requestedBuyerName = String(query.buyer_name || "").trim();
+  const requestedRecipientName = String(query.recipient_name || "").trim();
+  const requestedSearch = String(query.search || "").trim().toLocaleLowerCase();
+  const requestedZones = parseDirectTicketZones(query.zones);
+
+  return tickets.filter((ticket) => {
+    if (!["issued", "checked_in"].includes(ticket.status)) return false;
+    if (requestedIds.length && !requestedIds.includes(ticket.id)) return false;
+    if (requestedStatus && requestedStatus !== "all" && ticket.status !== requestedStatus) return false;
+    if (requestedPerformanceId && requestedPerformanceId !== "all" && ticket.performance_id !== requestedPerformanceId) return false;
+    if (requestedBuyerName && ticket.buyer_name?.trim() !== requestedBuyerName) return false;
+    if (requestedRecipientName && (ticket.holder_name?.trim() || ticket.buyer_name?.trim() || "—") !== requestedRecipientName) return false;
+    if (!directTicketMatchesZones(ticket.zone, requestedZones)) return false;
+    if (requestedSearch && ![ticket.id, ticket.holder_name, ticket.buyer_name, ticket.ticket_class, ticket.performance_title, ticket.zone, ticket.row_label, ticket.seat_label].filter(Boolean).join(" ").toLocaleLowerCase().includes(requestedSearch)) return false;
+    return true;
+  });
+}
+
 function directTicketZoneFilenameSuffix(requestedZones: string[]) {
   if (!requestedZones.length) return "";
   const zoneNumbers = requestedZones.map((zone) => zone.match(/^zone\s+(\d+)$/)?.[1]);
@@ -17246,6 +17270,43 @@ async function startServer() {
     await recordAudit(req, "direct_ticket.exported", "event", eventId, { event_id: eventId, rows: rows.length, zones: requestedZones });
     res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment(`direct-ticket-report${directTicketZoneFilenameSuffix(requestedZones)}.csv`); return res.send(`\ufeff${csv}`);
   });
+  app.get("/api/direct-ticketing/tickets/export-assets.zip", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    try {
+      const eventId = getRequestedEventId(req);
+      const format = String(req.query.format || "").trim().toLowerCase();
+      if (format !== "png" && format !== "pdf") return res.status(400).json({ error: "Batch format must be png or pdf" });
+
+      const tickets = filterDirectTicketsForExport(await appDb.listDirectTickets(eventId), req.query);
+      if (!tickets.length) return res.status(404).send("No issued direct tickets found");
+
+      const entries: Array<{ name: string; body: Buffer }> = [];
+      for (const [index, ticket] of tickets.entries()) {
+        const asset = await renderDirectTicketAsset(ticket, format, buildAdminDirectTicketQrValue(ticket.id));
+        entries.push({
+          name: `${String(index + 1).padStart(3, "0")}-${ticket.id}.${format}`,
+          body: Buffer.isBuffer(asset.body) ? asset.body : Buffer.from(asset.body),
+        });
+      }
+
+      const requestedZones = parseDirectTicketZones(req.query.zones);
+      const archive = buildStoredZipArchive(entries);
+      await recordAudit(req, "direct_ticket.batch_exported", "event", eventId, {
+        event_id: eventId,
+        tickets: tickets.length,
+        format,
+        zones: requestedZones,
+        recipient_name: String(req.query.recipient_name || "").trim(),
+      });
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="direct-tickets-${format}-individual${directTicketZoneFilenameSuffix(requestedZones)}.zip"`);
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.send(archive);
+    } catch (error) {
+      console.error("Failed to render direct ticket batch assets:", error);
+      if (res.headersSent) return res.end();
+      return res.status(503).json({ error: "Direct ticket batch export is temporarily unavailable" });
+    }
+  });
   app.get("/api/direct-ticketing/inventory/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req);
     const [seats, tickets] = await Promise.all([appDb.listDirectSeats(eventId), appDb.listDirectTickets(eventId)]);
@@ -17261,24 +17322,8 @@ async function startServer() {
   app.get("/api/direct-ticketing/tickets/print-a4.pdf", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
-      const requestedIds = String(req.query.ids || "").split(",").map((id) => id.trim()).filter(Boolean);
-      const requestedStatus = String(req.query.status || "").trim();
-      const requestedPerformanceId = String(req.query.performance_id || "").trim();
-      const requestedBuyerName = String(req.query.buyer_name || "").trim();
-      const requestedRecipientName = String(req.query.recipient_name || "").trim();
-      const requestedSearch = String(req.query.search || "").trim().toLocaleLowerCase();
       const requestedZones = parseDirectTicketZones(req.query.zones);
-      const tickets = (await appDb.listDirectTickets(eventId)).filter((ticket) => {
-        if (!["issued", "checked_in"].includes(ticket.status)) return false;
-        if (requestedIds.length && !requestedIds.includes(ticket.id)) return false;
-        if (requestedStatus && requestedStatus !== "all" && ticket.status !== requestedStatus) return false;
-        if (requestedPerformanceId && requestedPerformanceId !== "all" && ticket.performance_id !== requestedPerformanceId) return false;
-        if (requestedBuyerName && ticket.buyer_name?.trim() !== requestedBuyerName) return false;
-        if (requestedRecipientName && (ticket.holder_name?.trim() || ticket.buyer_name?.trim() || "—") !== requestedRecipientName) return false;
-        if (!directTicketMatchesZones(ticket.zone, requestedZones)) return false;
-        if (requestedSearch && ![ticket.id, ticket.holder_name, ticket.buyer_name, ticket.ticket_class, ticket.performance_title, ticket.zone, ticket.row_label, ticket.seat_label].filter(Boolean).join(" ").toLocaleLowerCase().includes(requestedSearch)) return false;
-        return true;
-      });
+      const tickets = filterDirectTicketsForExport(await appDb.listDirectTickets(eventId), req.query);
       if (!tickets.length) return res.status(404).send("No issued direct tickets found");
       const settings = await getSettingsMap(eventId);
       const artwork = resolveDirectTicketArtworkDataUrl(settings);

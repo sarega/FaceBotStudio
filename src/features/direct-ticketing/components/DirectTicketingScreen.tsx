@@ -235,6 +235,10 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   if (ticketSearch.trim()) printA4Params.set("search", ticketSearch.trim());
   if (ticketZoneFilter === "all" && selectedExportZones.length) printA4Params.set("zones", selectedExportZones.join(","));
   const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?${printA4Params.toString()}`;
+  const batchAssetParams = new URLSearchParams(printA4Params);
+  batchAssetParams.set("ids", printableTicketIds.join(","));
+  const batchPngHref = `/api/direct-ticketing/tickets/export-assets.zip?format=png&${batchAssetParams.toString()}`;
+  const batchPdfHref = `/api/direct-ticketing/tickets/export-assets.zip?format=pdf&${batchAssetParams.toString()}`;
   const ticketExportParams = new URLSearchParams({ event_id: eventId });
   if (selectedExportZones.length) ticketExportParams.set("zones", selectedExportZones.join(","));
   const ticketExportHref = `/api/direct-ticketing/tickets/export?${ticketExportParams.toString()}`;
@@ -698,6 +702,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
         </div>
         <div className="flex flex-wrap gap-3">
           <a href={printableTicketIds.length ? printA4Href : undefined} aria-disabled={!printableTicketIds.length} target="_blank" rel="noreferrer" className={"text-sm font-bold " + (printableTicketIds.length ? "text-violet-700" : "pointer-events-none text-slate-400")}>{t("printFilteredA4", "Print selected A4")} ({formatNumber(printableTicketIds.length)})</a>
+          {ticketRecipientFilter !== "all" && printableTicketIds.length > 0 && <><a href={batchPngHref} className="text-sm font-bold text-violet-700">{t("exportIndividualPng", "Export individual PNGs (ZIP)")} ({formatNumber(printableTicketIds.length)})</a><a href={batchPdfHref} className="text-sm font-bold text-violet-700">{t("exportIndividualPdf", "Export individual PDFs (ZIP)")} ({formatNumber(printableTicketIds.length)})</a></>}
           <a href={"/api/direct-ticketing/tickets/print-a4.pdf?event_id=" + encodeURIComponent(eventId)} target="_blank" rel="noreferrer" className="text-sm font-bold text-violet-700">{t("printA4", "Print all A4")}</a>
           <a href={"/api/direct-ticketing/inventory/export?event_id=" + encodeURIComponent(eventId)} className="text-sm font-bold text-violet-700">{t("reconcileSeats", "Reconcile seats")}</a>
           <a href={ticketExportHref} className="text-sm font-bold text-violet-700">{t("salesCsv", "Sales CSV")} ({t("selectedExportGroup", "selected group")})</a>

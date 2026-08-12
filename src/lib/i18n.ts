@@ -518,6 +518,8 @@ const THAI_LABELS: Record<string, string> = {
   "directTickets.directTickets": "บัตรตรง",
   "directTickets.printA4": "พิมพ์ A4 แบบ 4 ใบ",
   "directTickets.printFilteredA4": "พิมพ์ A4 ชุดที่กรอง",
+  "directTickets.exportIndividualPng": "ส่งออก PNG แยกใบ (ZIP)",
+  "directTickets.exportIndividualPdf": "ส่งออก PDF แยกใบ (ZIP)",
   "directTickets.matchingTickets": "รายการตรงเงื่อนไข",
   "directTickets.printableTickets": "พร้อมพิมพ์",
   "directTickets.searchTickets": "ค้นหาบัตร",
