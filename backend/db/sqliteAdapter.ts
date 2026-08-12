@@ -36,6 +36,7 @@ import type {
   DirectOrderRow,
   DirectSeatRow,
   DirectTicketRow,
+  DirectTicketDeliveryMethod,
   FacebookPageRow,
   ManualEventStatus,
   MessageAttachmentRow,
@@ -488,7 +489,7 @@ function mapDirectSeatRow(row: Record<string, unknown>) {
 }
 
 function mapDirectTicketRow(row: Record<string, unknown>) {
-  return { id: String(row.id || ""), event_id: String(row.event_id || ""), order_id: typeof row.order_id === "string" && row.order_id ? row.order_id : null, customer_account_id: typeof row.customer_account_id === "string" && row.customer_account_id ? row.customer_account_id : null, performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""), ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null, payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null, rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null, source: row.source === "public" ? "public" : "admin", status: String(row.status || "held") as DirectTicketRow["status"], issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null, payment_verified_at: typeof row.payment_verified_at === "string" ? mapSqliteTimestamp(row.payment_verified_at) : null, issued_at: typeof row.issued_at === "string" ? mapSqliteTimestamp(row.issued_at) : null, checked_in_at: typeof row.checked_in_at === "string" ? mapSqliteTimestamp(row.checked_in_at) : null, voided_at: typeof row.voided_at === "string" ? mapSqliteTimestamp(row.voided_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined, zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined, seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined } satisfies DirectTicketRow;
+  return { id: String(row.id || ""), event_id: String(row.event_id || ""), order_id: typeof row.order_id === "string" && row.order_id ? row.order_id : null, customer_account_id: typeof row.customer_account_id === "string" && row.customer_account_id ? row.customer_account_id : null, performance_id: String(row.performance_id || ""), seat_id: String(row.seat_id || ""), ticket_class: String(row.ticket_class || ""), holder_name: String(row.holder_name || ""), buyer_name: String(row.buyer_name || ""), phone: String(row.phone || ""), email: String(row.email || ""), price_amount: Number(row.price_amount || 0), payment_status: String(row.payment_status || "awaiting_payment") as DirectTicketRow["payment_status"], payment_reference: typeof row.payment_reference === "string" ? row.payment_reference : null, payment_proof_mime: typeof row.payment_proof_mime === "string" ? row.payment_proof_mime : null, payment_proof_base64: typeof row.payment_proof_base64 === "string" ? row.payment_proof_base64 : null, payment_proof_submitted_at: typeof row.payment_proof_submitted_at === "string" ? mapSqliteTimestamp(row.payment_proof_submitted_at) : null, rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null, hold_expires_at: typeof row.hold_expires_at === "string" ? mapSqliteTimestamp(row.hold_expires_at) : null, source: row.source === "public" ? "public" : "admin", status: String(row.status || "held") as DirectTicketRow["status"], delivery_status: String(row.delivery_status || "unsent") as DirectTicketRow["delivery_status"], delivery_method: row.delivery_method === "email" || row.delivery_method === "manual" ? row.delivery_method : null, delivery_sent_at: typeof row.delivery_sent_at === "string" ? mapSqliteTimestamp(row.delivery_sent_at) : null, issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null, payment_verified_at: typeof row.payment_verified_at === "string" ? mapSqliteTimestamp(row.payment_verified_at) : null, issued_at: typeof row.issued_at === "string" ? mapSqliteTimestamp(row.issued_at) : null, checked_in_at: typeof row.checked_in_at === "string" ? mapSqliteTimestamp(row.checked_in_at) : null, voided_at: typeof row.voided_at === "string" ? mapSqliteTimestamp(row.voided_at) : null, created_at: mapSqliteTimestamp(row.created_at), updated_at: mapSqliteTimestamp(row.updated_at), performance_code: typeof row.performance_code === "string" ? row.performance_code : undefined, performance_title: typeof row.performance_title === "string" ? row.performance_title : undefined, performance_starts_at: typeof row.performance_starts_at === "string" ? row.performance_starts_at : undefined, performance_ends_at: typeof row.performance_ends_at === "string" ? row.performance_ends_at : undefined, zone: typeof row.zone === "string" ? row.zone : undefined, row_label: typeof row.row_label === "string" ? row.row_label : undefined, seat_label: typeof row.seat_label === "string" ? row.seat_label : undefined } satisfies DirectTicketRow;
 }
 
 function mapDirectOrderRow(row: Record<string, unknown>, tickets: DirectTicketRow[] = []) {
@@ -1108,6 +1109,7 @@ export class SqliteAppDatabase implements AppDatabase {
         ticket_class TEXT NOT NULL, holder_name TEXT NOT NULL DEFAULT '', buyer_name TEXT NOT NULL DEFAULT '',
         phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', price_amount REAL NOT NULL DEFAULT 0,
         payment_status TEXT NOT NULL, payment_reference TEXT, status TEXT NOT NULL, issued_by_user_id TEXT,
+        delivery_status TEXT NOT NULL DEFAULT 'unsent', delivery_method TEXT, delivery_sent_at DATETIME,
         payment_verified_by_user_id TEXT, payment_verified_at DATETIME, issued_at DATETIME, checked_in_at DATETIME,
         voided_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
@@ -1325,6 +1327,9 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("direct_tickets", "source", "TEXT NOT NULL DEFAULT 'admin'");
     this.ensureColumn("direct_tickets", "order_id", "TEXT");
     this.ensureColumn("direct_tickets", "customer_account_id", "TEXT");
+    this.ensureColumn("direct_tickets", "delivery_status", "TEXT NOT NULL DEFAULT 'unsent'");
+    this.ensureColumn("direct_tickets", "delivery_method", "TEXT");
+    this.ensureColumn("direct_tickets", "delivery_sent_at", "DATETIME");
     this.ensureColumn("direct_orders", "customer_account_id", "TEXT");
     this.ensureColumn("direct_orders", "seller_organization_id", "TEXT");
     this.ensureColumn("direct_orders", "payment_profile_version", "INTEGER NOT NULL DEFAULT 1");
@@ -2378,6 +2383,18 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketQuery("WHERE t.event_id = ? ORDER BY t.created_at DESC", [eventId]); }
   async getDirectTicketById(id: string) { return this.directTicketQuery("WHERE t.id = ?", [id])[0]; }
+  async markDirectTicketsDelivered(ids: string[], method: DirectTicketDeliveryMethod) {
+    const normalizedIds = [...new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean))];
+    if (!normalizedIds.length) return [];
+    const mark = this.db.transaction((ticketIds: string[]) => {
+      const updatedIds: string[] = [];
+      const update = this.db.prepare("UPDATE direct_tickets SET delivery_status='sent',delivery_method=?,delivery_sent_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('issued','checked_in') AND delivery_status='unsent'");
+      for (const id of ticketIds) if (update.run(method, id).changes > 0) updatedIds.push(id);
+      return updatedIds;
+    });
+    const updatedIds = mark(normalizedIds);
+    return updatedIds.length ? this.directTicketQuery(`WHERE t.id IN (${updatedIds.map(() => "?").join(",")})`, updatedIds) : [];
+  }
 
   async createDirectTicket(input: CreateDirectTicketInput) {
     await this.releaseExpiredDirectTicketHolds(input.event_id);

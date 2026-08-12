@@ -39,6 +39,7 @@ import type {
   DirectOrderRow,
   DirectSeatRow,
   DirectTicketRow,
+  DirectTicketDeliveryMethod,
   FacebookPageRow,
   ManualEventStatus,
   MessageAttachmentRow,
@@ -511,7 +512,7 @@ function mapDirectTicketRow(row: Record<string, unknown>) {
     rejection_reason: typeof row.rejection_reason === "string" ? row.rejection_reason : null,
     hold_expires_at: mapPostgresTimestamp(row.hold_expires_at),
     source: row.source === "public" ? "public" : "admin",
-    status: String(row.status || "held") as DirectTicketRow["status"], issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, issued_at: mapPostgresTimestamp(row.issued_at),
+    status: String(row.status || "held") as DirectTicketRow["status"], delivery_status: String(row.delivery_status || "unsent") as DirectTicketRow["delivery_status"], delivery_method: row.delivery_method === "email" || row.delivery_method === "manual" ? row.delivery_method : null, delivery_sent_at: mapPostgresTimestamp(row.delivery_sent_at), issued_by_user_id: typeof row.issued_by_user_id === "string" ? row.issued_by_user_id : null, issued_at: mapPostgresTimestamp(row.issued_at),
     payment_verified_at: mapPostgresTimestamp(row.payment_verified_at), payment_verified_by_user_id: typeof row.payment_verified_by_user_id === "string" ? row.payment_verified_by_user_id : null,
     checked_in_at: mapPostgresTimestamp(row.checked_in_at), voided_at: mapPostgresTimestamp(row.voided_at),
     created_at: mapPostgresTimestamp(row.created_at) || "", updated_at: mapPostgresTimestamp(row.updated_at) || "",
@@ -1701,6 +1702,16 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async listDirectTickets(eventId: string) { await this.releaseExpiredDirectTicketHolds(eventId); return this.directTicketRows("WHERE t.event_id=$1 ORDER BY t.created_at DESC", [eventId]); }
   async getDirectTicketById(id: string) { return (await this.directTicketRows("WHERE t.id=$1", [id]))[0]; }
+  async markDirectTicketsDelivered(ids: string[], method: DirectTicketDeliveryMethod) {
+    const normalizedIds = [...new Set((ids || []).map((id) => String(id || "").trim()).filter(Boolean))];
+    if (!normalizedIds.length) return [];
+    const result = await this.pool.query<{ id: string }>(
+      "UPDATE direct_tickets SET delivery_status='sent',delivery_method=$1,delivery_sent_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=ANY($2::text[]) AND status IN ('issued','checked_in') AND delivery_status='unsent' RETURNING id",
+      [method, normalizedIds],
+    );
+    const updatedIds = result.rows.map((row) => row.id).filter(Boolean);
+    return updatedIds.length ? this.directTicketRows("WHERE t.id=ANY($1::text[])", [updatedIds]) : [];
+  }
 
   async createDirectTicket(input: CreateDirectTicketInput) {
     await this.releaseExpiredDirectOrderHolds(input.event_id);

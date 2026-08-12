@@ -51,6 +51,32 @@ test("direct seats cannot issue two active tickets and rejected payment releases
   assert.equal((await db.listDirectSeats(event.id, performance.id))[0].status, "available");
 });
 
+test("ticket delivery batches are idempotent and new tickets for the same recipient stay unsent", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Ticket delivery test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  const seats = await db.importDirectSeats(event.id, performance.id, [
+    { zone: "VIP", row_label: "A", seat_label: "01" },
+    { zone: "VIP", row_label: "A", seat_label: "02" },
+    { zone: "VIP", row_label: "A", seat_label: "03" },
+  ]);
+  const createIssued = (seatId: string) => db.createDirectTicket({ event_id: event.id, performance_id: performance.id, seat_id: seatId, ticket_class: "VIP", holder_name: "Same recipient", email: "recipient@example.com", payment_required: false });
+  const first = await createIssued(seats[0].id);
+  const second = await createIssued(seats[1].id);
+  assert.equal(first.ticket?.delivery_status, "unsent");
+  assert.equal(second.ticket?.delivery_status, "unsent");
+
+  const marked = await db.markDirectTicketsDelivered([first.ticket!.id, second.ticket!.id], "manual");
+  assert.deepEqual(new Set(marked.map((ticket) => ticket.id)), new Set([first.ticket!.id, second.ticket!.id]));
+  assert.ok(marked.every((ticket) => ticket.delivery_status === "sent" && ticket.delivery_method === "manual" && ticket.delivery_sent_at));
+  assert.deepEqual(await db.markDirectTicketsDelivered([first.ticket!.id, second.ticket!.id], "manual"), []);
+
+  const later = await createIssued(seats[2].id);
+  assert.equal(later.ticket?.delivery_status, "unsent");
+  assert.equal(later.ticket?.delivery_method, null);
+});
+
 test("payment proof waits for review and one bank reference cannot issue two tickets", async () => {
   const db = new SqliteAppDatabase(":memory:");
   await db.initialize();

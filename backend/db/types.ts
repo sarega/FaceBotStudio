@@ -4,6 +4,8 @@ export type DirectSeatStatus = "available" | "held" | "issued" | "voided";
 export type DirectSeatAllocationStatus = "allocated" | "not_allocated";
 export type DirectSeatSourceStatus = "available" | "sold" | "generated" | "blocked" | "unknown";
 export type DirectTicketStatus = "held" | "issued" | "checked_in" | "voided";
+export type DirectTicketDeliveryStatus = "unsent" | "sent";
+export type DirectTicketDeliveryMethod = "email" | "manual";
 export type DirectTicketPaymentStatus = "awaiting_payment" | "proof_submitted" | "verified" | "not_required" | "rejected" | "expired" | "refunded";
 export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" | "archived";
@@ -364,6 +366,9 @@ export interface DirectTicketRow {
   hold_expires_at: string | null;
   source: "admin" | "public";
   status: DirectTicketStatus;
+  delivery_status: DirectTicketDeliveryStatus;
+  delivery_method: DirectTicketDeliveryMethod | null;
+  delivery_sent_at: string | null;
   issued_by_user_id: string | null;
   payment_verified_by_user_id: string | null;
   payment_verified_at: string | null;
@@ -1093,6 +1098,7 @@ export interface AppDatabase {
   importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean; replaceZones?: string[] }): Promise<DirectSeatRow[]>;
   listDirectTickets(eventId: string): Promise<DirectTicketRow[]>;
   getDirectTicketById(id: string): Promise<DirectTicketRow | undefined>;
+  markDirectTicketsDelivered(ids: string[], method: DirectTicketDeliveryMethod): Promise<DirectTicketRow[]>;
   createDirectTicket(input: CreateDirectTicketInput): Promise<{ ticket?: DirectTicketRow; error?: "seat_unavailable" | "invalid_seat" }>;
   createDirectOrder(input: CreateDirectOrderInput): Promise<{ order?: DirectOrderRow; error?: "seat_unavailable" | "invalid_seat" | "invalid_order" }>;
   getDirectOrderById(id: string): Promise<DirectOrderRow | undefined>;

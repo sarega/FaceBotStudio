@@ -10180,11 +10180,12 @@ function serializeAdminDirectTicket(ticket: DirectTicketRow) {
     ...safeTicket,
     has_payment_proof: Boolean(ticket.payment_proof_base64 && ticket.payment_proof_mime),
     delivery: buildAdminDirectTicketDelivery(ticket),
+    share_delivery: buildDirectTicketDelivery(ticket),
   };
 }
 
 async function sendDirectTicketDecisionEmail(ticket: DirectTicketRow) {
-  if (!ticket.email) return;
+  if (!ticket.email?.trim()) return false;
   const settings = await getSettingsMap(ticket.event_id);
   const eventName = String(settings.event_name || "Event").trim() || "Event";
   const delivery = buildDirectTicketDelivery(ticket);
@@ -10204,9 +10205,54 @@ async function sendDirectTicketDecisionEmail(ticket: DirectTicketRow) {
         html: `<p>${escapeXml(message).replace(/\n/g, "<br>")}</p>`,
       },
     });
+    if (approved && pngUrl && pdfUrl) await appDb.markDirectTicketsDelivered([ticket.id], "email");
+    return approved && Boolean(pngUrl && pdfUrl);
   } catch (error) {
     console.error("Failed to send direct-ticket payment decision email:", error);
+    return false;
   }
+}
+
+async function sendDirectTicketBatchEmail(to: string, tickets: DirectTicketRow[]) {
+  // ponytail: Reuse the existing secure PNG/PDF links; the current email provider has no attachment contract.
+  if (!tickets.length) return;
+  const settings = await getSettingsMap(tickets[0].event_id);
+  const eventName = String(settings.event_name || "Event").trim() || "Event";
+  const recipientName = String(tickets[0].holder_name || tickets[0].buyer_name || "Guest").trim() || "Guest";
+  const items = tickets.map((ticket) => {
+    const delivery = buildDirectTicketDelivery(ticket);
+    const pngUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.png_url) : "";
+    const pdfUrl = delivery ? buildAbsoluteAppAssetUrl(delivery.pdf_url) : "";
+    if (!pngUrl || !pdfUrl) throw new Error("Direct ticket links are not configured");
+    return {
+      ticket,
+      performance: ticket.performance_title || ticket.performance_code || "Performance",
+      seat: `${ticket.zone || ""} ${ticket.row_label || ""}-${ticket.seat_label || ""}`.trim(),
+      pngUrl,
+      pdfUrl,
+    };
+  });
+  const text = [
+    `Your ${eventName} tickets are ready.`,
+    `Recipient: ${recipientName}`,
+    "",
+    ...items.flatMap((item, index) => [
+      `${index + 1}. ${item.performance} · ${item.seat}`,
+      `PNG: ${item.pngUrl}`,
+      `PDF: ${item.pdfUrl}`,
+      "",
+    ]),
+  ].join("\n");
+  const html = `<p>Hello ${escapeXml(recipientName)},</p><p>Your ${escapeXml(eventName)} tickets are ready.</p><ol>${items.map((item) => `<li><strong>${escapeXml(item.performance)}</strong> · ${escapeXml(item.seat)}<br><a href="${escapeXml(item.pngUrl)}">PNG</a> · <a href="${escapeXml(item.pdfUrl)}">PDF</a> <small>${escapeXml(item.ticket.id)}</small></li>`).join("")}</ol>`;
+  await sendTransactionalEmail({
+    to,
+    template: {
+      kind: "ticket_delivery",
+      subject: `${eventName}: ${items.length} ticket${items.length === 1 ? "" : "s"} ready`,
+      text,
+      html,
+    },
+  });
 }
 
 function crc16Ccitt(payload: string) {
@@ -17160,6 +17206,47 @@ async function startServer() {
     return res.json(imported);
   });
   app.get("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
+  app.post("/api/direct-ticketing/tickets/delivery/batch", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const method = body.method === "email" || body.method === "manual" ? body.method : null;
+    const ticketIds = Array.isArray(body.ticket_ids) ? [...new Set(body.ticket_ids.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 1000) : [];
+    const eventId = getRequestedEventId(req);
+    if (!method) return res.status(400).json({ error: "method must be email or manual" });
+    if (!ticketIds.length) return res.status(400).json({ error: "ticket_ids must contain at least one ticket" });
+    const tickets = (await Promise.all(ticketIds.map((id) => appDb.getDirectTicketById(id))))
+      .filter((ticket): ticket is DirectTicketRow => Boolean(ticket && ticket.event_id === eventId && ["issued", "checked_in"].includes(ticket.status) && ticket.delivery_status !== "sent"));
+    if (!tickets.length) return res.status(409).json({ error: "No unsent issued tickets found" });
+
+    if (method === "manual") {
+      const updated = await appDb.markDirectTicketsDelivered(tickets.map((ticket) => ticket.id), method);
+      await recordAudit(req, "direct_ticket.batch_sent", "event", eventId, { event_id: eventId, method, requested: tickets.length, sent: updated.length });
+      return res.json({ method, requested: tickets.length, sent: updated.length, skipped_without_email: 0, failed: 0 });
+    }
+
+    const groups = new Map<string, DirectTicketRow[]>();
+    let skippedWithoutEmail = 0;
+    for (const ticket of tickets) {
+      const email = String(ticket.email || "").trim().toLowerCase();
+      if (!isValidCustomerEmail(email)) {
+        skippedWithoutEmail += 1;
+        continue;
+      }
+      groups.set(email, [...(groups.get(email) || []), ticket]);
+    }
+    const failed: Array<{ email: string; tickets: number; error: string }> = [];
+    let sent = 0;
+    for (const [email, group] of groups) {
+      try {
+        await sendDirectTicketBatchEmail(email, group);
+        sent += (await appDb.markDirectTicketsDelivered(group.map((ticket) => ticket.id), method)).length;
+      } catch (error) {
+        failed.push({ email, tickets: group.length, error: error instanceof Error ? error.message : "Failed to send email" });
+      }
+    }
+    await recordAudit(req, "direct_ticket.batch_sent", "event", eventId, { event_id: eventId, method, requested: tickets.length, sent, skipped_without_email: skippedWithoutEmail, failed_groups: failed.length });
+    if (!sent && failed.length) return res.status(502).json({ error: "Could not send ticket email", method, requested: tickets.length, sent, skipped_without_email: skippedWithoutEmail, failed });
+    return res.json({ method, requested: tickets.length, sent, skipped_without_email: skippedWithoutEmail, failed: failed.length, failed_groups: failed });
+  });
   app.get("/api/direct-ticketing/orders", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const orders = await appDb.listDirectOrders(getRequestedEventId(req));
     return res.json(orders.map((order) => serializeCustomerOrder(order)));
@@ -17266,7 +17353,7 @@ async function startServer() {
   });
   app.get("/api/direct-ticketing/tickets/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req); const requestedZones = parseDirectTicketZones(req.query.zones); const rows = (await appDb.listDirectTickets(eventId)).filter((ticket) => directTicketMatchesZones(ticket.zone, requestedZones));
-    const csv = new Parser({ fields: ["id", "status", "payment_status", "ticket_class", "holder_name", "buyer_name", "phone", "email", "price_amount", "performance_code", "performance_title", "zone", "row_label", "seat_label", "payment_reference", "issued_at", "checked_in_at"] }).parse(rows);
+    const csv = new Parser({ fields: ["id", "status", "delivery_status", "delivery_method", "delivery_sent_at", "payment_status", "ticket_class", "holder_name", "buyer_name", "phone", "email", "price_amount", "performance_code", "performance_title", "zone", "row_label", "seat_label", "payment_reference", "issued_at", "checked_in_at"] }).parse(rows);
     await recordAudit(req, "direct_ticket.exported", "event", eventId, { event_id: eventId, rows: rows.length, zones: requestedZones });
     res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment(`direct-ticket-report${directTicketZoneFilenameSuffix(requestedZones)}.csv`); return res.send(`\ufeff${csv}`);
   });
