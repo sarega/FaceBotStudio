@@ -17134,18 +17134,6 @@ async function startServer() {
     return res.json(imported);
   });
   app.get("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
-  for (const format of ["png", "pdf", "svg"] as const) {
-    app.get(`/api/direct-ticketing/tickets/:id.${format}`, requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
-      try {
-        const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
-        if (!ticket || ticket.event_id !== getRequestedEventId(req) || !["issued", "checked_in"].includes(ticket.status)) return res.status(404).send("Direct ticket not found");
-        return await sendDirectTicketAsset(res, ticket, format, buildAdminDirectTicketQrValue(ticket.id), "private, no-store");
-      } catch (error) {
-        console.error(`Failed to render admin direct ticket ${format}:`, error);
-        return res.status(500).json({ error: `Failed to render direct ticket ${format.toUpperCase()}` });
-      }
-    });
-  }
   app.get("/api/direct-ticketing/orders", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const orders = await appDb.listDirectOrders(getRequestedEventId(req));
     return res.json(orders.map((order) => serializeCustomerOrder(order)));
@@ -17323,6 +17311,18 @@ async function startServer() {
       return res.status(503).json({ error: "Direct ticket A4 PDF is temporarily unavailable" });
     }
   });
+  for (const format of ["png", "pdf", "svg"] as const) {
+    app.get(`/api/direct-ticketing/tickets/:id.${format}`, requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+      try {
+        const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
+        if (!ticket || ticket.event_id !== getRequestedEventId(req) || !["issued", "checked_in"].includes(ticket.status)) return res.status(404).send("Direct ticket not found");
+        return await sendDirectTicketAsset(res, ticket, format, buildAdminDirectTicketQrValue(ticket.id), "private, no-store");
+      } catch (error) {
+        console.error(`Failed to render admin direct ticket ${format}:`, error);
+        return res.status(500).json({ error: `Failed to render direct ticket ${format.toUpperCase()}` });
+      }
+    });
+  }
 
   app.get(
     "/api/registrations/export",
