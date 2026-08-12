@@ -1665,11 +1665,12 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows.map(mapDirectSeatRow);
   }
 
-  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean }) {
+  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean; replaceZones?: string[] }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const layoutUpdate = options?.replaceLayout ? "x=EXCLUDED.x,y=EXCLUDED.y" : "x=COALESCE(direct_seats.x,EXCLUDED.x),y=COALESCE(direct_seats.y,EXCLUDED.y)";
+      const replaceZones = options?.replaceZones?.map((zone) => String(zone).trim()).filter(Boolean) || [];
       for (const seat of seats) {
         const allocationStatus = seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated";
         const sourceStatus = seat.source_status || "unknown";
@@ -1678,9 +1679,12 @@ export class PostgresAppDatabase implements AppDatabase {
       if (options?.replaceMissing && seats.length) {
         const keep = seats.map((_, index) => `(zone=$${index * 3 + 3} AND row_label=$${index * 3 + 4} AND seat_label=$${index * 3 + 5})`).join(" OR ");
         const keepParams = seats.flatMap((seat) => [String(seat.zone).trim(), String(seat.row_label).trim(), String(seat.seat_label).trim()]);
-        await client.query(`UPDATE direct_seats SET allocation_status='not_allocated',source_status='unknown',status='voided',updated_at=CURRENT_TIMESTAMP WHERE event_id=$1 AND performance_id=$2 AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in')) AND NOT (${keep})`, [eventId, performanceId, ...keepParams]);
+        const zonePlaceholder = 3 + keepParams.length;
+        const zoneFilter = replaceZones.length ? ` AND zone = ANY($${zonePlaceholder}::text[])` : "";
+        await client.query(`UPDATE direct_seats SET allocation_status='not_allocated',source_status='unknown',status='voided',updated_at=CURRENT_TIMESTAMP WHERE event_id=$1 AND performance_id=$2${zoneFilter} AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in')) AND NOT (${keep})`, [eventId, performanceId, ...keepParams, ...(replaceZones.length ? [replaceZones] : [])]);
       }
-      await client.query("UPDATE direct_seats SET status=CASE WHEN allocation_status='not_allocated' THEN 'voided' WHEN allocation_status='allocated' AND status='voided' THEN 'available' ELSE status END,updated_at=CURRENT_TIMESTAMP WHERE event_id=$1 AND performance_id=$2 AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))", [eventId, performanceId]);
+      const statusZoneFilter = replaceZones.length ? " AND zone = ANY($3::text[])" : "";
+      await client.query(`UPDATE direct_seats SET status=CASE WHEN allocation_status='not_allocated' THEN 'voided' WHEN allocation_status='allocated' AND status='voided' THEN 'available' ELSE status END,updated_at=CURRENT_TIMESTAMP WHERE event_id=$1 AND performance_id=$2${statusZoneFilter} AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`, [eventId, performanceId, ...(replaceZones.length ? [replaceZones] : [])]);
       await client.query("COMMIT");
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
     return this.listDirectSeats(eventId, performanceId);

@@ -2351,17 +2351,19 @@ export class SqliteAppDatabase implements AppDatabase {
     return rows.map((row) => mapDirectSeatRow(row as Record<string, unknown>));
   }
 
-  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean }) {
+  async importDirectSeats(eventId: string, performanceId: string, seats: ImportDirectSeatInput[], options?: { replaceMissing?: boolean; replaceLayout?: boolean; replaceZones?: string[] }) {
     const layoutUpdate = options?.replaceLayout ? "x=excluded.x,y=excluded.y" : "x=COALESCE(direct_seats.x,excluded.x),y=COALESCE(direct_seats.y,excluded.y)";
+    const replaceZones = options?.replaceZones?.map((zone) => String(zone).trim()).filter(Boolean) || [];
+    const zoneFilter = replaceZones.length ? ` AND zone IN (${replaceZones.map(() => "?").join(",")})` : "";
     const insert = this.db.prepare(`INSERT INTO direct_seats (id,event_id,performance_id,zone,section_label,row_label,seat_label,external_seat_ref,ticket_class,face_value,x,y,allocation_status,source_status)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(performance_id,zone,row_label,seat_label) DO UPDATE SET section_label=excluded.section_label,external_seat_ref=excluded.external_seat_ref,ticket_class=excluded.ticket_class,face_value=excluded.face_value,${layoutUpdate},allocation_status=excluded.allocation_status,source_status=excluded.source_status,updated_at=CURRENT_TIMESTAMP WHERE NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`);
     this.db.transaction((items: ImportDirectSeatInput[]) => items.forEach((seat) => insert.run(generateEntityId("seat"), eventId, performanceId, String(seat.zone).trim(), seat.section_label || null, String(seat.row_label).trim(), String(seat.seat_label).trim(), seat.external_seat_ref || null, seat.ticket_class || null, seat.face_value ?? null, seat.x ?? null, seat.y ?? null, seat.allocation_status === "not_allocated" ? "not_allocated" : "allocated", seat.source_status || "unknown")))(seats);
     if (options?.replaceMissing && seats.length) {
       const keep = seats.map(() => "(zone=? AND row_label=? AND seat_label=?)").join(" OR ");
       const keepParams = seats.flatMap((seat) => [String(seat.zone).trim(), String(seat.row_label).trim(), String(seat.seat_label).trim()]);
-      this.db.prepare(`UPDATE direct_seats SET allocation_status='not_allocated',source_status='unknown',status='voided',updated_at=CURRENT_TIMESTAMP WHERE event_id=? AND performance_id=? AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in')) AND NOT (${keep})`).run(eventId, performanceId, ...keepParams);
+      this.db.prepare(`UPDATE direct_seats SET allocation_status='not_allocated',source_status='unknown',status='voided',updated_at=CURRENT_TIMESTAMP WHERE event_id=? AND performance_id=?${zoneFilter} AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in')) AND NOT (${keep})`).run(eventId, performanceId, ...replaceZones, ...keepParams);
     }
-    this.db.prepare("UPDATE direct_seats SET status=CASE WHEN allocation_status='not_allocated' THEN 'voided' WHEN allocation_status='allocated' AND status='voided' THEN 'available' ELSE status END, updated_at=CURRENT_TIMESTAMP WHERE event_id=? AND performance_id=? AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))").run(eventId, performanceId);
+    this.db.prepare(`UPDATE direct_seats SET status=CASE WHEN allocation_status='not_allocated' THEN 'voided' WHEN allocation_status='allocated' AND status='voided' THEN 'available' ELSE status END, updated_at=CURRENT_TIMESTAMP WHERE event_id=? AND performance_id=?${zoneFilter} AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE direct_tickets.seat_id=direct_seats.id AND direct_tickets.status IN ('held','issued','checked_in'))`).run(eventId, performanceId, ...replaceZones);
     return this.listDirectSeats(eventId, performanceId);
   }
 

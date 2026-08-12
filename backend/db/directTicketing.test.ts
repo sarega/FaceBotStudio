@@ -151,6 +151,31 @@ test("seat-map statuses keep non-allocation seats unavailable and protect active
   assert.ok(removed.every((seat) => seat.status === "voided" && seat.allocation_status === "not_allocated"));
 });
 
+test("partial seat-map rescan only replaces the requested zones", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Partial rescan test", organizer_id: "org_default" });
+  const performance = await db.upsertDirectPerformance({ event_id: event.id, code: "R1", title: "Round 1", starts_at: "2026-08-22T18:30:00+07:00" });
+  await db.importDirectSeats(event.id, performance.id, [
+    { zone: "ZONE 1", row_label: "A", seat_label: "1", source_status: "blocked", allocation_status: "allocated" },
+    { zone: "ZONE 1", row_label: "A", seat_label: "2", source_status: "blocked", allocation_status: "allocated" },
+    { zone: "ZONE 2", row_label: "B", seat_label: "1", source_status: "blocked", allocation_status: "allocated" },
+  ]);
+
+  await db.importDirectSeats(event.id, performance.id, [
+    { zone: "ZONE 1", row_label: "A", seat_label: "1", source_status: "available", allocation_status: "not_allocated" },
+  ], { replaceMissing: true, replaceZones: ["ZONE 1"] });
+
+  const refreshed = await db.listDirectSeats(event.id, performance.id);
+  const zoneOneMissing = refreshed.find((seat) => seat.zone === "ZONE 1" && seat.seat_label === "2");
+  const zoneTwoSeat = refreshed.find((seat) => seat.zone === "ZONE 2" && seat.seat_label === "1");
+  assert.equal(zoneOneMissing?.status, "voided");
+  assert.equal(zoneOneMissing?.allocation_status, "not_allocated");
+  assert.equal(zoneTwoSeat?.status, "available");
+  assert.equal(zoneTwoSeat?.allocation_status, "allocated");
+  assert.equal(zoneTwoSeat?.source_status, "blocked");
+});
+
 test("seat rescans preserve an existing spatial layout unless replacement is explicit", async () => {
   const db = new SqliteAppDatabase(":memory:");
   await db.initialize();
