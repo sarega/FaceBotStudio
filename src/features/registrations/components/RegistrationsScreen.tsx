@@ -3,9 +3,11 @@ import {
   Activity,
   Download,
   ExternalLink,
+  MessageCircle,
   QrCode,
   RefreshCw,
   Search,
+  Send,
   Trash2,
   X,
 } from "lucide-react";
@@ -26,15 +28,29 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 
 type RegistrationRecord = {
   id: string;
+  sender_id: string;
   first_name: string;
   last_name: string;
   phone: string;
   email: string;
   channel_platform?: string | null;
+  channel_external_id?: string | null;
   sms_opt_in_at?: string | null;
   sms_opt_out_at?: string | null;
   timestamp: string;
   status: string;
+};
+
+export type RegistrationChatBatch = {
+  key: string;
+  sender_id: string;
+  channel_platform: string | null;
+  channel_external_id: string | null;
+  ticket_count: number;
+  active_ticket_count: number;
+  cancelled_ticket_count: number;
+  last_registration_at: string;
+  registrations: RegistrationRecord[];
 };
 
 type RegistrationAvailabilitySummary = {
@@ -74,6 +90,11 @@ type RegistrationsScreenProps = {
   cancelledCount: number;
   checkInRate: number;
   selectedRegistration: RegistrationRecord | null;
+  chatBatches: RegistrationChatBatch[];
+  chatBatchesLoading: boolean;
+  chatBatchLoadingKey: string;
+  chatBatchMessage: string;
+  onResendChatBatch: (batch: RegistrationChatBatch) => unknown;
   selectedTicketPreview: ReactNode;
   selectedTicketPngUrl: string;
   selectedTicketSvgUrl: string;
@@ -111,6 +132,11 @@ export function RegistrationsScreen({
   cancelledCount,
   checkInRate,
   selectedRegistration,
+  chatBatches,
+  chatBatchesLoading,
+  chatBatchLoadingKey,
+  chatBatchMessage,
+  onResendChatBatch,
   selectedTicketPreview,
   selectedTicketPngUrl,
   selectedTicketSvgUrl,
@@ -303,6 +329,69 @@ export function RegistrationsScreen({
               </ActionButton>
             )}
           </div>
+        </div>
+
+        <div className="surface-panel surface-panel-violet rounded-2xl p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-violet-950">
+                <MessageCircle className="h-4 w-4 text-violet-700" />
+                {t("chatBatchesTitle", "Chat ticket batches")}
+              </h3>
+              <p className="mt-0.5 text-xs text-violet-700 opacity-80">
+                {t("chatBatchesHint", "One Facebook chat can contain registrations for several people. Send all active tickets back to that chat.")}
+              </p>
+            </div>
+            <StatusBadge tone="violet">{chatBatches.length} {t("chatCount", "chats")}</StatusBadge>
+          </div>
+
+          {chatBatchesLoading ? (
+            <div className="surface-frame mt-3 rounded-xl p-4 text-center text-xs text-violet-700 opacity-80">
+              {t("chatBatchesLoading", "Loading chat batches...")}
+            </div>
+          ) : chatBatches.length === 0 ? (
+            <div className="surface-frame mt-3 rounded-xl border border-dashed border-violet-200 p-4 text-center text-xs text-violet-700">
+              {t("chatBatchesEmpty", "No channel-linked registration chats found.")}
+            </div>
+          ) : (
+            <div className="mt-3 max-h-[25rem] space-y-2 overflow-y-auto pr-1">
+              {chatBatches.map((batch) => {
+                const loading = chatBatchLoadingKey === batch.key;
+                return (
+                  <div key={batch.key} className="surface-tile rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-900">
+                          {batch.active_ticket_count} {t("activeTickets", "active ticket(s)")} · {batch.ticket_count} {t("registrationCount", "registration(s)")}
+                        </p>
+                        <p className="mt-1 break-all font-mono text-[10px] text-violet-700">{t("chatId", "Chat ID")}: {batch.sender_id}</p>
+                        {batch.channel_external_id && (
+                          <p className="mt-1 break-all font-mono text-[10px] text-slate-500">Page/Channel ID: {batch.channel_external_id}</p>
+                        )}
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          {batch.registrations.slice(0, 4).map((registration) => `${registration.first_name} ${registration.last_name}`.trim() || registration.id).map((label, index) => `${label} · ${batch.registrations[index].id}`).join(", ")}
+                          {batch.registrations.length > 4 ? ` +${batch.registrations.length - 4} more` : ""}
+                        </p>
+                        {batch.cancelled_ticket_count > 0 && (
+                          <p className="mt-1 text-[10px] text-amber-700">{batch.cancelled_ticket_count} {t("cancelledSkipped", "cancelled ticket(s) skipped")}</p>
+                        )}
+                      </div>
+                      <ActionButton
+                        onClick={() => void onResendChatBatch(batch)}
+                        disabled={!canChangeRegistrationStatus || loading || batch.active_ticket_count === 0}
+                        tone="blue"
+                        className="shrink-0 px-2.5 py-1.5 text-[11px]"
+                      >
+                        {loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                        {loading ? t("sending", "Sending...") : t("sendAll", "Send all")}
+                      </ActionButton>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {chatBatchMessage && <p className="mt-2 text-xs font-medium text-violet-900">{chatBatchMessage}</p>}
         </div>
       </div>
 

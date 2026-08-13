@@ -208,7 +208,7 @@ export function resolveStartupSecurityConfig(env: StartupEnv): StartupSecurityCo
     }
     if (runWebServer || runEmbeddedWorker) {
       if (!effectiveTicketAccessSecret) {
-        warnings.push("TICKET_ACCESS_SECRET is not configured; public registration ticket links are disabled until a production secret is provided.");
+        warnings.push("TICKET_ACCESS_SECRET is not configured; legacy signed registration-ticket links are disabled. Free-event ticket delivery uses the public registration-ticket route.");
       } else if (effectiveTicketAccessSecret.length < 32 || isLikelyPlaceholderSecret(effectiveTicketAccessSecret)) {
         throw new Error("TICKET_ACCESS_SECRET must be a generated secret of at least 32 characters.");
       } else if (!ticketAccessSecret && directTicketSecret) {

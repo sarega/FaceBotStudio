@@ -101,6 +101,7 @@ const LogsScreen = lazy(() => import("./features/logs/components/LogsScreen").th
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { PublicEventCatalog } from "./features/public-event/components/PublicEventCatalog";
 const RegistrationsScreen = lazy(() => import("./features/registrations/components/RegistrationsScreen").then(({ RegistrationsScreen }) => ({ default: RegistrationsScreen })));
+import type { RegistrationChatBatch } from "./features/registrations/components/RegistrationsScreen";
 const ReportsScreen = lazy(() => import("./features/reports/components/ReportsScreen").then(({ ReportsScreen }) => ({ default: ReportsScreen })));
 const SettingsScreen = lazy(() => import("./features/settings/components/SettingsScreen").then(({ SettingsScreen }) => ({ default: SettingsScreen })));
 const TestConsoleScreen = lazy(() => import("./features/test/components/TestConsoleScreen").then(({ TestConsoleScreen }) => ({ default: TestConsoleScreen })));
@@ -3233,6 +3234,10 @@ export default function App() {
   const [registrationCounts, setRegistrationCounts] = useState<RegistrationCounts>({ total: 0, registered: 0, cancelled: 0, checked_in: 0 });
   const [registrationHasMore, setRegistrationHasMore] = useState(false);
   const [registrationLoadingMore, setRegistrationLoadingMore] = useState(false);
+  const [registrationChatBatches, setRegistrationChatBatches] = useState<RegistrationChatBatch[]>([]);
+  const [registrationChatBatchesLoading, setRegistrationChatBatchesLoading] = useState(false);
+  const [registrationChatBatchLoadingKey, setRegistrationChatBatchLoadingKey] = useState("");
+  const [registrationChatBatchMessage, setRegistrationChatBatchMessage] = useState("");
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: ChatPart[], timestamp: string }[]>([]);
   const [inputText, setInputText] = useState("");
@@ -3622,10 +3627,10 @@ export default function App() {
   ];
   const helpContent = TAB_HELP_CONTENT[activeTab];
   const selectedTicketPngUrl = selectedRegistration
-    ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.png`
+    ? `/api/registration-tickets/${encodeURIComponent(selectedRegistration.id)}.png`
     : "";
   const selectedTicketSvgUrl = selectedRegistration
-    ? `/api/tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
+    ? `/api/registration-tickets/${encodeURIComponent(selectedRegistration.id)}.svg`
     : "";
   const timingInfo = describeEventTiming(settings);
   const eventLocationSummary = buildEventLocationSummary(settings);
@@ -3660,7 +3665,7 @@ export default function App() {
   const selectedEmailTemplateText = getResolvedEmailTemplateValue(settings, selectedEmailTemplateKind, "text");
   const emailPreviewBaseUrl = typeof window !== "undefined" ? window.location.origin : publicPageAbsoluteUrl;
   const emailPreviewTicketUrl = emailPreviewBaseUrl
-    ? new URL(`/api/tickets/${encodeURIComponent("TEST-TICKET")}.png`, emailPreviewBaseUrl).toString()
+    ? new URL(`/api/registration-tickets/${encodeURIComponent("TEST-TICKET")}.png`, emailPreviewBaseUrl).toString()
     : "";
   const emailPreviewTokens = {
     app_url: emailPreviewBaseUrl,
@@ -4022,6 +4027,8 @@ export default function App() {
       `${reg.first_name} ${reg.last_name}`,
       reg.phone,
       reg.email,
+      reg.sender_id,
+      reg.channel_external_id,
       reg.channel_platform,
       reg.status,
     ]),
@@ -5167,6 +5174,7 @@ export default function App() {
           fetchSettings(selectedEventId),
           canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
           canViewRegistrations ? fetchRegistrations(selectedEventId) : Promise.resolve(),
+          canViewRegistrations ? fetchRegistrationChatBatches(selectedEventId) : Promise.resolve(),
           canManageKnowledge ? fetchDocuments(selectedEventId) : Promise.resolve(),
           canRunTest ? fetchLlmModels() : Promise.resolve(),
           canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
@@ -5182,6 +5190,7 @@ export default function App() {
       void Promise.all([
         canViewLogs ? fetchMessages(selectedEventId) : Promise.resolve(),
         canViewRegistrations ? fetchRegistrations(selectedEventId, { preserveLoaded: true }) : Promise.resolve(),
+        canViewRegistrations ? fetchRegistrationChatBatches(selectedEventId, { silent: true }) : Promise.resolve(),
         canManageKnowledge ? fetchDocuments(selectedEventId) : Promise.resolve(),
         canEditSettings ? fetchLlmUsageSummary(selectedEventId) : Promise.resolve(null),
         canManageCheckinAccess ? fetchCheckinSessions(selectedEventId) : Promise.resolve([]),
@@ -5225,6 +5234,9 @@ export default function App() {
     setPublicInboxConversationLoading(false);
     setPublicInboxStatusUpdating(false);
     setRegistrations([]);
+    setRegistrationChatBatches([]);
+    setRegistrationChatBatchLoadingKey("");
+    setRegistrationChatBatchMessage("");
     setSelectedRegistrationId("");
     setEmailStatus(null);
     setEmailTestAddress("");
@@ -7630,6 +7642,24 @@ export default function App() {
     await fetchRegistrations(selectedEventId, { append: true });
   };
 
+  const fetchRegistrationChatBatches = async (eventId = selectedEventId, options?: { silent?: boolean }) => {
+    if (!eventId) return;
+    const silent = Boolean(options?.silent);
+    if (!silent) setRegistrationChatBatchesLoading(true);
+    try {
+      const res = await apiFetch(`/api/registrations/chats?event_id=${encodeURIComponent(eventId)}`);
+      const data = await res.json().catch(() => ([]));
+      if (!res.ok) throw new Error(data?.error || "Failed to fetch registration chat batches");
+      if (selectedEventIdRef.current !== eventId) return;
+      setRegistrationChatBatches(Array.isArray(data) ? data as RegistrationChatBatch[] : []);
+    } catch (err) {
+      console.error("Failed to fetch registration chat batches", err);
+      if (!silent) setRegistrationChatBatchMessage(err instanceof Error ? err.message : "Failed to fetch chat batches");
+    } finally {
+      if (!silent) setRegistrationChatBatchesLoading(false);
+    }
+  };
+
   const fetchPublicInboxConversations = async (eventId = selectedEventId, options?: { silent?: boolean }) => {
     if (!eventId) return;
     const silent = Boolean(options?.silent);
@@ -8112,6 +8142,46 @@ export default function App() {
       setStatusUpdateMessage(message);
     } finally {
       setStatusUpdateLoading(false);
+    }
+  };
+
+  const resendRegistrationChatBatch = async (batch: RegistrationChatBatch) => {
+    if (!canChangeRegistrationStatus || registrationChatBatchLoadingKey) return;
+    const confirmed = window.confirm(
+      language === "th"
+        ? `ส่งบัตรที่ยังใช้งาน ${batch.active_ticket_count} ใบกลับไปที่แชตนี้อีกครั้งหรือไม่?\n\nChat ID: ${batch.sender_id}`
+        : `Send ${batch.active_ticket_count} active ticket${batch.active_ticket_count === 1 ? "" : "s"} to this chat again?\n\nChat ID: ${batch.sender_id}`,
+    );
+    if (!confirmed) return;
+
+    setRegistrationChatBatchLoadingKey(batch.key);
+    setRegistrationChatBatchMessage("");
+    try {
+      const res = await apiFetch("/api/registrations/chats/resend-tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: selectedEventId,
+          sender_id: batch.sender_id,
+          channel_platform: batch.channel_platform,
+          channel_external_id: batch.channel_external_id,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to resend chat ticket batch");
+      const sent = Number(data.sent || 0);
+      const requested = Number(data.requested || 0);
+      setRegistrationChatBatchMessage(
+        language === "th"
+          ? `ส่งบัตรแล้ว ${sent}/${requested} ใบ ไปยัง Chat ID ${batch.sender_id}`
+          : `Sent ${sent} of ${requested} ticket${requested === 1 ? "" : "s"} to ${batch.sender_id}.`,
+      );
+      await fetchRegistrationChatBatches(selectedEventId, { silent: true });
+      window.setTimeout(() => setRegistrationChatBatchMessage(""), 4000);
+    } catch (err) {
+      setRegistrationChatBatchMessage(err instanceof Error ? err.message : "Failed to resend chat ticket batch");
+    } finally {
+      setRegistrationChatBatchLoadingKey("");
     }
   };
 
@@ -9653,7 +9723,7 @@ export default function App() {
                           Copy ID
                         </ActionButton>
                         <a
-                          href={`/api/tickets/${encodeURIComponent(registration.id)}.png`}
+                          href={`/api/registration-tickets/${encodeURIComponent(registration.id)}.png`}
                           target="_blank"
                           rel="noreferrer"
                           onClick={(event) => event.stopPropagation()}
@@ -10603,6 +10673,11 @@ export default function App() {
                 onUpdateRegistrationSmsConsent={updateRegistrationSmsConsent}
                 statusUpdateLoading={statusUpdateLoading}
                 statusUpdateMessage={statusUpdateMessage}
+                chatBatches={registrationChatBatches}
+                chatBatchesLoading={registrationChatBatchesLoading}
+                chatBatchLoadingKey={registrationChatBatchLoadingKey}
+                chatBatchMessage={registrationChatBatchMessage}
+                onResendChatBatch={resendRegistrationChatBatch}
               />
             </motion.div>
           )}

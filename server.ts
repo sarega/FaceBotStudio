@@ -159,7 +159,7 @@ import {
 } from "./backend/eventSelection";
 import { buildEventLocationSummary, formatEventLocationCompact, resolveEventMapUrl } from "./src/lib/eventLocation";
 import { createPrivateMediaToken, verifyPrivateMediaToken, type PrivateMediaScope } from "./backend/privateMediaAccess";
-import { createTicketAccessToken, verifyTicketAccessToken, type TicketImageFormat } from "./backend/ticketAccess";
+import { verifyTicketAccessToken, type TicketImageFormat } from "./backend/ticketAccess";
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor } from "./src/lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries } from "./src/lib/publicEventPageLayout";
@@ -591,6 +591,7 @@ function getSystemInstruction(
     "Ask for registration details only after the user clearly wants to register or explicitly confirms they want to continue.",
     "Summarize registration details exactly once, immediately before calling the registerUser tool.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
+    "After registerUser succeeds, the system sends the attendee's QR/PNG ticket separately in the same chat when the channel supports images. Never say that this system does not send a barcode, QR code, or ticket image. If the attendee cannot see the image, tell them to wait briefly or ask the admin for the Registration ID as a fallback; do not deny that a ticket image is sent.",
     "After a successful registration, ask whether the attendee explicitly agrees to receive SMS reminders for this event at their registered phone number. Never treat an unclear answer as consent. When they clearly answer yes or no, use setSmsConsent.",
     "Politely ask for any missing information one by one.",
     "If registration fails (e.g. limit reached or period closed), explain why to the user.",
@@ -2408,6 +2409,67 @@ function serializeAdminRegistration(registration: RegistrationRow) {
   };
 }
 
+type RegistrationChatBatch = {
+  key: string;
+  sender_id: string;
+  channel_platform: ChannelPlatform | null;
+  channel_external_id: string | null;
+  ticket_count: number;
+  active_ticket_count: number;
+  cancelled_ticket_count: number;
+  last_registration_at: string;
+  registrations: Array<ReturnType<typeof serializeAdminRegistration>>;
+};
+
+function getRegistrationChatBatchKey(registration: RegistrationRow) {
+  return JSON.stringify([
+    String(registration.event_id || "").trim(),
+    String(registration.channel_platform || "").trim(),
+    String(registration.sender_id || "").trim(),
+  ]);
+}
+
+function buildRegistrationChatBatches(rows: RegistrationRow[]) {
+  const batches = new Map<string, RegistrationChatBatch>();
+  for (const registration of rows) {
+    const senderId = normalizeOptionalText(registration.sender_id);
+    if (!senderId || senderId.startsWith("admin-manual:") || senderId.startsWith("public-web:")) continue;
+    const key = getRegistrationChatBatchKey(registration);
+    const batch = batches.get(key) || {
+      key,
+      sender_id: senderId,
+      channel_platform: registration.channel_platform || null,
+      channel_external_id: normalizeOptionalText(registration.channel_external_id) || null,
+      ticket_count: 0,
+      active_ticket_count: 0,
+      cancelled_ticket_count: 0,
+      last_registration_at: registration.timestamp,
+      registrations: [],
+    };
+    if (!batch.channel_external_id && registration.channel_external_id) {
+      batch.channel_external_id = registration.channel_external_id;
+    }
+    if (!batch.channel_platform && registration.channel_platform) {
+      batch.channel_platform = registration.channel_platform;
+    }
+    batch.ticket_count += 1;
+    if (registration.status === "cancelled") batch.cancelled_ticket_count += 1;
+    else batch.active_ticket_count += 1;
+    if (Date.parse(registration.timestamp) > Date.parse(batch.last_registration_at)) {
+      batch.last_registration_at = registration.timestamp;
+    }
+    batch.registrations.push(serializeAdminRegistration(registration));
+    batches.set(key, batch);
+  }
+
+  return [...batches.values()]
+    .map((batch) => ({
+      ...batch,
+      registrations: [...batch.registrations].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp)),
+    }))
+    .sort((left, right) => Date.parse(right.last_registration_at) - Date.parse(left.last_registration_at));
+}
+
 function normalizeChannelPlatformArg(value: unknown): ChannelPlatform | null {
   const raw = String(value ?? "").trim().toLowerCase();
   if (!raw) return null;
@@ -3321,8 +3383,8 @@ function buildRegistrationConfirmationEmailTemplate(options: {
     eventId: options.eventId,
     eventSlug: options.eventSlug,
     includeTicketLinks: options.includeTicketLinks,
-    ticketPngUrl: options.includeTicketLinks === false ? null : buildTicketImageUrl(options.registrationId, "png"),
-    ticketSvgUrl: options.includeTicketLinks === false ? null : buildTicketImageUrl(options.registrationId, "svg"),
+    ticketPngUrl: options.includeTicketLinks === false ? null : buildFreeRegistrationTicketImageUrl(options.registrationId, "png"),
+    ticketSvgUrl: options.includeTicketLinks === false ? null : buildFreeRegistrationTicketImageUrl(options.registrationId, "svg"),
   });
 
   return renderRegistrationConfirmationEmail({
@@ -4174,8 +4236,8 @@ async function resolveAttendeeCancellationTarget(options: {
 
 function buildTicketArtifactUrls(registrationId: string) {
   return {
-    png_url: buildTicketImageUrl(registrationId, "png", true),
-    svg_url: buildTicketImageUrl(registrationId, "svg", true),
+    png_url: buildFreeRegistrationTicketImageUrl(registrationId),
+    svg_url: buildFreeRegistrationTicketImageUrl(registrationId, "svg"),
   };
 }
 
@@ -4342,7 +4404,7 @@ function resolvePublicTicketRecoveryRegistration(
 async function sendPublicTicketRecoveryEmail(registration: RegistrationRow, settings: Record<string, string>) {
   const email = normalizeOptionalText(registration.email);
   const emailConfig = getEmailConfig();
-  const ticketUrl = buildTicketImageUrl(registration.id, "png");
+  const ticketUrl = buildFreeRegistrationTicketImageUrl(registration.id, "png");
   if (!email || !emailConfig.ready || !ticketUrl) return false;
 
   const template = renderTicketRecoveryEmail({
@@ -5460,7 +5522,11 @@ async function sendManualOutboundText(target: ManualOutboundTarget, text: string
   };
 }
 
-async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarget, registrationId: string) {
+async function resendTicketArtifactsToOutboundTarget(
+  target: ManualOutboundTarget,
+  registrationId: string,
+  options: { includeMap?: boolean } = {},
+) {
   const normalizedRegistrationId = String(registrationId || "").trim().toUpperCase();
   if (!normalizedRegistrationId) {
     throw new Error("Registration ID is required");
@@ -5478,31 +5544,24 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
 
   const settings = await getSettingsMap(target.eventId);
   const steps: string[] = [];
-  const manualOperationId = randomUUID();
   let deliveryStatus: "queued" | "sent" = "sent";
   const trackDeliveryStatus = (payload: unknown) => {
     if (getFacebookOutboundDeliveryStatus(target, payload) === "queued") deliveryStatus = "queued";
   };
   const ticketSummaryText = buildTicketSummaryText(registration, settings);
-  trackDeliveryStatus(await sendTextToOutboundTarget(target, ticketSummaryText, {
-    durableFacebook: target.platform === "facebook",
-    kind: "facebook.manual.ticket_summary",
-    idempotencyKey: `facebook:manual:${manualOperationId}:ticket-summary`,
-  }));
+  // Free-event ticket resends go directly to the channel. They must not use
+  // the durable Facebook outbox used by other operational messages.
+  trackDeliveryStatus(await sendTextToOutboundTarget(target, ticketSummaryText));
   await saveMessage(target.senderId, `[manual-ticket-summary] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
   steps.push("summary");
 
-  const ticketPngUrl = buildTicketImageUrl(normalizedRegistrationId, "png");
-  const ticketSvgUrl = buildTicketImageUrl(normalizedRegistrationId, "svg");
+  const ticketPngUrl = buildFreeRegistrationTicketImageUrl(normalizedRegistrationId, "png");
+  const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(normalizedRegistrationId, "svg");
   const ticketFallbackUrl = ticketPngUrl || ticketSvgUrl;
 
   if (ticketPngUrl) {
     try {
-      trackDeliveryStatus(await sendImageToOutboundTarget(target, ticketPngUrl, {
-        durableFacebook: target.platform === "facebook",
-        kind: "facebook.manual.ticket_image_png",
-        idempotencyKey: `facebook:manual:${manualOperationId}:ticket-image-png`,
-      }));
+      trackDeliveryStatus(await sendImageToOutboundTarget(target, ticketPngUrl));
       await saveMessage(target.senderId, `[manual-ticket-image-png] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
       steps.push("image");
     } catch (error) {
@@ -5511,22 +5570,14 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
   }
 
   if (!steps.includes("image") && ticketFallbackUrl) {
-    trackDeliveryStatus(await sendTextToOutboundTarget(target, `ตั๋วของคุณ: ${ticketFallbackUrl}`, {
-      durableFacebook: target.platform === "facebook",
-      kind: "facebook.manual.ticket_link",
-      idempotencyKey: `facebook:manual:${manualOperationId}:ticket-link`,
-    }));
+    trackDeliveryStatus(await sendTextToOutboundTarget(target, `ตั๋วของคุณ: ${ticketFallbackUrl}`));
     await saveMessage(target.senderId, `[manual-ticket-link] ${normalizedRegistrationId}`, "outgoing", target.eventId, target.externalId);
     steps.push("link");
   }
 
   const mapUrl = resolveEventMapUrlFromSettings(settings);
-  if ((steps.includes("image") || steps.includes("link")) && mapUrl) {
-    trackDeliveryStatus(await sendTextToOutboundTarget(target, `แผนที่สถานที่: ${mapUrl}`, {
-      durableFacebook: target.platform === "facebook",
-      kind: "facebook.manual.map_link",
-      idempotencyKey: `facebook:manual:${manualOperationId}:map-link`,
-    }));
+  if (options.includeMap !== false && (steps.includes("image") || steps.includes("link")) && mapUrl) {
+    trackDeliveryStatus(await sendTextToOutboundTarget(target, `แผนที่สถานที่: ${mapUrl}`));
     await saveMessage(target.senderId, `[manual-map-link] ${mapUrl}`, "outgoing", target.eventId, target.externalId);
     steps.push("map");
   }
@@ -5535,6 +5586,54 @@ async function resendTicketArtifactsToOutboundTarget(target: ManualOutboundTarge
     registration_id: normalizedRegistrationId,
     steps,
     delivery_status: deliveryStatus as "queued" | "sent",
+  };
+}
+
+async function resendTicketBatchToOutboundTarget(target: ManualOutboundTarget, registrations: RegistrationRow[]) {
+  const results: Array<{
+    registration_id: string;
+    ok: boolean;
+    steps?: string[];
+    error?: string;
+  }> = [];
+
+  for (const registration of registrations) {
+    try {
+      const result = await resendTicketArtifactsToOutboundTarget(target, registration.id, { includeMap: false });
+      results.push({ registration_id: registration.id, ok: true, steps: result.steps });
+    } catch (error) {
+      results.push({
+        registration_id: registration.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const delivered = results.filter((result) => result.ok && (result.steps || []).some((step) => step === "image" || step === "link"));
+  let mapSent = false;
+  let mapError = "";
+  if (delivered.length > 0) {
+    const settings = await getSettingsMap(target.eventId);
+    const mapUrl = resolveEventMapUrlFromSettings(settings);
+    if (mapUrl) {
+      try {
+        await sendTextToOutboundTarget(target, `แผนที่สถานที่: ${mapUrl}`);
+        await saveMessage(target.senderId, `[manual-map-link-batch] ${mapUrl}`, "outgoing", target.eventId, target.externalId);
+        mapSent = true;
+      } catch (error) {
+        mapError = error instanceof Error ? error.message : String(error);
+      }
+    }
+  }
+
+  return {
+    requested: registrations.length,
+    sent: delivered.length,
+    failed: results.filter((result) => !result.ok).length,
+    map_sent: mapSent,
+    ...(mapError ? { map_error: mapError } : {}),
+    results,
   };
 }
 
@@ -8365,8 +8464,8 @@ async function executeAdminAgentToolCall(
     }
     case "view_ticket": {
       const registration = await resolveSingleRegistrationForAdminAction(eventId, call.args, rawMessage);
-      const ticketPngUrl = buildTicketImageUrl(registration.id, "png");
-      const ticketSvgUrl = buildTicketImageUrl(registration.id, "svg");
+      const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registration.id, "png");
+      const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registration.id, "svg");
       return {
         reply: `ตั๋วของ ${formatRegistrationDisplayName(registration)} (${registration.id})`,
         result: {
@@ -8420,8 +8519,8 @@ async function executeAdminAgentToolCall(
 
       const registrationId = String(creation.content.id || "").trim().toUpperCase();
       const registration = await getRegistrationById(registrationId);
-      const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
-      const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+      const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registrationId, "png");
+      const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registrationId, "svg");
       const attendeeLabel = registration
         ? formatRegistrationDisplayName(registration)
         : `${draft.firstName} ${draft.lastName}`.trim();
@@ -8636,8 +8735,8 @@ async function executeAdminAgentToolCall(
             }
             const createdId = String(creation.content.id || "").trim().toUpperCase();
             const created = await getRegistrationById(createdId);
-            const ticketPngUrl = buildTicketImageUrl(createdId, "png");
-            const ticketSvgUrl = buildTicketImageUrl(createdId, "svg");
+            const ticketPngUrl = buildFreeRegistrationTicketImageUrl(createdId, "png");
+            const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(createdId, "svg");
             return {
               reply: `ลงทะเบียนเรียบร้อย: ${(created ? formatRegistrationDisplayName(created) : `${draft.firstName} ${draft.lastName}`.trim())} (${createdId})`,
               result: {
@@ -8738,8 +8837,8 @@ async function executeAdminAgentToolCall(
         platform: normalizeChannelPlatformArg(call.args.platform),
       });
       const resend = await resendTicketArtifactsToOutboundTarget(target, registration.id);
-      const ticketPngUrl = buildTicketImageUrl(registration.id, "png");
-      const ticketSvgUrl = buildTicketImageUrl(registration.id, "svg");
+      const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registration.id, "png");
+      const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registration.id, "svg");
       return {
         reply: `ส่งตั๋วใหม่แล้ว: ${formatRegistrationDisplayName(registration)} (${registration.id})`,
         result: {
@@ -9599,8 +9698,8 @@ async function buildWebChatArtifacts(eventId: string, registrationIds: string[])
     tickets.push({
       registration_id: registrationId,
       summary_text: buildTicketSummaryText(reg, settings),
-      png_url: buildTicketImageUrl(registrationId, "png"),
-      svg_url: buildTicketImageUrl(registrationId, "svg"),
+      png_url: buildFreeRegistrationTicketImageUrl(registrationId, "png"),
+      svg_url: buildFreeRegistrationTicketImageUrl(registrationId, "svg"),
     });
   }
 
@@ -9936,25 +10035,22 @@ function getTicketAccessSecret() {
   return IS_PRODUCTION ? "" : "facebotstudio-ticket-development-only";
 }
 
-function buildTicketImageUrl(
+// Free-event registrations use a public, registration-only asset route. This
+// path intentionally does not depend on Direct Ticket security secrets.
+function buildFreeRegistrationTicketImageUrl(
   registrationId: string,
   format: TicketImageFormat = "png",
-  allowRelative = false,
 ) {
-  const token = createTicketAccessToken(getTicketAccessSecret(), registrationId, format);
-  if (!token) return null;
-
-  const pathname = `/api/tickets/${encodeURIComponent(registrationId)}.${format}`;
-  const query = `?token=${encodeURIComponent(token)}`;
-  if (!process.env.APP_URL) return allowRelative ? `${pathname}${query}` : null;
+  const normalizedRegistrationId = String(registrationId || "").trim().toUpperCase();
+  if (!normalizedRegistrationId || !process.env.APP_URL) return null;
 
   try {
     const url = new URL(process.env.APP_URL);
-    url.pathname = pathname;
-    url.search = query;
+    url.pathname = `/api/registration-tickets/${encodeURIComponent(normalizedRegistrationId)}.${format}`;
+    url.search = "";
     return url.toString();
   } catch {
-    return allowRelative ? `${pathname}${query}` : null;
+    return null;
   }
 }
 
@@ -11149,6 +11245,36 @@ function renderTicketSvg(reg: RegistrationRow, settings: Record<string, string>,
   <rect x="5" y="608" width="410" height="45" fill="#f1f5f9"/>
   <text x="210" y="636" text-anchor="middle" font-family="Tahoma, Arial, sans-serif" font-size="11" font-weight="700" fill="#16a34a" letter-spacing="1.2">VERIFIED REGISTRATION</text>
 </svg>`;
+}
+
+async function renderFreeRegistrationTicketAsset(
+  registrationId: string,
+  format: TicketImageFormat,
+) {
+  const reg = await getRegistrationById(registrationId);
+  if (!reg) return null;
+
+  const settings = await getSettingsMap(reg.event_id || DEFAULT_EVENT_ID);
+  const qrDataUrl = await QRCode.toDataURL(reg.id, { width: 220, margin: 1 });
+  if (format === "svg") {
+    return {
+      body: renderTicketSvg(reg, settings, qrDataUrl),
+      contentType: "image/svg+xml; charset=utf-8",
+    };
+  }
+
+  try {
+    return {
+      body: await renderTicketPngScreenshotBuffer(reg, settings, qrDataUrl),
+      contentType: "image/png",
+    };
+  } catch (screenshotError) {
+    console.error("Failed to render free registration ticket PNG via screenshot, falling back to resvg:", screenshotError);
+    return {
+      body: Buffer.from(renderTicketPngBuffer(renderTicketSvg(reg, settings, qrDataUrl))),
+      contentType: "image/png",
+    };
+  }
 }
 
 function normalizeMessageTextForHistory(text: string) {
@@ -12653,39 +12779,34 @@ async function handleIncomingFacebookText(
       if (reg && settings) {
         const ticketSummaryText = buildTicketSummaryText(reg, settings);
         try {
-          await enqueueFacebookTextMessage(senderId, ticketSummaryText, pageId, {
-            kind: "facebook.inbound.ticket_summary",
-            idempotencyKey: outboundIdempotencyKey("ticket-summary", registrationId),
-          });
+          // Free-event ticket delivery is intentionally independent from the
+          // Direct Ticket/outbox pipeline. Send the registration summary now.
+          await sendFacebookTextMessage(senderId, ticketSummaryText, pageId);
           await saveMessage(senderId, `[ticket-summary] ${registrationId}`, "outgoing", eventId, pageId);
         } catch (error) {
           console.error("Failed to send ticket summary text:", error);
         }
       }
 
-      const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
-      const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+      const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registrationId, "png");
+      const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registrationId, "svg");
       if (!ticketPngUrl && !ticketSvgUrl) {
-        console.warn("APP_URL is not set; skipping ticket image send");
+        console.warn("APP_URL is not configured; skipping free registration ticket image send");
         continue;
       }
 
       try {
         if (!ticketPngUrl) throw new Error("PNG ticket URL is not available");
-        await enqueueFacebookImageMessage(senderId, ticketPngUrl, pageId, {
-          kind: "facebook.inbound.ticket_image_png",
-          idempotencyKey: outboundIdempotencyKey("ticket-image-png", registrationId),
-        });
+        // Facebook must fetch a public PNG URL. This path does not use
+        // TICKET_ACCESS_SECRET or any Direct Ticket security setting.
+        await sendFacebookImageMessage(senderId, ticketPngUrl, pageId);
         await saveMessage(senderId, `[ticket-image-png] ${registrationId}`, "outgoing", eventId, pageId);
         sentTicketArtifact = true;
       } catch (error) {
         console.error("Failed to send PNG ticket image:", error);
         try {
           if (!ticketSvgUrl) throw new Error("SVG ticket URL is not available");
-          await enqueueFacebookImageMessage(senderId, ticketSvgUrl, pageId, {
-            kind: "facebook.inbound.ticket_image_svg",
-            idempotencyKey: outboundIdempotencyKey("ticket-image-svg", registrationId),
-          });
+          await sendFacebookImageMessage(senderId, ticketSvgUrl, pageId);
           await saveMessage(senderId, `[ticket-image-svg] ${registrationId}`, "outgoing", eventId, pageId);
           sentTicketArtifact = true;
         } catch (svgError) {
@@ -12693,10 +12814,7 @@ async function handleIncomingFacebookText(
           try {
             const textUrl = ticketPngUrl || ticketSvgUrl;
             if (!textUrl) throw new Error("No ticket URL available");
-            await enqueueFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, pageId, {
-              kind: "facebook.inbound.ticket_link",
-              idempotencyKey: outboundIdempotencyKey("ticket-link", registrationId),
-            });
+            await sendFacebookTextMessage(senderId, `ตั๋วของคุณ: ${textUrl}`, pageId);
             await saveMessage(senderId, `[ticket-link] ${registrationId}`, "outgoing", eventId, pageId);
             sentTicketArtifact = true;
           } catch (fallbackError) {
@@ -12710,10 +12828,7 @@ async function handleIncomingFacebookText(
       const mapUrl = resolveEventMapUrlFromSettings(settings || {});
       if (mapUrl) {
         try {
-          await enqueueFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId, {
-            kind: "facebook.inbound.map_link",
-            idempotencyKey: outboundIdempotencyKey("map-link"),
-          });
+          await sendFacebookTextMessage(senderId, `แผนที่สถานที่: ${mapUrl}`, pageId);
           await saveMessage(senderId, `[map-link] ${mapUrl}`, "outgoing", eventId, pageId);
         } catch (error) {
           console.error("Failed to send map link:", error);
@@ -12820,10 +12935,10 @@ async function handleIncomingLineText(
       }
     }
 
-    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
-    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registrationId, "svg");
     if (!ticketPngUrl && !ticketSvgUrl) {
-      console.warn("APP_URL is not set; skipping LINE ticket image send");
+      console.warn("APP_URL is not configured; skipping free registration LINE ticket image send");
       continue;
     }
 
@@ -12930,10 +13045,10 @@ async function handleIncomingInstagramText(
       }
     }
 
-    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
-    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registrationId, "svg");
     if (!ticketPngUrl && !ticketSvgUrl) {
-      console.warn("APP_URL is not set; skipping Instagram ticket image send");
+      console.warn("APP_URL is not configured; skipping free registration Instagram ticket image send");
       continue;
     }
 
@@ -13040,10 +13155,10 @@ async function handleIncomingWhatsAppText(
       }
     }
 
-    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
-    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registrationId, "svg");
     if (!ticketPngUrl && !ticketSvgUrl) {
-      console.warn("APP_URL is not set; skipping WhatsApp ticket image send");
+      console.warn("APP_URL is not configured; skipping free registration WhatsApp ticket image send");
       continue;
     }
 
@@ -13150,10 +13265,10 @@ async function handleIncomingTelegramText(
       }
     }
 
-    const ticketPngUrl = buildTicketImageUrl(registrationId, "png");
-    const ticketSvgUrl = buildTicketImageUrl(registrationId, "svg");
+    const ticketPngUrl = buildFreeRegistrationTicketImageUrl(registrationId, "png");
+    const ticketSvgUrl = buildFreeRegistrationTicketImageUrl(registrationId, "svg");
     if (!ticketPngUrl && !ticketSvgUrl) {
-      console.warn("APP_URL is not set; skipping Telegram ticket image send");
+      console.warn("APP_URL is not configured; skipping free registration Telegram ticket image send");
       continue;
     }
 
@@ -16338,6 +16453,89 @@ async function startServer() {
   });
 
   app.get(
+    "/api/registrations/chats",
+    requireRoles(["owner", "admin", "operator", "checker"]),
+    requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req, res) => {
+      try {
+        const eventId = getRequestedEventId(req);
+        const rows = await appDb.listRegistrations(undefined, eventId);
+        return res.json(buildRegistrationChatBatches(rows));
+      } catch (error) {
+        console.error("Failed to fetch registration chat batches:", error);
+        return res.status(500).json({ error: "Failed to fetch registration chat batches" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/registrations/chats/resend-tickets",
+    requireRoles(["owner", "admin", "operator"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    manualOutboundActionRateLimit,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const body = readObjectBody(req);
+        const issues: ValidationIssue[] = [];
+        const senderId = readRequiredString(body, "sender_id", issues, { label: "Facebook chat ID", maxLength: 255 });
+        const requestedPlatform = readOptionalString(body, "channel_platform", 64).toLowerCase();
+        const requestedExternalId = readOptionalString(body, "channel_external_id", 255);
+        if (requestedPlatform && !ALLOWED_CHANNEL_PLATFORMS.includes(requestedPlatform as ChannelPlatform)) {
+          issues.push({ field: "channel_platform", message: "channel_platform is invalid" });
+        }
+        if (issues.length > 0) return respondValidationError(res, issues);
+
+        const eventId = getRequestedEventId(req);
+        const rows = await appDb.listRegistrations(undefined, eventId);
+        const matchingRows = rows.filter((registration) => {
+          if (normalizeOptionalText(registration.sender_id) !== senderId) return false;
+          if (requestedPlatform && registration.channel_platform && registration.channel_platform !== requestedPlatform) return false;
+          if (requestedExternalId && registration.channel_external_id && normalizeOptionalText(registration.channel_external_id) !== requestedExternalId) return false;
+          return true;
+        });
+        if (matchingRows.length === 0) return res.status(404).json({ error: "No registrations found for this chat" });
+
+        const platform = (requestedPlatform || matchingRows.find((row) => row.channel_platform)?.channel_platform || "facebook") as ChannelPlatform;
+        let externalId = requestedExternalId || normalizeOptionalText(matchingRows.find((row) => row.channel_external_id)?.channel_external_id);
+        if (!externalId) {
+          const conversationRows = await appDb.getConversationRowsForSender(senderId, 240, eventId);
+          externalId = normalizeOptionalText(conversationRows.find((row) => row.page_id)?.page_id);
+        }
+        if (!externalId) {
+          return res.status(409).json({ error: "This chat has no saved channel destination ID" });
+        }
+
+        const target = await resolveManualOutboundTarget(eventId, senderId, externalId, platform);
+        const activeRows = matchingRows.filter((registration) => registration.status !== "cancelled");
+        if (activeRows.length === 0) return res.status(409).json({ error: "This chat has no active tickets to resend" });
+
+        const result = await resendTicketBatchToOutboundTarget(target, activeRows);
+        await recordAudit(req, "registration.ticket_batch_resent", "conversation", senderId, {
+          event_id: eventId,
+          sender_id: senderId,
+          channel_platform: platform,
+          channel_external_id: externalId,
+          requested: result.requested,
+          sent: result.sent,
+          failed: result.failed,
+        });
+        return res.json({
+          ...result,
+          event_id: eventId,
+          sender_id: senderId,
+          channel_platform: platform,
+          channel_external_id: externalId,
+          ticket_count: matchingRows.length,
+          skipped_cancelled: matchingRows.length - activeRows.length,
+        });
+      } catch (error) {
+        console.error("Failed to resend registration chat ticket batch:", error);
+        return res.status(502).json({ error: error instanceof Error ? error.message : "Failed to resend ticket batch" });
+      }
+    },
+  );
+
+  app.get(
     "/api/registrations",
     requireRoles(["owner", "admin", "operator", "checker"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
@@ -17676,6 +17874,30 @@ async function startServer() {
     },
   );
 
+  // Free-event registration tickets are public image assets so Facebook can
+  // fetch them. They deliberately do not share Direct Ticket access secrets.
+  for (const format of ["png", "svg"] as const) {
+    app.get(`/api/registration-tickets/:id.${format}`, publicTicketRenderRateLimit, async (req, res) => {
+      try {
+        const registrationId = String(req.params.id || "").trim().toUpperCase();
+        if (!registrationId) return res.status(400).send("Missing registration ID");
+
+        const asset = await renderFreeRegistrationTicketAsset(registrationId, format);
+        if (!asset) return res.status(404).send("Registration ticket not found");
+
+        res.setHeader("Content-Type", asset.contentType);
+        res.setHeader("Content-Disposition", `inline; filename="${registrationId}.${format}"`);
+        res.setHeader("Cache-Control", "private, no-store");
+        return res.send(asset.body);
+      } catch (error) {
+        console.error(`Failed to render free registration ticket ${format}:`, error);
+        return res.status(500).send(`Failed to render registration ticket ${format.toUpperCase()}`);
+      }
+    });
+  }
+
+  // Legacy signed registration-ticket route. Keep it for existing links, but
+  // new free-event delivery never calls it.
   app.get("/api/tickets/:id.png", publicTicketRenderRateLimit, async (req, res) => {
     try {
       const registrationId = String(req.params.id || "").trim().toUpperCase();
