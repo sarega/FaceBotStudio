@@ -10944,6 +10944,12 @@ function renderDirectTicketsA4HtmlEnd() {
   return "</body></html>";
 }
 
+function setDirectTicketPrintHtmlHeaders(res: Response) {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
+}
+
 function parseDirectTicketZones(rawValue: unknown) {
   return String(rawValue || "").split(",").map((zone) => zone.trim().toLocaleLowerCase()).filter(Boolean);
 }
@@ -17794,7 +17800,7 @@ async function startServer() {
       };
       if (tickets.length > 200) {
         await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones, output: "browser_print_fallback" });
-        res.setHeader("Content-Type", "text/html; charset=utf-8"); res.setHeader("Cache-Control", "private, no-store");
+        setDirectTicketPrintHtmlHeaders(res);
         res.write(renderDirectTicketsA4HtmlStart());
         for (let index = 0; index < tickets.length; index += 4) {
           const svgs = await Promise.all(tickets.slice(index, index + 4).map(renderSvg));
@@ -17811,7 +17817,7 @@ async function startServer() {
       } catch (error) {
         console.error("Failed to render direct tickets A4 PDF; serving browser-print fallback:", error);
         await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones, output: "browser_print_fallback" });
-        res.setHeader("Content-Type", "text/html; charset=utf-8"); res.setHeader("Cache-Control", "private, no-store"); return res.send(renderDirectTicketsA4Html(svgs));
+        setDirectTicketPrintHtmlHeaders(res); return res.send(renderDirectTicketsA4Html(svgs));
       }
     } catch (error) {
       console.error("Failed to render direct tickets A4 PDF:", error);

@@ -244,6 +244,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigu
   const selectedExportZones = DIRECT_TICKET_ZONE_GROUPS[ticketExportZoneGroup] || [];
   const exportFilteredTickets = useMemo(() => filteredTickets.filter((ticket) => ticketMatchesZones(ticket.zone, selectedExportZones)), [filteredTickets, selectedExportZones]);
   const printableTicketIds = useMemo(() => exportFilteredTickets.filter((ticket) => ["issued", "checked_in"].includes(ticket.status)).map((ticket) => ticket.id), [exportFilteredTickets]);
+  const printableZones = useMemo(() => Array.from(new Set(exportFilteredTickets.filter((ticket) => ["issued", "checked_in"].includes(ticket.status)).map((ticket) => String(ticket.zone || "").trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })), [exportFilteredTickets]);
   const printA4Params = new URLSearchParams({ event_id: eventId });
   if (ticketStatusFilter !== "all") printA4Params.set("status", ticketStatusFilter);
   if (ticketPerformanceFilter !== "all") printA4Params.set("performance_id", ticketPerformanceFilter);
@@ -253,6 +254,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigu
   if (ticketSearch.trim()) printA4Params.set("search", ticketSearch.trim());
   if (ticketZoneFilter === "all" && selectedExportZones.length) printA4Params.set("zones", selectedExportZones.join(","));
   const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?${printA4Params.toString()}`;
+  const printA4HrefForZone = (zone: string) => { const params = new URLSearchParams(printA4Params); params.set("zones", zone); return `/api/direct-ticketing/tickets/print-a4.pdf?${params.toString()}`; };
   const batchAssetParams = new URLSearchParams(printA4Params);
   batchAssetParams.set("ids", printableTicketIds.join(","));
   const batchPngHref = `/api/direct-ticketing/tickets/export-assets.zip?format=png&${batchAssetParams.toString()}`;
@@ -780,6 +782,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigu
           <a href={ticketExportHref} className="text-sm font-bold text-violet-700">{t("salesCsv", "Sales CSV")} ({t("selectedExportGroup", "selected group")})</a>
         </div>
       </div>
+      {printableZones.length > 1 && <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3"><p className="text-xs font-bold text-violet-900">Print A4 by zone</p><p className="mt-1 text-xs text-violet-700">Recommended for large batches.</p><div className="mt-2 flex flex-wrap gap-2">{printableZones.map((zone) => <a key={zone} href={printA4HrefForZone(zone)} target="_blank" rel="noreferrer" className="rounded-lg border border-violet-300 bg-white px-3 py-2 text-xs font-bold text-violet-700">Print {zone}</a>)}</div></div>}
       <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_220px_180px_220px_auto]">
         <input aria-label={t("searchTickets", "Search tickets")} placeholder={t("searchTicketsPlaceholder", "Search recipient, buyer, ticket ID, seat…")} value={ticketSearch} onChange={(event) => setTicketSearch(event.target.value)} className="min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
         <select aria-label={t("filterStatus", "Filter status")} value={ticketStatusFilter} onChange={(event) => setTicketStatusFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
