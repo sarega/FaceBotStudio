@@ -14,7 +14,7 @@ import { createRequire } from "module";
 import dotenv from "dotenv";
 import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
 import { parseOutreachCsv } from "./backend/outreachCsv";
-import { buildStoredZipArchive } from "./backend/zipArchive";
+import { buildStoredZipArchive, createStoredZipWriter } from "./backend/zipArchive";
 import {
   formatAdminAgentOutreachDraftSummary,
   getAdminAgentOutreachIdentityKeys,
@@ -10886,12 +10886,12 @@ async function renderDirectTicketEmailPdfBuffer(ticket: DirectTicketRow, qrValue
 
 type DirectTicketAssetFormat = "png" | "pdf" | "svg";
 
-async function renderDirectTicketAsset(ticket: DirectTicketRow, format: DirectTicketAssetFormat, qrValue: string) {
-  const settings = await getSettingsMap(ticket.event_id);
+async function renderDirectTicketAsset(ticket: DirectTicketRow, format: DirectTicketAssetFormat, qrValue: string, eventSettings?: Record<string, string>, pngWidth?: number) {
+  const settings = eventSettings || await getSettingsMap(ticket.event_id);
   const qrDataUrl = await QRCode.toDataURL(qrValue, { width: 240, margin: 1 });
   const svg = renderDirectTicketSvg(ticket, settings, qrDataUrl, resolveDirectTicketArtworkDataUrl(settings));
   if (format === "svg") return { body: svg, contentType: "image/svg+xml; charset=utf-8" };
-  if (format === "png") return { body: Buffer.from(renderTicketPngBuffer(svg)), contentType: "image/png" };
+  if (format === "png") return { body: Buffer.from(renderTicketPngBuffer(svg, pngWidth)), contentType: "image/png" };
   return { body: await renderDirectTicketPdfBuffer(svg), contentType: "application/pdf" };
 }
 
@@ -17745,28 +17745,23 @@ async function startServer() {
       const tickets = filterDirectTicketsForExport(await appDb.listDirectTickets(eventId), req.query);
       if (!tickets.length) return res.status(404).send("No issued direct tickets found");
 
-      const entries: Array<{ name: string; body: Buffer }> = [];
-      for (const [index, ticket] of tickets.entries()) {
-        const asset = await renderDirectTicketAsset(ticket, format, buildAdminDirectTicketQrValue(ticket.id));
-        entries.push({
-          name: `${String(index + 1).padStart(3, "0")}-${ticket.id}.${format}`,
-          body: Buffer.isBuffer(asset.body) ? asset.body : Buffer.from(asset.body),
-        });
-      }
-
       const requestedZones = parseDirectTicketZones(req.query.zones);
-      const archive = buildStoredZipArchive(entries);
-      await recordAudit(req, "direct_ticket.batch_exported", "event", eventId, {
-        event_id: eventId,
-        tickets: tickets.length,
-        format,
-        zones: requestedZones,
-        recipient_name: String(req.query.recipient_name || "").trim(),
-      });
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename="direct-tickets-${format}-individual${directTicketZoneFilenameSuffix(requestedZones)}.zip"`);
       res.setHeader("Cache-Control", "private, no-store");
-      return res.send(archive);
+      const write = async (chunk: Buffer) => { if (!res.write(chunk)) await new Promise<void>((resolve) => res.once("drain", resolve)); };
+      const archive = createStoredZipWriter(write);
+      const settings = await getSettingsMap(eventId);
+      for (const [index, ticket] of tickets.entries()) {
+        const asset = await renderDirectTicketAsset(ticket, format, buildAdminDirectTicketQrValue(ticket.id), settings, 900);
+        await archive.append({ name: `${String(index + 1).padStart(3, "0")}-${ticket.id}.${format}`, body: Buffer.isBuffer(asset.body) ? asset.body : Buffer.from(asset.body) });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await archive.finish();
+      await recordAudit(req, "direct_ticket.batch_exported", "event", eventId, {
+        event_id: eventId, tickets: tickets.length, format, zones: requestedZones, recipient_name: String(req.query.recipient_name || "").trim(),
+      });
+      return res.end();
     } catch (error) {
       console.error("Failed to render direct ticket batch assets:", error);
       if (res.headersSent) return res.end();

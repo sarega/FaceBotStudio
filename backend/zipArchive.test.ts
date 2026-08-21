@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildStoredZipArchive } from "./zipArchive";
+import { buildStoredZipArchive, createStoredZipWriter } from "./zipArchive";
 
 test("builds a UTF-8 stored ZIP archive", () => {
   const archive = buildStoredZipArchive([
@@ -15,4 +15,16 @@ test("builds a UTF-8 stored ZIP archive", () => {
   assert.equal(archive.readUInt16LE(endOfCentralDirectory + 10), 2);
   assert.equal(archive.includes(Buffer.from("001-ticket.png")), true);
   assert.equal(archive.includes(Buffer.from("002-บัตร.pdf")), true);
+});
+
+test("streams a stored ZIP archive without retaining ticket bodies", async () => {
+  const chunks: Buffer[] = [];
+  const writer = createStoredZipWriter(async (chunk) => { chunks.push(chunk); });
+  await writer.append({ name: "001-ticket.png", body: Buffer.from("png-bytes") });
+  await writer.append({ name: "002-บัตร.pdf", body: Buffer.from("pdf-bytes") });
+  await writer.finish();
+  assert.deepEqual(Buffer.concat(chunks), buildStoredZipArchive([
+    { name: "001-ticket.png", body: Buffer.from("png-bytes") },
+    { name: "002-บัตร.pdf", body: Buffer.from("pdf-bytes") },
+  ]));
 });
