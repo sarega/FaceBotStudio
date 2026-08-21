@@ -99,6 +99,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigu
   const [recipientForm, setRecipientForm] = useState({ display_name: "", email: "", phone: "", address: "", notes: "" });
   const [selectedSeatIds, setSelectedSeatIds] = useState<string[]>([]);
   const [ticketCreationProgress, setTicketCreationProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [batchExportStarted, setBatchExportStarted] = useState<"png" | "pdf" | null>(null);
   const [ticketClasses, setTicketClasses] = useState<TicketClassPreset[]>(DEFAULT_TICKET_CLASSES);
   const [previewTicketClass, setPreviewTicketClass] = useState("VIP");
   const [newClass, setNewClass] = useState({ name: "", price_amount: "", payment_required: true, primary_color: "#1d4ed8", accent_color: "#bfdbfe" });
@@ -773,7 +774,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigu
         </div>
         <div className="flex flex-wrap gap-3">
           <a href={printableTicketIds.length ? printA4Href : undefined} aria-disabled={!printableTicketIds.length} target="_blank" rel="noreferrer" className={"text-sm font-bold " + (printableTicketIds.length ? "text-violet-700" : "pointer-events-none text-slate-400")}>{t("printFilteredA4", "Print selected A4")} ({formatNumber(printableTicketIds.length)})</a>
-          {printableTicketIds.length > 0 && <><a href={batchPngHref} className="text-sm font-bold text-violet-700">{t("exportIndividualPng", "Export individual PNGs (ZIP)")} ({formatNumber(printableTicketIds.length)})</a><a href={batchPdfHref} className="text-sm font-bold text-violet-700">{t("exportIndividualPdf", "Export individual PDFs (ZIP)")} ({formatNumber(printableTicketIds.length)})</a></>}
+          {printableTicketIds.length > 0 && <><a href={batchPngHref} target="_blank" rel="noreferrer" onClick={() => setBatchExportStarted("png")} className="text-sm font-bold text-violet-700">{batchExportStarted === "png" ? "Preparing PNG ZIP — keep this page open…" : `${t("exportIndividualPng", "Export individual PNGs (ZIP)")} (${formatNumber(printableTicketIds.length)})`}</a><a href={batchPdfHref} target="_blank" rel="noreferrer" onClick={() => setBatchExportStarted("pdf")} className="text-sm font-bold text-violet-700">{batchExportStarted === "pdf" ? "Preparing PDF ZIP — keep this page open…" : `${t("exportIndividualPdf", "Export individual PDFs (ZIP)")} (${formatNumber(printableTicketIds.length)})`}</a></>}
           <a href={"/api/direct-ticketing/tickets/print-a4.pdf?event_id=" + encodeURIComponent(eventId)} target="_blank" rel="noreferrer" className="text-sm font-bold text-violet-700">{t("printA4", "Print all A4")}</a>
           <a href={"/api/direct-ticketing/inventory/export?event_id=" + encodeURIComponent(eventId)} className="text-sm font-bold text-violet-700">{t("reconcileSeats", "Reconcile seats")}</a>
           <a href={ticketExportHref} className="text-sm font-bold text-violet-700">{t("salesCsv", "Sales CSV")} ({t("selectedExportGroup", "selected group")})</a>
