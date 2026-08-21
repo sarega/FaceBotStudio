@@ -2677,8 +2677,8 @@ function resolveTrustedCsrfOrigins() {
 
 const TRUSTED_CSRF_ORIGINS = resolveTrustedCsrfOrigins();
 const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
-const EVENT_ASSIGNMENT_ROLES = new Set<UserRole>(["operator", "checker", "viewer"]);
+const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "cashier", "checker", "viewer"];
+const EVENT_ASSIGNMENT_ROLES = new Set<UserRole>(["operator", "cashier", "checker", "viewer"]);
 const SENSITIVE_SETTINGS_KEYS = new Set([
   "verify_token",
   "admin_agent_telegram_bot_token",
@@ -3310,7 +3310,7 @@ function canManageTargetUser(actor: AuthUserRow, target: AuthUserRow, action: "s
   }
 
   if (actor.role === "admin") {
-    return target.role === "operator" || target.role === "checker" || target.role === "viewer";
+    return target.role === "operator" || target.role === "cashier" || target.role === "checker" || target.role === "viewer";
   }
 
   return false;
@@ -14661,7 +14661,7 @@ async function startServer() {
         return res.status(400).json({ error: "Create owners manually in the database only" });
       }
       if (req.auth?.user.role === "admin" && normalizedRole === "admin") {
-        return res.status(403).json({ error: "Admins can only create operator, checker, or viewer accounts" });
+        return res.status(403).json({ error: "Admins can only create operator, cashier, checker, or viewer accounts" });
       }
       if (EVENT_ASSIGNMENT_ROLES.has(normalizedRole) && (!assignedEventIds || assignedEventIds.length === 0)) {
         return res.status(400).json({ error: "Select at least one event for this account" });
@@ -14714,7 +14714,7 @@ async function startServer() {
         return res.status(403).json({ error: "You cannot change this user's role" });
       }
       if (req.auth.user.role === "admin" && (normalizedRole === "owner" || normalizedRole === "admin")) {
-        return res.status(403).json({ error: "Admins can only assign operator, checker, or viewer roles" });
+        return res.status(403).json({ error: "Admins can only assign operator, cashier, checker, or viewer roles" });
       }
 
       const updated = await appDb.updateUserRole(userId, normalizedRole);
@@ -16727,7 +16727,7 @@ async function startServer() {
 
   app.post(
     "/api/registrations/checkin",
-    requireRoles(["owner", "admin", "operator", "checker"]),
+    requireRoles(["owner", "admin", "operator", "cashier", "checker"]),
     requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }),
     async (req: AuthenticatedRequest, res) => {
     try {
@@ -17506,7 +17506,7 @@ async function startServer() {
 
   // Direct seats are inventory explicitly withheld from Ticketmelon. These routes are
   // intentionally admin/operator-only; public self-service checkout is a later phase.
-  app.get("/api/direct-ticketing/performances", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/performances", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     return res.json(await appDb.listDirectPerformances(getRequestedEventId(req)));
   });
   app.post("/api/direct-ticketing/performances", requireRoles(["owner", "admin"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
@@ -17544,7 +17544,7 @@ async function startServer() {
       return res.status(500).json({ error: "Failed to reset performance" });
     }
   });
-  app.get("/api/direct-ticketing/seats", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/seats", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const performanceId = typeof req.query.performance_id === "string" ? req.query.performance_id.trim() : undefined;
     return res.json(await appDb.listDirectSeats(getRequestedEventId(req), performanceId));
   });
@@ -17558,8 +17558,8 @@ async function startServer() {
     await recordAudit(req, "direct_seats.imported", "direct_performance", performanceId, { event_id: getRequestedEventId(req), imported_count: seats.length, replace_layout: body.replace_layout === true, replace_missing: body.replace_missing === true, replace_zones: replaceZones || [] });
     return res.json(imported);
   });
-  app.get("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
-  app.get("/api/direct-ticketing/recipients", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => res.json((await appDb.listDirectTickets(getRequestedEventId(req))).map(serializeAdminDirectTicket)));
+  app.get("/api/direct-ticketing/recipients", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     return res.json(await appDb.listDirectTicketRecipients(getRequestedEventId(req)));
   });
   app.post("/api/direct-ticketing/recipients", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
@@ -17626,7 +17626,7 @@ async function startServer() {
     if (!sent && failed.length) return res.status(502).json({ error: "Could not send ticket email", method, requested: tickets.length, sent, skipped_without_email: skippedWithoutEmail, failed });
     return res.json({ method, requested: tickets.length, sent, skipped_without_email: skippedWithoutEmail, failed: failed.length, failed_groups: failed });
   });
-  app.get("/api/direct-ticketing/orders", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/orders", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const orders = await appDb.listDirectOrders(getRequestedEventId(req));
     return res.json(orders.map((order) => serializeCustomerOrder(order)));
   });
@@ -17663,7 +17663,7 @@ async function startServer() {
     const png = await QRCode.toBuffer(payload, { width: 720, margin: 2, errorCorrectionLevel: "M" });
     res.setHeader("Content-Type", "image/png"); res.setHeader("Cache-Control", "no-store"); return res.send(png);
   });
-  app.post("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/direct-ticketing/tickets", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const body = readObjectBody(req); const issues: ValidationIssue[] = [];
     const performanceId = readRequiredString(body, "performance_id", issues, { label: "Performance", maxLength: 128 }); const seatId = readRequiredString(body, "seat_id", issues, { label: "Seat", maxLength: 128 }); const ticketClass = readRequiredString(body, "ticket_class", issues, { label: "Ticket class", maxLength: 80 });
     if (issues.length) return respondValidationError(res, issues);
@@ -17672,7 +17672,7 @@ async function startServer() {
     await recordAudit(req, "direct_ticket.created", "direct_ticket", result.ticket?.id || "", { event_id: getRequestedEventId(req), seat_id: seatId });
     return res.status(201).json(result.ticket ? serializeAdminDirectTicket(result.ticket) : null);
   });
-  app.post("/api/direct-ticketing/tickets/:id/payment", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/direct-ticketing/tickets/:id/payment", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const body = readObjectBody(req); const paymentStatus = body.payment_status === "verified" || body.payment_status === "rejected" || body.payment_status === "refunded" ? body.payment_status : null;
     if (!paymentStatus) return res.status(400).json({ error: "payment_status must be verified, rejected, or refunded" });
     const paymentReference = readOptionalString(body, "payment_reference", 255);
@@ -17711,7 +17711,7 @@ async function startServer() {
     await recordAudit(req, "direct_ticket.voided", "direct_ticket", ticket.id, { event_id: ticket.event_id, release_seat: body.release_seat !== false });
     return res.json(ticket);
   });
-  app.post("/api/direct-ticketing/tickets/:id/reissue", requireRoles(["owner", "admin", "operator"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/direct-ticketing/tickets/:id/reissue", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const existing = await appDb.getDirectTicketById(req.params.id);
     if (!existing || existing.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Direct ticket not found" });
     const ticket = await appDb.reissueDirectTicket(existing.id, req.auth?.user.id);
@@ -17719,7 +17719,7 @@ async function startServer() {
     await recordAudit(req, "direct_ticket.reissued", "direct_ticket", ticket.id, { event_id: ticket.event_id, superseded_ticket_id: existing.id });
     return res.status(201).json(serializeAdminDirectTicket(ticket));
   });
-  app.post("/api/direct-ticketing/tickets/:id/checkin", requireRoles(["owner", "admin", "operator", "checker"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/direct-ticketing/tickets/:id/checkin", requireRoles(["owner", "admin", "operator", "cashier", "checker"]), requireEventScope({ bodyKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const qrValue = readObjectBody(req).qr_value;
     const parsed = parseDirectTicketQrValue(qrValue) || parseAdminDirectTicketQrValue(qrValue);
     if (!parsed || parsed.ticketId !== req.params.id) return res.status(400).json({ error: "Invalid or altered direct-ticket QR" });
@@ -17736,7 +17736,7 @@ async function startServer() {
     await recordAudit(req, "direct_ticket.exported", "event", eventId, { event_id: eventId, rows: rows.length, zones: requestedZones });
     res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment(`direct-ticket-report${directTicketZoneFilenameSuffix(requestedZones)}.csv`); return res.send(`\ufeff${csv}`);
   });
-  app.get("/api/direct-ticketing/tickets/export-assets.zip", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/tickets/export-assets.zip", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const format = String(req.query.format || "").trim().toLowerCase();
@@ -17835,7 +17835,7 @@ async function startServer() {
     }
   });
   for (const format of ["png", "pdf", "svg"] as const) {
-    app.get(`/api/direct-ticketing/tickets/:id.${format}`, requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+    app.get(`/api/direct-ticketing/tickets/:id.${format}`, requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
       try {
         const ticket = await appDb.getDirectTicketById(String(req.params.id || "").trim());
         if (!ticket || ticket.event_id !== getRequestedEventId(req) || !["issued", "checked_in"].includes(ticket.status)) return res.status(404).send("Direct ticket not found");

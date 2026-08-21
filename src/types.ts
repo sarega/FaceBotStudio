@@ -29,7 +29,7 @@ export interface Message {
   type: "incoming" | "outgoing";
 }
 
-export type UserRole = "owner" | "admin" | "operator" | "checker" | "viewer";
+export type UserRole = "owner" | "admin" | "operator" | "cashier" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" | "archived";
 export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram" | "web_chat";

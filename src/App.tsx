@@ -825,8 +825,8 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
   outreach: "Outreach",
 };
 
-const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "checker", "viewer"];
-const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
+const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "cashier", "checker", "viewer"];
+const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "cashier", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
 const PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX = "facebotstudio-public-event-chat-history-v1";
@@ -871,6 +871,7 @@ const INITIAL_CHECKIN_TOKEN =
     : "";
 
 function getDefaultTabForRole(role: UserRole | null | undefined): AppTab {
+  if (role === "cashier") return "direct_tickets";
   if (role === "checker") return "registrations";
   if (role === "viewer") return "logs";
   if (role === "operator") return "test";
@@ -3431,7 +3432,8 @@ export default function App() {
   const canViewLogs = role === "owner" || role === "admin" || role === "operator" || role === "viewer";
   const canViewRegistrations = role === "owner" || role === "admin" || role === "operator" || role === "checker";
   const canManageRegistrations = role === "owner" || role === "admin" || role === "operator";
-  const canCheckinRegistrations = canViewRegistrations;
+  const canSellDirectTickets = canManageRegistrations || role === "cashier";
+  const canCheckinRegistrations = canViewRegistrations || role === "cashier";
   const canChangeRegistrationStatus = role === "owner" || role === "admin" || role === "operator";
   const canManageKnowledge = role === "owner" || role === "admin" || role === "operator";
   const canManageUsers = role === "owner" || role === "admin";
@@ -3442,12 +3444,12 @@ export default function App() {
   const canManageTargetRole = (user: AuthUser) => {
     if (!authUser || user.id === authUser.id || !canChangeRoles) return false;
     if (authUser.role === "owner") return user.role !== "owner";
-    return user.role === "operator" || user.role === "checker" || user.role === "viewer";
+    return user.role === "operator" || user.role === "cashier" || user.role === "checker" || user.role === "viewer";
   };
   const canManageTargetAccess = (user: AuthUser) => {
     if (!authUser || user.id === authUser.id || !canManageUsers) return false;
     if (authUser.role === "owner") return true;
-    return user.role === "operator" || user.role === "checker" || user.role === "viewer";
+    return user.role === "operator" || user.role === "cashier" || user.role === "checker" || user.role === "viewer";
   };
   const canDeleteTeamUser = (user: AuthUser) => canManageTargetAccess(user);
   const deferredGlobalSearchQuery = useDeferredValue(normalizeSearchQuery(globalSearchQuery));
@@ -3620,7 +3622,7 @@ export default function App() {
   const operationsTabs = [
     ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: translate(language, "nav.reports", "Reports") }] : []),
     ...(canViewRegistrations ? [{ id: "registrations" as const, icon: Users, label: translate(language, "nav.registrations", "Registrations") }] : []),
-    ...(canManageRegistrations ? [{ id: "direct_tickets" as const, icon: QrCode, label: translate(language, "nav.directTickets", "Direct Tickets") }] : []),
+    ...(canSellDirectTickets ? [{ id: "direct_tickets" as const, icon: QrCode, label: translate(language, "nav.directTickets", "Direct Tickets") }] : []),
     ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: translate(language, "nav.inbox", "Public Inbox") }] : []),
     ...(canCheckinRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: translate(language, "nav.checkin", "Check-in") }] : []),
     ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: translate(language, "nav.logs", "Logs") }] : []),
@@ -5670,7 +5672,7 @@ export default function App() {
       ...(canEditSettings ? ["organizer"] : []),
       ...(canManageCustomers ? ["customers"] : []),
       ...(canViewRegistrations ? ["registrations"] : []),
-      ...(canManageRegistrations ? ["direct_tickets"] : []),
+      ...(canSellDirectTickets ? ["direct_tickets"] : []),
       ...(canCheckinRegistrations ? ["checkin"] : []),
       ...(canViewLogs ? ["reports"] : []),
       ...(canViewLogs ? ["inbox"] : []),
@@ -5682,7 +5684,7 @@ export default function App() {
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || getDefaultTabForRole(role));
     }
-  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canViewRegistrations, canManageRegistrations, canCheckinRegistrations, canManageCustomers, canManageUsers, role]);
+  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canViewRegistrations, canSellDirectTickets, canCheckinRegistrations, canManageCustomers, canManageUsers, role]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
@@ -10705,7 +10707,7 @@ export default function App() {
           )}
           {activeTab === "direct_tickets" && (
             <motion.div key="direct-tickets" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <DirectTicketingScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canChangeRegistrationStatus} language={language} />
+              <DirectTicketingScreen eventId={selectedEventId} apiFetch={apiFetch} canManage={canSellDirectTickets} canSell={canSellDirectTickets} language={language} />
             </motion.div>
           )}
           {activeTab === "checkin" && (

@@ -13,7 +13,7 @@ type Order = { id: string; status: string; total_amount: number; currency?: stri
 type TicketClassPreset = { id: string; name: string; price_amount: number; payment_required: boolean; primary_color: string; accent_color: string };
 type TicketDesign = { event_name: string; direct_ticket_artwork_url: string; direct_ticket_artwork_mode: "panel" | "background"; direct_ticket_artwork_opacity: string; direct_ticket_primary_color: string; direct_ticket_accent_color: string; direct_ticket_heading: string; direct_ticket_note: string };
 
-type Props = { eventId: string; apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>; canManage: boolean; language: AppLanguage };
+type Props = { eventId: string; apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>; canManage: boolean; canSell: boolean; language: AppLanguage };
 type DirectTicketingSection = "settings" | "import" | "manage";
 
 const csvRows = (text: string) => {
@@ -85,7 +85,8 @@ const parseTicketClasses = (value: unknown): TicketClassPreset[] => {
   } catch { return DEFAULT_TICKET_CLASSES; }
 };
 
-export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }: Props) {
+export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigure, canSell, language }: Props) {
+  const canManage = canConfigure;
   const t = (key: string, fallback: string) => translate(language, `directTickets.${key}`, fallback);
   const formatNumber = (value: number) => new Intl.NumberFormat(language === "th" ? "th-TH" : "en-US").format(value);
   const statusLabel = (status: string) => t(`status.${status}`, status);
@@ -388,7 +389,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const spatialMapAvailable = Boolean(seatMapZone) && spatialSeatMap.positioned.length > 0 && spatialSeatMap.coverage >= 0.8;
   const seatByKey = useMemo(() => new Map(seats.map((seat) => [seatDraftKey({ zone: seat.zone, section_label: seat.section_label || "", row_label: seat.row_label, seat_label: seat.seat_label }), seat])), [seats]);
   const toggleSeatSelection = (seat: Seat) => {
-    if (!canManage || seat.status !== "available" || seat.allocation_status === "not_allocated") return;
+    if (!canSell || seat.status !== "available" || seat.allocation_status === "not_allocated") return;
     setSelectedSeatIds((current) => {
       const next = current.includes(seat.id) ? current.filter((id) => id !== seat.id) : [...current, seat.id];
       setTicketForm((form) => ({ ...form, seat_id: next[next.length - 1] || "" }));
@@ -517,7 +518,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
     setBusy(true); setMessage(""); setTicketCreationProgress({ completed: 0, total: seatIds.length }); let created = 0;
     try {
       for (const seatId of seatIds) {
-        const response = await apiFetch("/api/direct-ticketing/tickets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, performance_id: performanceId, ...ticketForm, seat_id: seatId, price_amount: Number(ticketForm.price_amount || 0), hold_minutes: Number(ticketForm.hold_minutes || 15) }) });
+        const response = await apiFetch("/api/direct-ticketing/tickets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event_id: eventId, performance_id: performanceId, ...ticketForm, payment_required: canConfigure ? ticketForm.payment_required : false, seat_id: seatId, price_amount: Number(ticketForm.price_amount || 0), hold_minutes: Number(ticketForm.hold_minutes || 15) }) });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(`${data.error || "Request failed"} (${created}/${seatIds.length} created)`);
         created += 1; setTicketCreationProgress({ completed: created, total: seatIds.length });
@@ -527,7 +528,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
       setSeats(await refreshed.json());
       setSelectedSeatIds([]);
       setTicketForm((form) => ({ ...form, seat_id: "", holder_name: "", buyer_name: "", phone: "", email: "", price_amount: "" }));
-      setMessage(`${ticketForm.payment_required ? t("held", "Held") : t("issued", "Issued")} ${created} ${t(created === 1 ? "ticket" : "tickets", created === 1 ? "ticket" : "tickets")} ${t("for", "for")} ${ticketForm.holder_name}`);
+      setMessage(`${canConfigure && ticketForm.payment_required ? t("held", "Held") : t("issued", "Issued")} ${created} ${t(created === 1 ? "ticket" : "tickets", created === 1 ? "ticket" : "tickets")} ${t("for", "for")} ${ticketForm.holder_name}`);
     } catch (error) {
       await load();
       const refreshed = await apiFetch(`/api/direct-ticketing/seats?event_id=${encodeURIComponent(eventId)}&performance_id=${encodeURIComponent(performanceId)}`);
@@ -649,6 +650,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage, language }
   const previewPrimaryColor = previewClass?.primary_color || design.direct_ticket_primary_color;
   const previewAccentColor = previewClass?.accent_color || design.direct_ticket_accent_color;
   const previewHasPrice = Number(previewClass?.price_amount || 0) > 0;
+  if (!canConfigure) return <div className="space-y-4"><section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-bold uppercase tracking-[.16em] text-violet-700">On-site counter</p><h2 className="mt-1 text-lg font-bold text-slate-900">Sell tickets</h2><select aria-label={t("choosePerformance", "Choose performance")} value={performanceId} onChange={(event) => setActivePerformance(event.target.value)} className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">{t("choosePerformance", "Choose performance")}</option>{performances.map((item) => <option key={item.id} value={item.id}>{item.code} — {item.title}</option>)}</select></section>{performanceId && <><section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><h3 className="font-bold">Available seats</h3><div className="mt-3 flex flex-wrap gap-2">{seats.filter((seat) => seat.status === "available" && seat.allocation_status !== "not_allocated").map((seat) => <button type="button" key={seat.id} onClick={() => toggleSeatSelection(seat)} className={`rounded-lg border px-3 py-2 text-sm font-bold ${selectedSeatIds.includes(seat.id) ? "border-violet-600 bg-violet-100" : "border-emerald-300 bg-emerald-50"}`}>{seat.zone} {seat.row_label}-{seat.seat_label}</button>)}</div></section><form onSubmit={createTicket} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><h3 className="font-bold">Issue ticket</h3><div className="mt-3 grid gap-2 sm:grid-cols-2"><input required placeholder="Guest name" value={ticketForm.holder_name} onChange={(event) => setTicketForm({ ...ticketForm, holder_name: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/><input placeholder="Buyer name" value={ticketForm.buyer_name} onChange={(event) => setTicketForm({ ...ticketForm, buyer_name: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/><select value={ticketForm.ticket_class} onChange={(event) => { const ticketClass = ticketClasses.find((item) => item.name === event.target.value); setTicketForm({ ...ticketForm, ticket_class: event.target.value, price_amount: ticketClass ? String(ticketClass.price_amount) : ticketForm.price_amount, payment_required: ticketClass?.payment_required ?? true }); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">{ticketClasses.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select><input type="number" min="0" placeholder="Price (THB)" value={ticketForm.price_amount} onChange={(event) => setTicketForm({ ...ticketForm, price_amount: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"/></div><button disabled={busy || !selectedSeatIds.length} className="mt-3 rounded-lg bg-violet-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{selectedSeatIds.length ? `Issue ${selectedSeatIds.length} ticket${selectedSeatIds.length > 1 ? "s" : ""}` : "Select seats"}</button></form></>}{message && <p className="text-sm text-rose-600">{message}</p>}</div>;
   return <div className="direct-ticketing-page space-y-3" data-direct-section={activeSection} data-has-performance={performanceId ? "true" : "false"}>
     <div className="direct-ticketing-page-header sticky top-0 z-30 -mx-2 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1.5 sm:-mx-4 sm:px-4">
       <h2 className="text-base font-bold leading-tight text-slate-900">{t("title", "VIP & Direct Tickets")}</h2>

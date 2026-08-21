@@ -40,11 +40,14 @@ test("direct seats cannot issue two active tickets and rejected payment releases
     ticket_class: "VIP", payment_required: false,
   });
   assert.equal(replacement.ticket?.status, "issued");
+  await db.markDirectTicketsDelivered([replacement.ticket!.id], "manual");
   const checkedIn = await db.checkInDirectTicket(replacement.ticket!.id);
   assert.equal(checkedIn.ticket?.status, "checked_in");
   const reissued = await db.reissueDirectTicket(replacement.ticket!.id);
   assert.ok(reissued);
   assert.notEqual(reissued?.id, replacement.ticket?.id);
+  assert.equal((await db.getDirectTicketById(replacement.ticket!.id))?.status, "voided");
+  assert.equal(reissued?.delivery_status, "unsent");
   assert.equal((await db.checkInDirectTicket(replacement.ticket!.id)).ticket?.status, "voided");
   assert.equal((await db.checkInDirectTicket(reissued!.id)).ticket?.status, "checked_in");
   assert.equal((await db.voidDirectTicket(reissued!.id))?.status, "voided");

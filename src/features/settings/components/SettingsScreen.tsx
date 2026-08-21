@@ -219,6 +219,7 @@ export function SettingsScreen({
     owner: ["All organization settings", "Manage admins and users", "All events and operations"],
     admin: ["Organization and event settings", "Manage operators/checkers/viewers", "All events and operations"],
     operator: ["Assigned event operations", "Registrations, tickets, and messages", "No user administration"],
+    cashier: ["Assigned event ticket counter", "Sell direct tickets and check in guests", "No setup or user administration"],
     checker: ["Assigned event check-in", "Read attendee status", "No settings changes"],
     viewer: ["Read assigned event data", "View operational logs", "No data changes"],
   }[authUser?.role || "viewer"];

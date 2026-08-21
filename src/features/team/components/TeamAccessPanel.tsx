@@ -4,10 +4,10 @@ import { CalendarRange, RefreshCw, Save, Shield, Trash2, UserPlus } from "lucide
 import { ActionButton, StatusLine } from "../../../components/shared/AppUi";
 import type { AuthUser, EventRecord, UserRole } from "../../../types";
 
-const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "checker", "viewer"];
+const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "cashier", "checker", "viewer"];
 
 function roleLabel(role: UserRole) {
-  return role === "checker" ? "Gatekeeper" : role;
+  return role === "cashier" ? "On-site Cashier" : role === "checker" ? "Gatekeeper" : role;
 }
 
 type TeamAccessPanelProps = {
@@ -278,8 +278,8 @@ export function TeamAccessPanel({
               </select>
               {EVENT_SCOPED_ROLES.includes(newUserRole) && (
                 <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3">
-                  <p className="text-xs font-semibold text-slate-800">Gatekeeper Event access</p>
-                  <p className="mt-1 text-[11px] text-slate-500">เลือก Event ที่บัญชีนี้จะเห็นและเช็ครายชื่อได้เท่านั้น</p>
+                  <p className="text-xs font-semibold text-slate-800">Event access</p>
+                  <p className="mt-1 text-[11px] text-slate-500">เลือก Event ที่บัญชีนี้จะเข้าถึงได้เท่านั้น</p>
                   <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     {events.map((event) => (
                       <label key={event.id} className="flex items-start gap-2 rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-xs text-slate-700">
