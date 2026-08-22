@@ -254,6 +254,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigu
   if (ticketSearch.trim()) printA4Params.set("search", ticketSearch.trim());
   if (ticketZoneFilter === "all" && selectedExportZones.length) printA4Params.set("zones", selectedExportZones.join(","));
   const printA4Href = `/api/direct-ticketing/tickets/print-a4.pdf?${printA4Params.toString()}`;
+  const printA4CompactHref = `${printA4Href}&layout=8`;
   const printA4HrefForZone = (zone: string) => { const params = new URLSearchParams(printA4Params); params.set("zones", zone); return `/api/direct-ticketing/tickets/print-a4.pdf?${params.toString()}`; };
   const batchAssetParams = new URLSearchParams(printA4Params);
   batchAssetParams.set("ids", printableTicketIds.join(","));
@@ -776,6 +777,7 @@ export function DirectTicketingScreen({ eventId, apiFetch, canManage: canConfigu
         </div>
         <div className="flex flex-wrap gap-3">
           <a href={printableTicketIds.length ? printA4Href : undefined} aria-disabled={!printableTicketIds.length} target="_blank" rel="noreferrer" className={"text-sm font-bold " + (printableTicketIds.length ? "text-violet-700" : "pointer-events-none text-slate-400")}>{t("printFilteredA4", "Print selected A4")} ({formatNumber(printableTicketIds.length)})</a>
+          <a href={printableTicketIds.length ? printA4CompactHref : undefined} aria-disabled={!printableTicketIds.length} target="_blank" rel="noreferrer" className={"text-sm font-bold " + (printableTicketIds.length ? "text-violet-700" : "pointer-events-none text-slate-400")}>Print A4 Compact (8/page)</a>
           {printableTicketIds.length > 0 && <><a href={batchPngHref} target="_blank" rel="noreferrer" onClick={() => setBatchExportStarted("png")} className="text-sm font-bold text-violet-700">{batchExportStarted === "png" ? "Preparing PNG ZIP — keep this page open…" : `${t("exportIndividualPng", "Export individual PNGs (ZIP)")} (${formatNumber(printableTicketIds.length)})`}</a><a href={batchPdfHref} target="_blank" rel="noreferrer" onClick={() => setBatchExportStarted("pdf")} className="text-sm font-bold text-violet-700">{batchExportStarted === "pdf" ? "Preparing PDF ZIP — keep this page open…" : `${t("exportIndividualPdf", "Export individual PDFs (ZIP)")} (${formatNumber(printableTicketIds.length)})`}</a></>}
           <a href={"/api/direct-ticketing/tickets/print-a4.pdf?event_id=" + encodeURIComponent(eventId)} target="_blank" rel="noreferrer" className="text-sm font-bold text-violet-700">{t("printA4", "Print all A4")}</a>
           <a href={"/api/direct-ticketing/inventory/export?event_id=" + encodeURIComponent(eventId)} className="text-sm font-bold text-violet-700">{t("reconcileSeats", "Reconcile seats")}</a>

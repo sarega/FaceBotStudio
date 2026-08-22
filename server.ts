@@ -10911,22 +10911,24 @@ async function sendDirectTicketEmailPdfAsset(res: Response, ticket: DirectTicket
   return res.send(body);
 }
 
-async function renderDirectTicketsA4PdfBuffer(svgs: string[]) {
+async function renderDirectTicketsA4PdfBuffer(svgs: string[], compact = false) {
   const pdf = await PDFDocument.create();
-  const pageWidth = 297 / 25.4 * 72;
-  const pageHeight = 210 / 25.4 * 72;
-  const ticketWidth = pageWidth / 2;
-  const ticketHeight = pageHeight / 2;
-  for (let index = 0; index < svgs.length; index += 4) {
+  const pageWidth = (compact ? 210 : 297) / 25.4 * 72;
+  const pageHeight = (compact ? 297 : 210) / 25.4 * 72;
+  const columns = 2;
+  const rows = compact ? 4 : 2;
+  const ticketWidth = pageWidth / columns;
+  const ticketHeight = pageHeight / rows;
+  for (let index = 0; index < svgs.length; index += columns * rows) {
     const page = pdf.addPage([pageWidth, pageHeight]);
-    for (const [offset, svg] of svgs.slice(index, index + 4).entries()) {
-      const image = await pdf.embedPng(renderTicketPngBuffer(svg, 1000));
-      const column = offset % 2;
-      const row = Math.floor(offset / 2);
+    for (const [offset, svg] of svgs.slice(index, index + columns * rows).entries()) {
+      const image = await pdf.embedPng(renderTicketPngBuffer(svg, compact ? 700 : 1000));
+      const column = offset % columns;
+      const row = Math.floor(offset / columns);
       page.drawImage(image, { x: column * ticketWidth, y: pageHeight - (row + 1) * ticketHeight, width: ticketWidth, height: ticketHeight });
     }
     page.drawLine({ start: { x: ticketWidth, y: 0 }, end: { x: ticketWidth, y: pageHeight }, thickness: 1, color: rgb(0, 0, 0) });
-    page.drawLine({ start: { x: 0, y: ticketHeight }, end: { x: pageWidth, y: ticketHeight }, thickness: 1, color: rgb(0, 0, 0) });
+    for (let row = 1; row < rows; row += 1) page.drawLine({ start: { x: 0, y: row * ticketHeight }, end: { x: pageWidth, y: row * ticketHeight }, thickness: 1, color: rgb(0, 0, 0) });
   }
   return Buffer.from(await pdf.save());
 }
@@ -10942,6 +10944,18 @@ function renderDirectTicketsA4HtmlSheet(svgs: string[]) {
 
 function renderDirectTicketsA4HtmlEnd() {
   return "</body></html>";
+}
+
+function renderDirectTicketsA4CompactHtmlStart() {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Direct tickets A4 compact</title><style>${buildEmbeddedTicketFontCss()}@page{size:A4 portrait;margin:0}html,body{margin:0;width:210mm;background:#1f2937;-webkit-print-color-adjust:exact;print-color-adjust:exact}.sheet{position:relative;box-sizing:border-box;width:210mm;height:297mm;display:grid;grid-template-columns:repeat(2,105mm);grid-template-rows:repeat(4,74.25mm);break-after:page;background:#fff}.sheet:last-child{break-after:auto}.ticket{position:relative;overflow:hidden;border:.15mm dashed #777}.ticket svg{display:block;width:105mm;height:74.25mm}.cut-guide{position:absolute;z-index:2;pointer-events:none}.cut-guide-v{top:0;bottom:0;left:105mm;border-left:.35mm solid #111}.cut-guide-h1,.cut-guide-h2,.cut-guide-h3{left:0;right:0;border-top:.35mm solid #111}.cut-guide-h1{top:74.25mm}.cut-guide-h2{top:148.5mm}.cut-guide-h3{top:222.75mm}.print-actions{display:none}@media screen{.print-actions{position:sticky;top:0;z-index:3;display:flex;gap:12px;align-items:center;padding:12px 18px;background:#111827;color:#fff;font:14px sans-serif}.print-actions button{border:0;border-radius:6px;padding:8px 14px;background:#6d28d9;color:#fff;font-weight:700;cursor:pointer}}@media print{html,body{background:#fff}.print-actions{display:none}}</style></head><body><div class="print-actions">A4 portrait · 8 tickets per page · cut on the solid black lines · print at 100% with margins set to None.<button onclick="window.print()">Print A4</button></div><script>window.addEventListener("load",()=>setTimeout(()=>window.print(),250));</script>`;
+}
+
+function renderDirectTicketsA4CompactHtmlSheet(svgs: string[]) {
+  return `<section class="sheet">${svgs.map((svg) => `<div class="ticket">${svg}</div>`).join("")}<i class="cut-guide cut-guide-v"></i><i class="cut-guide cut-guide-h1"></i><i class="cut-guide cut-guide-h2"></i><i class="cut-guide cut-guide-h3"></i></section>`;
+}
+
+function renderDirectTicketsA4CompactHtml(svgs: string[]) {
+  return `${renderDirectTicketsA4CompactHtmlStart()}${Array.from({ length: Math.ceil(svgs.length / 8) }, (_, index) => renderDirectTicketsA4CompactHtmlSheet(svgs.slice(index * 8, index * 8 + 8))).join("")}${renderDirectTicketsA4HtmlEnd()}`;
 }
 
 function setDirectTicketPrintHtmlHeaders(res: Response) {
@@ -17786,10 +17800,11 @@ async function startServer() {
     await recordAudit(req, "direct_ticket.inventory_reconciled", "event", eventId, { event_id: eventId, rows: rows.length });
     res.header("Content-Type", "text/csv; charset=utf-8"); res.attachment("direct-seat-reconciliation.csv"); return res.send(`\ufeff${csv}`);
   });
-  app.get("/api/direct-ticketing/tickets/print-a4.pdf", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/direct-ticketing/tickets/print-a4.pdf", requireRoles(["owner", "admin", "operator", "cashier"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
       const requestedZones = parseDirectTicketZones(req.query.zones);
+      const compact = req.query.layout === "8";
       const tickets = filterDirectTicketsForExport(await appDb.listDirectTickets(eventId), req.query);
       if (!tickets.length) return res.status(404).send("No issued direct tickets found");
       const settings = await getSettingsMap(eventId);
@@ -17801,23 +17816,24 @@ async function startServer() {
       if (tickets.length > 200) {
         await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones, output: "browser_print_fallback" });
         setDirectTicketPrintHtmlHeaders(res);
-        res.write(renderDirectTicketsA4HtmlStart());
-        for (let index = 0; index < tickets.length; index += 4) {
-          const svgs = await Promise.all(tickets.slice(index, index + 4).map(renderSvg));
-          if (!res.write(renderDirectTicketsA4HtmlSheet(svgs))) await new Promise<void>((resolve) => res.once("drain", resolve));
+        res.write(compact ? renderDirectTicketsA4CompactHtmlStart() : renderDirectTicketsA4HtmlStart());
+        const perPage = compact ? 8 : 4;
+        for (let index = 0; index < tickets.length; index += perPage) {
+          const svgs = await Promise.all(tickets.slice(index, index + perPage).map(renderSvg));
+          if (!res.write(compact ? renderDirectTicketsA4CompactHtmlSheet(svgs) : renderDirectTicketsA4HtmlSheet(svgs))) await new Promise<void>((resolve) => res.once("drain", resolve));
         }
         return res.end(renderDirectTicketsA4HtmlEnd());
       }
       const svgs: string[] = [];
       for (const ticket of tickets) svgs.push(await renderSvg(ticket));
       try {
-        const pdf = await renderDirectTicketsA4PdfBuffer(svgs);
-        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones });
-        res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", `inline; filename="direct-tickets${directTicketZoneFilenameSuffix(requestedZones)}.pdf"`); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
+        const pdf = await renderDirectTicketsA4PdfBuffer(svgs, compact);
+        await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones, layout: compact ? 8 : 4 });
+        res.setHeader("Content-Type", "application/pdf"); res.setHeader("Content-Disposition", `inline; filename="direct-tickets${directTicketZoneFilenameSuffix(requestedZones)}-${compact ? "8up" : "4up"}.pdf"`); res.setHeader("Cache-Control", "private, no-store"); return res.send(pdf);
       } catch (error) {
         console.error("Failed to render direct tickets A4 PDF; serving browser-print fallback:", error);
         await recordAudit(req, "direct_ticket.batch_printed", "event", eventId, { event_id: eventId, tickets: tickets.length, zones: requestedZones, output: "browser_print_fallback" });
-        setDirectTicketPrintHtmlHeaders(res); return res.send(renderDirectTicketsA4Html(svgs));
+        setDirectTicketPrintHtmlHeaders(res); return res.send(compact ? renderDirectTicketsA4CompactHtml(svgs) : renderDirectTicketsA4Html(svgs));
       }
     } catch (error) {
       console.error("Failed to render direct tickets A4 PDF:", error);
