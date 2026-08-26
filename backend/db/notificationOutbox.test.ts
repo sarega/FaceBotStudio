@@ -73,6 +73,33 @@ test("notification outbox deduplicates and enforces worker ownership across retr
   assert.equal(readDelivery(db, first.id)?.provider_message_id, "msg_123");
 });
 
+test("notification outbox keeps per-recipient email attachments in the delivery payload", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const delivery = await db.enqueueNotificationDelivery({
+    ...notificationInput("event-update:ticket-123"),
+    payload_json: JSON.stringify({
+      subject: "Event update",
+      text: "The event has changed",
+      html: "<p>The event has changed</p>",
+      attachments: [{ filename: "reg_123-ticket.png", content: "iVBORw0KGgo=" }],
+    }),
+  });
+  assert.ok(delivery);
+
+  const result = await dispatchNotificationDeliveries(
+    db,
+    "worker-attachments",
+    async (claimed) => {
+      const payload = JSON.parse(claimed.payload_json) as { attachments?: Array<{ filename: string; content: string }> };
+      assert.deepEqual(payload.attachments, [{ filename: "reg_123-ticket.png", content: "iVBORw0KGgo=" }]);
+      return { provider: "test-provider", providerMessageId: "provider-msg-attachment" };
+    },
+  );
+
+  assert.deepEqual(result, { claimed: 1, sent: 1, retried: 0, failed: 0 });
+});
+
 test("notification dispatcher retries transient failures and stops on permanent failures", async () => {
   const db = new SqliteAppDatabase(":memory:");
   await db.initialize();

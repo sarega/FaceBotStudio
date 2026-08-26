@@ -34,6 +34,20 @@ export type RegistrationConfirmationTemplateInput = {
   supportEmail?: string | null;
 };
 
+export type EventUpdateEmailTemplateInput = {
+  appUrl: string;
+  settings: Record<string, string>;
+  attendee: {
+    registrationId: string;
+    firstName?: string | null;
+    lastName?: string | null;
+  };
+  eventId?: string | null;
+  eventSlug?: string | null;
+  updateSummary: string;
+  supportEmail?: string | null;
+};
+
 export type SampleTransactionalEmailInput = {
   kind: TransactionalEmailKind;
   appUrl: string;
@@ -220,6 +234,23 @@ export function renderRegistrationConfirmationEmail(
       supportEmail: input.supportEmail,
     }),
     event_page_url: recoveryUrl || normalizeText(input.appUrl),
+  });
+}
+
+export function renderEventUpdateEmail(
+  input: EventUpdateEmailTemplateInput,
+): RenderedTransactionalEmail {
+  return renderTemplateFromTokens("event_update", input.settings, {
+    ...buildCommonTokens({
+      appUrl: input.appUrl,
+      settings: input.settings,
+      eventId: input.eventId,
+      eventSlug: input.eventSlug,
+      fullName: buildFullName(input.attendee.firstName, input.attendee.lastName),
+      registrationId: input.attendee.registrationId,
+      supportEmail: input.supportEmail,
+    }),
+    update_summary: normalizeText(input.updateSummary),
   });
 }
 

@@ -6,6 +6,10 @@ export type ProviderEmailInput = {
   subject: string;
   text: string;
   html: string;
+  attachments?: Array<{
+    filename: string;
+    content: string;
+  }>;
 };
 
 export type ProviderEmailSendResult = {
@@ -57,6 +61,7 @@ async function sendWithResend(config: EmailConfig, input: ProviderEmailInput): P
       text: input.text,
       html: input.html,
       reply_to: config.replyToAddress,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     }),
   });
 

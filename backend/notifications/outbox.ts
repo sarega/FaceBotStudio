@@ -73,7 +73,31 @@ function parseEmailPayload(delivery: NotificationDeliveryRow) {
     throw new NotificationDeliveryError("Email notification payload is incomplete", false);
   }
 
-  return { subject, text, html };
+  const rawAttachments = record.attachments == null
+    ? []
+    : Array.isArray(record.attachments)
+      ? record.attachments
+      : null;
+  if (!rawAttachments) {
+    throw new NotificationDeliveryError("Email notification attachments must be an array", false);
+  }
+  if (rawAttachments.length > 4) {
+    throw new NotificationDeliveryError("Email notification has too many attachments", false);
+  }
+  const attachments = rawAttachments.map((attachment, index) => {
+    if (!attachment || typeof attachment !== "object") {
+      throw new NotificationDeliveryError(`Email attachment ${index + 1} is invalid`, false);
+    }
+    const value = attachment as Record<string, unknown>;
+    const filename = normalizeText(value.filename).slice(0, 240);
+    const content = normalizeText(value.content);
+    if (!filename || !content) {
+      throw new NotificationDeliveryError(`Email attachment ${index + 1} is incomplete`, false);
+    }
+    return { filename, content };
+  });
+
+  return { subject, text, html, attachments };
 }
 
 function parseSmsPayload(delivery: NotificationDeliveryRow) {
@@ -107,6 +131,7 @@ export async function sendWithCurrentEmailSender(delivery: NotificationDeliveryR
     subject: payload.subject,
     text: payload.text,
     html: payload.html,
+    attachments: payload.attachments,
   }, config);
 
   return {

@@ -112,6 +112,7 @@ import { sendTransactionalEmail } from "./backend/email/service";
 import {
   buildRegistrationConfirmationLinks,
   renderRegistrationConfirmationEmail,
+  renderEventUpdateEmail,
   renderTicketRecoveryEmail,
   renderSampleTransactionalEmail,
   type TransactionalEmailKind,
@@ -3422,6 +3423,95 @@ function buildEmailStatusResponse(eventId?: string) {
     notificationWorker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
     lastTestResult: eventId ? (adminEmailTestResults.get(eventId) || null) : null,
   };
+}
+
+type EventEmailBroadcastAudience = {
+  registrations: RegistrationRow[];
+  totalRegistrations: number;
+  activeRegistrations: number;
+  cancelledRegistrations: number;
+  eligibleRegistrations: number;
+  missingEmailRegistrations: number;
+  duplicateEmailRegistrations: number;
+};
+
+async function getEventEmailBroadcastAudience(eventId: string): Promise<EventEmailBroadcastAudience> {
+  const registrations = await appDb.listRegistrations(undefined, eventId);
+  const activeRegistrations = registrations.filter((registration) => registration.status !== "cancelled");
+  const emailCounts = new Map<string, number>();
+
+  for (const registration of activeRegistrations) {
+    const email = normalizeOptionalText(registration.email).toLowerCase();
+    if (!looksLikeEmailAddress(email)) continue;
+    emailCounts.set(email, (emailCounts.get(email) || 0) + 1);
+  }
+
+  const eligible = activeRegistrations.filter((registration) => looksLikeEmailAddress(normalizeOptionalText(registration.email)));
+  const duplicateEmailRegistrations = eligible.reduce((count, registration) => {
+    const email = normalizeOptionalText(registration.email).toLowerCase();
+    return count + ((emailCounts.get(email) || 0) > 1 ? 1 : 0);
+  }, 0);
+
+  return {
+    registrations: eligible,
+    totalRegistrations: registrations.length,
+    activeRegistrations: activeRegistrations.length,
+    cancelledRegistrations: registrations.length - activeRegistrations.length,
+    eligibleRegistrations: eligible.length,
+    missingEmailRegistrations: activeRegistrations.length - eligible.length,
+    duplicateEmailRegistrations,
+  };
+}
+
+function buildEventEmailBroadcastId(
+  eventId: string,
+  settings: Record<string, string>,
+  updateSummary: string,
+) {
+  const templateKeys = [
+    "email_template_event_update_subject",
+    "email_template_event_update_html",
+    "email_template_event_update_text",
+    "event_name",
+    "event_date",
+    "event_end_date",
+    "event_timezone",
+    "event_location",
+    "event_address",
+    "event_public_page_enabled",
+    "event_public_slug",
+  ];
+  return createHash("sha256")
+    .update(JSON.stringify({
+      eventId,
+      updateSummary,
+      template: Object.fromEntries(templateKeys.map((key) => [key, settings[key] || ""])),
+    }))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function buildEventUpdateEmailTemplate(options: {
+  eventId: string;
+  eventSlug?: string | null;
+  settings: Record<string, string>;
+  registration: RegistrationRow;
+  updateSummary: string;
+}) {
+  const emailConfig = getEmailConfig();
+  return renderEventUpdateEmail({
+    appUrl: emailConfig.appUrl,
+    settings: options.settings,
+    attendee: {
+      registrationId: options.registration.id,
+      firstName: options.registration.first_name,
+      lastName: options.registration.last_name,
+    },
+    eventId: options.eventId,
+    eventSlug: options.eventSlug,
+    updateSummary: options.updateSummary,
+    supportEmail: emailConfig.replyToAddress,
+  });
 }
 
 async function queueCustomerAccountEmail(
@@ -18665,6 +18755,213 @@ async function startServer() {
       return res.status(500).json({ error: "Failed to send test email" });
     }
   });
+
+  app.post(
+    "/api/admin/email/broadcast/preview",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const body = readObjectBody(req);
+        const issues: ValidationIssue[] = [];
+        const updateSummary = readRequiredString(body, "update_summary", issues, {
+          label: "update summary",
+          maxLength: 5000,
+        });
+        if (issues.length > 0) return respondValidationError(res, issues);
+
+        const eventId = getRequestedEventId(req);
+        const { settings, event } = await getEmailTemplateEventContext(eventId);
+        if (!event) return res.status(404).json({ error: "Event not found" });
+
+        const audience = await getEventEmailBroadcastAudience(eventId);
+        const sampleRegistration = audience.registrations[0] || ({
+          id: "sample-registration",
+          event_id: eventId,
+          first_name: "Attendee",
+          last_name: "",
+          email: "sample@example.com",
+          sender_id: "sample",
+          phone: "",
+          timestamp: new Date().toISOString(),
+          status: "registered",
+        } as RegistrationRow);
+        const template = buildEventUpdateEmailTemplate({
+          eventId,
+          eventSlug: event.slug,
+          settings,
+          registration: sampleRegistration,
+          updateSummary,
+        });
+        const config = getEmailConfig();
+
+        return res.json({
+          event_id: eventId,
+          event_name: event.name,
+          broadcast_id: buildEventEmailBroadcastId(eventId, settings, updateSummary),
+          update_summary: updateSummary,
+          subject: template.subject,
+          provider: config.provider,
+          provider_ready: config.ready,
+          provider_error: config.ready ? null : config.errorMessage,
+          notification_worker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
+          total_registrations: audience.totalRegistrations,
+          active_registrations: audience.activeRegistrations,
+          cancelled_registrations: audience.cancelledRegistrations,
+          eligible_recipients: audience.eligibleRegistrations,
+          missing_email_registrations: audience.missingEmailRegistrations,
+          duplicate_email_registrations: audience.duplicateEmailRegistrations,
+          attachment: {
+            format: "png",
+            one_per_recipient: true,
+            filename_pattern: "<registration-id>-ticket.png",
+          },
+        });
+      } catch (error) {
+        console.error("Failed to preview event update email broadcast:", error);
+        return res.status(500).json({ error: "Failed to preview event update email broadcast" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/admin/email/broadcast",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ bodyKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
+    manualOutboundActionRateLimit,
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const body = readObjectBody(req);
+        const issues: ValidationIssue[] = [];
+        const updateSummary = readRequiredString(body, "update_summary", issues, {
+          label: "update summary",
+          maxLength: 5000,
+        });
+        if (body.confirm !== true) {
+          issues.push({ field: "confirm", message: "confirm must be true" });
+        }
+        if (issues.length > 0) return respondValidationError(res, issues);
+
+        const eventId = getRequestedEventId(req);
+        const { settings, event } = await getEmailTemplateEventContext(eventId);
+        if (!event) return res.status(404).json({ error: "Event not found" });
+
+        const emailConfig = getEmailConfig();
+        if (!emailConfig.ready) {
+          return res.status(400).json({
+            error: emailConfig.errorMessage || "Email provider is not configured",
+            provider_ready: false,
+          });
+        }
+
+        const audience = await getEventEmailBroadcastAudience(eventId);
+        if (audience.eligibleRegistrations === 0) {
+          return res.status(409).json({
+            error: "No active registrations with a valid email address were found",
+            event_id: eventId,
+            total_registrations: audience.totalRegistrations,
+            active_registrations: audience.activeRegistrations,
+            cancelled_registrations: audience.cancelledRegistrations,
+            eligible_recipients: 0,
+            missing_email_registrations: audience.missingEmailRegistrations,
+          });
+        }
+
+        const broadcastId = buildEventEmailBroadcastId(eventId, settings, updateSummary);
+        let queued = 0;
+        let alreadyQueued = 0;
+        let failed = 0;
+
+        for (const registration of audience.registrations) {
+          try {
+            const template = buildEventUpdateEmailTemplate({
+              eventId,
+              eventSlug: event.slug,
+              settings,
+              registration,
+              updateSummary,
+            });
+            const ticketAsset = await renderFreeRegistrationTicketAsset(registration.id, "png");
+            if (!ticketAsset || ticketAsset.contentType !== "image/png" || !Buffer.isBuffer(ticketAsset.body)) {
+              throw new Error("PNG ticket could not be rendered");
+            }
+            if (ticketAsset.body.length > 8 * 1024 * 1024) {
+              throw new Error("PNG ticket is too large to attach");
+            }
+
+            const delivery = await appDb.enqueueNotificationDelivery({
+              channel: "email",
+              kind: "event.event_update_broadcast",
+              recipient: normalizeOptionalText(registration.email),
+              recipient_snapshot: JSON.stringify({
+                event_id: eventId,
+                registration_id: registration.id,
+                full_name: formatRegistrationDisplayName(registration),
+              }),
+              related_type: "event_email_broadcast",
+              related_id: broadcastId,
+              payload_json: JSON.stringify({
+                subject: template.subject,
+                text: template.text,
+                html: template.html,
+                attachments: [{
+                  filename: `${registration.id}-ticket.png`,
+                  content: ticketAsset.body.toString("base64"),
+                }],
+              }),
+              idempotency_key: `event-email-update:${eventId}:${broadcastId}:${registration.id}`,
+              provider: emailConfig.provider,
+            });
+
+            if (delivery) queued += 1;
+            else alreadyQueued += 1;
+          } catch (error) {
+            failed += 1;
+            console.error(`Failed to queue event update email for registration ${registration.id}:`, error);
+          }
+        }
+
+        await recordAudit(req, "email.event_update_broadcast_queued", "event", eventId, {
+          event_id: eventId,
+          broadcast_id: broadcastId,
+          update_summary_length: updateSummary.length,
+          eligible_recipients: audience.eligibleRegistrations,
+          queued,
+          already_queued: alreadyQueued,
+          failed,
+          skipped_cancelled: audience.cancelledRegistrations,
+          skipped_missing_email: audience.missingEmailRegistrations,
+        });
+
+        const subject = buildEventUpdateEmailTemplate({
+          eventId,
+          eventSlug: event.slug,
+          settings,
+          registration: audience.registrations[0],
+          updateSummary,
+        }).subject;
+        return res.status(202).json({
+          status: "queued",
+          event_id: eventId,
+          broadcast_id: broadcastId,
+          subject,
+          total_registrations: audience.totalRegistrations,
+          eligible_recipients: audience.eligibleRegistrations,
+          queued,
+          already_queued: alreadyQueued,
+          failed,
+          skipped_cancelled: audience.cancelledRegistrations,
+          skipped_missing_email: audience.missingEmailRegistrations,
+          duplicate_email_registrations: audience.duplicateEmailRegistrations,
+          ticket_attachments: queued,
+          notification_worker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
+        });
+      } catch (error) {
+        console.error("Failed to queue event update email broadcast:", error);
+        return res.status(500).json({ error: "Failed to queue event update email broadcast" });
+      }
+    },
+  );
 
   app.post(
     "/api/public-page/poster-upload",

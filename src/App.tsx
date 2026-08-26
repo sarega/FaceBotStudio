@@ -10379,6 +10379,7 @@ export default function App() {
           {activeTab === "mail" && (
             <EventMailScreen
               settings={settings}
+              apiFetch={apiFetch}
               onSettingsChange={setSettings}
               emailReadinessTone={emailReadinessTone}
               emailReadinessLabel={emailReadinessLabel}

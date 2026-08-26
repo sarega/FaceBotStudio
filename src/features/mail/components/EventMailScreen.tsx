@@ -1,4 +1,5 @@
 import { motion } from "motion/react";
+import { useEffect, useState } from "react";
 import {
   RefreshCw,
   Save,
@@ -20,15 +21,35 @@ import {
 } from "../../../lib/emailTemplateCatalog";
 import type { AdminEmailStatusResponse, Settings } from "../../../types";
 
+type EventEmailBroadcastPreview = {
+  update_summary: string;
+  subject: string;
+  provider_ready: boolean;
+  provider_error: string | null;
+  total_registrations: number;
+  active_registrations: number;
+  cancelled_registrations: number;
+  eligible_recipients: number;
+  missing_email_registrations: number;
+  duplicate_email_registrations: number;
+  attachment: {
+    format: string;
+    one_per_recipient: boolean;
+  };
+};
+
+type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 type EventMailScreenProps = {
   settings: Settings;
+  apiFetch: ApiFetch;
   onSettingsChange: (nextSettings: Settings) => void;
   emailReadinessTone: BadgeTone;
   emailReadinessLabel: string;
   emailStatus: AdminEmailStatusResponse | null;
   emailStatusLoading: boolean;
   eventMailDirty: boolean;
-  onSaveEventMailSettings: () => unknown;
+  onSaveEventMailSettings: () => Promise<boolean>;
   saving: boolean;
   eventMessage: string;
   settingsMessage: string;
@@ -68,6 +89,7 @@ type EventMailScreenProps = {
 
 export function EventMailScreen({
   settings,
+  apiFetch,
   onSettingsChange,
   emailReadinessTone,
   emailReadinessLabel,
@@ -104,6 +126,107 @@ export function EventMailScreen({
 }: EventMailScreenProps) {
   const panelClass = "rounded-[1.5rem] border border-slate-200 bg-slate-50 p-3.5 sm:p-4";
   const insetCardClass = "rounded-xl border border-slate-200 bg-white px-3 py-3";
+  const [broadcastMessage, setBroadcastMessage] = useState("");
+  const [broadcastPreview, setBroadcastPreview] = useState<EventEmailBroadcastPreview | null>(null);
+  const [broadcastBusy, setBroadcastBusy] = useState(false);
+  const [broadcastResult, setBroadcastResult] = useState("");
+
+  useEffect(() => {
+    setBroadcastMessage("");
+    setBroadcastPreview(null);
+    setBroadcastResult("");
+  }, [selectedEventId]);
+
+  const ensureMailSettingsSaved = async () => {
+    if (!eventMailDirty) return true;
+    return onSaveEventMailSettings();
+  };
+
+  const readApiError = async (response: Response, fallback: string) => {
+    const data = await response.json().catch(() => ({} as Record<string, unknown>));
+    if (!response.ok) {
+      throw new Error(typeof data.error === "string" && data.error.trim() ? data.error : fallback);
+    }
+    return data;
+  };
+
+  const handleBroadcastPreview = async () => {
+    const updateSummary = broadcastMessage.trim();
+    if (!selectedEventId || !updateSummary) {
+      setBroadcastResult("Enter an update message before previewing.");
+      return;
+    }
+
+    setBroadcastBusy(true);
+    setBroadcastResult("");
+    try {
+      const saved = await ensureMailSettingsSaved();
+      if (!saved) {
+        setBroadcastResult("Save Mail failed. Fix the settings and try again.");
+        return;
+      }
+      const response = await apiFetch("/api/admin/email/broadcast/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: selectedEventId, update_summary: updateSummary }),
+      });
+      const data = await readApiError(response, "Failed to preview recipients.");
+      setBroadcastPreview(data as EventEmailBroadcastPreview);
+      setBroadcastResult("");
+    } catch (error) {
+      setBroadcastPreview(null);
+      setBroadcastResult(error instanceof Error ? error.message : "Failed to preview recipients.");
+    } finally {
+      setBroadcastBusy(false);
+    }
+  };
+
+  const handleBroadcastSend = async () => {
+    const updateSummary = broadcastMessage.trim();
+    if (!selectedEventId || !broadcastPreview || broadcastPreview.update_summary !== updateSummary) {
+      setBroadcastResult("Preview the current update message before sending.");
+      return;
+    }
+    if (eventMailDirty) {
+      setBroadcastResult("Save Mail and preview recipients again before sending.");
+      return;
+    }
+    if (!broadcastPreview.provider_ready) {
+      setBroadcastResult(broadcastPreview.provider_error || "Email provider is not ready.");
+      return;
+    }
+    if (broadcastPreview.eligible_recipients < 1) {
+      setBroadcastResult("There are no eligible recipients to send to.");
+      return;
+    }
+    if (!window.confirm(`Send this update to ${broadcastPreview.eligible_recipients} eligible registration(s), with one PNG ticket attached to each email?`)) {
+      return;
+    }
+
+    setBroadcastBusy(true);
+    setBroadcastResult("");
+    try {
+      const response = await apiFetch("/api/admin/email/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: selectedEventId,
+          update_summary: updateSummary,
+          confirm: true,
+        }),
+      });
+      const data = await readApiError(response, "Failed to queue the email broadcast.");
+      const queued = Number(data.queued || 0);
+      const alreadyQueued = Number(data.already_queued || 0);
+      const failed = Number(data.failed || 0);
+      setBroadcastResult(`Queued ${queued} email(s) with PNG tickets${alreadyQueued ? `; ${alreadyQueued} already queued` : ""}${failed ? `; ${failed} failed to prepare` : ""}.`);
+      setBroadcastPreview(null);
+    } catch (error) {
+      setBroadcastResult(error instanceof Error ? error.message : "Failed to queue the email broadcast.");
+    } finally {
+      setBroadcastBusy(false);
+    }
+  };
 
   return (
     <motion.div
@@ -274,6 +397,75 @@ export function EventMailScreen({
                   <p className="mt-1 text-rose-600">{emailStatus.lastTestResult.error}</p>
                 )}
               </div>
+            )}
+          </div>
+
+          <div className={`${panelClass} border-blue-200 bg-blue-50/50`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-slate-900">Send Event Update</p>
+              <StatusBadge tone="blue">PNG ticket attached</StatusBadge>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-600">
+              Uses the saved Event Update template. Each active registration with a valid email receives a separate email with that registration&apos;s PNG ticket attached.
+            </p>
+            <label className="mt-4 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+              Update message
+            </label>
+            <textarea
+              value={broadcastMessage}
+              onChange={(event) => {
+                setBroadcastMessage(event.target.value);
+                setBroadcastPreview(null);
+                setBroadcastResult("");
+              }}
+              rows={6}
+              placeholder="Write the event update to send to all eligible registrants..."
+              className="mt-1 w-full rounded-[1.25rem] border border-blue-100 bg-white px-3 py-3 text-sm leading-6 outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void handleBroadcastPreview()}
+                disabled={!selectedEventId || !broadcastMessage.trim() || broadcastBusy}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {broadcastBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Preview Recipients
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleBroadcastSend()}
+                disabled={
+                  !selectedEventId
+                  || !broadcastPreview
+                  || broadcastPreview.update_summary !== broadcastMessage.trim()
+                  || broadcastPreview.eligible_recipients < 1
+                  || broadcastBusy
+                  || eventMailDirty
+                }
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {broadcastBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                Send to Eligible Recipients
+              </button>
+            </div>
+            {broadcastPreview && (
+              <div className="mt-3 rounded-xl border border-blue-100 bg-white px-3 py-3 text-xs text-slate-600">
+                <p className="font-semibold text-slate-800">Ready to send</p>
+                <p className="mt-1">Subject: {broadcastPreview.subject}</p>
+                <p className="mt-1">
+                  {broadcastPreview.eligible_recipients} eligible · {broadcastPreview.active_registrations} active · {broadcastPreview.cancelled_registrations} cancelled · {broadcastPreview.missing_email_registrations} without valid email
+                </p>
+                <p className="mt-1">One {broadcastPreview.attachment.format.toUpperCase()} ticket attachment per email.</p>
+                {!broadcastPreview.provider_ready && (
+                  <p className="mt-1 text-rose-600">{broadcastPreview.provider_error || "Email provider is not ready."}</p>
+                )}
+              </div>
+            )}
+            {broadcastResult && (
+              <p className={`mt-3 text-xs ${broadcastResult.toLowerCase().includes("failed") || broadcastResult.toLowerCase().includes("error") ? "text-rose-600" : "text-slate-600"}`}>
+                {broadcastResult}
+              </p>
             )}
           </div>
 
