@@ -3239,6 +3239,8 @@ export default function App() {
   const [registrationChatBatchesLoading, setRegistrationChatBatchesLoading] = useState(false);
   const [registrationChatBatchLoadingKey, setRegistrationChatBatchLoadingKey] = useState("");
   const [registrationChatBatchMessage, setRegistrationChatBatchMessage] = useState("");
+  const [registrationTicketResendLoadingId, setRegistrationTicketResendLoadingId] = useState("");
+  const [registrationTicketResendMessage, setRegistrationTicketResendMessage] = useState("");
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
   const [testMessages, setTestMessages] = useState<{ role: "user" | "model", parts: ChatPart[], timestamp: string }[]>([]);
   const [inputText, setInputText] = useState("");
@@ -8201,6 +8203,91 @@ export default function App() {
     }
   };
 
+  const resendRegistrationTicket = async (registration: Registration) => {
+    if (!canChangeRegistrationStatus || registrationTicketResendLoadingId) return false;
+
+    const registrationId = String(registration.id || "").trim().toUpperCase();
+    const senderId = String(registration.sender_id || "").trim();
+    const pageId = String(registration.channel_external_id || "").trim();
+    const label = `${registration.first_name || ""} ${registration.last_name || ""}`.trim() || registrationId;
+    const hasChannelSource = Boolean(
+      senderId
+      && (pageId || registration.channel_platform)
+      && registration.channel_platform !== "web_chat",
+    );
+
+    if (!registrationId || !senderId || !hasChannelSource || registration.status === "cancelled") {
+      setRegistrationTicketResendMessage(
+        language === "th"
+          ? `ส่งตั๋วซ้ำให้ ${label} ไม่ได้: ไม่มีแชตต้นทางที่ใช้งานได้`
+          : `Cannot resend a ticket to ${label}: no active source chat is available.`,
+      );
+      return false;
+    }
+
+    const confirmed = window.confirm(
+      language === "th"
+        ? `ส่งตั๋วของ ${label} (${registrationId}) กลับไปยังแชตเดิมอีกครั้งหรือไม่?\n\nหาก Facebook บล็อกการส่งนอกช่วงเวลาที่อนุญาต รายการนี้จะแสดงเป็นล้มเหลว`
+        : `Resend ${label}'s ticket (${registrationId}) to the original chat?\n\nFacebook may reject messages outside its allowed messaging window.`,
+    );
+    if (!confirmed) return false;
+
+    setRegistrationTicketResendLoadingId(registration.id);
+    setRegistrationTicketResendMessage(
+      language === "th"
+        ? `กำลังส่งตั๋วของ ${label} กลับไปยังแชตเดิม...`
+        : `Sending ${label}'s ticket back to the original chat...`,
+    );
+    try {
+      const res = await apiFetch("/api/messages/manual-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "ticket",
+          event_id: selectedEventId,
+          sender_id: senderId,
+          page_id: pageId || undefined,
+          platform: registration.channel_platform || undefined,
+          registration_id: registrationId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to resend registration ticket");
+
+      const steps = Array.isArray(data?.steps) ? data.steps.map((step: unknown) => String(step || "")) : [];
+      const sentImage = steps.includes("image");
+      const sentLink = steps.includes("link");
+      if (!sentImage && !sentLink) {
+        throw new Error(
+          language === "th"
+            ? "ส่งข้อความแล้ว แต่ยังไม่พบรูปหรือลิงก์ตั๋วที่ส่งออกไป"
+            : "The summary was sent, but no ticket image or link was delivered.",
+        );
+      }
+
+      const deliveryQueued = String(data?.delivery_status || "") === "queued";
+      const artifactLabel = sentImage
+        ? language === "th" ? "แนบรูป PNG แล้ว" : "PNG attached"
+        : language === "th" ? "ส่งลิงก์ตั๋วแทนรูปภาพแล้ว" : "ticket link sent as fallback";
+      setRegistrationTicketResendMessage(
+        language === "th"
+          ? `ส่งตั๋วซ้ำให้ ${label} แล้ว · ${artifactLabel}${deliveryQueued ? " · เข้าคิวส่งของ Facebook" : ""}`
+          : `Ticket resent to ${label} · ${artifactLabel}${deliveryQueued ? " · queued for Facebook delivery" : ""}.`,
+      );
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to resend registration ticket";
+      setRegistrationTicketResendMessage(
+        language === "th"
+          ? `ส่งตั๋วซ้ำไม่สำเร็จสำหรับ ${label}: ${message}`
+          : `Failed to resend ${label}'s ticket: ${message}`,
+      );
+      return false;
+    } finally {
+      setRegistrationTicketResendLoadingId("");
+    }
+  };
+
   const updateRegistrationSmsConsent = async (registrationId: string, consent: boolean) => {
     setStatusUpdateLoading(true);
     setStatusUpdateMessage("");
@@ -10695,6 +10782,9 @@ export default function App() {
                 chatBatchLoadingKey={registrationChatBatchLoadingKey}
                 chatBatchMessage={registrationChatBatchMessage}
                 onResendChatBatch={resendRegistrationChatBatch}
+                registrationTicketResendLoadingId={registrationTicketResendLoadingId}
+                registrationTicketResendMessage={registrationTicketResendMessage}
+                onResendRegistrationTicket={resendRegistrationTicket}
               />
             </motion.div>
           )}

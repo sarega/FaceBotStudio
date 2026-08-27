@@ -20037,7 +20037,7 @@ async function startServer() {
       const mode = readEnumValue(body, "mode", ["text", "ticket"] as const, issues, { required: true, label: "mode" });
       const eventId = getRequestedEventId(req);
       const senderId = readRequiredString(body, "sender_id", issues, { label: "sender_id", maxLength: 255 });
-      const pageId = readRequiredString(body, "page_id", issues, { label: "page_id", maxLength: 255 });
+      let pageId = readOptionalString(body, "page_id", 255);
       const platform = readOptionalString(body, "platform", 64);
       const text = readOptionalString(body, "text", 5000);
       const registrationId = readOptionalString(body, "registration_id", 64).toUpperCase();
@@ -20048,8 +20048,26 @@ async function startServer() {
       if (mode === "text" && !text) {
         return respondValidationError(res, [{ field: "text", message: "Manual reply text is required" }]);
       }
+      if (mode === "text" && !pageId) {
+        return respondValidationError(res, [{ field: "page_id", message: "Channel destination is required" }]);
+      }
       if (mode === "ticket" && !registrationId) {
         return respondValidationError(res, [{ field: "registration_id", message: "Registration ID is required to resend a ticket" }]);
+      }
+
+      if (mode === "ticket") {
+        const registration = await getRegistrationById(registrationId);
+        if (!registration) throw new Error("Registration not found");
+        const registrationEventId = String(registration.event_id || DEFAULT_EVENT_ID).trim() || DEFAULT_EVENT_ID;
+        if (registrationEventId !== eventId) throw new Error("Registration does not belong to the selected event");
+        if (normalizeOptionalText(registration.sender_id) !== senderId) {
+          throw new Error("Registration does not belong to sender");
+        }
+        pageId = pageId || normalizeOptionalText(registration.channel_external_id);
+        if (!pageId) {
+          const conversationRows = await appDb.getConversationRowsForSender(senderId, 240, eventId);
+          pageId = normalizeOptionalText(conversationRows.find((row) => row.page_id)?.page_id);
+        }
       }
 
       const target = await resolveManualOutboundTarget(eventId, senderId, pageId, platform);

@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import {
   Activity,
+  AlertCircle,
+  CheckCircle2,
   Download,
   ExternalLink,
   MessageCircle,
@@ -95,6 +97,9 @@ type RegistrationsScreenProps = {
   chatBatchLoadingKey: string;
   chatBatchMessage: string;
   onResendChatBatch: (batch: RegistrationChatBatch) => unknown;
+  registrationTicketResendLoadingId: string;
+  registrationTicketResendMessage: string;
+  onResendRegistrationTicket: (registration: RegistrationRecord) => unknown;
   selectedTicketPreview: ReactNode;
   selectedTicketPngUrl: string;
   selectedTicketSvgUrl: string;
@@ -137,6 +142,9 @@ export function RegistrationsScreen({
   chatBatchLoadingKey,
   chatBatchMessage,
   onResendChatBatch,
+  registrationTicketResendLoadingId,
+  registrationTicketResendMessage,
+  onResendRegistrationTicket,
   selectedTicketPreview,
   selectedTicketPngUrl,
   selectedTicketSvgUrl,
@@ -156,6 +164,26 @@ export function RegistrationsScreen({
     || chatBatchMessage.includes("ล้มเหลว")
     || chatBatchMessage.toLowerCase().includes("failed")
     || chatBatchMessage.toLowerCase().includes("error");
+  const registrationTicketMessageIsError = registrationTicketResendMessage.includes("ส่งไม่สำเร็จ")
+    || registrationTicketResendMessage.includes("ล้มเหลว")
+    || registrationTicketResendMessage.includes("ไม่พบ")
+    || registrationTicketResendMessage.toLowerCase().includes("failed")
+    || registrationTicketResendMessage.toLowerCase().includes("error");
+  const hasRegistrationTicketSource = (registration: RegistrationRecord) => Boolean(
+    registration.sender_id.trim()
+    && (registration.channel_external_id?.trim() || registration.channel_platform)
+    && registration.channel_platform !== "web_chat",
+  );
+  const canResendRegistrationTicket = (registration: RegistrationRecord) => Boolean(
+    canChangeRegistrationStatus
+    && registration.status !== "cancelled"
+    && hasRegistrationTicketSource(registration),
+  );
+  const registrationTicketDisabledReason = (registration: RegistrationRecord) => {
+    if (registration.status === "cancelled") return t("resendCancelled", "Cancelled");
+    if (!hasRegistrationTicketSource(registration)) return t("resendNoChannel", "No source chat");
+    return "";
+  };
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)]">
       <div className="space-y-4">
@@ -211,6 +239,23 @@ export function RegistrationsScreen({
               )}
             </div>
           </div>
+          {registrationTicketResendMessage && (
+            <div
+              aria-live="polite"
+              className={`mx-3 mt-3 rounded-xl border px-3 py-2 text-xs font-medium sm:mx-4 ${
+                registrationTicketMessageIsError
+                  ? "border-rose-200 bg-rose-50 text-rose-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-800"
+              }`}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                {registrationTicketMessageIsError
+                  ? <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  : <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
+                {registrationTicketResendMessage}
+              </span>
+            </div>
+          )}
           <div className="max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden">
             {filteredRegistrations.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
@@ -218,10 +263,19 @@ export function RegistrationsScreen({
               </div>
             ) : (
               visibleRegistrations.map((registration) => (
-                <button
+                <div
                   key={registration.id}
                   id={getSearchTargetDomId("registration", registration.id)}
                   onClick={() => onSelectRegistration(registration.id)}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectRegistration(registration.id);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
                   className={`w-full rounded-2xl border px-3 py-2.5 text-left transition-colors ${
                     selectedRegistrationId === registration.id
                       ? "border-blue-200 bg-blue-50"
@@ -243,8 +297,28 @@ export function RegistrationsScreen({
                       {selectedRegistrationId === registration.id && <SelectionMarker />}
                     </div>
                   </div>
-                        <p className="mt-1 text-[10px] text-slate-500">{formatDate(registration.timestamp)}</p>
-                </button>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <p className="text-[10px] text-slate-500">{formatDate(registration.timestamp)}</p>
+                    <ActionButton
+                      tone="blue"
+                      className="min-h-8 shrink-0 px-2.5 py-1.5 text-[10px]"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onResendRegistrationTicket(registration);
+                      }}
+                      disabled={!canResendRegistrationTicket(registration) || Boolean(registrationTicketResendLoadingId)}
+                      title={registrationTicketDisabledReason(registration) || t("resendTicket", "Resend ticket")}
+                      aria-label={`${t("resendTicket", "Resend ticket")} ${registration.id}`}
+                    >
+                      {registrationTicketResendLoadingId === registration.id
+                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        : <Send className="h-3.5 w-3.5" />}
+                      {registrationTicketResendLoadingId === registration.id
+                        ? t("resendingTicket", "Sending...")
+                        : t("resendTicket", "Resend ticket")}
+                    </ActionButton>
+                  </div>
+                </div>
               ))
             )}
           </div>
@@ -258,12 +332,13 @@ export function RegistrationsScreen({
                   <th className="px-4 py-2.5">{t("channel", "Channel")}</th>
                   <th className="px-4 py-2.5">SMS</th>
                   <th className="px-4 py-2.5">{t("status", "Status")}</th>
+                  <th className="px-4 py-2.5">{t("ticket", "Ticket")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRegistrations.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-slate-400 italic">
+                    <td colSpan={7} className="px-4 py-10 text-center text-slate-400 italic">
                       {deferredRegistrationListQuery ? t("noMatch", "No attendees match this search.") : t("noRegistrations", "No registrations yet.")}
                     </td>
                   </tr>
@@ -310,6 +385,26 @@ export function RegistrationsScreen({
                         {selectedRegistrationId === registration.id && (
                           <p className="mt-1 text-[10px] font-semibold text-blue-600 uppercase tracking-wider">{t("selected", "Selected")}</p>
                         )}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <ActionButton
+                          tone="blue"
+                          className="min-h-8 whitespace-nowrap px-2.5 py-1.5 text-[10px]"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void onResendRegistrationTicket(registration);
+                          }}
+                          disabled={!canResendRegistrationTicket(registration) || Boolean(registrationTicketResendLoadingId)}
+                          title={registrationTicketDisabledReason(registration) || t("resendTicket", "Resend ticket")}
+                          aria-label={`${t("resendTicket", "Resend ticket")} ${registration.id}`}
+                        >
+                          {registrationTicketResendLoadingId === registration.id
+                            ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            : <Send className="h-3.5 w-3.5" />}
+                          {registrationTicketResendLoadingId === registration.id
+                            ? t("resendingTicket", "Sending...")
+                            : t("resendTicket", "Resend ticket")}
+                        </ActionButton>
                       </td>
                     </tr>
                   ))
