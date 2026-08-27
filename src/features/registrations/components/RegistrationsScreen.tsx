@@ -152,6 +152,10 @@ export function RegistrationsScreen({
   const t = (key: string, fallback: string) => translate(language, `registrations.${key}`, fallback);
   const statusLabel = (status: string) => t(`status.${status}`, status);
   const formatDate = (value: string) => new Date(value).toLocaleString(language === "th" ? "th-TH" : "en-US");
+  const chatBatchMessageIsError = chatBatchMessage.includes("ส่งไม่สำเร็จ")
+    || chatBatchMessage.includes("ล้มเหลว")
+    || chatBatchMessage.toLowerCase().includes("failed")
+    || chatBatchMessage.toLowerCase().includes("error");
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)]">
       <div className="space-y-4">
@@ -345,6 +349,19 @@ export function RegistrationsScreen({
             <StatusBadge tone="violet">{chatBatches.length} {t("chatCount", "chats")}</StatusBadge>
           </div>
 
+          {chatBatchMessage && (
+            <div
+              aria-live="polite"
+              className={`mt-3 rounded-xl border px-3 py-2 text-xs font-medium ${
+                chatBatchMessageIsError
+                  ? "border-rose-200 bg-rose-50 text-rose-800"
+                  : "border-violet-200 bg-white text-violet-900"
+              }`}
+            >
+              {chatBatchMessage}
+            </div>
+          )}
+
           {chatBatchesLoading ? (
             <div className="surface-frame mt-3 rounded-xl p-4 text-center text-xs text-violet-700 opacity-80">
               {t("chatBatchesLoading", "Loading chat batches...")}
@@ -391,7 +408,6 @@ export function RegistrationsScreen({
               })}
             </div>
           )}
-          {chatBatchMessage && <p className="mt-2 text-xs font-medium text-violet-900">{chatBatchMessage}</p>}
         </div>
       </div>
 

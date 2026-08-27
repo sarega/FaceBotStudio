@@ -8157,7 +8157,11 @@ export default function App() {
     if (!confirmed) return;
 
     setRegistrationChatBatchLoadingKey(batch.key);
-    setRegistrationChatBatchMessage("");
+    setRegistrationChatBatchMessage(
+      language === "th"
+        ? `กำลังส่งตั๋ว ${batch.active_ticket_count} ใบไปยัง Chat ID ${batch.sender_id} กรุณารอสักครู่...`
+        : `Sending ${batch.active_ticket_count} ticket${batch.active_ticket_count === 1 ? "" : "s"} to ${batch.sender_id}. Please wait...`,
+    );
     try {
       const res = await apiFetch("/api/registrations/chats/resend-tickets", {
         method: "POST",
@@ -8173,15 +8177,25 @@ export default function App() {
       if (!res.ok) throw new Error(data?.error || "Failed to resend chat ticket batch");
       const sent = Number(data.sent || 0);
       const requested = Number(data.requested || 0);
+      const failed = Number(data.failed || 0);
+      const failedResults = Array.isArray(data.results)
+        ? data.results as Array<{ ok?: boolean; error?: string }>
+        : [];
+      const firstError = failedResults.find((result) => result?.ok === false && typeof result.error === "string")?.error?.trim() || "";
+      const errorDetail = firstError ? `: ${firstError.slice(0, 180)}` : "";
       setRegistrationChatBatchMessage(
         language === "th"
-          ? `ส่งบัตรแล้ว ${sent}/${requested} ใบ ไปยัง Chat ID ${batch.sender_id}`
-          : `Sent ${sent} of ${requested} ticket${requested === 1 ? "" : "s"} to ${batch.sender_id}.`,
+          ? `ส่งสำเร็จ ${sent}/${requested} ใบ ไปยัง Chat ID ${batch.sender_id}${failed ? ` · ล้มเหลว ${failed} รายการ${errorDetail}` : ""}`
+          : `Sent ${sent} of ${requested} ticket${requested === 1 ? "" : "s"} to ${batch.sender_id}${failed ? ` · ${failed} failed${errorDetail}` : ""}.`,
       );
       await fetchRegistrationChatBatches(selectedEventId, { silent: true });
-      window.setTimeout(() => setRegistrationChatBatchMessage(""), 4000);
     } catch (err) {
-      setRegistrationChatBatchMessage(err instanceof Error ? err.message : "Failed to resend chat ticket batch");
+      const message = err instanceof Error ? err.message : "Failed to resend chat ticket batch";
+      setRegistrationChatBatchMessage(
+        language === "th"
+          ? `ส่งไม่สำเร็จสำหรับ Chat ID ${batch.sender_id}: ${message}`
+          : `Failed to send to ${batch.sender_id}: ${message}`,
+      );
     } finally {
       setRegistrationChatBatchLoadingKey("");
     }
