@@ -221,6 +221,10 @@ const CUSTOMER_ACCOUNT_EMAIL_RATE_LIMIT_NAME = "customer-account-email";
 const PUBLIC_REGISTRATION_RATE_LIMIT_NAME = "public-registration";
 const PUBLIC_TICKET_RECOVERY_RATE_LIMIT_NAME = "public-ticket-recovery";
 const PUBLIC_TICKET_RENDER_RATE_LIMIT_NAME = "public-ticket-render";
+const PUBLIC_TICKET_RENDER_RATE_LIMIT_MAX = Math.max(
+  300,
+  Number.parseInt(process.env.PUBLIC_TICKET_RENDER_RATE_LIMIT_MAX || "600", 10) || 600,
+);
 const PUBLIC_CHAT_SESSION_RATE_LIMIT_NAME = "public-chat-session";
 const PUBLIC_CHAT_HISTORY_RATE_LIMIT_NAME = "public-chat-history";
 const PUBLIC_CHAT_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -5679,26 +5683,119 @@ async function resendTicketArtifactsToOutboundTarget(
   };
 }
 
-async function resendTicketBatchToOutboundTarget(target: ManualOutboundTarget, registrations: RegistrationRow[]) {
+async function resendFacebookTicketBatchToOutboundTarget(target: ManualOutboundTarget, registrations: RegistrationRow[]) {
+  const settings = await getSettingsMap(target.eventId);
   const results: Array<{
     registration_id: string;
     ok: boolean;
-    steps?: string[];
+    steps: string[];
     error?: string;
+  }> = [];
+  const pendingImages: Array<{
+    registration: RegistrationRow;
+    pngUrl: string;
+    fallbackUrl: string;
+    result: (typeof results)[number];
   }> = [];
 
   for (const registration of registrations) {
+    const result: (typeof results)[number] = {
+      registration_id: registration.id,
+      ok: false,
+      steps: [],
+    };
+    results.push(result);
+
     try {
-      const result = await resendTicketArtifactsToOutboundTarget(target, registration.id, { includeMap: false });
-      results.push({ registration_id: registration.id, ok: true, steps: result.steps });
+      if (String(registration.event_id || DEFAULT_EVENT_ID).trim() !== target.eventId) {
+        throw new Error("Registration does not belong to the selected event");
+      }
+
+      await sendFacebookTextMessage(target.senderId, buildTicketSummaryText(registration, settings), target.externalId);
+      await saveMessage(target.senderId, `[manual-ticket-summary] ${registration.id}`, "outgoing", target.eventId, target.externalId);
+      result.steps.push("summary");
+
+      const pngUrl = buildFreeRegistrationTicketImageUrl(registration.id, "png") || "";
+      const svgUrl = buildFreeRegistrationTicketImageUrl(registration.id, "svg") || "";
+      if (!pngUrl && !svgUrl) throw new Error("Ticket image URL is not available");
+      pendingImages.push({ registration, pngUrl, fallbackUrl: pngUrl || svgUrl, result });
     } catch (error) {
-      results.push({
-        registration_id: registration.id,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      result.error = error instanceof Error ? error.message : String(error);
     }
   }
+
+  const pngItems = pendingImages.filter((item) => item.pngUrl);
+  for (let index = 0; index < pngItems.length; index += FACEBOOK_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
+    const chunk = pngItems.slice(index, index + FACEBOOK_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE);
+    try {
+      await sendFacebookImageBatchMessage(target.senderId, chunk.map((item) => item.pngUrl), target.externalId);
+      for (const item of chunk) {
+        await saveMessage(target.senderId, `[manual-ticket-image-png] ${item.registration.id}`, "outgoing", target.eventId, target.externalId);
+        item.result.steps.push("image");
+        item.result.ok = true;
+      }
+    } catch (batchError) {
+      for (const item of chunk) {
+        try {
+          await sendFacebookImageMessage(target.senderId, item.pngUrl, target.externalId);
+          await saveMessage(target.senderId, `[manual-ticket-image-png] ${item.registration.id}`, "outgoing", target.eventId, target.externalId);
+          item.result.steps.push("image");
+          item.result.ok = true;
+        } catch (imageError) {
+          try {
+            await sendFacebookTextMessage(target.senderId, `ตั๋วของคุณ: ${item.fallbackUrl}`, target.externalId);
+            await saveMessage(target.senderId, `[manual-ticket-link] ${item.registration.id}`, "outgoing", target.eventId, target.externalId);
+            item.result.steps.push("link");
+            item.result.ok = true;
+          } catch (linkError) {
+            item.result.error = [batchError, imageError, linkError]
+              .map((error) => error instanceof Error ? error.message : String(error))
+              .filter(Boolean)
+              .join("; ");
+          }
+        }
+      }
+    }
+  }
+
+  for (const item of pendingImages.filter((candidate) => !candidate.pngUrl)) {
+    try {
+      await sendFacebookTextMessage(target.senderId, `ตั๋วของคุณ: ${item.fallbackUrl}`, target.externalId);
+      await saveMessage(target.senderId, `[manual-ticket-link] ${item.registration.id}`, "outgoing", target.eventId, target.externalId);
+      item.result.steps.push("link");
+      item.result.ok = true;
+    } catch (error) {
+      item.result.error = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return results;
+}
+
+async function resendTicketBatchToOutboundTarget(target: ManualOutboundTarget, registrations: RegistrationRow[]) {
+  const results = target.platform === "facebook"
+    ? await resendFacebookTicketBatchToOutboundTarget(target, registrations)
+    : await (async () => {
+        const fallbackResults: Array<{
+          registration_id: string;
+          ok: boolean;
+          steps?: string[];
+          error?: string;
+        }> = [];
+        for (const registration of registrations) {
+          try {
+            const result = await resendTicketArtifactsToOutboundTarget(target, registration.id, { includeMap: false });
+            fallbackResults.push({ registration_id: registration.id, ok: true, steps: result.steps });
+          } catch (error) {
+            fallbackResults.push({
+              registration_id: registration.id,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        return fallbackResults;
+      })();
 
   const delivered = results.filter((result) => result.ok && (result.steps || []).some((step) => step === "image" || step === "link"));
   let mapSent = false;
@@ -11104,6 +11201,7 @@ function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, s
   const fullName = `${reg.first_name || ""} ${reg.last_name || ""}`.trim() || "-";
   const eventDate = formatTicketDate(settings.event_date || "", settings.event_end_date || "", timeZone);
   const location = formatEventLocationFromSettings(settings);
+  const ticketUrl = buildFreeRegistrationTicketImageUrl(reg.id, "png");
 
   return [
     "ลงทะเบียนสำเร็จแล้ว ✅",
@@ -11111,6 +11209,7 @@ function buildTicketSummaryText(reg: RegistrationRow, settings: Record<string, s
     `รหัสตั๋ว: ${reg.id}`,
     `วันเวลา: ${eventDate}`,
     `สถานที่: ${location}`,
+    ...(ticketUrl ? [`เปิดบัตร PNG: ${ticketUrl}`] : []),
     "กรุณาเก็บข้อความนี้และรูปตั๋วไว้สำหรับเช็กอิน",
   ].join("\n");
 }
@@ -12425,6 +12524,54 @@ async function sendFacebookImageMessage(recipientId: string, imageUrl: string, p
   }
 
   return payload;
+}
+
+const FACEBOOK_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE = 30;
+
+async function sendFacebookImageBatchMessage(recipientId: string, imageUrls: string[], pageId?: string) {
+  const pageAccessToken = await getFacebookAccessToken(pageId);
+  if (!pageAccessToken) {
+    throw new FacebookGraphDeliveryError("PAGE_ACCESS_TOKEN is not configured", false);
+  }
+
+  const normalizedImageUrls = [...new Set(imageUrls.map((url) => normalizeOptionalText(url)).filter(Boolean))];
+  if (normalizedImageUrls.length === 0) {
+    throw new FacebookGraphDeliveryError("At least one Facebook image URL is required", false);
+  }
+
+  const apiVersion = process.env.FACEBOOK_GRAPH_API_VERSION || "v22.0";
+  const payloads: unknown[] = [];
+  for (let index = 0; index < normalizedImageUrls.length; index += FACEBOOK_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
+    const chunk = normalizedImageUrls.slice(index, index + FACEBOOK_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE);
+    const url = new URL(`https://graph.facebook.com/${apiVersion}/me/messages`);
+    url.searchParams.set("access_token", pageAccessToken);
+
+    const response = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_type: "RESPONSE",
+        recipient: { id: recipientId },
+        message: {
+          attachments: chunk.map((imageUrl) => ({
+            type: "image",
+            payload: { url: imageUrl },
+          })),
+        },
+      }),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new FacebookGraphDeliveryError(
+        payload?.error?.message || "Failed to send image batch to Facebook",
+        isRetryableFacebookGraphError(response.status, payload),
+      );
+    }
+    payloads.push(payload);
+  }
+
+  return payloads.length === 1 ? payloads[0] : payloads;
 }
 
 function normalizeLineText(value: string) {
@@ -14002,7 +14149,7 @@ async function startServer() {
   const publicTicketRenderRateLimit = createRateLimitMiddleware({
     name: PUBLIC_TICKET_RENDER_RATE_LIMIT_NAME,
     windowMs: 60 * 1000,
-    max: 30,
+    max: PUBLIC_TICKET_RENDER_RATE_LIMIT_MAX,
     keyFn: (req) => buildRateLimitKey(getRequestIp(req) || "unknown"),
     errorMessage: "Too many ticket image requests. Please retry shortly.",
   });
@@ -17994,7 +18141,11 @@ async function startServer() {
 
         res.setHeader("Content-Type", asset.contentType);
         res.setHeader("Content-Disposition", `inline; filename="${registrationId}.${format}"`);
-        res.setHeader("Cache-Control", "private, no-store");
+        // Meta/LINE must fetch this asset from their own media servers. A
+        // short public cache also prevents a burst of registrations from
+        // repeatedly starting a Chromium render for the same ticket.
+        res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300");
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
         return res.send(asset.body);
       } catch (error) {
         console.error(`Failed to render free registration ticket ${format}:`, error);
