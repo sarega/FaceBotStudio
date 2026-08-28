@@ -279,6 +279,8 @@ export interface RegistrationSearchOptions {
   status?: RegistrationStatus;
   limit?: number;
   offset?: number;
+  sortBy?: "timestamp" | "name";
+  sortDirection?: "asc" | "desc";
 }
 
 export interface RegistrationInput {

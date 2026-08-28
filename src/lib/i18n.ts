@@ -287,6 +287,8 @@ const THAI_LABELS: Record<string, string> = {
   "registrations.status.cancelled": "ยกเลิกแล้ว",
   "registrations.status.checked-in": "เช็กอินแล้ว",
   "registrations.name": "ชื่อ",
+  "registrations.sortBy": "เรียงตาม",
+  "registrations.time": "เวลา",
   "registrations.contact": "ติดต่อ",
   "registrations.status": "สถานะ",
   "registrations.ticket": "ตั๋ว",

@@ -16800,6 +16800,8 @@ async function startServer() {
     try {
       const eventId = getRequestedEventId(req);
       const search = normalizeOptionalText(req.query?.search || req.query?.q).slice(0, 160);
+      const sortBy = String(req.query?.sort_by || "").trim().toLowerCase() === "name" ? "name" : "timestamp";
+      const sortDirection = String(req.query?.sort_direction || "").trim().toLowerCase() === "asc" ? "asc" : "desc";
       const pageRequested = req.query?.limit !== undefined || req.query?.offset !== undefined || Boolean(search);
       if (pageRequested) {
         const pageSize = parsePositiveInteger(req.query?.limit, 120, 200);
@@ -16812,11 +16814,15 @@ async function startServer() {
                 query: search,
                 limit: Math.min(pageSize + 1, 200),
                 offset,
+                sortBy,
+                sortDirection,
               })
             : appDb.searchRegistrations({
                 eventIds: [eventId],
                 limit: pageSize,
                 offset,
+                sortBy,
+                sortDirection,
               }),
         ]);
         const counts = countRows[0] || { total: 0, registered: 0, cancelled: 0, checked_in: 0 };

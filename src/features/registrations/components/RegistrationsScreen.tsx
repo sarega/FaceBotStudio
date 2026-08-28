@@ -55,6 +55,9 @@ export type RegistrationChatBatch = {
   registrations: RegistrationRecord[];
 };
 
+export type RegistrationSortKey = "timestamp" | "name";
+export type RegistrationSortDirection = "asc" | "desc";
+
 type RegistrationAvailabilitySummary = {
   label: string;
   helper: string;
@@ -77,6 +80,9 @@ type RegistrationsScreenProps = {
   registrationListQuery: string;
   onRegistrationListQueryChange: (value: string) => void;
   deferredRegistrationListQuery: string;
+  registrationSortKey: RegistrationSortKey;
+  registrationSortDirection: RegistrationSortDirection;
+  onRegistrationSortChange: (key: RegistrationSortKey) => void;
   visibleRegistrations: RegistrationRecord[];
   selectedRegistrationId: string;
   onSelectRegistration: (registrationId: string) => void;
@@ -122,6 +128,9 @@ export function RegistrationsScreen({
   registrationListQuery,
   onRegistrationListQueryChange,
   deferredRegistrationListQuery,
+  registrationSortKey,
+  registrationSortDirection,
+  onRegistrationSortChange,
   visibleRegistrations,
   selectedRegistrationId,
   onSelectRegistration,
@@ -160,6 +169,24 @@ export function RegistrationsScreen({
   const t = (key: string, fallback: string) => translate(language, `registrations.${key}`, fallback);
   const statusLabel = (status: string) => t(`status.${status}`, status);
   const formatDate = (value: string) => new Date(value).toLocaleString(language === "th" ? "th-TH" : "en-US");
+  const renderSortButton = (key: RegistrationSortKey, label: string, className = "") => {
+    const active = registrationSortKey === key;
+    const directionLabel = registrationSortDirection === "asc" ? "ascending" : "descending";
+    return (
+      <button
+        type="button"
+        onClick={() => onRegistrationSortChange(key)}
+        aria-pressed={active}
+        aria-label={`${label} ${active ? directionLabel : "sort"}`}
+        className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold normal-case tracking-normal transition-colors ${
+          active ? "bg-blue-100 text-blue-700" : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+        } ${className}`}
+      >
+        <span>{label}</span>
+        <span aria-hidden="true">{active ? (registrationSortDirection === "asc" ? "↑" : "↓") : "↕"}</span>
+      </button>
+    );
+  };
   const chatBatchMessageIsError = chatBatchMessage.includes("ส่งไม่สำเร็จ")
     || chatBatchMessage.includes("ล้มเหลว")
     || chatBatchMessage.toLowerCase().includes("failed")
@@ -237,6 +264,11 @@ export function RegistrationsScreen({
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 md:hidden">
+              <span className="mr-1 text-[10px] font-semibold text-slate-400">{t("sortBy", "Sort by")}</span>
+              {renderSortButton("timestamp", t("time", "Time"))}
+              {renderSortButton("name", t("name", "Name"))}
             </div>
           </div>
           {registrationTicketResendMessage && (
@@ -327,7 +359,18 @@ export function RegistrationsScreen({
               <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                 <tr>
                   <th className="px-4 py-2.5">ID</th>
-                  <th className="px-4 py-2.5">{t("name", "Name")}</th>
+                  <th
+                    className="px-4 py-2.5"
+                    aria-sort={registrationSortKey === "name" ? (registrationSortDirection === "asc" ? "ascending" : "descending") : "none"}
+                  >
+                    {renderSortButton("name", t("name", "Name"), "px-0")}
+                  </th>
+                  <th
+                    className="px-4 py-2.5"
+                    aria-sort={registrationSortKey === "timestamp" ? (registrationSortDirection === "asc" ? "ascending" : "descending") : "none"}
+                  >
+                    {renderSortButton("timestamp", t("time", "Time"), "px-0")}
+                  </th>
                   <th className="px-4 py-2.5">{t("contact", "Contact")}</th>
                   <th className="px-4 py-2.5">{t("channel", "Channel")}</th>
                   <th className="px-4 py-2.5">SMS</th>
@@ -338,7 +381,7 @@ export function RegistrationsScreen({
               <tbody className="divide-y divide-slate-100">
                 {filteredRegistrations.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-slate-400 italic">
+                    <td colSpan={8} className="px-4 py-10 text-center text-slate-400 italic">
                       {deferredRegistrationListQuery ? t("noMatch", "No attendees match this search.") : t("noRegistrations", "No registrations yet.")}
                     </td>
                   </tr>
@@ -359,7 +402,9 @@ export function RegistrationsScreen({
                       </td>
                       <td className="px-4 py-2.5">
                         <p className="text-sm font-medium">{registration.first_name} {registration.last_name}</p>
-                        <p className="text-[10px] text-slate-400">{formatDate(registration.timestamp)}</p>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-[11px] text-slate-600">
+                        {formatDate(registration.timestamp)}
                       </td>
                       <td className="px-4 py-2.5">
                         <p className="text-[11px]">{registration.phone}</p>

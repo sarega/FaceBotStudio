@@ -906,11 +906,15 @@ export class PostgresAppDatabase implements AppDatabase {
     values.push(offset);
     const offsetPlaceholder = `$${values.length}`;
     const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const sortDirection = options.sortDirection === "asc" ? "ASC" : "DESC";
+    const orderBy = options.sortBy === "name"
+      ? `LOWER(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')) ${sortDirection}, timestamp DESC, id DESC`
+      : `timestamp ${sortDirection}, id ${sortDirection}`;
     const result = await this.pool.query<RegistrationRow>(
       `SELECT id, sender_id, event_id, customer_account_id, channel_platform, channel_external_id, sms_opt_in_at::text, sms_opt_out_at::text, sms_consent_source, first_name, last_name, phone, email, timestamp::text AS timestamp, status
        FROM registrations
        ${whereClause}
-       ORDER BY timestamp DESC, id DESC
+       ORDER BY ${orderBy}
        LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}`,
       values,
     );

@@ -101,7 +101,7 @@ const LogsScreen = lazy(() => import("./features/logs/components/LogsScreen").th
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { PublicEventCatalog } from "./features/public-event/components/PublicEventCatalog";
 const RegistrationsScreen = lazy(() => import("./features/registrations/components/RegistrationsScreen").then(({ RegistrationsScreen }) => ({ default: RegistrationsScreen })));
-import type { RegistrationChatBatch } from "./features/registrations/components/RegistrationsScreen";
+import type { RegistrationChatBatch, RegistrationSortDirection, RegistrationSortKey } from "./features/registrations/components/RegistrationsScreen";
 const ReportsScreen = lazy(() => import("./features/reports/components/ReportsScreen").then(({ ReportsScreen }) => ({ default: ReportsScreen })));
 const SettingsScreen = lazy(() => import("./features/settings/components/SettingsScreen").then(({ SettingsScreen }) => ({ default: SettingsScreen })));
 const TestConsoleScreen = lazy(() => import("./features/test/components/TestConsoleScreen").then(({ TestConsoleScreen }) => ({ default: TestConsoleScreen })));
@@ -3235,6 +3235,8 @@ export default function App() {
   const [registrationCounts, setRegistrationCounts] = useState<RegistrationCounts>({ total: 0, registered: 0, cancelled: 0, checked_in: 0 });
   const [registrationHasMore, setRegistrationHasMore] = useState(false);
   const [registrationLoadingMore, setRegistrationLoadingMore] = useState(false);
+  const [registrationSortKey, setRegistrationSortKey] = useState<RegistrationSortKey>("timestamp");
+  const [registrationSortDirection, setRegistrationSortDirection] = useState<RegistrationSortDirection>("desc");
   const [registrationChatBatches, setRegistrationChatBatches] = useState<RegistrationChatBatch[]>([]);
   const [registrationChatBatchesLoading, setRegistrationChatBatchesLoading] = useState(false);
   const [registrationChatBatchLoadingKey, setRegistrationChatBatchLoadingKey] = useState("");
@@ -3378,6 +3380,8 @@ export default function App() {
   const selectedEventIdRef = useRef("");
   const registrationRowsRef = useRef<Registration[]>([]);
   const registrationSearchQueryRef = useRef("");
+  const registrationSortKeyRef = useRef<RegistrationSortKey>("timestamp");
+  const registrationSortDirectionRef = useRef<RegistrationSortDirection>("desc");
   const registrationFetchSequenceRef = useRef(0);
   const registrationQueryInitializedRef = useRef(false);
   const selectedPublicInboxSenderIdRef = useRef("");
@@ -3463,6 +3467,8 @@ export default function App() {
   const deferredAdminCommandPaletteQuery = useDeferredValue(normalizeSearchQuery(adminCommandPaletteQuery));
   registrationRowsRef.current = registrations;
   registrationSearchQueryRef.current = deferredRegistrationListQuery;
+  registrationSortKeyRef.current = registrationSortKey;
+  registrationSortDirectionRef.current = registrationSortDirection;
   const adminAgentChatStorageKey = authUser?.id
     ? `${authUser.id}:global`
     : "";
@@ -4037,8 +4043,28 @@ export default function App() {
       reg.status,
     ]),
   );
-  const visibleRegistrations = filteredRegistrations.slice(0, registrationVisibleCount);
-  const hasMoreRegistrations = registrationHasMore || filteredRegistrations.length > visibleRegistrations.length;
+  const sortedRegistrations = [...filteredRegistrations].sort((left, right) => {
+    if (registrationSortKey === "name") {
+      const leftName = `${left.first_name} ${left.last_name}`.trim().toLocaleLowerCase();
+      const rightName = `${right.first_name} ${right.last_name}`.trim().toLocaleLowerCase();
+      const nameComparison = leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
+      if (nameComparison !== 0) return registrationSortDirection === "asc" ? nameComparison : -nameComparison;
+    }
+
+    const leftTimestamp = Date.parse(left.timestamp);
+    const rightTimestamp = Date.parse(right.timestamp);
+    const leftTime = Number.isFinite(leftTimestamp) ? leftTimestamp : null;
+    const rightTime = Number.isFinite(rightTimestamp) ? rightTimestamp : null;
+    if (leftTime !== rightTime) {
+      if (leftTime === null) return 1;
+      if (rightTime === null) return -1;
+      const timeComparison = leftTime < rightTime ? -1 : 1;
+      return registrationSortDirection === "asc" ? timeComparison : -timeComparison;
+    }
+    return left.id.localeCompare(right.id);
+  });
+  const visibleRegistrations = sortedRegistrations.slice(0, registrationVisibleCount);
+  const hasMoreRegistrations = registrationHasMore || sortedRegistrations.length > visibleRegistrations.length;
   const filteredDocuments = documents.filter((document) =>
     matchesSearchQuery(deferredDocumentListQuery, [
       document.title,
@@ -7569,11 +7595,19 @@ export default function App() {
 
   const fetchRegistrations = async (
     eventId = selectedEventId,
-    options: { append?: boolean; preserveLoaded?: boolean; query?: string } = {},
+    options: {
+      append?: boolean;
+      preserveLoaded?: boolean;
+      query?: string;
+      sortKey?: RegistrationSortKey;
+      sortDirection?: RegistrationSortDirection;
+    } = {},
   ) => {
     const append = Boolean(options.append);
     const preserveLoaded = Boolean(options.preserveLoaded);
     const query = options.query === undefined ? registrationSearchQueryRef.current : normalizeSearchQuery(options.query);
+    const sortKey = options.sortKey || registrationSortKeyRef.current;
+    const sortDirection = options.sortDirection || registrationSortDirectionRef.current;
     const requestId = ++registrationFetchSequenceRef.current;
     const existingRows = registrationRowsRef.current;
     const offset = append ? existingRows.length : 0;
@@ -7584,6 +7618,8 @@ export default function App() {
         event_id: eventId,
         limit: String(REGISTRATION_PAGE_SIZE),
         offset: String(offset),
+        sort_by: sortKey,
+        sort_direction: sortDirection,
       });
       if (query) params.set("search", query);
       const res = await apiFetch(`/api/registrations?${params.toString()}`);
@@ -7644,6 +7680,21 @@ export default function App() {
   const loadMoreRegistrations = async () => {
     if (registrationLoadingMore || !registrationHasMore) return;
     await fetchRegistrations(selectedEventId, { append: true });
+  };
+
+  const handleRegistrationSortChange = (nextSortKey: RegistrationSortKey) => {
+    const nextSortDirection = registrationSortKey === nextSortKey
+      ? (registrationSortDirection === "desc" ? "asc" : "desc")
+      : nextSortKey === "timestamp" ? "desc" : "asc";
+    setRegistrationSortKey(nextSortKey);
+    setRegistrationSortDirection(nextSortDirection);
+    registrationSortKeyRef.current = nextSortKey;
+    registrationSortDirectionRef.current = nextSortDirection;
+    void fetchRegistrations(selectedEventId, {
+      query: deferredRegistrationListQuery,
+      sortKey: nextSortKey,
+      sortDirection: nextSortDirection,
+    });
   };
 
   const fetchRegistrationChatBatches = async (eventId = selectedEventId, options?: { silent?: boolean }) => {
@@ -10739,6 +10790,9 @@ export default function App() {
                 registrationListQuery={registrationListQuery}
                 onRegistrationListQueryChange={setRegistrationListQuery}
                 deferredRegistrationListQuery={deferredRegistrationListQuery}
+                registrationSortKey={registrationSortKey}
+                registrationSortDirection={registrationSortDirection}
+                onRegistrationSortChange={handleRegistrationSortChange}
                 visibleRegistrations={visibleRegistrations}
                 selectedRegistrationId={selectedRegistrationId}
                 onSelectRegistration={setSelectedRegistrationId}
