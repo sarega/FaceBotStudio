@@ -57,6 +57,7 @@ export type RegistrationChatBatch = {
 
 export type RegistrationSortKey = "timestamp" | "name";
 export type RegistrationSortDirection = "asc" | "desc";
+export type RegistrationStatusFilter = "all" | RegistrationStatus;
 
 type RegistrationAvailabilitySummary = {
   label: string;
@@ -83,6 +84,8 @@ type RegistrationsScreenProps = {
   registrationSortKey: RegistrationSortKey;
   registrationSortDirection: RegistrationSortDirection;
   onRegistrationSortChange: (key: RegistrationSortKey) => void;
+  registrationStatusFilter: RegistrationStatusFilter;
+  onRegistrationStatusFilterChange: (filter: RegistrationStatusFilter) => void;
   visibleRegistrations: RegistrationRecord[];
   selectedRegistrationId: string;
   onSelectRegistration: (registrationId: string) => void;
@@ -131,6 +134,8 @@ export function RegistrationsScreen({
   registrationSortKey,
   registrationSortDirection,
   onRegistrationSortChange,
+  registrationStatusFilter,
+  onRegistrationStatusFilterChange,
   visibleRegistrations,
   selectedRegistrationId,
   onSelectRegistration,
@@ -169,6 +174,10 @@ export function RegistrationsScreen({
   const t = (key: string, fallback: string) => translate(language, `registrations.${key}`, fallback);
   const statusLabel = (status: string) => t(`status.${status}`, status);
   const formatDate = (value: string) => new Date(value).toLocaleString(language === "th" ? "th-TH" : "en-US");
+  const statsCardClass = (filter: RegistrationStatusFilter, colors: string) =>
+    `w-full rounded-xl border px-3 py-2.5 text-left transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${colors} ${
+      registrationStatusFilter === filter ? "ring-2 ring-blue-500 ring-offset-1" : ""
+    }`;
   const renderSortButton = (key: RegistrationSortKey, label: string, className = "") => {
     const active = registrationSortKey === key;
     const directionLabel = registrationSortDirection === "asc" ? "ascending" : "descending";
@@ -291,7 +300,9 @@ export function RegistrationsScreen({
           <div className="max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden">
             {filteredRegistrations.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-                {deferredRegistrationListQuery ? t("noMatch", "No attendees match this search.") : t("noRegistrations", "No registrations yet.")}
+                {deferredRegistrationListQuery || registrationStatusFilter !== "all"
+                  ? t("noMatch", "No attendees match this filter.")
+                  : t("noRegistrations", "No registrations yet.")}
               </div>
             ) : (
               visibleRegistrations.map((registration) => (
@@ -382,7 +393,9 @@ export function RegistrationsScreen({
                 {filteredRegistrations.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-4 py-10 text-center text-slate-400 italic">
-                      {deferredRegistrationListQuery ? t("noMatch", "No attendees match this search.") : t("noRegistrations", "No registrations yet.")}
+                      {deferredRegistrationListQuery || registrationStatusFilter !== "all"
+                        ? t("noMatch", "No attendees match this filter.")
+                        : t("noRegistrations", "No registrations yet.")}
                     </td>
                   </tr>
                 ) : (
@@ -599,22 +612,46 @@ export function RegistrationsScreen({
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+              <button
+                type="button"
+                className={statsCardClass("all", "border-slate-200 bg-white")}
+                onClick={() => onRegistrationStatusFilterChange("all")}
+                aria-pressed={registrationStatusFilter === "all"}
+                aria-label={`${t("total", "Total")}: ${registrationsCount}`}
+              >
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("total", "Total")}</p>
                 <p className="mt-1 text-base font-bold text-slate-900">{registrationsCount}</p>
-              </div>
-              <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
+              </button>
+              <button
+                type="button"
+                className={statsCardClass("registered", "border-blue-100 bg-blue-50")}
+                onClick={() => onRegistrationStatusFilterChange("registered")}
+                aria-pressed={registrationStatusFilter === "registered"}
+                aria-label={`${t("registered", "Registered")}: ${registeredCount}`}
+              >
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">{t("registered", "Registered")}</p>
                 <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
-              </div>
-              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+              </button>
+              <button
+                type="button"
+                className={statsCardClass("checked-in", "border-emerald-100 bg-emerald-50")}
+                onClick={() => onRegistrationStatusFilterChange("checked-in")}
+                aria-pressed={registrationStatusFilter === "checked-in"}
+                aria-label={`${t("checked", "Checked")}: ${checkedInCount}`}
+              >
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">{t("checked", "Checked")}</p>
                 <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("cancelled", "Cancelled")}</p>
-                <p className="mt-1 text-base font-bold text-slate-700">{cancelledCount}</p>
-              </div>
+              </button>
+              <button
+                type="button"
+                className={statsCardClass("cancelled", "border-rose-100 bg-rose-50")}
+                onClick={() => onRegistrationStatusFilterChange("cancelled")}
+                aria-pressed={registrationStatusFilter === "cancelled"}
+                aria-label={`${t("cancelled", "Cancelled")}: ${cancelledCount}`}
+              >
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-rose-600">{t("cancelled", "Cancelled")}</p>
+                <p className="mt-1 text-base font-bold text-rose-700">{cancelledCount}</p>
+              </button>
             </div>
 
             <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3 py-2.5">

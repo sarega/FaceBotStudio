@@ -101,7 +101,7 @@ const LogsScreen = lazy(() => import("./features/logs/components/LogsScreen").th
 import { PublicEventPage as PublicEventPageScreen } from "./features/public-event/components/PublicEventPage";
 import { PublicEventCatalog } from "./features/public-event/components/PublicEventCatalog";
 const RegistrationsScreen = lazy(() => import("./features/registrations/components/RegistrationsScreen").then(({ RegistrationsScreen }) => ({ default: RegistrationsScreen })));
-import type { RegistrationChatBatch, RegistrationSortDirection, RegistrationSortKey } from "./features/registrations/components/RegistrationsScreen";
+import type { RegistrationChatBatch, RegistrationSortDirection, RegistrationSortKey, RegistrationStatusFilter } from "./features/registrations/components/RegistrationsScreen";
 const ReportsScreen = lazy(() => import("./features/reports/components/ReportsScreen").then(({ ReportsScreen }) => ({ default: ReportsScreen })));
 const SettingsScreen = lazy(() => import("./features/settings/components/SettingsScreen").then(({ SettingsScreen }) => ({ default: SettingsScreen })));
 const TestConsoleScreen = lazy(() => import("./features/test/components/TestConsoleScreen").then(({ TestConsoleScreen }) => ({ default: TestConsoleScreen })));
@@ -1964,7 +1964,7 @@ function getRegistrationStatusTone(status: string | null | undefined): BadgeTone
     case "checked-in":
       return "emerald";
     case "cancelled":
-      return "neutral";
+      return "rose";
     default:
       return "blue";
   }
@@ -3237,6 +3237,7 @@ export default function App() {
   const [registrationLoadingMore, setRegistrationLoadingMore] = useState(false);
   const [registrationSortKey, setRegistrationSortKey] = useState<RegistrationSortKey>("timestamp");
   const [registrationSortDirection, setRegistrationSortDirection] = useState<RegistrationSortDirection>("desc");
+  const [registrationStatusFilter, setRegistrationStatusFilter] = useState<RegistrationStatusFilter>("all");
   const [registrationChatBatches, setRegistrationChatBatches] = useState<RegistrationChatBatch[]>([]);
   const [registrationChatBatchesLoading, setRegistrationChatBatchesLoading] = useState(false);
   const [registrationChatBatchLoadingKey, setRegistrationChatBatchLoadingKey] = useState("");
@@ -3382,6 +3383,7 @@ export default function App() {
   const registrationSearchQueryRef = useRef("");
   const registrationSortKeyRef = useRef<RegistrationSortKey>("timestamp");
   const registrationSortDirectionRef = useRef<RegistrationSortDirection>("desc");
+  const registrationStatusFilterRef = useRef<RegistrationStatusFilter>("all");
   const registrationFetchSequenceRef = useRef(0);
   const registrationQueryInitializedRef = useRef(false);
   const selectedPublicInboxSenderIdRef = useRef("");
@@ -3469,6 +3471,7 @@ export default function App() {
   registrationSearchQueryRef.current = deferredRegistrationListQuery;
   registrationSortKeyRef.current = registrationSortKey;
   registrationSortDirectionRef.current = registrationSortDirection;
+  registrationStatusFilterRef.current = registrationStatusFilter;
   const adminAgentChatStorageKey = authUser?.id
     ? `${authUser.id}:global`
     : "";
@@ -4030,6 +4033,7 @@ export default function App() {
   })();
   const visibleSelectedEventChannels = selectedEventChannels;
   const filteredRegistrations = registrations.filter((reg) =>
+    (registrationStatusFilter === "all" || reg.status === registrationStatusFilter) &&
     matchesSearchQuery(deferredRegistrationListQuery, [
       reg.id,
       reg.first_name,
@@ -5232,7 +5236,7 @@ export default function App() {
 
   useEffect(() => {
     setRegistrationVisibleCount(REGISTRATION_PAGE_SIZE);
-  }, [selectedEventId, deferredRegistrationListQuery]);
+  }, [selectedEventId, deferredRegistrationListQuery, registrationStatusFilter]);
 
   useEffect(() => {
     if (!registrationQueryInitializedRef.current) {
@@ -7601,6 +7605,7 @@ export default function App() {
       query?: string;
       sortKey?: RegistrationSortKey;
       sortDirection?: RegistrationSortDirection;
+      status?: RegistrationStatusFilter;
     } = {},
   ) => {
     const append = Boolean(options.append);
@@ -7608,6 +7613,7 @@ export default function App() {
     const query = options.query === undefined ? registrationSearchQueryRef.current : normalizeSearchQuery(options.query);
     const sortKey = options.sortKey || registrationSortKeyRef.current;
     const sortDirection = options.sortDirection || registrationSortDirectionRef.current;
+    const status = options.status === undefined ? registrationStatusFilterRef.current : options.status;
     const requestId = ++registrationFetchSequenceRef.current;
     const existingRows = registrationRowsRef.current;
     const offset = append ? existingRows.length : 0;
@@ -7622,6 +7628,7 @@ export default function App() {
         sort_direction: sortDirection,
       });
       if (query) params.set("search", query);
+      if (status !== "all") params.set("status", status);
       const res = await apiFetch(`/api/registrations?${params.toString()}`);
       if (!res.ok) {
         throw new Error("Failed to fetch registrations");
@@ -7694,6 +7701,15 @@ export default function App() {
       query: deferredRegistrationListQuery,
       sortKey: nextSortKey,
       sortDirection: nextSortDirection,
+    });
+  };
+
+  const handleRegistrationStatusFilterChange = (nextFilter: RegistrationStatusFilter) => {
+    setRegistrationStatusFilter(nextFilter);
+    registrationStatusFilterRef.current = nextFilter;
+    void fetchRegistrations(selectedEventId, {
+      query: deferredRegistrationListQuery,
+      status: nextFilter,
     });
   };
 
@@ -10793,6 +10809,8 @@ export default function App() {
                 registrationSortKey={registrationSortKey}
                 registrationSortDirection={registrationSortDirection}
                 onRegistrationSortChange={handleRegistrationSortChange}
+                registrationStatusFilter={registrationStatusFilter}
+                onRegistrationStatusFilterChange={handleRegistrationStatusFilterChange}
                 visibleRegistrations={visibleRegistrations}
                 selectedRegistrationId={selectedRegistrationId}
                 onSelectRegistration={setSelectedRegistrationId}
