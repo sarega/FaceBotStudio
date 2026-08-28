@@ -95,15 +95,24 @@ export async function enqueueFacebookInboundJob(job: FacebookInboundJob) {
           type: "exponential",
           delay: 1500,
         },
-        removeOnComplete: 200,
-        removeOnFail: 500,
+        removeOnComplete: {
+          age: DEDUP_TTL_SECONDS,
+          count: 5000,
+        },
+        removeOnFail: {
+          age: DEDUP_TTL_SECONDS,
+          count: 1000,
+        },
       },
     });
   }
 
-  await inboundQueue.add("facebook-message", job satisfies FacebookInboundJob, {
+  const queuedJob = await inboundQueue.add("facebook-message", job satisfies FacebookInboundJob, {
     jobId: buildSafeQueueJobId(job.dedupKey),
   });
+  if (await queuedJob.getState() === "failed") {
+    await queuedJob.retry("failed");
+  }
   return true;
 }
 

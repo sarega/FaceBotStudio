@@ -211,6 +211,8 @@ const JSON_BODY_LIMIT = String(process.env.JSON_BODY_LIMIT || "256kb").trim() ||
 const SHUTDOWN_TIMEOUT_MS = Math.max(1_000, Number.parseInt(process.env.SHUTDOWN_TIMEOUT_MS || "10000", 10) || 10_000);
 const PROVIDER_REQUEST_TIMEOUT_MS = Math.min(120_000, Math.max(1_000, Number.parseInt(process.env.PROVIDER_REQUEST_TIMEOUT_MS || "15000", 10) || 15_000));
 const LLM_REQUEST_TIMEOUT_MS = Math.min(120_000, Math.max(5_000, Number.parseInt(process.env.LLM_REQUEST_TIMEOUT_MS || "60000", 10) || 60_000));
+const OPENROUTER_MAX_ATTEMPTS = 2;
+const OPENROUTER_RETRY_DELAY_MS = 400;
 const CSRF_ALLOWED_ORIGINS_RAW = String(process.env.CSRF_ALLOWED_ORIGINS || "").trim();
 const LOGIN_IP_RATE_LIMIT_NAME = "auth-login-ip";
 const LOGIN_USERNAME_RATE_LIMIT_NAME = "auth-login-username";
@@ -611,6 +613,36 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isRetryableOpenRouterStatus(status: number) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function isRetryableOpenRouterNetworkError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return /abort|eai_again|econnrefused|econnreset|enotfound|fetch failed|network|socket|timed out|timeout/i.test(error.message);
+}
+
+async function fetchOpenRouterWithRetry(input: RequestInfo | URL, init: RequestInit, timeoutMs: number) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= OPENROUTER_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(input, init, timeoutMs);
+      if (response.ok || attempt === OPENROUTER_MAX_ATTEMPTS || !isRetryableOpenRouterStatus(response.status)) {
+        return response;
+      }
+      await response.text().catch(() => "");
+    } catch (error) {
+      lastError = error;
+      if (attempt === OPENROUTER_MAX_ATTEMPTS || !isRetryableOpenRouterNetworkError(error)) {
+        throw error;
+      }
+    }
+    await sleep(OPENROUTER_RETRY_DELAY_MS * attempt);
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("OpenRouter request failed");
+}
+
 function encodeInboundConversationKeyPart(value: string) {
   return encodeURIComponent(String(value || "").trim() || "-");
 }
@@ -807,6 +839,42 @@ function rememberFailedInboundTurn(
         failedInboundTurns.delete(key);
       }
     }
+  }
+}
+
+async function recordFacebookInboundFailure(input: {
+  senderId: string;
+  pageId?: string | null;
+  eventId?: string | null;
+  messageMid?: string | null;
+  dedupKey?: string | null;
+  stage: string;
+  error: unknown;
+}) {
+  const errorMessage = input.error instanceof Error && input.error.message.trim()
+    ? input.error.message.trim()
+    : String(input.error || "Unknown Facebook inbound failure");
+  try {
+    await appDb.recordAuditLog({
+      actor_user_id: null,
+      action: "facebook.inbound.failed",
+      target_type: "facebook_inbound",
+      target_id: String(input.dedupKey || input.messageMid || input.senderId || "").slice(0, 240) || null,
+      metadata: {
+        stage: String(input.stage || "unknown").slice(0, 80),
+        event_id: input.eventId || null,
+        page_id: input.pageId || null,
+        sender_id: input.senderId || null,
+        message_mid: input.messageMid || null,
+        dedup_key: input.dedupKey || null,
+        error_name: input.error instanceof Error ? input.error.name : typeof input.error,
+        error_message: errorMessage.slice(0, 1000),
+        runtime: APP_RUNTIME || "all",
+        queue_mode: canUseFacebookWebhookQueue() ? "redis" : "inline",
+      },
+    });
+  } catch (auditError) {
+    console.error("Failed to persist Facebook inbound failure:", auditError);
   }
 }
 
@@ -11881,7 +11949,7 @@ async function requestOpenRouterChat(
     ? buildOpenRouterMessageContent(currentUserParts)
     : message;
 
-  const upstream = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
+  const upstream = await fetchOpenRouterWithRetry("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: openRouterHeaders(),
     body: JSON.stringify({
@@ -12008,7 +12076,8 @@ async function requestOpenRouterChat(
 
   const payload = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {
-    throw new Error(payload?.error?.message || "OpenRouter chat request failed");
+    const providerMessage = payload?.error?.message || "OpenRouter chat request failed";
+    throw new Error(`OpenRouter chat request failed (${upstream.status}): ${providerMessage}`);
   }
   const usage = normalizeOpenRouterUsage(payload);
 
@@ -13015,6 +13084,15 @@ async function handleIncomingFacebookText(
         preparedTurn,
         error instanceof Error ? error.message : String(error),
       );
+      void recordFacebookInboundFailure({
+        senderId,
+        pageId,
+        eventId,
+        messageMid,
+        dedupKey,
+        stage: "reply_generation",
+        error,
+      });
       replyText = BOT_TEMPORARY_FAILURE_MESSAGE;
       }
     }
@@ -13693,14 +13771,26 @@ async function normalizeTelegramInboundJob(update: any, botKey: string) {
 }
 
 async function processFacebookInboundJob(job: FacebookInboundJob) {
-  await handleIncomingFacebookText(
-    job.senderId,
-    job.text,
-    job.pageId || undefined,
-    job.attachments || [],
-    job.messageMid || undefined,
-    job.dedupKey,
-  );
+  try {
+    await handleIncomingFacebookText(
+      job.senderId,
+      job.text,
+      job.pageId || undefined,
+      job.attachments || [],
+      job.messageMid || undefined,
+      job.dedupKey,
+    );
+  } catch (error) {
+    void recordFacebookInboundFailure({
+      senderId: job.senderId,
+      pageId: job.pageId,
+      messageMid: job.messageMid,
+      dedupKey: job.dedupKey,
+      stage: "worker_processing",
+      error,
+    });
+    throw error;
+  }
 }
 
 async function processInstagramInboundJob(job: InstagramInboundJob) {
@@ -20886,7 +20976,7 @@ async function startServer() {
   });
 
   // Facebook Webhook Event Handling
-  app.post("/api/webhook", webhookRateLimit, (req: RawBodyRequest, res) => {
+  app.post("/api/webhook", webhookRateLimit, async (req: RawBodyRequest, res) => {
     if (!verifyFacebookWebhookSignature(req)) {
       console.warn("Rejected Facebook webhook due to invalid signature");
       res.sendStatus(401);
@@ -20900,14 +20990,62 @@ async function startServer() {
       return;
     }
 
-    res.status(200).send("EVENT_RECEIVED");
-
     const entries = Array.isArray(body.entry) ? body.entry : [];
     if (body.object === "instagram") {
+      res.status(200).send("EVENT_RECEIVED");
       void processInstagramWebhookEntries(entries);
       return;
     }
 
+    if (IS_PRODUCTION) {
+      if (!canUseFacebookWebhookQueue()) {
+        const error = new Error("Facebook inbound queue is unavailable");
+        console.error("Rejected Facebook webhook because the inbound queue is unavailable");
+        void recordFacebookInboundFailure({
+          senderId: "unknown",
+          pageId: null,
+          dedupKey: "queue-unavailable",
+          stage: "webhook_queue_unavailable",
+          error,
+        });
+        res.status(503).send("EVENT_RETRY");
+        return;
+      }
+
+      try {
+        for (const entry of entries) {
+          const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
+          for (const webhookEvent of messagingEvents) {
+            const normalized = normalizeFacebookInboundJob(webhookEvent);
+            if (!normalized) continue;
+
+            try {
+              const queued = await enqueueFacebookInboundJob(normalized);
+              if (!queued) {
+                throw new Error("Facebook inbound queue could not accept the event");
+              }
+            } catch (error) {
+              void recordFacebookInboundFailure({
+                senderId: normalized.senderId,
+                pageId: normalized.pageId,
+                messageMid: normalized.messageMid,
+                dedupKey: normalized.dedupKey,
+                stage: "webhook_enqueue",
+                error,
+              });
+              throw error;
+            }
+          }
+        }
+        res.status(200).send("EVENT_RECEIVED");
+      } catch (error) {
+        console.error("Failed to queue incoming Facebook webhook:", error);
+        res.status(503).send("EVENT_RETRY");
+      }
+      return;
+    }
+
+    res.status(200).send("EVENT_RECEIVED");
     void (async () => {
       for (const entry of entries) {
         const messagingEvents = Array.isArray(entry?.messaging) ? entry.messaging : [];
@@ -20932,6 +21070,14 @@ async function startServer() {
             await processFacebookInboundJob(normalized);
           } catch (error) {
             console.error("Failed to handle incoming Facebook message:", error);
+            void recordFacebookInboundFailure({
+              senderId: normalized.senderId,
+              pageId: normalized.pageId,
+              messageMid: normalized.messageMid,
+              dedupKey: normalized.dedupKey,
+              stage: "inline_processing",
+              error,
+            });
           }
         }
       }
