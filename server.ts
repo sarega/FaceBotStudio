@@ -399,8 +399,8 @@ type FailedInboundTurn = {
 type PendingCancellationIntent = {
   senderId: string;
   eventId: string;
-  registrationId: string;
-  attendeeName: string;
+  scope: "single" | "chat";
+  registrationIds: string[];
   createdAt: number;
 };
 
@@ -605,7 +605,9 @@ function getSystemInstruction(
     "If registration is rejected because the same first+last name already exists, explain that this event blocks duplicate full names and ask for a different attendee name.",
     "If a user wants to cancel, only cancel registrations for the current event conversation. Never assume a cancellation should affect another event.",
     "If the user does not have a Registration ID, ask for the attendee's full name plus phone number or email. On channels like Facebook or LINE, you may also use the current chat sender to narrow the match, but still stay within the current event only.",
+    "If the user asks to cancel all registrations or tickets from this chat, use cancelRegistration with cancel_all=true. The tool will list every attendee in this current event/chat and require confirmation; never cancel only the chat sender or the first attendee for an all request.",
     "When you identify a single attendee to cancel, confirm the exact attendee first. Only after the user explicitly confirms should you call cancelRegistration to complete the cancellation.",
+    "After the user explicitly confirms a chat-wide cancellation list, call cancelRegistration with cancel_all=true and do not narrow it to one attendee.",
   ].join("\n\n");
 }
 
@@ -4216,6 +4218,53 @@ function hasCancellationConfirmationText(value: unknown) {
   }
 
   return ["yes", "ใช่", "ครับ", "ค่ะ", "โอเค", "ok", "ตกลง", "ได้เลย"].includes(normalized);
+}
+
+function hasBulkCancellationRequest(value: unknown) {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return false;
+
+  return [
+    "ทั้งหมด",
+    "ทุกคน",
+    "ทุกใบ",
+    "ทั้งแชต",
+    "ทั้งแชท",
+    "ทั้งกลุ่ม",
+    "ยกเลิกหมด",
+    "ให้หมด",
+    "หมดทุก",
+    "all tickets",
+    "all registrations",
+    "cancel all",
+    "cancel them",
+    "everyone",
+  ].some((pattern) => normalized.includes(pattern)) || /\b(all|everyone)\b/.test(normalized);
+}
+
+function formatCancellationAttendeeList(rows: RegistrationRow[]) {
+  return rows
+    .map((row, index) => {
+      const statusLabel = normalizeComparableText(row.status) === "cancelled" ? " — ยกเลิกแล้ว" : "";
+      return `${index + 1}. ${formatRegistrationDisplayName(row)} (${row.id})${statusLabel}`;
+    })
+    .join("\n");
+}
+
+function buildChatCancellationConfirmation(rows: RegistrationRow[], activeRows: RegistrationRow[]) {
+  return [
+    `พบผู้ลงทะเบียนในแชตนี้ ${rows.length} รายการ:`,
+    formatCancellationAttendeeList(rows),
+    "",
+    `ต้องการยืนยันยกเลิกทั้งหมด ${activeRows.length} รายการที่ยังใช้งานอยู่หรือไม่`,
+  ].join("\n");
+}
+
+async function getChatCancellationRows(senderId: string, eventId: string) {
+  const normalizedSenderId = normalizeOptionalText(senderId);
+  const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
+  if (!normalizedSenderId) return [] as RegistrationRow[];
+  return appDb.listRegistrationsBySenderIds([normalizedSenderId], normalizedEventId);
 }
 
 function filterCancellationRowsByProvidedFields(
@@ -11676,6 +11725,33 @@ async function cancelRegistration(id: unknown, options?: { source?: string }) {
   return { statusCode: 404, content: { error: "Registration not found" } };
 }
 
+async function cancelRegistrationGroup(senderId: string, eventId: string, registrationIds: string[]) {
+  const normalizedSenderId = normalizeOptionalText(senderId);
+  const normalizedEventId = normalizeOptionalText(eventId) || DEFAULT_EVENT_ID;
+  const cancelled: RegistrationRow[] = [];
+  const alreadyCancelled: RegistrationRow[] = [];
+
+  for (const registrationId of [...new Set(registrationIds.map((id) => String(id || "").trim().toUpperCase()).filter(Boolean))]) {
+    const registration = await getRegistrationById(registrationId);
+    if (!registration) continue;
+    if ((normalizeOptionalText(registration.event_id) || DEFAULT_EVENT_ID) !== normalizedEventId) continue;
+    if (normalizeOptionalText(registration.sender_id) !== normalizedSenderId) continue;
+    if (normalizeComparableText(registration.status) === "cancelled") {
+      alreadyCancelled.push(registration);
+      continue;
+    }
+
+    const result = await updateRegistrationStatusWithNotification(registration.id, "cancelled", {
+      source: "attendee_bot_bulk_cancel",
+    });
+    if (result.updated) {
+      cancelled.push(result.registration || { ...registration, status: "cancelled" });
+    }
+  }
+
+  return { cancelled, alreadyCancelled };
+}
+
 async function executeAttendeeCancellationTool(
   senderId: string,
   eventId: string,
@@ -11689,6 +11765,92 @@ async function executeAttendeeCancellationTool(
     || `${normalizeOptionalText(args.first_name)} ${normalizeOptionalText(args.last_name)}`.trim();
   const phone = normalizeOptionalText(args.phone);
   const email = normalizeOptionalText(args.email);
+  const bulkRequestedByArg = args.cancel_all === true;
+  const bulkRequestedByText = hasBulkCancellationRequest(incomingText);
+  const requestedBulkCancellation = bulkRequestedByArg || bulkRequestedByText;
+
+  if (pendingIntent?.scope === "chat" && explicitConfirmation) {
+    const result = await cancelRegistrationGroup(senderId, eventId, pendingIntent.registrationIds);
+    clearPendingCancellationIntent(senderId, eventId);
+    const requestedCount = pendingIntent.registrationIds.length;
+    const resolvedCount = result.cancelled.length + result.alreadyCancelled.length;
+    const notFoundCount = Math.max(requestedCount - resolvedCount, 0);
+    const cancelledNames = result.cancelled.map(formatRegistrationDisplayName);
+    const status = result.cancelled.length > 0
+      ? (notFoundCount > 0 ? "partial_success" : "success")
+      : "already_cancelled";
+    const message = result.cancelled.length > 0
+      ? `ยกเลิกการลงทะเบียนในแชตนี้แล้ว ${result.cancelled.length} รายการ${notFoundCount > 0 ? ` จาก ${requestedCount} รายการ` : ""}: ${cancelledNames.join(", ")}`
+      : "ผู้ลงทะเบียนในรายการนี้ถูกยกเลิกไปแล้วทั้งหมด";
+    return {
+      statusCode: 200,
+      content: {
+        status,
+        scope: "chat",
+        requested_count: requestedCount,
+        cancelled_count: result.cancelled.length,
+        already_cancelled_count: result.alreadyCancelled.length,
+        not_found_count: notFoundCount,
+        registration_ids: result.cancelled.map((registration) => registration.id),
+        attendee_names: cancelledNames,
+        message,
+      },
+    };
+  }
+
+  if (requestedBulkCancellation) {
+    const rows = await getChatCancellationRows(senderId, eventId);
+    const activeRows = rows.filter(isActiveLookupRegistration);
+    if (!normalizeOptionalText(senderId) || rows.length === 0) {
+      clearPendingCancellationIntent(senderId, eventId);
+      return {
+        statusCode: 200,
+        content: {
+          status: "not_found",
+          scope: "chat",
+          error: "ไม่พบผู้ลงทะเบียนในแชตนี้สำหรับอีเวนต์ปัจจุบัน",
+        },
+      };
+    }
+    if (activeRows.length === 0) {
+      clearPendingCancellationIntent(senderId, eventId);
+      return {
+        statusCode: 200,
+        content: {
+          status: "already_cancelled",
+          scope: "chat",
+          total_count: rows.length,
+          cancelled_count: rows.length,
+          attendee_names: rows.map(formatRegistrationDisplayName),
+          message: `ผู้ลงทะเบียนทั้ง ${rows.length} รายการในแชตนี้ถูกยกเลิกแล้ว`,
+        },
+      };
+    }
+
+    rememberPendingCancellationIntent({
+      senderId,
+      eventId,
+      scope: "chat",
+      registrationIds: activeRows.map((registration) => registration.id),
+      createdAt: Date.now(),
+    });
+    return {
+      statusCode: 200,
+      content: {
+        status: "confirmation_required",
+        scope: "chat",
+        total_count: rows.length,
+        active_count: activeRows.length,
+        registration_ids: activeRows.map((registration) => registration.id),
+        attendees: rows.map((registration) => ({
+          registration_id: registration.id,
+          attendee_name: formatRegistrationDisplayName(registration),
+          status: registration.status,
+        })),
+        message: buildChatCancellationConfirmation(rows, activeRows),
+      },
+    };
+  }
 
   let resolved:
     | Awaited<ReturnType<typeof resolveAttendeeCancellationTarget>>
@@ -11705,7 +11867,7 @@ async function executeAttendeeCancellationTool(
       email,
     });
   } else if (pendingIntent) {
-    const pendingRegistration = await getRegistrationById(pendingIntent.registrationId);
+    const pendingRegistration = await getRegistrationById(pendingIntent.registrationIds[0] || "");
     if (
       pendingRegistration
       && (normalizeOptionalText(pendingRegistration.event_id) || DEFAULT_EVENT_ID) === (normalizeOptionalText(eventId) || DEFAULT_EVENT_ID)
@@ -11746,8 +11908,8 @@ async function executeAttendeeCancellationTool(
       rememberPendingCancellationIntent({
         senderId,
         eventId,
-        registrationId: registration.id,
-        attendeeName: formatRegistrationDisplayName(registration),
+        scope: "single",
+        registrationIds: [registration.id],
         createdAt: Date.now(),
       });
       return {
@@ -12022,7 +12184,7 @@ async function requestOpenRouterChat(
           type: "function",
           function: {
             name: "cancelRegistration",
-            description: "Find and cancel a registration for the current event. If the attendee is identified but not yet explicitly confirmed, this tool will return a confirmation request instead of cancelling.",
+            description: "Find and cancel a registration for the current event. Set cancel_all=true when the user wants every registration from this chat cancelled; the tool will list all attendees and require confirmation before cancelling the group.",
             parameters: {
               type: "object",
               properties: {
@@ -12041,6 +12203,10 @@ async function requestOpenRouterChat(
                 email: {
                   type: "string",
                   description: "Attendee email to help identify the correct registration",
+                },
+                cancel_all: {
+                  type: "boolean",
+                  description: "Set true when the user wants all registrations/tickets from this current chat cancelled together",
                 },
                 confirm: {
                   type: "boolean",
