@@ -2,9 +2,9 @@ import sanitizeHtml from "sanitize-html";
 
 export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
   return sanitizeHtml(String(value || ""), {
-    allowedTags: ["h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "span", "font", "br", "strong", "b", "em", "i", "u", "s", "strike", "del", "sub", "sup", "small", "pre", "code", "ul", "ol", "li", "blockquote", "a", "figure", "figcaption", "img", "hr", "table", "caption", "colgroup", "col", "thead", "tbody", "tfoot", "tr", "th", "td"],
+    allowedTags: ["section", "header", "h1", "h2", "h3", "h4", "h5", "h6", "p", "div", "span", "font", "br", "strong", "b", "em", "i", "u", "s", "strike", "del", "sub", "sup", "small", "pre", "code", "ul", "ol", "li", "blockquote", "a", "figure", "figcaption", "img", "hr", "table", "caption", "colgroup", "col", "thead", "tbody", "tfoot", "tr", "th", "td"],
     allowedAttributes: {
-      "*": ["style"],
+      "*": ["style", "lang"],
       a: ["href", "target", "rel", "title"],
       img: ["src", "alt", "title", "loading", "width", "height", "class"],
       font: ["color", "face", "size", "style"],
@@ -20,8 +20,13 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
         color: [/^#[0-9a-f]{3,8}$/i, /^rgba?\([\d\s,.%]+\)$/i, /^[a-z]+$/i],
         "background-color": [/^#[0-9a-f]{3,8}$/i, /^rgba?\([\d\s,.%]+\)$/i, /^(?:transparent|[a-z]+)$/i],
         // Includes the standard font stacks emitted by Froala when HTML is pasted in.
-        "font-family": [/^(?:Sarabun(?:\s*,\s*sans-serif)?|Noto Sans Thai(?:\s*,\s*sans-serif)?|Arial(?:\s*,\s*Helvetica)?(?:\s*,\s*sans-serif)?|Tahoma(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Georgia(?:\s*,\s*serif)?|Times New Roman(?:\s*,\s*Times)?(?:\s*,\s*serif)?(?:\s*,\s*-webkit-standard)?|Verdana(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Impact(?:\s*,\s*Charcoal)?(?:\s*,\s*sans-serif)?)$/i],
-        "font-size": [/^(?:[8-9]|[1-9]\d)px$/],
+        "font-family": [/^(?:(?:['"]?(?:Sarabun|Noto Sans Thai|Arial|Helvetica|Tahoma|Geneva|Georgia|Times New Roman|Times|Verdana|Impact|Charcoal)['"]?|sans-serif|serif|-webkit-standard)\s*,\s*)*(?:['"]?(?:Sarabun|Noto Sans Thai|Arial|Helvetica|Tahoma|Geneva|Georgia|Times New Roman|Times|Verdana|Impact|Charcoal)['"]?|sans-serif|serif|-webkit-standard)$/i],
+        "font-size": [/^(?:[8-9]|[1-9]\d)px$/, /^clamp\(\s*\d+(?:\.\d+)?(?:px|rem|em|vw)\s*,\s*\d+(?:\.\d+)?(?:px|rem|em|vw)\s*,\s*\d+(?:\.\d+)?(?:px|rem|em|vw)\s*\)$/i],
+        "line-height": [/^(?:normal|\d+(?:\.\d+)?(?:px|rem|em|%)?)$/i],
+        margin: [/^(?:auto|\d+(?:\.\d+)?(?:px|rem|em|%)?)(?:\s+(?:auto|\d+(?:\.\d+)?(?:px|rem|em|%)?)){0,3}$/i],
+        "border-radius": [/^\d+(?:\.\d+)?(?:px|rem|em|%)?(?:\s+\d+(?:\.\d+)?(?:px|rem|em|%)?){0,3}$/i],
+        background: [/^#[0-9a-f]{3,8}$/i, /^rgba?\([\d\s,.%]+\)$/i, /^[a-z]+$/i],
+        "border-top": [/^(?:none|\d+(?:\.\d+)?(?:px)?\s+(?:solid|dashed|dotted)\s+(?:#[0-9a-f]{3,8}|[a-z]+|rgba?\([\d\s,.%]+\)))$/i],
         "font-weight": [/^(?:normal|bold|[1-9]00)$/i],
         "font-style": [/^(?:normal|italic)$/i],
         "text-decoration": [/^(?:none|underline|line-through)(?:\s+(?:underline|line-through))?$/i],

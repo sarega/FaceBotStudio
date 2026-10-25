@@ -1,4 +1,6 @@
 const EVENT_DESCRIPTION_TAGS = [
+  "section",
+  "header",
   "h1",
   "h2",
   "h3",
@@ -65,8 +67,14 @@ function sanitizeInlineStyle(value: string) {
   const rules = [
     new RegExp(`^text-align\\s*:\\s*(left|center|right|justify)$`, "i"),
     new RegExp(`^(color|background-color)\\s*:\\s*${safeColor}$`, "i"),
-    /^font-family\s*:\s*(?:Sarabun(?:\s*,\s*sans-serif)?|Noto Sans Thai(?:\s*,\s*sans-serif)?|Arial(?:\s*,\s*Helvetica)?(?:\s*,\s*sans-serif)?|Tahoma(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Georgia(?:\s*,\s*serif)?|Times New Roman(?:\s*,\s*Times)?(?:\s*,\s*serif)?(?:\s*,\s*-webkit-standard)?|Verdana(?:\s*,\s*Geneva)?(?:\s*,\s*sans-serif)?|Impact(?:\s*,\s*Charcoal)?(?:\s*,\s*sans-serif)?)$/i,
+    /^font-family\s*:\s*(?:(?:['"]?(?:Sarabun|Noto Sans Thai|Arial|Helvetica|Tahoma|Geneva|Georgia|Times New Roman|Times|Verdana|Impact|Charcoal)['"]?|sans-serif|serif|-webkit-standard)\s*,\s*)*(?:['"]?(?:Sarabun|Noto Sans Thai|Arial|Helvetica|Tahoma|Geneva|Georgia|Times New Roman|Times|Verdana|Impact|Charcoal)['"]?|sans-serif|serif|-webkit-standard)$/i,
     /^font-size\s*:\s*(?:[8-9]|[1-9]\d)px$/i,
+    /^font-size\s*:\s*clamp\(\s*\d+(?:\.\d+)?(?:px|rem|em|vw)\s*,\s*\d+(?:\.\d+)?(?:px|rem|em|vw)\s*,\s*\d+(?:\.\d+)?(?:px|rem|em|vw)\s*\)$/i,
+    /^line-height\s*:\s*(?:normal|\d+(?:\.\d+)?(?:px|rem|em|%)?)$/i,
+    /^margin\s*:\s*(?:auto|\d+(?:\.\d+)?(?:px|rem|em|%)?)(?:\s+(?:auto|\d+(?:\.\d+)?(?:px|rem|em|%)?)){0,3}$/i,
+    /^border-radius\s*:\s*\d+(?:\.\d+)?(?:px|rem|em|%)?(?:\s+\d+(?:\.\d+)?(?:px|rem|em|%)?){0,3}$/i,
+    new RegExp(`^background\\s*:\\s*${safeColor}$`, "i"),
+    new RegExp(`^border-top\\s*:\\s*(?:none|\\d+(?:\\.\\d+)?(?:px)?\\s+(?:solid|dashed|dotted)\\s+${safeColor})$`, "i"),
     /^font-weight\s*:\s*(?:normal|bold|[1-9]00)$/i,
     /^font-style\s*:\s*(?:normal|italic)$/i,
     /^text-decoration\s*:\s*(?:none|underline|line-through)(?:\s+(?:underline|line-through))?$/i,
@@ -116,6 +124,7 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
     const originalColor = tagName === "font" ? element.getAttribute("color") || "" : "";
     const originalFace = tagName === "font" ? element.getAttribute("face") || "" : "";
     const originalSize = tagName === "font" ? element.getAttribute("size") || "" : "";
+    const originalLang = element.getAttribute("lang") || "";
     const originalStyle = element.getAttribute("style") || "";
     Array.from(element.attributes).forEach((attribute) => element.removeAttribute(attribute.name));
     if (tagName === "a") {
@@ -149,6 +158,7 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
       if (/^\d{1,2}$/.test(originalColspan)) element.setAttribute("colspan", originalColspan);
       if (/^\d{1,2}$/.test(originalRowspan)) element.setAttribute("rowspan", originalRowspan);
     }
+    if (/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(originalLang)) element.setAttribute("lang", originalLang);
     const safeStyle = sanitizeInlineStyle(originalStyle);
     if (safeStyle) {
       element.setAttribute("style", safeStyle);

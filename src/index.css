@@ -248,22 +248,6 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   line-height: 1.55 !important;
 }
 
-.public-event-themed .event-description-content {
-  font-size: 1.0625rem;
-  line-height: 1.9;
-}
-
-.public-event-themed .event-description-content h2 {
-  font-size: 1.5rem;
-  line-height: 1.45;
-}
-
-.public-event-themed .event-description-content h3,
-.public-event-themed .event-description-content h4 {
-  font-size: 1.2rem;
-  line-height: 1.55;
-}
-
 .public-event-themed .bg-blue-600 {
   background-color: var(--public-theme) !important;
 }
