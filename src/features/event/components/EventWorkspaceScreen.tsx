@@ -783,6 +783,27 @@ export function EventWorkspaceScreen({
                   </div>
 
                   <div className="md:col-span-2">
+                    <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer</label>
+                            {organizerProfiles.length > 0 ? (
+                              <select
+                                aria-label="Event organizer"
+                                value={settings.event_public_organizer_profile_id}
+                                onChange={(event) => onOrganizerProfileChange(event.target.value)}
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                <option value="">Default organizer</option>
+                                {organizerProfiles.map((profile) => {
+                                  const profileId = profile.organizer_profile_id || profile.id || "";
+                                  return <option key={profileId} value={profileId}>{profile.name || profile.display_name || profile.organization_name || "Organizer"}</option>;
+                                })}
+                              </select>
+                            ) : (
+                              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">ยังไม่มี Organizer ใน directory</div>
+                            )}
+                    <p className="mt-1 text-xs text-slate-500">เลือกผู้จัดงาน แล้วกด Save เพื่อบันทึก Event นี้</p>
+                  </div>
+
+                  <div className="md:col-span-2">
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Event Starts</label>
@@ -1975,6 +1996,7 @@ export function EventWorkspaceScreen({
                                 onChange={(event) => onOrganizerProfileChange(event.target.value)}
                                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                               >
+                                <option value="">Default organizer</option>
                                 {organizerProfiles.map((profile) => {
                                   const profileId = profile.organizer_profile_id || profile.id || "";
                                   return <option key={profileId} value={profileId}>{profile.name || profile.display_name || profile.organization_name || "Organizer"}</option>;

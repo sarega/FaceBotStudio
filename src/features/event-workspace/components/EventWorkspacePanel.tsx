@@ -2,7 +2,7 @@ import { CalendarRange, ChevronDown, PanelRightClose, Plus, RefreshCw, Search, X
 import { useState } from "react";
 
 import { ActionButton, SelectionMarker, StatusBadge, StatusLine, type BadgeTone } from "../../../components/shared/AppUi";
-import type { EventRecord, EventStatus } from "../../../types";
+import type { EventRecord, EventStatus, OrganizerProfileRecord } from "../../../types";
 
 type EventWorkspaceSort = "event_start_desc" | "name_asc" | "modified_desc";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -35,6 +35,9 @@ type EventWorkspacePanelProps = {
   onToggleEventCreate: () => void;
   onRefresh: () => unknown;
   eventLoading: boolean;
+  organizerProfiles: OrganizerProfileRecord[];
+  newEventOrganizerId: string;
+  onNewEventOrganizerIdChange: (value: string) => void;
   newEventName: string;
   onNewEventNameChange: (value: string) => void;
   onCreateEvent: () => unknown;
@@ -168,6 +171,9 @@ export function EventWorkspacePanel({
   onToggleEventCreate,
   onRefresh,
   eventLoading,
+  organizerProfiles,
+  newEventOrganizerId,
+  onNewEventOrganizerIdChange,
   newEventName,
   onNewEventNameChange,
   onCreateEvent,
@@ -255,6 +261,12 @@ export function EventWorkspacePanel({
               className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="New event name"
             />
+            <label className="text-xs text-slate-500">Organizer
+              <select aria-label="New event organizer" value={newEventOrganizerId} onChange={(event) => onNewEventOrganizerIdChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                <option value="">Default organizer</option>
+                {organizerProfiles.map((profile) => <option key={profile.organizer_profile_id || profile.id} value={profile.organizer_profile_id || profile.id}>{profile.name || profile.display_name || profile.organization_name}</option>)}
+              </select>
+            </label>
             <ActionButton
               onClick={() => void onCreateEvent()}
               disabled={!newEventName.trim() || eventLoading}

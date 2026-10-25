@@ -15646,7 +15646,12 @@ async function startServer() {
         return respondValidationError(res, issues);
       }
       const organizerId = req.auth?.user.organization_id || "";
+      const profileId = readOptionalString(body, "event_public_organizer_profile_id", 180).trim();
+      if (profileId && !await appDb.getOrganizerProfileById(profileId, organizerId)) {
+        return res.status(400).json({ error: "Organizer is not available in your organization" });
+      }
       const event = await appDb.createEvent({ name, organizer_id: organizerId });
+      if (profileId) await appDb.upsertSettings({ event_public_organizer_profile_id: profileId }, event.id);
       await recordAudit(req, "event.created", "event", event.id, { name: event.name });
       return res.status(201).json(event);
     } catch (error) {
@@ -18858,6 +18863,13 @@ async function startServer() {
         return respondValidationError(res, [{ field: "body", message: "No settings payload provided" }]);
       }
       const event = await appDb.getEventById(eventId);
+      if (Object.prototype.hasOwnProperty.call(body, "event_public_organizer_profile_id")) {
+        const profileId = body.event_public_organizer_profile_id.trim();
+        if (profileId && (!event || !await appDb.getOrganizerProfileById(profileId, event.organizer_id))) {
+          return res.status(400).json({ error: "Organizer is not available in your organization" });
+        }
+        body.event_public_organizer_profile_id = profileId;
+      }
       const mergedSettings = {
         ...(await getSettingsMap(eventId)),
         ...body,

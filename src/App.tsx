@@ -2394,6 +2394,7 @@ function getBlankEventScopedSettings() {
 }
 
 const EVENT_SETUP_SETTINGS_KEYS = [
+  "event_public_organizer_profile_id",
   "event_name",
   "event_timezone",
   "event_venue_name",
@@ -3195,6 +3196,7 @@ export default function App() {
   const [eventLoading, setEventLoading] = useState(false);
   const [eventMessage, setEventMessage] = useState("");
   const [newEventName, setNewEventName] = useState("");
+  const [newEventOrganizerId, setNewEventOrganizerId] = useState("");
   const [eventCreateOpen, setEventCreateOpen] = useState(false);
   const [newPageId, setNewPageId] = useState("");
   const [newPageName, setNewPageName] = useState("");
@@ -4601,6 +4603,10 @@ export default function App() {
   const handleOrganizerProfileChange = (profileId: string) => {
     const nextProfile = organizerProfiles.find((profile) => (profile.organizer_profile_id || profile.id || "") === profileId) || null;
     setOrganizerProfile(nextProfile);
+    setSavedSettings((current) => ({
+      ...applyOrganizerProfileToSettings(current, nextProfile),
+      event_public_organizer_profile_id: current.event_public_organizer_profile_id,
+    }));
     setSettings((current) => applyOrganizerProfileToSettings(
       { ...current, event_public_organizer_profile_id: profileId },
       nextProfile,
@@ -8928,13 +8934,14 @@ export default function App() {
       const res = await apiFetch("/api/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, event_public_organizer_profile_id: newEventOrganizerId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data?.error || "Failed to create event");
       }
       setNewEventName("");
+      setNewEventOrganizerId("");
       setEventCreateOpen(false);
       await fetchEvents();
       await fetchChannels();
@@ -10499,6 +10506,9 @@ export default function App() {
                   onToggleEventCreate={() => setEventCreateOpen((current) => !current)}
                   onRefresh={() => Promise.all([fetchEvents(), fetchChannels()])}
                   eventLoading={eventLoading}
+                  organizerProfiles={organizerProfiles}
+                  newEventOrganizerId={newEventOrganizerId}
+                  onNewEventOrganizerIdChange={setNewEventOrganizerId}
                   newEventName={newEventName}
                   onNewEventNameChange={setNewEventName}
                   onCreateEvent={handleCreateEvent}
