@@ -97,7 +97,7 @@ export function AgentSetupScreen({
             </h3>
             {!agentRuntimeCollapsed && (
               <p className="text-sm text-slate-500">
-                Separate prompt/model and routing for Admin Agent, independent from event chat bot setup.
+                Configure public chatbot options and the separate Admin Agent prompt, model, and routing.
               </p>
             )}
           </button>
@@ -110,6 +110,32 @@ export function AgentSetupScreen({
 
         {!agentRuntimeCollapsed && (
           <>
+            <section className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/40 p-3">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-800">Public Bot Settings · Current Event</h4>
+                <p className="text-xs text-slate-500">Controls the attendee chatbot, separate from the Admin Agent settings below.</p>
+              </div>
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={settings.public_bot_sms_consent_enabled === "1"}
+                  onChange={(event) => onSettingsChange({ ...settings, public_bot_sms_consent_enabled: event.target.checked ? "1" : "0" })}
+                  disabled={!canEditSettings}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                />
+                <span>
+                  <span className="block font-semibold text-slate-800">Ask for SMS reminder consent after registration</span>
+                  <span className="mt-1 block text-xs text-slate-500">
+                    OFF by default. When off, the public bot neither asks about SMS nor offers its consent tool.
+                    This option does not activate SMS delivery.
+                  </span>
+                </span>
+              </label>
+              <p className="text-xs text-slate-500">
+                The editable public chatbot Organization System Prompt is in Settings → AI Settings.
+                Existing prompt text is preserved.
+              </p>
+            </section>
             <div className="workspace-control-band rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <label className="flex items-start gap-3 text-sm">
                 <input

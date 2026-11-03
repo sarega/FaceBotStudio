@@ -293,6 +293,7 @@ export interface EmbeddingPreviewResponse {
 export interface Settings {
   context: string;
   llm_model: string;
+  public_bot_sms_consent_enabled: string;
   global_system_prompt: string;
   global_llm_model: string;
   admin_agent_enabled: string;

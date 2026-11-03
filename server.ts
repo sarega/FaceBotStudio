@@ -554,6 +554,7 @@ function getSystemInstruction(
   eventId?: string | null,
 ) {
   const globalPrompt = String(settings.global_system_prompt || "").trim();
+  const smsConsentEnabled = String(settings.public_bot_sms_consent_enabled || "0") === "1";
   const { safeContext: eventContext, gates: promoGates } = parsePromoGates(settings.context);
   const currentEventId = normalizeOptionalText(eventId);
   const currentEventName = normalizeOptionalText(settings.event_name);
@@ -599,7 +600,9 @@ function getSystemInstruction(
     "Summarize registration details exactly once, immediately before calling the registerUser tool.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
     "After registerUser succeeds, the system sends the attendee's QR/PNG ticket separately in the same chat when the channel supports images. Never say that this system does not send a barcode, QR code, or ticket image. If the attendee cannot see the image, tell them to wait briefly or ask the admin for the Registration ID as a fallback; do not deny that a ticket image is sent.",
-    "After a successful registration, ask whether the attendee explicitly agrees to receive SMS reminders for this event at their registered phone number. Never treat an unclear answer as consent. When they clearly answer yes or no, use setSmsConsent.",
+    smsConsentEnabled
+      ? "After a successful registration, ask whether the attendee explicitly agrees to receive SMS reminders for this event at their registered phone number. Never treat an unclear answer as consent. When they clearly answer yes or no, use setSmsConsent."
+      : "SMS reminders are unavailable for this event. Do not ask for SMS notification consent or promise SMS reminders.",
     "Politely ask for any missing information one by one.",
     "If registration fails (e.g. limit reached or period closed), explain why to the user.",
     "If registration is rejected because the same first+last name already exists, explain that this event blocks duplicate full names and ask for a different attendee name.",
@@ -12166,7 +12169,7 @@ async function requestOpenRouterChat(
             },
           },
         },
-        {
+        ...(String(settings.public_bot_sms_consent_enabled || "0") === "1" ? [{
           type: "function",
           function: {
             name: "setSmsConsent",
@@ -12179,7 +12182,7 @@ async function requestOpenRouterChat(
               required: ["consent"],
             },
           },
-        },
+        }] : []),
         {
           type: "function",
           function: {
@@ -12397,15 +12400,19 @@ async function buildToolResponseMessages(
         ticketRegistrationIds.push(result.content.id);
       }
     } else if (call.name === "setSmsConsent") {
-      const consent = call.args.consent === true;
-      if (!isExplicitSmsConsentReply(incomingText, consent)) {
-        content = { error: "SMS consent requires an explicit yes or no reply." };
+      if (String((await getSettingsMap(eventId)).public_bot_sms_consent_enabled || "0") !== "1") {
+        content = { error: "SMS consent collection is disabled for this event." };
       } else {
-        const registration = (await appDb.listRegistrationsBySenderIds([senderId], eventId))
-          .find((row) => row.status !== "cancelled");
-        content = registration && await appDb.setRegistrationSmsConsent(registration.id, consent, "chat")
-          ? { status: "success", registration_id: registration.id, sms_consent: consent }
-          : { error: "No active registration found for SMS consent." };
+        const consent = call.args.consent === true;
+        if (!isExplicitSmsConsentReply(incomingText, consent)) {
+          content = { error: "SMS consent requires an explicit yes or no reply." };
+        } else {
+          const registration = (await appDb.listRegistrationsBySenderIds([senderId], eventId))
+            .find((row) => row.status !== "cancelled");
+          content = registration && await appDb.setRegistrationSmsConsent(registration.id, consent, "chat")
+            ? { status: "success", registration_id: registration.id, sms_consent: consent }
+            : { error: "No active registration found for SMS consent." };
+        }
       }
     } else if (call.name === "cancelRegistration") {
       const result = await executeAttendeeCancellationTool(senderId, eventId, call.args, incomingText);

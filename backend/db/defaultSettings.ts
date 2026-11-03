@@ -1,6 +1,7 @@
 export const DEFAULT_SETTINGS_ENTRIES = {
   context: "",
   llm_model: "",
+  public_bot_sms_consent_enabled: "0",
   global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
   global_llm_model: process.env.OPENROUTER_DEFAULT_MODEL || "google/gemini-3-flash-preview",
   admin_agent_enabled: "0",
@@ -314,6 +315,7 @@ export const EVENT_SETTING_KEYS = [
   "email_template_magic_link_login_subject",
   "email_template_magic_link_login_html",
   "email_template_magic_link_login_text",
+  "public_bot_sms_consent_enabled",
   "reg_unique_name",
   "reg_limit",
   "reg_start",

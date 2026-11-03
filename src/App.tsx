@@ -2083,6 +2083,7 @@ const RECOMMENDED_ADMIN_AGENT_PROMPT = [
 const INITIAL_SETTINGS: Settings = {
   context: "",
   llm_model: "",
+  public_bot_sms_consent_enabled: "0",
   global_system_prompt: "You are a helpful assistant for an event registration system. Be polite, concise, and operationally accurate.",
   global_llm_model: "google/gemini-3-flash-preview",
   admin_agent_enabled: "0",
@@ -2205,6 +2206,7 @@ function getBlankEventScopedSettings() {
   return {
     context: "",
     llm_model: "",
+    public_bot_sms_consent_enabled: "0",
     event_name: "",
     event_timezone: DEFAULT_TIMEZONE,
     event_venue_name: "",
@@ -2300,6 +2302,7 @@ function getBlankEventScopedSettings() {
     Settings,
     | "context"
     | "llm_model"
+    | "public_bot_sms_consent_enabled"
     | "event_name"
     | "event_timezone"
     | "event_venue_name"
@@ -2508,6 +2511,7 @@ const AI_SETTINGS_KEYS = [
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 const AGENT_SETTINGS_KEYS = [
+  "public_bot_sms_consent_enabled",
   "admin_agent_enabled",
   "admin_agent_system_prompt",
   "admin_agent_model",
@@ -2538,6 +2542,7 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
   return {
     context: typeof data.context === "string" ? data.context : "",
     llm_model: typeof data.llm_model === "string" ? data.llm_model : "",
+    public_bot_sms_consent_enabled: typeof data.public_bot_sms_consent_enabled === "string" ? data.public_bot_sms_consent_enabled : "0",
     global_system_prompt:
       typeof data.global_system_prompt === "string" ? data.global_system_prompt : previous.global_system_prompt,
     global_llm_model:
@@ -7289,6 +7294,7 @@ export default function App() {
   ], "AI settings saved");
 
   const saveAgentSettings = async () => saveSettingsSubset([
+    "public_bot_sms_consent_enabled",
     "admin_agent_enabled",
     "admin_agent_system_prompt",
     "admin_agent_model",
