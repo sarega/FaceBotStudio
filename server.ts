@@ -37,7 +37,8 @@ import {
   type NotificationSendResult,
 } from "./backend/notifications/outbox";
 import { createRateLimitMiddleware, resetRateLimitCounter, resolveRateLimitFallbackMode } from "./backend/runtime/rateLimit";
-import { closeRedis, pingRedis } from "./backend/runtime/redis";
+import { closeRedis, pingRedis, getRedisClient } from "./backend/runtime/redis";
+import { bangkokSchedule, reportText, criticalIssues, type EventSnapshot, type Diagnostics } from "./backend/adminAgentAutonomous";
 import { fetchWithTimeout } from "./backend/runtime/fetchWithTimeout";
 import { resolveStartupSecurityConfig } from "./backend/runtime/startupSecurity";
 import { SYSTEM_REVISION, SYSTEM_VERSION } from "./backend/runtime/systemInfo";
@@ -9288,6 +9289,11 @@ type AdminAgentGlobalSettings = {
   notificationOnRegistrationStatusChanged: boolean;
   notificationScope: "all" | "event";
   notificationEventId: string;
+  autonomousEnabled: boolean;
+  dailyReportEnabled: boolean;
+  criticalAlertsEnabled: boolean;
+  errorAnalysisEnabled: boolean;
+  dailyReportTime: string;
 };
 
 async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> {
@@ -9305,6 +9311,11 @@ async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> 
     notificationOnRegistrationStatusChangedRaw,
     notificationScopeRaw,
     notificationEventIdRaw,
+    autonomousEnabledRaw,
+    dailyReportEnabledRaw,
+    criticalAlertsEnabledRaw,
+    errorAnalysisEnabledRaw,
+    dailyReportTimeRaw,
   ] = await Promise.all([
     appDb.getSettingValue("admin_agent_enabled"),
     appDb.getSettingValue("admin_agent_system_prompt"),
@@ -9319,6 +9330,11 @@ async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> 
     appDb.getSettingValue("admin_agent_notification_on_registration_status_changed"),
     appDb.getSettingValue("admin_agent_notification_scope"),
     appDb.getSettingValue("admin_agent_notification_event_id"),
+    appDb.getSettingValue("admin_agent_autonomous_enabled"),
+    appDb.getSettingValue("admin_agent_daily_report_enabled"),
+    appDb.getSettingValue("admin_agent_critical_alerts_enabled"),
+    appDb.getSettingValue("admin_agent_error_analysis_enabled"),
+    appDb.getSettingValue("admin_agent_daily_report_time"),
   ]);
 
   return {
@@ -9335,6 +9351,11 @@ async function getAdminAgentGlobalSettings(): Promise<AdminAgentGlobalSettings> 
     notificationOnRegistrationStatusChanged: isTruthySetting(notificationOnRegistrationStatusChangedRaw ?? "1"),
     notificationScope: normalizeComparableText(notificationScopeRaw) === "event" ? "event" : "all",
     notificationEventId: normalizeOptionalText(notificationEventIdRaw),
+    autonomousEnabled: isTruthySetting(autonomousEnabledRaw ?? "1"),
+    dailyReportEnabled: isTruthySetting(dailyReportEnabledRaw ?? "1"),
+    criticalAlertsEnabled: isTruthySetting(criticalAlertsEnabledRaw ?? "1"),
+    errorAnalysisEnabled: isTruthySetting(errorAnalysisEnabledRaw ?? "1"),
+    dailyReportTime: normalizeOptionalText(dailyReportTimeRaw) || "08:00",
   };
 }
 
@@ -14098,10 +14119,147 @@ async function processEmbeddingJob(job: EmbeddingJob) {
   }
 }
 
+/**
+ * Runs in worker mode only. Redis SET NX provides per-recipient/day idempotency.
+ * No Redis: no scheduled sends (fail closed).
+ */
+let autonomousPolling = false;
+let autonomousRedisWarningAt = 0;
+async function sendAutonomousTelegramOnce(
+  redis: NonNullable<Awaited<ReturnType<typeof getRedisClient>>>,
+  key: string,
+  token: string,
+  chatId: string,
+  message: string,
+) {
+  const lease = String(process.pid) + ":" + Date.now() + ":" + Math.random();
+  const claimed = await redis.set(key, lease, "EX", 172800, "NX");
+  if (claimed !== "OK") return;
+  try {
+    await sendTelegramTextWithBotToken(token, chatId, message);
+  } catch (error) {
+    await redis.eval(
+      'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end',
+      1, key, lease,
+    ).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function runAutonomousAdminAgentCheck() {
+  if (autonomousPolling) return;
+  autonomousPolling = true;
+  try {
+    const settings = await getAdminAgentGlobalSettings();
+    if (!settings.enabled || !settings.autonomousEnabled || !settings.telegramEnabled || !settings.telegramBotToken) return;
+    if (!settings.dailyReportEnabled && !settings.criticalAlertsEnabled) return;
+    const recipients = [...parseAdminAgentTelegramAllowedChatIds(settings.telegramAllowedChatIdsRaw)];
+    if (!recipients.length) return;
+    const redis = await getRedisClient();
+    if (!redis) {
+      if (Date.now() - autonomousRedisWarningAt > 3600000) {
+        autonomousRedisWarningAt = Date.now();
+        console.warn("[autonomous-agent] Redis unavailable; scheduled Telegram delivery disabled to prevent duplicate sends");
+      }
+      return;
+    }
+    const now = new Date();
+    const schedule = bangkokSchedule(now, settings.dailyReportTime);
+    // The Admin Agent Telegram bot belongs to the default-event organization.
+    // Never include events from unrelated organizations in its reports.
+    const ownerEvent = await appDb.getEventById(settings.defaultEventId);
+    if (!ownerEvent?.organizer_id) return;
+    const events = (await appDb.listEvents(ownerEvent.organizer_id)).filter((event) =>
+      ["active", "pending", "inactive"].includes(event.effective_status)
+      && (settings.notificationScope !== "event" || event.id === settings.notificationEventId)
+    );
+    const [countRows, deliveries, audits] = await Promise.all([
+      appDb.getRegistrationCountsByEvent(),
+      settings.errorAnalysisEnabled ? appDb.listNotificationDeliveries({ limit: 500 }) : Promise.resolve([]),
+      settings.errorAnalysisEnabled ? appDb.listAuditLogs(500) : Promise.resolve([]),
+    ]);
+    const counts = new Map(countRows.map((row) => [String(row.event_id || DEFAULT_EVENT_ID), row]));
+    const snapshots: EventSnapshot[] = await Promise.all(events.map(async (event) => {
+      const count = counts.get(event.id);
+      const recent = settings.dailyReportEnabled && schedule.due
+        ? await appDb.getRegistrationActivityByDay(event.id, 2)
+        : [];
+      const last = recent.at(-1);
+      return {
+        id: event.id,
+        name: event.name,
+        status: event.effective_status,
+        availability: event.registration_availability || "unknown",
+        total: count?.total || 0,
+        active: (count?.total || 0) - (count?.cancelled || 0),
+        cancelled: count?.cancelled || 0,
+        checkedIn: count?.checked_in || 0,
+        remaining: event.remaining_seats == null ? null : event.remaining_seats,
+        ...(last ? { recentUtcDate: last.date, recentUtcCount: last.registrations } : {}),
+      };
+    }));
+    const recentAfter = now.getTime() - 24 * 60 * 60 * 1000;
+    const recentDeliveries = deliveries.filter((row) => Date.parse(row.queued_at) >= recentAfter);
+    const recentAudits = audits.filter((row) => Date.parse(row.created_at) >= recentAfter);
+    const diagnostics: Diagnostics = {
+      failedDeliveries: recentDeliveries.filter((row) => row.status === "failed").length,
+      pendingDeliveries: recentDeliveries.filter((row) => ["pending", "retry", "queued"].includes(row.status)).length,
+      failedAgentActions: recentAudits.filter((row) => row.action.startsWith("admin_agent.") && row.action.includes("failed")).length,
+      samplesTruncated: deliveries.length >= 500 || audits.length >= 500,
+    };
+
+    if (settings.dailyReportEnabled && schedule.due) {
+      const batches: EventSnapshot[][] = [];
+      for (let index = 0; index < snapshots.length; index += 8) batches.push(snapshots.slice(index, index + 8));
+      if (!batches.length) batches.push([]);
+      for (const chatId of recipients) {
+        for (let index = 0; index < batches.length; index++) {
+          const text = reportText(schedule.dateKey, batches[index], settings.errorAnalysisEnabled ? diagnostics : null);
+          const key = "facebot:auto:daily:" + schedule.dateKey + ":" + chatId + ":" + index;
+          await sendAutonomousTelegramOnce(redis, key, settings.telegramBotToken, chatId, text);
+        }
+      }
+    }
+
+    if (settings.criticalAlertsEnabled) {
+      const issues = criticalIssues(snapshots, diagnostics);
+      if (issues.length) {
+        const alert = [
+          "🚨 FaceBotStudio · แจ้งเตือนปัญหาที่ต้องตรวจสอบ",
+          "ข้อมูลล่าสุด " + now.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
+          ...issues.slice(0, 20),
+          issues.length > 20 ? "ยังมีปัญหาเพิ่มเติม โปรดตรวจระบบ" : "",
+          "ตอบกลับในแชต Admin Agent เพื่อสอบถามรายละเอียด",
+        ].filter(Boolean).join("\n").slice(0, 3900);
+        for (const chatId of recipients) {
+          // Alert on a new issue category, not every fluctuation in error counts.
+          const signature = createHash("sha256").update(JSON.stringify({
+            invalidEventIds: snapshots.filter((event) => event.availability === "invalid").map((event) => event.id).sort(),
+            deliveryFailures: diagnostics.failedDeliveries > 0,
+            agentFailures: diagnostics.failedAgentActions > 0,
+          })).digest("hex").slice(0, 16);
+          const key = "facebot:auto:critical:" + schedule.dateKey + ":" + chatId + ":" + signature;
+          await sendAutonomousTelegramOnce(redis, key, settings.telegramBotToken, chatId, alert);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("[autonomous-agent] Check failed:", error);
+  } finally {
+    autonomousPolling = false;
+  }
+}
+
+function startAutonomousAdminAgentScheduler() {
+  void runAutonomousAdminAgentCheck();
+  return setInterval(() => void runAutonomousAdminAgentCheck(), 15 * 60 * 1000);
+}
+
 async function startServer() {
   type ShutdownHandle = { close: () => Promise<void> };
   const shutdownHandles: ShutdownHandle[] = [];
   let notificationTimer: ReturnType<typeof setInterval> | null = null;
+  let autonomousTimer: ReturnType<typeof setInterval> | null = null;
   let httpServer: HttpServer | null = null;
   let shuttingDown = false;
   const registerShutdownHandle = (value: unknown) => {
@@ -14127,6 +14285,10 @@ async function startServer() {
       clearInterval(notificationTimer);
       notificationTimer = null;
     }
+    if (autonomousTimer) {
+      clearInterval(autonomousTimer);
+      autonomousTimer = null;
+    }
     await Promise.allSettled(shutdownHandles.map((handle) => handle.close()));
     await closeRedis();
     await appDb.close();
@@ -14149,6 +14311,7 @@ async function startServer() {
       enabled: true,
       sender: sendCurrentNotificationDelivery,
     });
+    autonomousTimer = startAutonomousAdminAgentScheduler();
   }
 
   if (!RUN_WEB_SERVER) {

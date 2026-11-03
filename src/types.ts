@@ -314,6 +314,11 @@ export interface Settings {
   admin_agent_telegram_webhook_secret: string;
   admin_agent_telegram_allowed_chat_ids: string;
   admin_agent_notification_enabled: string;
+  admin_agent_autonomous_enabled: string;
+  admin_agent_daily_report_enabled: string;
+  admin_agent_critical_alerts_enabled: string;
+  admin_agent_error_analysis_enabled: string;
+  admin_agent_daily_report_time: string;
   admin_agent_notification_on_registration_created: string;
   admin_agent_notification_on_registration_status_changed: string;
   admin_agent_notification_scope: string;

@@ -2104,6 +2104,11 @@ const INITIAL_SETTINGS: Settings = {
   admin_agent_telegram_webhook_secret: "",
   admin_agent_telegram_allowed_chat_ids: "",
   admin_agent_notification_enabled: "0",
+  admin_agent_autonomous_enabled: "1",
+  admin_agent_daily_report_enabled: "1",
+  admin_agent_critical_alerts_enabled: "1",
+  admin_agent_error_analysis_enabled: "1",
+  admin_agent_daily_report_time: "08:00",
   admin_agent_notification_on_registration_created: "1",
   admin_agent_notification_on_registration_status_changed: "1",
   admin_agent_notification_scope: "all",
@@ -2530,6 +2535,11 @@ const AGENT_SETTINGS_KEYS = [
   "admin_agent_telegram_webhook_secret",
   "admin_agent_telegram_allowed_chat_ids",
   "admin_agent_notification_enabled",
+  "admin_agent_autonomous_enabled",
+  "admin_agent_daily_report_enabled",
+  "admin_agent_critical_alerts_enabled",
+  "admin_agent_error_analysis_enabled",
+  "admin_agent_daily_report_time",
   "admin_agent_notification_on_registration_created",
   "admin_agent_notification_on_registration_status_changed",
   "admin_agent_notification_scope",
@@ -2615,6 +2625,11 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.admin_agent_telegram_allowed_chat_ids === "string"
         ? data.admin_agent_telegram_allowed_chat_ids
         : previous.admin_agent_telegram_allowed_chat_ids,
+    admin_agent_autonomous_enabled: typeof data.admin_agent_autonomous_enabled === "string" ? data.admin_agent_autonomous_enabled : previous.admin_agent_autonomous_enabled,
+    admin_agent_daily_report_enabled: typeof data.admin_agent_daily_report_enabled === "string" ? data.admin_agent_daily_report_enabled : previous.admin_agent_daily_report_enabled,
+    admin_agent_critical_alerts_enabled: typeof data.admin_agent_critical_alerts_enabled === "string" ? data.admin_agent_critical_alerts_enabled : previous.admin_agent_critical_alerts_enabled,
+    admin_agent_error_analysis_enabled: typeof data.admin_agent_error_analysis_enabled === "string" ? data.admin_agent_error_analysis_enabled : previous.admin_agent_error_analysis_enabled,
+    admin_agent_daily_report_time: typeof data.admin_agent_daily_report_time === "string" ? data.admin_agent_daily_report_time : previous.admin_agent_daily_report_time,
     admin_agent_notification_enabled:
       typeof data.admin_agent_notification_enabled === "string" && data.admin_agent_notification_enabled.trim()
         ? data.admin_agent_notification_enabled.trim()
@@ -7313,6 +7328,11 @@ export default function App() {
     "admin_agent_telegram_webhook_secret",
     "admin_agent_telegram_allowed_chat_ids",
     "admin_agent_notification_enabled",
+  "admin_agent_autonomous_enabled",
+  "admin_agent_daily_report_enabled",
+  "admin_agent_critical_alerts_enabled",
+  "admin_agent_error_analysis_enabled",
+  "admin_agent_daily_report_time",
     "admin_agent_notification_on_registration_created",
     "admin_agent_notification_on_registration_status_changed",
     "admin_agent_notification_scope",

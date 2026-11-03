@@ -207,6 +207,33 @@ export function AgentSetupScreen({
               </div>
             </div>
 
+            <section className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/40 p-3">
+              <h4 className="text-sm font-semibold text-slate-800">Autonomous Admin Agent · Telegram</h4>
+              <p className="text-xs text-slate-500">Background reports require Admin Agent, Telegram, authorized chat IDs, and Redis on the worker. Read-only checks cannot change registrations or events.</p>
+              {([
+                ["admin_agent_autonomous_enabled", "Enable Autonomous Agent"],
+                ["admin_agent_daily_report_enabled", "Daily Event Summary"],
+                ["admin_agent_critical_alerts_enabled", "Critical issue alerts"],
+                ["admin_agent_error_analysis_enabled", "Include error analysis"],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-3 text-sm">
+                  <input type="checkbox" checked={settings[key] === "1"}
+                    onChange={(event) => onSettingsChange({ ...settings, [key]: event.target.checked ? "1" : "0" })}
+                    disabled={!canEditSettings || (key !== "admin_agent_autonomous_enabled" && settings.admin_agent_autonomous_enabled !== "1")}
+                    className="h-4 w-4 rounded border border-slate-300 text-violet-600 focus:ring-violet-500" />
+                  <span>{label}</span>
+                </label>
+              ))}
+              <label className="flex flex-wrap items-center gap-3 text-sm">
+                Daily report time (Asia/Bangkok)
+                <input type="time" value={settings.admin_agent_daily_report_time || "08:00"}
+                  onChange={(event) => onSettingsChange({ ...settings, admin_agent_daily_report_time: event.target.value })}
+                  disabled={!canEditSettings || settings.admin_agent_autonomous_enabled !== "1"}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1" />
+              </label>
+              <p className="text-xs text-slate-500">Default 08:00 Bangkok. Sends to existing Admin Agent Telegram allowed chat IDs. Analysis uses stored event, notification and audit records, not server infrastructure monitoring.</p>
+            </section>
+
             <details className="workspace-disclosure rounded-xl border border-slate-200 bg-slate-50">
               <summary className="cursor-pointer list-none px-3 py-2.5 text-sm font-semibold text-slate-800">
                 Advanced Action Policy
