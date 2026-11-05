@@ -10168,6 +10168,17 @@ export default function App() {
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {canSendManualOverride && !manualOverrideUnavailableReason && (
+              <ActionButton
+                tone="amber"
+                className="min-h-8 rounded-full px-3 py-1.5 text-[11px]"
+                onClick={() => void retryBotFromLog()}
+                disabled={manualOverrideAction !== ""}
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${manualOverrideAction === "retry" ? "animate-spin" : ""}`} />
+                {manualOverrideAction === "retry" ? "Retrying..." : "Retry Bot"}
+              </ActionButton>
+            )}
             {canSendManualOverride && (
               <ActionButton
                 tone={logToolsOpen ? "amber" : "neutral"}
