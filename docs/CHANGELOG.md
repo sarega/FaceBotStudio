@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.1 - 2026-11-17
+
+- Added shared customer profile avatar and dropdown navigation across the public Event Catalog and Event pages.
+- Signed-in customers see their name, Profile, My Bookings, Browse Events and Sign out; guests see Register and Sign in.
+- Customer session refreshes when returning to the browser tab; the booking card no longer duplicates the My Account navigation.
+- Added responsive header menu, keyboard escape/outside-click dismissal, and light/dark accessible colors.
+
 ## 0.9.0 - 2026-11-17
 
 - Event Paid Registration now checks the actual customer account session before showing account controls.

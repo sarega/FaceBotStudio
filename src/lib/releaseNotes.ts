@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.1",
+    date: "2026-11-17",
+    title: "Familiar account navigation on public events",
+    features: [
+      "Profile avatar menu appears in Event Catalog and Event headers when signed in",
+      "Profile, My Bookings, Browse Events and Sign out remain one click away",
+      "Guest register/sign-in actions and dark/light themes remain consistent",
+    ],
+  },
+  {
     version: "0.9.0",
     date: "2026-11-17",
     title: "Event registration recognizes signed-in accounts",

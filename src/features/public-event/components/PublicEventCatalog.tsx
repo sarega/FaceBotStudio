@@ -1,3 +1,4 @@
+import { PublicCustomerMenu } from "./PublicCustomerMenu";
 import { useEffect, useState } from "react";
 import { ArrowRight, CalendarDays, ExternalLink, MapPin, RefreshCw, Search, Ticket } from "lucide-react";
 import type { PublicEventCatalogEntry, PublicEventCatalogResponse } from "../../../types";
@@ -87,13 +88,13 @@ export function PublicEventCatalog() {
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200 bg-white">
+      <header className="relative z-50 border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-5 sm:px-8">
           <a href="/events" className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-600 text-white"><Ticket className="h-5 w-5" /></span>
             <span><span className="block text-sm font-bold tracking-wide text-slate-900">Meetrix</span><span className="block text-xs text-slate-500">Public events</span></span>
           </a>
-          <a href="/account/login" className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-blue-300 hover:text-blue-700">Customer sign in</a>
+          <PublicCustomerMenu />
         </div>
       </header>
 

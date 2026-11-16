@@ -81,10 +81,12 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
       if (document.visibilityState === "visible") void refreshAccount();
     };
     window.addEventListener("focus", onFocus);
+    window.addEventListener("customer-session-changed", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       controller.abort();
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("customer-session-changed", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
@@ -167,16 +169,10 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
                 กรุณายืนยันอีเมลก่อนจอง / Verify your email before booking.
               </p>
             )}
-            <div className="grid gap-2 sm:grid-cols-2">
-              <a className="paid-signup-primary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
-                 href="#public-registration-form">
-                ลงทะเบียนเข้างาน / Book places
-              </a>
-              <a className="paid-signup-secondary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
-                 href="/account" target="_blank" rel="noopener noreferrer">
-                บัญชีของฉัน / My account
-              </a>
-            </div>
+            <a className="paid-signup-primary inline-flex min-h-11 items-center justify-center rounded-lg px-4 py-2.5 text-center text-sm font-semibold"
+               href="#public-registration-form">
+              ลงทะเบียนเข้างาน / Book places
+            </a>
           </>
         ) : (
           <>

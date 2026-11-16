@@ -1,3 +1,4 @@
+import { PublicCustomerMenu } from "./PublicCustomerMenu";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import {
@@ -426,6 +427,14 @@ export function PublicEventPage({
   return (
     <div className="public-event-themed public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans" style={publicThemeStyle}>
       <header className="sticky top-0 z-40 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+        <nav className="public-customer-nav relative z-50 border-b" aria-label="Attendee navigation">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-2 sm:px-6 lg:px-8">
+            <a href="/events" className="public-customer-nav-link text-xs font-semibold sm:text-sm">
+              ← งานทั้งหมด / All events
+            </a>
+            <PublicCustomerMenu />
+          </div>
+        </nav>
         <AnimatePresence initial={false}>
           {page && !headerCondensed && (
             <motion.div

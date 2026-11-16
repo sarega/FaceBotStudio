@@ -2078,3 +2078,45 @@ html.theme-dark .paid-admin-promptpay-warning {
   outline: 2px solid #f59e0b;
   outline-offset: 2px;
 }
+
+/* Attendee navigation shared by catalog and individual event pages. */
+.public-customer-nav, .public-customer-dropdown {
+  background: #fff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+.public-customer-nav-link, .public-customer-guest-link { color: #1d4ed8; }
+.public-customer-nav-link:hover, .public-customer-guest-link:hover { color: #1e40af; }
+.public-customer-signin {
+  background: #1d4ed8;
+  color: #fff;
+}
+.public-customer-signin:hover { background: #1e40af; }
+.public-customer-trigger {
+  background: #fff;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+.public-customer-trigger:hover, .public-customer-item:hover { background: #eff6ff; }
+.public-customer-avatar { background: #dbeafe; color: #1e40af; }
+.public-customer-item { color: inherit; }
+html.theme-dark .public-customer-nav,
+html.theme-dark .public-customer-dropdown {
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: #475569;
+}
+html.theme-dark .public-customer-nav-link,
+html.theme-dark .public-customer-guest-link { color: #bfdbfe; }
+html.theme-dark .public-customer-trigger {
+  background: #1e293b;
+  border-color: #64748b;
+  color: #f8fafc;
+}
+html.theme-dark .public-customer-avatar { background: #1d4ed8; color: #fff; }
+html.theme-dark .public-customer-item:hover,
+html.theme-dark .public-customer-trigger:hover { background: #334155; }
+html.theme-dark .public-customer-signin { background: #60a5fa; color: #0f172a; }
+.public-customer-menu a:focus-visible,
+.public-customer-menu button:focus-visible,
+.public-customer-nav-link:focus-visible { outline: 3px solid #f59e0b; outline-offset: 2px; }
