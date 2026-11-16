@@ -1475,7 +1475,7 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.deleteExpiredCustomerAccountTokens();
 
     this.db.transaction(() => {
-      for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql", "050_paid_external_payment.sql"]) {
+      for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql", "050_paid_external_payment.sql", "051_paid_payment_display.sql"]) {
         if (name === "050_paid_external_payment.sql" && (this.db.pragma("table_info(paid_event_settings)") as { name: string }[]).some((column) => column.name === "payment_mode")) continue;
         this.db.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
       }
@@ -1614,6 +1614,24 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async readOwnedPaidBooking(eventId: string, id: string, customerId: string) {
     return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId));
+  }
+
+  async getPaidPaymentDisplay(eventId: string) {
+    const row = this.db.prepare("SELECT bank_name,account_name,account_number,qr_png_base64 FROM paid_payment_display WHERE event_id=?").get(eventId) as
+      { bank_name: string; account_name: string; account_number: string; qr_png_base64: string } | undefined;
+    return row ?? { bank_name: "", account_name: "", account_number: "", qr_png_base64: "" };
+  }
+
+  async savePaidPaymentDisplay(eventId: string, organizationId: string, input: {
+    bank_name: string; account_name: string; account_number: string; qr_png_base64: string;
+  }) {
+    const owner = this.db.prepare("SELECT organizer_id FROM events WHERE id=?").get(eventId) as { organizer_id: string } | undefined;
+    if (!owner || owner.organizer_id !== organizationId) throw new PaidBookingError("event_not_found");
+    this.db.prepare(`INSERT INTO paid_payment_display(event_id,bank_name,account_name,account_number,qr_png_base64,updated_ms)
+      VALUES (?,?,?,?,?,?) ON CONFLICT(event_id) DO UPDATE SET bank_name=excluded.bank_name,account_name=excluded.account_name,
+      account_number=excluded.account_number,qr_png_base64=excluded.qr_png_base64,updated_ms=excluded.updated_ms`)
+      .run(eventId,input.bank_name,input.account_name,input.account_number,input.qr_png_base64,Date.now());
+    return this.getPaidPaymentDisplay(eventId);
   }
 
   async readPaidMode(eventId: string) {

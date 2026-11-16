@@ -60,3 +60,10 @@ Reviewed the uncommitted workspace on 2026-11-16 against [PRD v0.2](../prd-paid-
 - No funds are transferred by this system. Anonymous/no-account guest registration is a separate authenticated-recovery design decision.
 
 - External/manual bookings waiting for operator verification are included in the Admin Review Queue even without a slip or booking-reference filter; per-booking receiver snapshots govern verification so later event payment-mode changes do not retroactively alter existing bookings.
+
+## 0.8.4 — Organizer-provided QR and bank details
+
+- Migration 051 creates paid_payment_display, an event-specific store for sanitized bank name/account holder/number and metadata-free PNG (base64). It is never stored as an ephemeral server upload path.
+- Authorized organizer owner/admin controls the payment display. The image upload uses a raw octet-stream route to avoid the global JSON parser size limit; Sharp validates and normalizes images before saving. The QR payload is not decoded into a guessed PromptPay ID.
+- Only the authenticated owner of an external/manual booking in payment-awaiting/review state may retrieve its event payment display. The attendee should verify the receiver and amount before payment; this QR does not imply a bank payment has been received.
+- PromptPay-ID-generated QR remains a separate mode. External/manual bookings still require the organizer to review and confirm transfers before issuing admission QR.

@@ -93,6 +93,32 @@ function PaidProofForm({ path, version, totalMinor, onSubmitted }: {
   );
 }
 
+type PaymentDisplay = { bank_name: string; account_name: string; account_number: string; qr_png_base64: string };
+function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; bookingId: string }) {
+  const [details,setDetails] = useState<PaymentDisplay>();
+  useEffect(() => {
+    const abort = new AbortController();
+    void customerApi<PaymentDisplay>("/api/customer/paid-bookings/" + encodeURIComponent(eventId) + "/" +
+      encodeURIComponent(bookingId) + "/payment-display", {signal:abort.signal})
+      .then(setDetails).catch(() => undefined);
+    return () => abort.abort();
+  },[eventId,bookingId]);
+  if (!details || !(details.bank_name || details.account_name || details.account_number || details.qr_png_base64)) {
+    return <p className="text-sm text-slate-300">Contact the organizer for the external payment instructions.</p>;
+  }
+  return <div className="space-y-2 rounded-lg border border-white/20 p-3 text-sm">
+    <strong>Payment details supplied by the organizer</strong>
+    {!!details.bank_name && <p>Bank: {details.bank_name}</p>}
+    {!!details.account_name && <p>Account name: {details.account_name}</p>}
+    {!!details.account_number && <p>Account number: <span className="font-mono">{details.account_number}</span></p>}
+    {!!details.qr_png_base64 && <div className="space-y-1">
+      <img src={"data:image/png;base64," + details.qr_png_base64} alt="Organizer-provided payment QR code"
+        className="max-h-72 max-w-72 rounded-xl bg-white p-3" />
+      <p className="text-xs">Verify the recipient name and amount in your banking app before transferring.</p>
+    </div>}
+    <p className="text-xs text-slate-300">Your QR admission ticket will be issued only after the organizer confirms payment.</p>
+  </div>;
+}
 export function CustomerPaidBookings() {
   const [reference, setReference] = useState(() => {
     const value = new URLSearchParams(window.location.search).get("paid_booking") || "";
@@ -161,9 +187,12 @@ export function CustomerPaidBookings() {
             {detail.status === "awaiting_payment" && detail.payment_mode === "external_manual" && (
               <p role="status" className="rounded-lg border border-blue-500/40 bg-blue-950/40 p-3 text-sm">
                 Your place is reserved until the payment deadline. Please pay through the organizer's external instructions.
-                No bank details or slip upload is required here. The organizer will confirm payment manually;
+                The bank details or recipient QR, if provided, are shown below. The organizer will confirm payment manually;
                 attendee admission QR codes appear after confirmation.
               </p>
+            )}
+            {detail.status === "awaiting_payment" && detail.payment_mode === "external_manual" && (
+              <ExternalPaymentInstructions eventId={booking.event_id} bookingId={booking.id} />
             )}
             {detail.status === "awaiting_payment" && detail.payment_mode !== "external_manual" && (
               <PaidProofForm key={booking.id} path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}`}

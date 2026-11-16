@@ -814,6 +814,25 @@ export class PostgresAppDatabase implements AppDatabase {
     return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId));
   }
 
+  async getPaidPaymentDisplay(eventId: string) {
+    const { rows } = await this.pool.query<{ bank_name: string; account_name: string; account_number: string; qr_png_base64: string }>(
+      "SELECT bank_name,account_name,account_number,qr_png_base64 FROM paid_payment_display WHERE event_id=$1", [eventId],
+    );
+    return rows[0] ?? { bank_name: "", account_name: "", account_number: "", qr_png_base64: "" };
+  }
+
+  async savePaidPaymentDisplay(eventId: string, organizationId: string, input: {
+    bank_name: string; account_name: string; account_number: string; qr_png_base64: string;
+  }) {
+    const { rows } = await this.pool.query("SELECT organizer_id FROM events WHERE id=$1", [eventId]);
+    if (!rows[0] || rows[0].organizer_id !== organizationId) throw new PaidBookingError("event_not_found");
+    await this.pool.query(`INSERT INTO paid_payment_display(event_id,bank_name,account_name,account_number,qr_png_base64,updated_ms)
+      VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(event_id) DO UPDATE SET bank_name=excluded.bank_name,account_name=excluded.account_name,
+      account_number=excluded.account_number,qr_png_base64=excluded.qr_png_base64,updated_ms=excluded.updated_ms`,
+      [eventId,input.bank_name,input.account_name,input.account_number,input.qr_png_base64,Date.now()]);
+    return this.getPaidPaymentDisplay(eventId);
+  }
+
   async readPaidMode(eventId: string) {
     const { rows: [row] } = await this.pool.query<{ published: number; payment_mode: string }>(
       "SELECT published,payment_mode FROM paid_event_settings WHERE event_id=$1", [eventId],

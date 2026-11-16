@@ -381,9 +381,14 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
                     </PageBanner>
                     <div className="surface-subpanel rounded-xl p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div><h3 className="text-sm font-semibold text-slate-900">PromptPay รับเงิน</h3><p className="text-[11px] text-slate-500">ใช้สร้าง QR และรับสลิปให้แอดมินตรวจ</p></div>
+                        <div><h3 className="text-sm font-semibold text-slate-900">Generate a new PromptPay QR</h3><p className="text-[11px] text-slate-500">เฉพาะกรณีมี PromptPay ID ของผู้รับเงินจริง</p></div>
                         {Boolean(financeProfile?.promptpay_id_configured) && <StatusBadge tone="neutral">Configured: {String(financeProfile?.promptpay_id_masked || "••••")}</StatusBadge>}
                       </div>
+                      <p className="mt-3 rounded-lg border-2 border-blue-300 bg-blue-50 p-3 text-sm font-semibold text-blue-900">
+                        มีเพียงรูป QR และเลขบัญชีของผู้รับเงินใช่ไหม? ไม่ต้องกรอก PromptPay ID ที่นี่
+                        ให้ไปที่ Event → Registrations → Paid registration settings → Bank transfer / Upload existing QR
+                        แล้วอัปโหลดรูปและใส่เลขบัญชีสำหรับงานนั้นโดยตรง
+                      </p>
                       <div className="mt-3 grid gap-3 sm:grid-cols-2">
                         <label className={labelClass}>Receiver name<input value={financeForm.promptpay_receiver_name} onChange={(event) => updateFinanceField("promptpay_receiver_name", event.target.value)} className={inputClass} placeholder="ชื่อผู้รับเงิน" /></label>
                         <label className={labelClass}>PromptPay ID<input value={financeForm.promptpay_id} onChange={(event) => updateFinanceField("promptpay_id", event.target.value)} disabled={financeForm.clear_promptpay_id} className={`${inputClass} font-mono disabled:bg-slate-100`} placeholder={Boolean(financeProfile?.promptpay_id_configured) ? "เว้นว่างเพื่อใช้เลขเดิม" : "เบอร์มือถือหรือเลขบัตรประชาชน"} /></label>

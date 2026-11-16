@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.4",
+    date: "2026-11-16",
+    title: "Upload recipient QR and bank details",
+    features: [
+      "Upload an existing bank payment QR image in Paid Registration settings without needing a PromptPay ID",
+      "Attendees can see QR and bank details in their own booking",
+      "Organizer finance now directs internal events to the correct payment setup",
+    ],
+  },
+  {
     version: "0.8.3",
     date: "2026-11-16",
     title: "Internal events: external manual payments",

@@ -1,3 +1,4 @@
+import { PaidPaymentDisplaySettings } from "./PaidPaymentDisplaySettings";
 import { paidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
@@ -255,6 +256,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
         settings === undefined ? <p role="status">Loading settings…</p> :
           <SettingsForm key={settings?.version ?? 0} settings={settings} path={path} apiFetch={apiFetch}
             onSaved={(result) => { setSettings(result); setSaved(true); void loadReadiness(); }} />)}
+      {open && settings !== undefined && <PaidPaymentDisplaySettings eventId={eventId} apiFetch={apiFetch} />}
       {open && settings !== undefined && <section className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
         <div className="flex items-center justify-between gap-2">
           <h3 className="font-semibold">Event activation checks — registration + Help Bot</h3>

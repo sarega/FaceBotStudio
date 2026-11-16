@@ -1087,6 +1087,10 @@ export interface AppDatabase {
   readPaidProof(eventId: string, bookingId: string, attemptId: string, organizationId: string): Promise<{ mime: string; content: Buffer } | undefined>;
   submitPaidProof(input: PaidProofInput): Promise<PaidProofReceipt>;
   expirePaidBookings(eventId: string): Promise<number>;
+  getPaidPaymentDisplay(eventId: string): Promise<{ bank_name: string; account_name: string; account_number: string; qr_png_base64: string }>;
+  savePaidPaymentDisplay(eventId: string, organizationId: string, input: {
+    bank_name: string; account_name: string; account_number: string; qr_png_base64: string;
+  }): Promise<{ bank_name: string; account_name: string; account_number: string; qr_png_base64: string }>;
   readPaidMode(eventId: string): Promise<{ published: boolean; paymentMode: "promptpay" | "external_manual" } | undefined>;
   readPaidSettings(eventId: string): Promise<PaidRow | undefined>;
   savePaidSettings(eventId: string, input: PaidSettingsInput): Promise<PaidRow>;

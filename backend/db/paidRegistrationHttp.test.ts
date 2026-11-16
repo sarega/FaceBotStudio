@@ -175,6 +175,37 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       { headers: staffCreateHeaders });
     assert.equal(externalQueue.status, 200);
     assert.equal((await externalQueue.json()).reviews[0].payment_mode, "external_manual");
+    const qrFixture = await sharp({create:{width:150,height:150,channels:3,background:"#ffffff"}})
+      .png().toBuffer();
+    const displayUrl = externalPrefix + "/payment-display";
+    const qrUpload = await fetch(displayUrl + "/qr",{
+      method:"POST",headers:{...staffCreateHeaders,"Content-Type":"application/octet-stream"},body:qrFixture,
+    });
+    assert.equal(qrUpload.status,200,await qrUpload.clone().text());
+    const qrUploaded = await qrUpload.json();
+    assert.equal(typeof qrUploaded.qr_png_base64,"string");
+    assert.equal(Buffer.from(qrUploaded.qr_png_base64,"base64").subarray(0,8).toString("hex"),"89504e470d0a1a0a");
+    assert.equal((await fetch(displayUrl,{headers:headers("test-owner")})).status,401);
+    const detailsSave = await fetch(displayUrl,{
+      method:"PUT",headers:staffCreateHeaders,
+      body:JSON.stringify({bank_name:"Example Bank",account_name:"Recipient Example",
+        account_number:"123-4-56789-0"}),
+    });
+    assert.equal(detailsSave.status,200,await detailsSave.clone().text());
+    const savedDisplay=await detailsSave.json();
+    assert.equal(savedDisplay.account_name,"Recipient Example");
+    assert.equal(savedDisplay.qr_png_base64,qrUploaded.qr_png_base64);
+    const privatePayment=origin+"/api/customer/paid-bookings/"+paidEvent.id+"/"+externalBooking.id+"/payment-display";
+    const customerDisplay=await fetch(privatePayment,{headers:headers("test-owner")});
+    assert.equal(customerDisplay.status,200,await customerDisplay.clone().text());
+    assert.equal((await customerDisplay.json()).account_number,"123-4-56789-0");
+    assert.equal((await fetch(privatePayment,{headers:headers("test-other")})).status,404);
+    const invalidUpload=await fetch(displayUrl+"/qr",{
+      method:"POST",headers:{...staffCreateHeaders,"Content-Type":"application/octet-stream"},body:"not an image",
+    });
+    assert.equal(invalidUpload.status,415);
+    assert.equal((await fetch(displayUrl,{headers:staffCreateHeaders}).then(r=>r.json())).qr_png_base64,
+      qrUploaded.qr_png_base64);
     const externalApproval = await fetch(externalPrefix + "/bookings/" + externalBooking.id + "/review", {
       method:"POST", headers:{ ...staffCreateHeaders, "Idempotency-Key":"external-http-review" },
       body:JSON.stringify({ decision:"approve", version:1, reason:"Organizer confirmed payment externally",

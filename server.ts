@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import { paidProofEncryptionConfigured } from "./backend/paidProofEncryption";
 import { parsePaidSeminarFields } from "./backend/paidSeminarFields";
 import { parsePaidMessengerCommand, paidMessengerStatusText } from "./backend/paidMessenger";
@@ -17131,6 +17132,88 @@ async function startServer() {
         console.error("Failed paid registration readiness:", error);
         return res.status(500).json({ error: "readiness_check_failed" });
       }
+    },
+  );
+
+  // Event-specific bank transfer instructions and a user-supplied payment QR; no PromptPay ID is needed.
+  app.get("/api/events/:eventId/paid-registration/payment-display",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      try {
+        return res.set("Cache-Control", "private, no-store")
+          .json(await appDb.getPaidPaymentDisplay(req.eventScope!.eventId));
+      } catch { return res.status(500).json({ error:"payment_display_unavailable" }); }
+    },
+  );
+  app.put("/api/events/:eventId/paid-registration/payment-display",
+    requireRoles(["owner", "admin"]), paidSettingsScope,
+    async (req: AuthenticatedRequest, res) => {
+      const body = readObjectBody(req);
+      const bank_name = typeof body.bank_name === "string" ? body.bank_name.trim() : "";
+      const account_name = typeof body.account_name === "string" ? body.account_name.trim() : "";
+      const account_number = typeof body.account_number === "string" ? body.account_number.trim() : "";
+      if (bank_name.length > 120 || account_name.length > 180 || account_number.length > 50 ||
+        !/^[\d\s-]*$/.test(account_number)) return res.status(400).json({error:"invalid_payment_display"});
+      const existing = await appDb.getPaidPaymentDisplay(req.eventScope!.eventId);
+      const qr_png_base64 = existing.qr_png_base64;
+      try {
+        const result = await appDb.savePaidPaymentDisplay(req.eventScope!.eventId,
+          req.auth!.user.organization_id,{bank_name,account_name,account_number,qr_png_base64});
+        await recordAudit(req,"paid_registration.payment_display_updated","event",req.eventScope!.eventId,
+          {has_qr:!!qr_png_base64,has_bank_account:!!account_number});
+        return res.set("Cache-Control","private, no-store").json(result);
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({error:error.code});
+        return res.status(500).json({error:"payment_display_unavailable"});
+      }
+    },
+  );
+  app.post("/api/events/:eventId/paid-registration/payment-display/qr",
+    requireRoles(["owner","admin"]),paidSettingsScope,
+    express.raw({type:"application/octet-stream",limit:"4mb",inflate:false}),
+    async (req: AuthenticatedRequest,res) => {
+      const bytes = Buffer.isBuffer(req.body) ? req.body : undefined;
+      if (!bytes || bytes.length > 4 * 1024 * 1024 || !(await detectPaidProofImage(bytes))) {
+        return res.status(415).json({error:"invalid_qr_image"});
+      }
+      try {
+        const normalized = await sharp(bytes).resize(900,900,{fit:"inside",withoutEnlargement:true}).png().toBuffer();
+        if (normalized.length > 768 * 1024) return res.status(413).json({error:"qr_image_too_large"});
+        const current = await appDb.getPaidPaymentDisplay(req.eventScope!.eventId);
+        const result = await appDb.savePaidPaymentDisplay(req.eventScope!.eventId,req.auth!.user.organization_id,{
+          ...current,qr_png_base64:normalized.toString("base64"),
+        });
+        await recordAudit(req,"paid_registration.payment_qr_uploaded","event",req.eventScope!.eventId,
+          {size:normalized.length});
+        return res.set("Cache-Control","private, no-store").json(result);
+      } catch(error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({error:error.code});
+        return res.status(500).json({error:"qr_upload_failed"});
+      }
+    },
+  );
+  app.delete("/api/events/:eventId/paid-registration/payment-display/qr",
+    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
+      try {
+        const current = await appDb.getPaidPaymentDisplay(req.eventScope!.eventId);
+        const result=await appDb.savePaidPaymentDisplay(req.eventScope!.eventId,req.auth!.user.organization_id,{
+          ...current,qr_png_base64:"",
+        });
+        await recordAudit(req,"paid_registration.payment_qr_deleted","event",req.eventScope!.eventId,{});
+        return res.set("Cache-Control","private, no-store").json(result);
+      } catch {return res.status(500).json({error:"qr_delete_failed"});}
+    },
+  );
+  app.get("/api/customer/paid-bookings/:eventId/:id/payment-display",
+    requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+      try {
+        const booking = await appDb.readOwnedPaidBooking(req.params.eventId,req.params.id,req.customer!.account.id);
+        if (!booking || booking.payment_mode !== "external_manual" ||
+          !["awaiting_payment","verification_pending"].includes(String(booking.state))) {
+          return res.status(404).json({error:"payment_display_unavailable"});
+        }
+        return res.set("Cache-Control","private, no-store")
+          .json(await appDb.getPaidPaymentDisplay(req.params.eventId));
+      } catch { return res.status(500).json({error:"payment_display_unavailable"}); }
     },
   );
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.4 - 2026-11-16
+
+- Added per-event upload of an existing recipient payment QR image (JPEG/PNG/WebP), plus bank name, account holder, and bank account number, without requiring a PromptPay ID.
+- Payment QR is decoded and converted to metadata-free PNG and stored durably in a database table; the image is not dependent on Railway's ephemeral filesystem.
+- Added authenticated organizer upload/update/remove endpoints and booking-owner-only payment instructions. Only external/manual Paid Registration bookings receive the uploaded QR and account details.
+- Added guidance in Organizer Finance to distinguish generating a new PromptPay QR from uploading a supplied QR for an Event.
+- Added migration 051 and HTTP integration coverage for QR upload, bank details, authorization isolation and invalid files. Payment confirmation remains manual; admission QR is issued only after verification.
+
 ## 0.8.3 - 2026-11-16
 
 - Added External / Manual Payment for internal Paid Registration events. Organizer PromptPay account and payment-proof encryption are no longer required for this explicitly selected mode.
