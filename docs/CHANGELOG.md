@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.7 - 2026-11-16
+
+- Return exact missing deployment-variable names when publishing Paid Registration is rejected, without returning any secret values.
+- Explain that selecting PromptPay still requires an active Organizer receiver and that uploading an existing bank QR does not switch the payment mode; provide the exact External/Manual action on the Event configuration screen.
+- Preserve Event data and safeguards; publishing never silently changes payment mode.
+
 ## 0.8.6 - 2026-11-16
 
 - Display prominent attendee Create Account and Sign In links directly on paid event pages, even if Paid Registration is not currently bookable. Registration remains account-based and email verified, without Facebook.

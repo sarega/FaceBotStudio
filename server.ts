@@ -17257,7 +17257,17 @@ async function startServer() {
         parsed.push({ id: category.id, label: category.label.trim(), unitMinor: category.unit_minor, quota: category.quota ?? null });
       }
       if (published && !paidPublicEnrollmentEnabled(paymentMode)) {
-        return res.status(409).json({ error: "paid_enrollment_disabled" });
+        // Return only environment *names* and booleans, never secret values.
+        const missing: string[] = [];
+        if (process.env.PAID_REGISTRATION_PUBLIC_ENABLED !== "1") missing.push("PAID_REGISTRATION_PUBLIC_ENABLED");
+        if (!isCustomerAppEnabled()) missing.push("CUSTOMER_APP_ENABLED");
+        if (paymentMode === "promptpay" && !paidProofEncryptionConfigured()) missing.push("PAID_PROOF_ENCRYPTION_KEY");
+        return res.status(409).json({
+          error: "paid_enrollment_disabled",
+          missing,
+          payment_mode: paymentMode,
+          message: "The current Railway deployment does not have all required paid registration settings enabled.",
+        });
       }
       if (published && paymentMode === "promptpay") {
         const eventId = req.eventScope!.eventId;
@@ -17265,7 +17275,11 @@ async function startServer() {
         const profile = event && await resolveEventOrganizerFinancialProfile(event, await getSettingsMap(eventId));
         const payment = resolveOrganizerPaymentConfig(profile);
         if (!payment.promptpay_ready || payment.source !== "organizer_profile") {
-          return res.status(409).json({ error: "payment_profile_unavailable" });
+          return res.status(409).json({
+            error: "payment_profile_unavailable",
+            payment_mode: "promptpay",
+            message: "This event is in PromptPay mode but the Organizer has no active PromptPay receiver. For a bank account and uploaded QR, select External payment / Admin verifies manually instead.",
+          });
         }
       }
       const settings = await appDb.savePaidSettings(req.eventScope!.eventId, {

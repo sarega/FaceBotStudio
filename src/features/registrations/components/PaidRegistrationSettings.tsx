@@ -96,7 +96,15 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
           paid_enrollment_disabled: "Public paid registration is disabled for this deployment.",
           payment_profile_unavailable: "Activate a PromptPay receiver for this event’s organizer before publishing.",
         };
-        setError(messages[result.error] || "Could not save these settings. Check capacity, hold duration and category details.");
+        const missing = Array.isArray(result.missing)
+          ? result.missing.filter((key: unknown) => typeof key === "string").join(", ") : "";
+        setError(result.error === "paid_enrollment_disabled" && missing
+          ? "Railway ยังไม่ส่งค่าที่เปิดใช้งานมาให้ Server นี้: " + missing +
+            " — ตรวจว่าอยู่ใน FaceBotStudio Service และ Environment ที่กำลัง Deploy แล้วกด Recheck"
+          : result.error === "payment_profile_unavailable"
+            ? "ขณะนี้เลือก PromptPay อยู่ แต่ยังไม่มี PromptPay receiver — หากใช้รูป QR/บัญชีธนาคาร ให้เลือก External payment / Admin verifies manually ด้านบนแล้วกดบันทึกและเปิดรับสมัคร"
+            : messages[result.error] || result.message ||
+              "Could not save these settings. Check capacity, hold duration and category details.");
         return;
       }
       onSaved(result.settings);
@@ -292,6 +300,12 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
           <button type="button" className="text-blue-700 underline" onClick={() => void loadReadiness()}>Recheck</button>
         </div>
         {readiness && <>
+          {readiness.payment_mode === "promptpay" && !readiness.checks.organizer_receiver_ready &&
+            <p className="rounded-lg bg-amber-100 p-2 font-semibold text-amber-900">
+              โหมดปัจจุบันคือ PromptPay — การอัปโหลด QR ไม่ได้เปลี่ยนโหมดรับเงินให้อัตโนมัติ
+              ถ้ามีแค่รูป QR หรือเลขบัญชี ให้เลือก External payment / Admin verifies manually ในฟอร์มด้านบน
+              แล้วกด “บันทึกและเปิดรับสมัคร”
+            </p>}
           <p className="font-semibold">Payment mode: {readiness.payment_mode === "external_manual" ? "External / manual verification" : "PromptPay"}<span className="block" />
             {readiness.paid_ready ? "Paid booking ready" : "Paid booking blocked"}
             {" · "}{readiness.bot_ready ? "Help Bot session ready" : "Help Bot session blocked"}</p>
