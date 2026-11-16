@@ -1475,7 +1475,8 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.deleteExpiredCustomerAccountTokens();
 
     this.db.transaction(() => {
-      for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql"]) {
+      for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql", "050_paid_external_payment.sql"]) {
+        if (name === "050_paid_external_payment.sql" && (this.db.pragma("table_info(paid_event_settings)") as { name: string }[]).some((column) => column.name === "payment_mode")) continue;
         this.db.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
       }
       for (const table of ["registrations", "event_performances"]) {
@@ -1616,9 +1617,9 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   async readPaidMode(eventId: string) {
-    const row = this.db.prepare("SELECT published FROM paid_event_settings WHERE event_id=?")
-      .get(eventId) as { published: number } | undefined;
-    return row ? { published: row.published === 1 } : undefined;
+    const row = this.db.prepare("SELECT published,payment_mode FROM paid_event_settings WHERE event_id=?")
+      .get(eventId) as { published: number; payment_mode: string } | undefined;
+    return row ? { published: row.published === 1, paymentMode: row.payment_mode === "external_manual" ? "external_manual" as const : "promptpay" as const } : undefined;
   }
 
   async readPaidSettings(eventId: string) {

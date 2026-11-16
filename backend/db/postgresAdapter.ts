@@ -815,10 +815,10 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async readPaidMode(eventId: string) {
-    const { rows: [row] } = await this.pool.query<{ published: number }>(
-      "SELECT published FROM paid_event_settings WHERE event_id=$1", [eventId],
+    const { rows: [row] } = await this.pool.query<{ published: number; payment_mode: string }>(
+      "SELECT published,payment_mode FROM paid_event_settings WHERE event_id=$1", [eventId],
     );
-    return row ? { published: row.published === 1 } : undefined;
+    return row ? { published: row.published === 1, paymentMode: row.payment_mode === "external_manual" ? "external_manual" as const : "promptpay" as const } : undefined;
   }
 
   async readPaidSettings(eventId: string) {

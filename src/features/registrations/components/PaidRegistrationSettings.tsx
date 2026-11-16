@@ -8,12 +8,14 @@ type Settings = {
   hold_minutes: number;
   cutoff_ms: number | null;
   published: 0 | 1;
+  payment_mode: "promptpay" | "external_manual";
   fields: PaidSeminarField[];
   categories: { id: string; label: string; unit_minor: number; quota: number | null }[];
 };
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type Readiness = {
   checks: Record<string, boolean>;
+  payment_mode: "promptpay" | "external_manual";
   paid_ready: boolean;
   bot_ready: boolean;
 };
@@ -46,6 +48,7 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
     quota: category.quota == null ? "" : String(category.quota),
   })) ?? [{ id: "general", label: "", price: "", quota: "" }]);
   const [seminar, setSeminar] = useState(settings?.fields ?? []);
+  const [paymentMode, setPaymentMode] = useState(settings?.payment_mode === "external_manual" ? "external_manual" : "promptpay");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -73,7 +76,7 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
         body: JSON.stringify({
           version: settings?.version ?? 0, capacity: Number(data.get("capacity")),
           hold_minutes: Number(data.get("hold_minutes")), cutoff_ms: cutoff ? new Date(cutoff).getTime() : null,
-          published: data.has("published"), categories: parsedCategories, fields: seminar,
+          published: data.has("published"), payment_mode: paymentMode, categories: parsedCategories, fields: seminar,
         }),
       });
       const result = await response.json();
@@ -115,6 +118,22 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
         </p>
       )}
       <fieldset disabled={busy} className="space-y-3">
+        <fieldset className="rounded-xl border-2 border-blue-200 p-3">
+          <legend className="px-2 font-bold">How will attendees pay?</legend>
+          <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border bg-white p-3">
+            <input type="radio" className="mt-1" checked={paymentMode === "external_manual"}
+              onChange={() => setPaymentMode("external_manual")} />
+            <span><strong>External payment / Admin verifies manually (Internal Event)</strong>
+            <span className="block text-xs text-slate-600">No PromptPay setup required. Register first; accept payment outside this system.
+              Admin checks it and confirms the booking later. QR is issued only after confirmation.</span></span>
+          </label>
+          <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border bg-white p-3">
+            <input type="radio" className="mt-1" checked={paymentMode === "promptpay"}
+              onChange={() => setPaymentMode("promptpay")} />
+            <span><strong>PromptPay + payment proof</strong>
+            <span className="block text-xs text-slate-600">Requires an Organizer receiving account and secure proof storage.</span></span>
+          </label>
+        </fieldset>
         <div className="grid gap-3 sm:grid-cols-3">
           <label>Capacity<input className={field} name="capacity" type="number" min={1} step={1} required defaultValue={settings?.capacity} /></label>
           <label>Hold duration (minutes)<input className={field} name="hold_minutes" type="number" min={1} step={1} required defaultValue={settings?.hold_minutes} /></label>
@@ -197,7 +216,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
         body: JSON.stringify({
           version: settings.version, capacity: settings.capacity, hold_minutes: settings.hold_minutes,
           cutoff_ms: settings.cutoff_ms, published: true, categories: settings.categories,
-          fields: settings.fields,
+          fields: settings.fields, payment_mode: settings.payment_mode,
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -242,12 +261,15 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
           <button type="button" className="text-blue-700 underline" onClick={() => void loadReadiness()}>Recheck</button>
         </div>
         {readiness && <>
-          <p className="font-semibold">{readiness.paid_ready ? "Paid booking ready" : "Paid booking blocked"}
+          <p className="font-semibold">Payment mode: {readiness.payment_mode === "external_manual" ? "External / manual verification" : "PromptPay"}<span className="block" />
+            {readiness.paid_ready ? "Paid booking ready" : "Paid booking blocked"}
             {" · "}{readiness.bot_ready ? "Help Bot session ready" : "Help Bot session blocked"}</p>
           <div className="grid gap-1">
             {Object.entries(readiness.checks).map(([key, ok]) =>
               <p key={key} className={ok ? "text-green-800" : "font-medium text-red-700"}>
-                {ok ? "✓" : "✕"} {readinessLabels[key] || key}
+                {ok ? "✓" : "✕"} {readiness.payment_mode === "external_manual" &&
+                  (key === "organizer_receiver_ready" || key === "slip_encryption_ready")
+                    ? "Not required for external/manual payment" : readinessLabels[key] || key}
               </p>)}
           </div>
           {!readiness.checks.paid_published && Object.entries(readiness.checks).every(([key, ok]) =>

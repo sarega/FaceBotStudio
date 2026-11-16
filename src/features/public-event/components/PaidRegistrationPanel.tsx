@@ -2,7 +2,7 @@ import { paidSeminarFields, type PaidSeminarField } from "../../../../backend/pa
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { customerApi } from "../../customer-account/components/CustomerAccountScreen";
 
-type Catalog = { pricing_version: number; fields: PaidSeminarField[]; categories: { id: string; label: string; unit_minor: number }[] };
+type Catalog = { payment_mode?: "promptpay" | "external_manual"; pricing_version: number; fields: PaidSeminarField[]; categories: { id: string; label: string; unit_minor: number }[] };
 type Attendee = { category_id: string; first_name: string; last_name: string; answers?: Record<string, string> };
 type Booking = { id: string; event_id: string; reference: string; status: string; total_due_minor: number; due_at: string };
 
@@ -116,6 +116,10 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
   return (
     <div className="surface-panel space-y-4 rounded-[1.75rem] p-4 sm:p-5">
       <h2 className="text-lg font-semibold text-slate-900">Paid registration</h2>
+      {catalog?.payment_mode === "external_manual" && <p role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+        Payment is arranged outside this website. Register to reserve a place; the organizer will verify payment
+        and confirm your admission. No PromptPay setup or online payment is required here.
+      </p>}
       {booking ? (
         <div role="status" className="space-y-2 text-sm text-slate-700">
           <p className="font-semibold">{booking.status.replaceAll("_", " ")}</p>

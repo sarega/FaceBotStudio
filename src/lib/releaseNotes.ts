@@ -1,5 +1,16 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.3",
+    date: "2026-11-16",
+    title: "Internal events: external manual payments",
+    features: [
+      "Paid seminars accept bookings without Organizer PromptPay when external/manual payment is selected",
+      "Admin confirms verified external payments later; admission QR is issued only after confirmation",
+      "Event creation and paid settings offer payment method selection",
+      "Organizer profile and finance settings use large, visible navigation buttons",
+    ],
+  },
+  {
     version: "0.8.2",
     date: "2026-11-16",
     title: "Paid registration and Help Bot readiness hotfix",

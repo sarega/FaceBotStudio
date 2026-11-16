@@ -49,3 +49,14 @@ Reviewed the uncommitted workspace on 2026-11-16 against [PRD v0.2](../prd-paid-
 - Outstanding production acceptance: real payment reconciliation, configurable review escalation/remainder policy, provider delivery and recovery, PostgreSQL cross-domain concurrency test, and operational backup/restore. Pilot with synthetic/controlled transactions first.
 
 - Optional 24-hour payment reminder queueing uses the existing notification outbox with a per-booking idempotency key, a worker-side opt-in flag PAID_REGISTRATION_REMINDERS_ENABLED, and delivery-time checks for active unpaid bookings and transactional email preference. This flag remains off by default; no reminders were sent to real customers during local verification.
+
+## 0.8.3 — Internal external/manual payments
+
+- Added additive migration 050: paid_event_settings.payment_mode defaults to promptpay to preserve older events; accepts external_manual explicitly.
+- External/manual bookings do not require receiver snapshot or payment-proof encryption. The booking stores no fictitious receiving account.
+- Staff confirm independently verified full payment via existing role-restricted review API, a unique external reference and EXTERNAL_MANUAL namespace; existing capacity deadlines, idempotency, duplicate-reference checks, audit log and QR-after-confirmation remain in effect.
+- Paid website still uses verified customer-account authentication and server deployment controls. CUSTOMER_APP_ENABLED=1 and PAID_REGISTRATION_PUBLIC_ENABLED=1 are required for web booking; customer account registration must be enabled if new accounts are expected.
+- Existing events can change payment mode in Paid Registration Settings; this does not require deleting or recreating the event.
+- No funds are transferred by this system. Anonymous/no-account guest registration is a separate authenticated-recovery design decision.
+
+- External/manual bookings waiting for operator verification are included in the Admin Review Queue even without a slip or booking-reference filter; per-booking receiver snapshots govern verification so later event payment-mode changes do not retroactively alter existing bookings.

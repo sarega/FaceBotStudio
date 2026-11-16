@@ -4982,7 +4982,8 @@ async function buildPublicEventPagePayload(
       timezone: normalizeTimeZone(settings.event_timezone),
       registration_enabled: ticketingMode === "inline" && isTruthySetting(settings.event_public_registration_enabled ?? "1"),
       ticketing_mode: ticketingMode,
-      paid_registration_enabled: paidSettings?.published === true && paidPublicEnrollmentEnabled(),
+      paid_registration_enabled: paidSettings?.published === true &&
+        paidPublicEnrollmentEnabled(paidSettings.paymentMode),
       external_ticket_url: externalTicketUrl,
       customer_checkout_enabled: customerCheckoutEnabled,
       ticket_sales: ticketSales,
@@ -5086,7 +5087,7 @@ async function buildPublicEventCatalogEntry(
   if (!publicSlug) return null;
 
   const paidMode = await appDb.readPaidMode(event.id);
-  const paidCatalog = paidMode?.published && paidPublicEnrollmentEnabled() ? await appDb.readPaidCatalog(event.id) : undefined;
+  const paidCatalog = paidMode?.published && paidPublicEnrollmentEnabled(paidMode.paymentMode) ? await appDb.readPaidCatalog(event.id) : undefined;
   if (paidMode && !paidCatalog?.categories.length) return null;
   const customerTicketingSelected = !paidMode && settings.event_public_ticketing_mode === "customer";
   const externalTicketUrl = !paidMode && settings.event_public_ticketing_mode === "external"
@@ -11372,8 +11373,9 @@ function isTruthySetting(value: unknown) {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function paidPublicEnrollmentEnabled() {
-  return process.env.PAID_REGISTRATION_PUBLIC_ENABLED === "1" && isCustomerAppEnabled() && paidProofEncryptionConfigured();
+function paidPublicEnrollmentEnabled(mode: "promptpay" | "external_manual" = "promptpay") {
+  return process.env.PAID_REGISTRATION_PUBLIC_ENABLED === "1" && isCustomerAppEnabled() &&
+    (mode === "external_manual" || paidProofEncryptionConfigured());
 }
 
 function isCustomerAppEnabled() {
@@ -13366,7 +13368,9 @@ async function handleIncomingFacebookText(
     const { thai } = paidCommand;
     let reply: string;
     if (paidCommand.action === "prices") {
-      const catalog = paidPublicEnrollmentEnabled() ? await appDb.readPaidCatalog(eventId) : undefined;
+      const botPaidMode = await appDb.readPaidMode(eventId);
+      const catalog = botPaidMode && paidPublicEnrollmentEnabled(botPaidMode.paymentMode)
+        ? await appDb.readPaidCatalog(eventId) : undefined;
       const settings = await getSettingsMap(eventId);
       const event = await appDb.getEventById(eventId);
       if (!catalog?.categories.length || !event || !isTruthySetting(settings.event_public_page_enabled ?? "0")) {
@@ -13402,7 +13406,8 @@ async function handleIncomingFacebookText(
         try {
           const settings = await getSettingsMap(eventId);
           const event = await appDb.getEventById(eventId);
-          if (!event || !paidPublicEnrollmentEnabled() ||
+          const botPaidMode = await appDb.readPaidMode(eventId);
+          if (!event || !botPaidMode || !paidPublicEnrollmentEnabled(botPaidMode.paymentMode) ||
               !isTruthySetting(settings.event_public_page_enabled ?? "0")) {
             throw new PaidBookingError("registration_unavailable");
           }
@@ -16046,6 +16051,7 @@ async function startServer() {
       }
       const organizerId = req.auth?.user.organization_id || "";
       const registrationMode = body.registration_mode === "paid" ? "paid" : "free";
+      const paymentMode = body.payment_mode === "external_manual" ? "external_manual" : "promptpay";
       const webPageEnabled = body.web_page_enabled !== false;
       const openNow = body.open_registration_now === true;
       const price = Number(body.price_thb);
@@ -16071,10 +16077,12 @@ async function startServer() {
         direct_ticketing_public_enabled: "0",
       }, event.id);
       if (registrationMode === "paid") {
-        // Payment is never published implicitly: receiving profile and environment must be verified first.
+        // External/manual events can open without receiver credentials; PromptPay stays draft.
         await appDb.savePaidSettings(event.id, {
           organizationId: organizerId, version: 0, capacity,
-          holdMinutes: 48 * 60, cutoffMs: null, published: false,
+          holdMinutes: 48 * 60, cutoffMs: null, paymentMode,
+          published: paymentMode === "external_manual" && openNow && webPageEnabled &&
+            paidPublicEnrollmentEnabled("external_manual"),
           categories: [{ id: "general", label: "General", unitMinor: Math.round(price * 100), quota: null }],
         });
       }
@@ -17098,6 +17106,7 @@ async function startServer() {
         if (!event) return res.status(404).json({ error: "event_not_found" });
         const receiverProfile = await resolveEventOrganizerFinancialProfile(event, settings);
         const payment = resolveOrganizerPaymentConfig(receiverProfile);
+        const externalManual = mode?.paymentMode === "external_manual";
         const checks = {
           event_active: event.effective_status === "active",
           event_web_page: isTruthySetting(settings.event_public_page_enabled),
@@ -17107,11 +17116,11 @@ async function startServer() {
           paid_server_enabled: process.env.PAID_REGISTRATION_PUBLIC_ENABLED === "1",
           customer_accounts_enabled: isCustomerAppEnabled(),
           customer_signup_enabled: isCustomerAccountRegistrationEnabled(),
-          slip_encryption_ready: paidProofEncryptionConfigured(),
-          organizer_receiver_ready: payment.promptpay_ready && payment.source === "organizer_profile",
+          slip_encryption_ready: externalManual || paidProofEncryptionConfigured(),
+          organizer_receiver_ready: externalManual || (payment.promptpay_ready && payment.source === "organizer_profile"),
         };
         res.setHeader("Cache-Control", "private, no-store");
-        return res.json({ checks,
+        return res.json({ checks, payment_mode: mode?.paymentMode ?? "promptpay",
           paid_ready: checks.event_active && checks.event_web_page && checks.paid_published &&
             checks.paid_server_enabled && checks.customer_accounts_enabled &&
             checks.slip_encryption_ready && checks.organizer_receiver_ready,
@@ -17129,6 +17138,12 @@ async function startServer() {
     try {
       const body = readObjectBody(req);
       const { capacity, version, hold_minutes, published, categories, cutoff_ms } = body;
+      if (body.payment_mode !== undefined && body.payment_mode !== "promptpay" && body.payment_mode !== "external_manual") {
+        return res.status(400).json({ error: "invalid_payment_mode" });
+      }
+      const paymentMode = body.payment_mode === "external_manual" ? "external_manual" :
+        body.payment_mode === "promptpay" ? "promptpay" :
+          (await appDb.readPaidMode(req.eventScope!.eventId))?.paymentMode ?? "promptpay";
       const fields = body.fields === undefined ? undefined : parsePaidSeminarFields(body.fields);
       if (body.fields !== undefined && !fields) return res.status(400).json({ error: "invalid_seminar_fields" });
       const integer = (value: unknown, min: number, max = 2_147_483_647): value is number =>
@@ -17150,10 +17165,10 @@ async function startServer() {
         ids.add(category.id);
         parsed.push({ id: category.id, label: category.label.trim(), unitMinor: category.unit_minor, quota: category.quota ?? null });
       }
-      if (published && !paidPublicEnrollmentEnabled()) {
+      if (published && !paidPublicEnrollmentEnabled(paymentMode)) {
         return res.status(409).json({ error: "paid_enrollment_disabled" });
       }
-      if (published) {
+      if (published && paymentMode === "promptpay") {
         const eventId = req.eventScope!.eventId;
         const event = await appDb.getEventById(eventId);
         const profile = event && await resolveEventOrganizerFinancialProfile(event, await getSettingsMap(eventId));
@@ -17164,7 +17179,7 @@ async function startServer() {
       }
       const settings = await appDb.savePaidSettings(req.eventScope!.eventId, {
         organizationId: req.auth!.user.organization_id, capacity, version, holdMinutes: hold_minutes,
-        published, cutoffMs: cutoff_ms as number | null ?? null, categories: parsed, fields,
+        published, paymentMode, cutoffMs: cutoff_ms as number | null ?? null, categories: parsed, fields,
       });
       return res.json({ settings });
     } catch (error) {
@@ -17179,10 +17194,12 @@ async function startServer() {
       if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
         return res.status(404).json({ error: "registration_unavailable" });
       }
-      if (!paidPublicEnrollmentEnabled()) return res.status(404).json({ error: "registration_unavailable" });
+      const mode = await appDb.readPaidMode(match.event.id);
+      if (!mode || !paidPublicEnrollmentEnabled(mode.paymentMode)) return res.status(404).json({ error: "registration_unavailable" });
       const catalog = await appDb.readPaidCatalog(match.event.id);
       if (!catalog) return res.status(404).json({ error: "registration_unavailable" });
-      return res.json({ registration_mode: "paid_registration", currency: "THB", ...catalog });
+      return res.json({ registration_mode: "paid_registration", payment_mode: mode.paymentMode,
+        currency: "THB", ...catalog });
     } catch {
       return res.status(500).json({ error: "catalog_unavailable" });
     }
@@ -17190,11 +17207,12 @@ async function startServer() {
 
   app.post("/api/public/events/:slug/paid-bookings", publicRegistrationRateLimit, requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
     try {
-      if (!paidPublicEnrollmentEnabled()) return res.status(404).json({ error: "registration_unavailable" });
       const match = await resolvePublicEventBySlug(req.params.slug);
       if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
         return res.status(404).json({ error: "registration_unavailable" });
       }
+      const paidMode = await appDb.readPaidMode(match.event.id);
+      if (!paidMode || !paidPublicEnrollmentEnabled(paidMode.paymentMode)) return res.status(404).json({ error: "registration_unavailable" });
       const body = readObjectBody(req);
       const key = (req.get("Idempotency-Key") || "").trim();
       const issues: ValidationIssue[] = [];

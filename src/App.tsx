@@ -3220,6 +3220,7 @@ export default function App() {
   const [newEventName, setNewEventName] = useState("");
   const [newEventOrganizerId, setNewEventOrganizerId] = useState("");
   const [newEventMode, setNewEventMode] = useState<"free" | "paid">("free");
+  const [newEventPaymentMode, setNewEventPaymentMode] = useState<"promptpay" | "external_manual">("external_manual");
   const [newEventWebPage, setNewEventWebPage] = useState(true);
   const [newEventOpenNow, setNewEventOpenNow] = useState(true);
   const [newEventPrice, setNewEventPrice] = useState("");
@@ -8987,7 +8988,8 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name, event_public_organizer_profile_id: newEventOrganizerId,
-          registration_mode: newEventMode, web_page_enabled: newEventWebPage,
+          registration_mode: newEventMode, payment_mode: newEventPaymentMode,
+          web_page_enabled: newEventWebPage,
           open_registration_now: newEventOpenNow,
           ...(newEventMode === "paid" ? { price_thb: Number(newEventPrice), capacity: Number(newEventCapacity) } : {}),
         }),
@@ -10602,6 +10604,8 @@ export default function App() {
                   onNewEventNameChange={setNewEventName}
                   newEventMode={newEventMode}
                   onNewEventModeChange={setNewEventMode}
+                  newEventPaymentMode={newEventPaymentMode}
+                  onNewEventPaymentModeChange={setNewEventPaymentMode}
                   newEventWebPage={newEventWebPage}
                   onNewEventWebPageChange={setNewEventWebPage}
                   newEventOpenNow={newEventOpenNow}

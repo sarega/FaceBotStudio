@@ -40,6 +40,8 @@ type EventWorkspacePanelProps = {
   onNewEventOrganizerIdChange: (value: string) => void;
   newEventName: string;
   newEventMode: "free" | "paid";
+  newEventPaymentMode: "promptpay" | "external_manual";
+  onNewEventPaymentModeChange: (value: "promptpay" | "external_manual") => void;
   onNewEventModeChange: (value: "free" | "paid") => void;
   newEventWebPage: boolean;
   onNewEventWebPageChange: (value: boolean) => void;
@@ -187,6 +189,8 @@ export function EventWorkspacePanel({
   newEventName,
   newEventMode,
   onNewEventModeChange,
+  newEventPaymentMode,
+  onNewEventPaymentModeChange,
   newEventWebPage,
   onNewEventWebPageChange,
   newEventOpenNow,
@@ -318,6 +322,20 @@ export function EventWorkspacePanel({
               The URL itself is not password-protected.
             </p>
             {newEventMode === "paid" && <>
+              <fieldset className="sm:col-span-2 rounded-xl border-2 border-blue-200 p-3">
+                <legend className="px-2 font-bold">Payment method</legend>
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-white p-2">
+                  <input type="radio" checked={newEventPaymentMode === "external_manual"}
+                    onChange={() => onNewEventPaymentModeChange("external_manual")} />
+                  <span><strong>External payment — Admin confirms later</strong>
+                    <span className="block text-xs">Recommended for internal seminars. No Organizer PromptPay account required.</span></span>
+                </label>
+                <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg bg-white p-2">
+                  <input type="radio" checked={newEventPaymentMode === "promptpay"}
+                    onChange={() => onNewEventPaymentModeChange("promptpay")} />
+                  PromptPay — online slip submission
+                </label>
+              </fieldset>
               <label>Price per attendee (THB)
                 <input className="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-2"
                   type="number" min="1" step="0.01" value={newEventPrice}
@@ -329,8 +347,9 @@ export function EventWorkspacePanel({
                   onChange={(e) => onNewEventCapacityChange(e.target.value)} />
               </label>
               <p className="sm:col-span-2 text-xs text-amber-800">
-                Paid events start as an unpublished payment draft. Review the organizer’s PromptPay
-                receiver and enable paid bookings in Registrations before accepting money.
+                {newEventPaymentMode === "external_manual"
+                  ? "External payment does not require a receiver. Registration opens automatically when the server customer registration service is ready; otherwise use the Registration activation checklist."
+                  : "PromptPay events start as an unpublished payment draft. Configure the organizer receiver before publishing."}
               </p>
             </>}
           </div>

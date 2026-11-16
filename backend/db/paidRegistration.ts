@@ -89,12 +89,13 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
     return JSON.parse(String(replay.result_json)) as PaidBookingReceipt;
   }
   const receiver = input.receiver;
-  if (!receiver || !/^(?:[0-9]{10}|[0-9]{13}|[0-9]{15})$/.test(receiver.id) ||
-      !Number.isSafeInteger(receiver.profileVersion) || receiver.profileVersion < 1) {
-    throw new PaidBookingError("payment_profile_unavailable");
-  }
   const [settings] = yield query("SELECT * FROM paid_event_settings WHERE event_id=? AND published=1", eventId);
   if (!settings) throw new PaidBookingError("registration_unavailable");
+  if (settings.payment_mode !== "external_manual" &&
+      (!receiver || !/^(?:[0-9]{10}|[0-9]{13}|[0-9]{15})$/.test(receiver.id) ||
+       !Number.isSafeInteger(receiver.profileVersion) || receiver.profileVersion < 1)) {
+    throw new PaidBookingError("payment_profile_unavailable");
+  }
   if (Number(settings.version) !== pricingVersion) throw new PaidBookingError("quote_stale");
 
   const fields = yield* readPaidSeminarForm(eventId);
@@ -146,10 +147,12 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
       VALUES (?,?,?,?,?,?,?,'awaiting_payment',?,?,?,?)`,
     id, reference, eventId, organizationId, customerId, JSON.stringify({ ...contact, answers: bookingAnswers }), pricingVersion, totalMinor, dueMs, now, now,
   );
-  yield query(
-    "INSERT INTO paid_booking_receivers (booking_id,receiver_id,receiver_name,profile_version) VALUES (?,?,?,?)",
-    id, receiver.id, receiver.name, receiver.profileVersion,
-  );
+  if (settings.payment_mode !== "external_manual" && receiver) {
+    yield query(
+      "INSERT INTO paid_booking_receivers (booking_id,receiver_id,receiver_name,profile_version) VALUES (?,?,?,?)",
+      id, receiver.id, receiver.name, receiver.profileVersion,
+    );
+  }
   for (const [index, attendee] of snapshots.entries()) {
     yield query(
       `INSERT INTO paid_attendees
@@ -225,8 +228,9 @@ export function* readPaidCatalog(eventId: string): PaidCommand<PaidCatalog | und
 
 export function* readOwnedPaidBooking(eventId: string, id: string, customerId: string): PaidCommand<PaidRow | undefined> {
   const [booking] = yield query(
-    `SELECT id,reference,state,payment_state,currency,total_minor,due_ms,version FROM paid_bookings
-     WHERE event_id=? AND id=? AND customer_id=?`, eventId, id, customerId,
+    `SELECT b.id,b.reference,b.state,b.payment_state,b.currency,b.total_minor,b.due_ms,b.version,
+      s.payment_mode FROM paid_bookings b JOIN paid_event_settings s ON s.event_id=b.event_id
+     WHERE b.event_id=? AND b.id=? AND b.customer_id=?`, eventId, id, customerId,
   );
   if (!booking) return undefined;
   const attendees = yield query(
@@ -248,6 +252,7 @@ export interface PaidSettingsInput {
   holdMinutes: number;
   cutoffMs: number | null;
   published: boolean;
+  paymentMode?: "promptpay" | "external_manual";
   categories: { id: string; label: string; unitMinor: number; quota: number | null }[];
   fields?: PaidSeminarField[];
 }
@@ -262,6 +267,7 @@ export function* readPaidSettings(eventId: string): PaidCommand<PaidRow | undefi
 export function* savePaidSettings(eventId: string, organizationId: string, input: PaidSettingsInput): PaidCommand<PaidRow> {
   if (organizationId !== input.organizationId) throw new PaidBookingError("event_not_found");
   const current = yield* readPaidSettings(eventId);
+  if (input.paymentMode && !["promptpay","external_manual"].includes(input.paymentMode)) throw new PaidBookingError("invalid_payment_mode");
   if (Number(current?.version ?? 0) !== input.version) throw new PaidBookingError("version_conflict");
   const [legacy] = yield query(
     `SELECT id FROM registrations WHERE event_id=? UNION ALL
@@ -282,10 +288,10 @@ export function* savePaidSettings(eventId: string, organizationId: string, input
       })) throw new PaidBookingError("capacity_in_use");
   const version = input.version + 1;
   yield query(
-    `INSERT INTO paid_event_settings (event_id,capacity,hold_minutes,cutoff_ms,version,published) VALUES (?,?,?,?,?,?)
+    `INSERT INTO paid_event_settings (event_id,capacity,hold_minutes,cutoff_ms,version,published,payment_mode) VALUES (?,?,?,?,?,?,?)
      ON CONFLICT(event_id) DO UPDATE SET capacity=excluded.capacity,hold_minutes=excluded.hold_minutes,
-       cutoff_ms=excluded.cutoff_ms,version=excluded.version,published=excluded.published`,
-    eventId, input.capacity, input.holdMinutes, input.cutoffMs, version, Number(input.published),
+       cutoff_ms=excluded.cutoff_ms,version=excluded.version,published=excluded.published,payment_mode=excluded.payment_mode`,
+    eventId, input.capacity, input.holdMinutes, input.cutoffMs, version, Number(input.published), input.paymentMode ?? (current?.payment_mode === "external_manual" ? "external_manual" : "promptpay"),
   );
   yield query("UPDATE paid_categories SET enabled=0 WHERE event_id=?", eventId);
   for (const category of input.categories) {
@@ -307,10 +313,10 @@ export function* savePaidSettings(eventId: string, organizationId: string, input
 }
 
 export const OWNED_BOOKING_LIST_SQL = `
-  SELECT b.id,b.event_id,b.reference,e.name AS event_name,b.currency,b.total_minor AS total_due_minor,
+  SELECT b.id,b.event_id,b.reference,e.name AS event_name,s.payment_mode,b.currency,b.total_minor AS total_due_minor,
     b.due_ms,CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS status,
     b.payment_state AS payment_status
-  FROM paid_bookings b JOIN events e ON e.id=b.event_id
+  FROM paid_bookings b JOIN events e ON e.id=b.event_id JOIN paid_event_settings s ON s.event_id=b.event_id
   WHERE b.customer_id=? AND (b.reference=? OR ?='') ORDER BY b.created_ms DESC,b.id DESC LIMIT ? OFFSET ?
 `;
 
@@ -432,7 +438,8 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   const { eventId, bookingId, attemptId, organizationId, reviewerId, key, version, decision, reason, observed } = input;
   const now = Date.now();
   const reference = observed?.reference.trim().normalize("NFKC").toUpperCase();
-  const namespace = observed?.receiverNamespace.replace(/[^0-9]/g, "");
+  const namespace = observed?.receiverNamespace === "EXTERNAL_MANUAL"
+    ? "EXTERNAL_MANUAL" : observed?.receiverNamespace.replace(/[^0-9]/g, "");
   if ((!attemptId && decision !== "approve") || !key || key.length > 128 || !reason.trim() || reason.length > 1000 ||
       (decision === "approve" && (!observed || !reference || !namespace || reference.length > 255 || namespace.length > 255 ||
         !Number.isSafeInteger(observed.amountMinor) || observed.amountMinor <= 0 ||
@@ -485,8 +492,11 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   let paymentStatus: PaidReviewReceipt["payment_status"] = "proof_submitted";
   let attemptStatus = "exception";
   if (decision === "approve" && observed) {
+    // Receiver snapshots are immutable per booking even if an event switches payment mode later.
     const [receiver] = yield query("SELECT receiver_id FROM paid_booking_receivers WHERE booking_id=?", bookingId);
-    if (!receiver || receiver.receiver_id !== namespace) throw new PaidBookingError("receiver_mismatch");
+    if (receiver ? receiver.receiver_id !== namespace : namespace !== "EXTERNAL_MANUAL") {
+      throw new PaidBookingError("receiver_mismatch");
+    }
     if (observed.transferMs < Number(booking.created_ms) || observed.transferMs >= Number(booking.due_ms)) {
       throw new PaidBookingError("transfer_outside_hold");
     }
@@ -626,17 +636,19 @@ export function* listPaidReviewQueue(eventId: string, offset: number, reference?
   const rows = yield query(
     `SELECT b.id AS booking_id,b.reference AS booking_reference,b.version,b.total_minor,b.payment_state,
        a.id AS attempt_id,a.status,a.claimed_minor,a.claimed_transfer_ms,a.claimed_reference,a.created_ms,
-       a.observed_minor,a.reason,r.receiver_name,r.receiver_id,p.id AS proof_id,
+       a.observed_minor,a.reason,r.receiver_name,r.receiver_id,es.payment_mode,p.id AS proof_id,
        (SELECT COUNT(*) FROM paid_proofs other WHERE other.checksum=p.checksum AND other.attempt_id<>a.id) AS matching_proofs,
        (SELECT COUNT(*) FROM paid_attendees attendee WHERE attendee.booking_id=b.id AND attendee.cancelled_ms IS NULL) AS attendee_count
      FROM paid_bookings b LEFT JOIN paid_payment_attempts a
        ON a.booking_id=b.id AND a.event_id=b.event_id AND a.status IN ('proof_submitted','exception')
      LEFT JOIN paid_proofs p ON p.attempt_id=a.id LEFT JOIN paid_booking_receivers r ON r.booking_id=b.id
+     JOIN paid_event_settings es ON es.event_id=b.event_id
      WHERE b.event_id=? AND ${reference ? "b.reference=?" : "1=1"}
        AND ((b.state='verification_pending' AND a.id IS NOT NULL)
-       ${reference ? "OR (b.state='awaiting_payment' AND b.due_ms>?)" : ""})
+         OR (b.state='awaiting_payment' AND b.due_ms>?
+           AND (es.payment_mode='external_manual' OR ?)))
      ORDER BY COALESCE(a.created_ms,b.created_ms),b.id LIMIT 21 OFFSET ?`,
-    eventId, ...(reference ? [reference, Date.now()] : []), offset,
+    eventId, ...(reference ? [reference] : []), Date.now(), reference ? 1 : 0, offset,
   );
   return rows.map(({ receiver_id, ...row }) => ({
     ...row, receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),

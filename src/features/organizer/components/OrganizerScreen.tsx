@@ -344,9 +344,19 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
                   </div>
                 </div>
 
-                <div className="my-3 flex gap-1 rounded-xl bg-slate-100 p-1">
-                  <button type="button" onClick={() => setSection("profile")} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold ${section === "profile" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Profile & public page</button>
-                  <button type="button" onClick={() => setSection("finance")} className={`flex-1 rounded-lg px-3 py-1.5 text-xs font-semibold ${section === "finance" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Finance & payout</button>
+                <div className="my-4 grid grid-cols-1 gap-2 sm:grid-cols-2" role="tablist" aria-label="Organizer settings sections">
+                  <button type="button" role="tab" aria-selected={section === "profile"} onClick={() => setSection("profile")}
+                    className={`flex min-h-16 items-center gap-3 rounded-xl border-2 px-4 py-3 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${section === "profile" ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-300 bg-white text-slate-700 hover:border-blue-400 hover:bg-slate-50"}`}>
+                    <UserRound className="h-6 w-6 shrink-0" />
+                    <span className="min-w-0"><span className="block text-sm font-bold">1. Organizer profile</span><span className="block text-xs">ชื่อ โลโก้ และข้อมูลติดต่อ</span></span>
+                    {section === "profile" && <span className="ml-auto rounded-full bg-blue-600 px-2 py-1 text-[10px] font-bold text-white">OPEN</span>}
+                  </button>
+                  <button type="button" role="tab" aria-selected={section === "finance"} onClick={() => setSection("finance")}
+                    className={`flex min-h-16 items-center gap-3 rounded-xl border-2 px-4 py-3 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 ${section === "finance" ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-300 bg-white text-slate-700 hover:border-blue-400 hover:bg-slate-50"}`}>
+                    <WalletCards className="h-6 w-6 shrink-0" />
+                    <span className="min-w-0"><span className="block text-sm font-bold">2. Payment & payout</span><span className="block text-xs">ตั้งค่า PromptPay (ไม่จำเป็นสำหรับรับเงินภายนอก)</span></span>
+                    {section === "finance" && <span className="ml-auto rounded-full bg-blue-600 px-2 py-1 text-[10px] font-bold text-white">OPEN</span>}
+                  </button>
                 </div>
 
                 {section === "profile" ? (

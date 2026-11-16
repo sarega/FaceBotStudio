@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.3 - 2026-11-16
+
+- Added External / Manual Payment for internal Paid Registration events. Organizer PromptPay account and payment-proof encryption are no longer required for this explicitly selected mode.
+- Group bookings retain capacity holds and full amount due; organizer staff independently verify payment outside FaceBotStudio and manually record a unique external receipt/reference to confirm attendees and issue check-in QR credentials.
+- Added payment mode selector to New Event and existing Paid Registration settings. New external/manual events can open immediately when customer registration services are enabled; existing events retain all configuration.
+- Removed customer PromptPay QR/slip-upload controls for external/manual bookings and clarified instructions on the event and customer order pages.
+- Replaced subtle Organizer Profile / Finance pills with large, clearly identifiable navigation buttons, icons, visible active state and keyboard focus.
+- Added event-scoped database migration 050 and regression coverage for external bookings, manual confirmation, and UI/API readiness. Does not transfer or collect money, bypass admin approval, or allow QR before confirmed payment.
+
 ## 0.8.2 - 2026-11-16
 
 - Added secure admin-only Paid Registration readiness checks for server flags, account availability, encryption, organizer receiver and web Help Bot session.

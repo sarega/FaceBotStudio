@@ -290,6 +290,33 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_refunds WHERE booking_id=?").pluck().get(manualBooking.id), 1);
     assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_credentials WHERE booking_id=? AND revoked_ms IS NULL").pluck().get(manualBooking.id), 0);
 
+    // Internal paid event: book and manually confirm an external payment without any PromptPay receiver.
+    const externalEvent = await db.createEvent({ name: "Private external payment seminar", organizer_id: "org_default" });
+    await db.updateEvent(externalEvent.id, { status: "active" });
+    const externalSettings = await db.savePaidSettings(externalEvent.id, {
+      ...settings, paymentMode: "external_manual",
+    });
+    assert.equal(externalSettings.payment_mode, "external_manual");
+    assert.equal((await db.readPaidMode(externalEvent.id))?.paymentMode, "external_manual");
+    const externalBooking = await db.createPaidBooking({ ...command, eventId: externalEvent.id, key: "external-booking", receiver: undefined });
+    assert.equal((await db.readOwnedPaidBooking(externalEvent.id, externalBooking.id, customer.id))?.payment_mode, "external_manual");
+    const externalQueue = await db.listPaidReviewQueue(externalEvent.id, "org_default", 0, externalBooking.reference);
+    assert.equal(externalQueue[0]?.payment_mode, "external_manual");
+    const unfilteredExternalQueue = await db.listPaidReviewQueue(externalEvent.id, "org_default", 0);
+    assert.equal(unfilteredExternalQueue.some((row) => row.booking_reference === externalBooking.reference), true);
+    const externalReview = await db.reviewPaidProof({
+      ...manualReview, eventId: externalEvent.id, bookingId: externalBooking.id, key: "external-review", version: 1,
+      observed: { ...manualReview.observed, amountMinor: externalBooking.totalMinor, transferMs: Date.now(),
+        receiverNamespace: "EXTERNAL_MANUAL", reference: "external-receipt-001" },
+    });
+    assert.equal(externalReview.status, "confirmed");
+    assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_credentials WHERE booking_id=?").pluck().get(externalBooking.id), 2);
+    await assert.rejects(db.reviewPaidProof({
+      ...manualReview, eventId: externalEvent.id, bookingId: externalBooking.id, key: "external-retry", version: 1,
+      observed: { ...manualReview.observed, amountMinor: externalBooking.totalMinor, transferMs: Date.now(),
+        receiverNamespace: "EXTERNAL_MANUAL", reference: "external-receipt-001" },
+    }), /state_conflict/);
+
     const messengerEvent = await db.createEvent({ name: "Messenger workshop", organizer_id: "org_default" });
     await db.updateEvent(messengerEvent.id, { status: "active" });
     await db.savePaidSettings(messengerEvent.id, settings);

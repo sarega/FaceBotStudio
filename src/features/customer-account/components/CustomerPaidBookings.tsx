@@ -10,7 +10,7 @@ type Booking = {
   total_due_minor: number;
   due_at: string;
 };
-type Detail = { status: string; version: number; payment_state: string; attendees: { id: string; first_name: string; last_name: string; category_label: string }[] };
+type Detail = { status: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual"; attendees: { id: string; first_name: string; last_name: string; category_label: string }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 
 function PaidProofForm({ path, version, totalMinor, onSubmitted }: {
@@ -158,7 +158,14 @@ export function CustomerPaidBookings() {
                 )}
               </li>
             ))}</ul>
-            {detail.status === "awaiting_payment" && (
+            {detail.status === "awaiting_payment" && detail.payment_mode === "external_manual" && (
+              <p role="status" className="rounded-lg border border-blue-500/40 bg-blue-950/40 p-3 text-sm">
+                Your place is reserved until the payment deadline. Please pay through the organizer's external instructions.
+                No bank details or slip upload is required here. The organizer will confirm payment manually;
+                attendee admission QR codes appear after confirmation.
+              </p>
+            )}
+            {detail.status === "awaiting_payment" && detail.payment_mode !== "external_manual" && (
               <PaidProofForm key={booking.id} path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}`}
                 version={detail.version} totalMinor={booking.total_due_minor} onSubmitted={() => {
                   const updated = { ...booking, status: "verification_pending" };

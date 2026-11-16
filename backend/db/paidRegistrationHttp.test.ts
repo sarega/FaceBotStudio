@@ -124,6 +124,18 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       method:"POST",headers:staffCreateHeaders,
     })).status,409);
     assert.equal((await db.getSettingsMap(paidEvent.id)).event_public_registration_enabled, "0");
+    const newExternal = await fetch(origin + "/api/events", {
+      method:"POST",headers:staffCreateHeaders,
+      body:JSON.stringify({ name:"Internal manual paid signup",registration_mode:"paid",
+        payment_mode:"external_manual",web_page_enabled:true,open_registration_now:true,
+        price_thb:650,capacity:15 }),
+    });
+    assert.equal(newExternal.status,201,await newExternal.clone().text());
+    const newExternalEvent = await newExternal.json();
+    const newExternalSettings = await db.readPaidSettings(newExternalEvent.id);
+    assert.equal(newExternalSettings?.payment_mode,"external_manual");
+    assert.equal(Number(newExternalSettings?.published),1);
+    assert.equal((await fetch(origin + "/api/public/events/" + newExternalEvent.slug + "/paid-registration")).status,200);
     const prefix = `${origin}/api/public/events/http-paid-workshop`;
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 200);
     const publicCatalog = await (await fetch(`${origin}/api/public/events`)).json();
@@ -134,6 +146,43 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const headers = (token: string) => ({
       Cookie: `fbs_customer_session=${token}; fbs_customer_csrf=fixture-csrf`, Origin: origin,
     });
+    const externalPrefix = origin + "/api/events/" + paidEvent.id + "/paid-registration";
+    const publishExternal = await fetch(externalPrefix + "/settings", {
+      method: "PATCH", headers: staffCreateHeaders,
+      body: JSON.stringify({ version: 1, capacity: 25, hold_minutes: 2880, cutoff_ms: null,
+        published: true, payment_mode: "external_manual",
+        categories: [{ id: "general", label: "General", unit_minor: 250000, quota: null }] }),
+    });
+    assert.equal(publishExternal.status, 200, await publishExternal.clone().text());
+    assert.equal((await publishExternal.json()).settings.payment_mode, "external_manual");
+    assert.equal((await db.readPaidMode(paidEvent.id))?.paymentMode, "external_manual");
+    const readinessExternal = await (await fetch(externalPrefix + "/readiness", { headers: staffCreateHeaders })).json();
+    assert.equal(readinessExternal.paid_ready, true);
+    assert.equal(readinessExternal.payment_mode, "external_manual");
+    const externalPublic = origin + "/api/public/events/" + paidEvent.slug;
+    assert.equal((await fetch(externalPublic + "/paid-registration")).status, 200);
+    const externalPlaced = await fetch(externalPublic + "/paid-bookings", {
+      method:"POST", headers: { ...headers("test-owner"), "Content-Type": "application/json",
+        "Idempotency-Key": "external-http", "x-csrf-token": "fixture-csrf" },
+      body:JSON.stringify({ pricing_version:2, contact:{ name:"External Participant" },
+        attendees:[{ category_id:"general", first_name:"External", last_name:"Guest" }] }),
+    });
+    assert.equal(externalPlaced.status, 201, await externalPlaced.clone().text());
+    const externalBooking = await externalPlaced.json();
+    assert.equal(await db.readPaidPaymentInstructions(paidEvent.id, externalBooking.id,
+      (await db.getCustomerSessionWithAccount(hashSessionToken("test-owner")))!.account.id), undefined);
+    const externalQueue = await fetch(externalPrefix + "/review-queue?reference=" + externalBooking.reference,
+      { headers: staffCreateHeaders });
+    assert.equal(externalQueue.status, 200);
+    assert.equal((await externalQueue.json()).reviews[0].payment_mode, "external_manual");
+    const externalApproval = await fetch(externalPrefix + "/bookings/" + externalBooking.id + "/review", {
+      method:"POST", headers:{ ...staffCreateHeaders, "Idempotency-Key":"external-http-review" },
+      body:JSON.stringify({ decision:"approve", version:1, reason:"Organizer confirmed payment externally",
+        observed:{ amount_minor:250000,currency:"THB",paid_at:new Date().toISOString(),
+          reference:"external-http-001",receiver_id:"EXTERNAL_MANUAL" } }),
+    });
+    assert.equal(externalApproval.status, 200, await externalApproval.clone().text());
+    assert.equal((await externalApproval.json()).status, "confirmed");
     const body = JSON.stringify({
       pricing_version: 1, contact: { name: "Test Customer" },
       attendees: ["One", "Two"].map((name) => ({ category_id: "adult", first_name: name, last_name: "Guest" })),
@@ -318,7 +367,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       if (attempt === 39) assert.fail("Missing reply to replayed confirmation");
       await delay(75);
     }
-    assert.equal((await db.listOwnedPaidBookings(ownerAccount!.account.id, 10, 0)).length, 3);
+    assert.equal((await db.listOwnedPaidBookings(ownerAccount!.account.id, 10, 0)).length, 4);
     const response = await fetch(`${eventPrefix}/summary`, { headers: staffHeaders });
     assert.equal(response.status, 200);
     const { summary } = await response.json();

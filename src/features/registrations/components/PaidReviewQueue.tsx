@@ -12,6 +12,7 @@ type Review = {
   proof_id: string | null;
   claimed_transfer_ms: number | null;
   claimed_reference: string | null;
+  payment_mode: "promptpay" | "external_manual";
   receiver_name: string | null;
   receiver_last_four: string;
   matching_proofs: number;
@@ -50,7 +51,8 @@ function ReviewForm({ review, path, apiFetch, onUpdated }: { review: Review; pat
         setError("Enter the amount and time shown by the bank.");
         return;
       }
-      observed = { amount_minor: amount, currency: "THB", paid_at: paidAt.toISOString(), reference: data.get("reference"), receiver_id: data.get("receiver") };
+      observed = { amount_minor: amount, currency: "THB", paid_at: paidAt.toISOString(), reference: data.get("reference"),
+        receiver_id: review.payment_mode === "external_manual" ? "EXTERNAL_MANUAL" : data.get("receiver") };
     }
     const body = JSON.stringify({ decision, attempt_id: review.attempt_id, version: review.version, reason: data.get("reason"), observed });
     if (command.current?.body !== body) command.current = { body, key: crypto.randomUUID() };
@@ -86,11 +88,15 @@ function ReviewForm({ review, path, apiFetch, onUpdated }: { review: Review; pat
         </select></label>
         <label>Review reason<input className={inputClass} name="reason" required maxLength={1000} /></label>
         {decision === "approve" && <>
-          <p className="sm:col-span-2">Use the posted transfer in your bank records to complete these fields.</p>
+          <p className="sm:col-span-2">{review.payment_mode === "external_manual"
+            ? "Record only payment you have independently verified outside FaceBotStudio. This approves the entire booking and issues attendee QR codes."
+            : "Use the posted transfer in your bank records to complete these fields."}</p>
           <label>Amount received (THB)<input className={inputClass} name="amount" inputMode="decimal" required /></label>
           <label>Transfer time (your device’s timezone)<input className={inputClass} name="paid_at" type="datetime-local" step={1} required /></label>
-          <label>Bank transaction reference<input className={inputClass} name="reference" required maxLength={255} /></label>
-          <label>Receiver identifier<input className={inputClass} name="receiver" inputMode="numeric" maxLength={32} required /></label>
+          <label>{review.payment_mode === "external_manual" ? "Unique external payment / receipt reference" : "Bank transaction reference"}
+            <input className={inputClass} name="reference" required maxLength={255} /></label>
+          {review.payment_mode !== "external_manual" &&
+            <label>Receiver identifier<input className={inputClass} name="receiver" inputMode="numeric" maxLength={32} required /></label>}
         </>}
         <button type="submit" className="justify-self-start rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white">
           {busy ? "Saving…" : "Save review"}
