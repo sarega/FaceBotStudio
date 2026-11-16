@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 - 2026-11-16
+
+- Added New Event registration type (Free / Paid Seminar), web-page + AI chat choice, optional immediate activation, private catalog visibility by default, and basic paid price/capacity draft settings.
+- Added an event-level one-click "Enable web registration + AI chat now" action for existing free events, guarded against accidentally activating paid checkout or changing past event schedules.
+- Ensured paid events begin with safe unpublished booking configuration until organizer financial settings and deployment encryption prerequisites are verified.
+- Clarified paid-registration draft state and public unavailable messaging; added HTTP coverage for new-event web-only publishing and guarded paid draft activation.
+
 ## 0.8.0 - 2026-11-16
 
 - Added opt-in Paid Registration for seminars and retreats with per-event pricing, time-limited capacity holds, group bookings, booking recovery and configurable attendee fields.

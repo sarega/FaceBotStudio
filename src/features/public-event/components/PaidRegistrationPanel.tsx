@@ -159,7 +159,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
           </fieldset>
           <a className="text-sm text-blue-700 underline" href="/account" target="_blank" rel="noopener">Customer sign-in and email verification</a>
         </form>
-      ) : <p role="status" className="text-sm text-slate-700">{enabled && !error ? "Loading registration…" : "Registration is currently unavailable."}</p>}
+      ) : <p role="status" className="text-sm text-slate-700">{enabled && !error ? "Loading registration…" : "Paid registration is not accepting bookings yet. Please contact the organizer."}</p>}
       <details className="space-y-2 border-t border-slate-200 pt-3 text-sm text-slate-700">
         <summary className="cursor-pointer font-medium">Messenger booking access</summary>
         <p>Generate a private code and send it to the organizer’s Messenger page within 10 minutes.</p>

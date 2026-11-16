@@ -16045,19 +16045,94 @@ async function startServer() {
         return respondValidationError(res, issues);
       }
       const organizerId = req.auth?.user.organization_id || "";
+      const registrationMode = body.registration_mode === "paid" ? "paid" : "free";
+      const webPageEnabled = body.web_page_enabled !== false;
+      const openNow = body.open_registration_now === true;
+      const price = Number(body.price_thb);
+      const capacity = Number(body.capacity);
+      if (registrationMode === "paid" &&
+          (!Number.isFinite(price) || price <= 0 || !Number.isSafeInteger(Math.round(price * 100)) ||
+           Math.abs(price * 100 - Math.round(price * 100)) > 0.00001 ||
+           !Number.isSafeInteger(capacity) || capacity < 1 || capacity > 100000)) {
+        return res.status(400).json({ error: "Enter a valid paid-event price and capacity" });
+      }
       const profileId = readOptionalString(body, "event_public_organizer_profile_id", 180).trim();
       if (profileId && !await appDb.getOrganizerProfileById(profileId, organizerId)) {
         return res.status(400).json({ error: "Organizer is not available in your organization" });
       }
       const event = await appDb.createEvent({ name, organizer_id: organizerId });
-      if (profileId) await appDb.upsertSettings({ event_public_organizer_profile_id: profileId }, event.id);
-      await recordAudit(req, "event.created", "event", event.id, { name: event.name });
+      await appDb.upsertSettings({
+        ...(profileId ? { event_public_organizer_profile_id: profileId } : {}),
+        event_public_page_enabled: webPageEnabled ? "1" : "0",
+        event_catalog_visible: "0",
+        event_public_bot_enabled: webPageEnabled ? "1" : "0",
+        event_public_ticketing_mode: "inline",
+        event_public_registration_enabled: registrationMode === "free" ? "1" : "0",
+        direct_ticketing_public_enabled: "0",
+      }, event.id);
+      if (registrationMode === "paid") {
+        // Payment is never published implicitly: receiving profile and environment must be verified first.
+        await appDb.savePaidSettings(event.id, {
+          organizationId: organizerId, version: 0, capacity,
+          holdMinutes: 48 * 60, cutoffMs: null, published: false,
+          categories: [{ id: "general", label: "General", unitMinor: Math.round(price * 100), quota: null }],
+        });
+      }
+      if (openNow) await appDb.updateEvent(event.id, { status: "active" });
+      await recordAudit(req, "event.created", "event", event.id, {
+        name: event.name, registration_mode: registrationMode, web_page_enabled: webPageEnabled,
+        open_registration_now: openNow,
+      });
       return res.status(201).json(event);
     } catch (error) {
       console.error("Failed to create event:", error);
       return res.status(500).json({ error: "Failed to create event" });
     }
   });
+
+  app.post(
+    "/api/events/:id/enable-web-registration",
+    requireRoles(["owner", "admin"]),
+    requireEventScope({ paramKey: "id", allowDefault: false, allowCheckinAccess: false, queryKey: null, bodyKey: null }),
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const eventId = req.eventScope!.eventId;
+        const event = await appDb.getEventById(eventId);
+        if (!event) return res.status(404).json({ error: "event_not_found" });
+        if (await appDb.readPaidMode(eventId)) {
+          return res.status(409).json({
+            error: "paid_event_requires_payment_setup",
+            message: "This is a paid event. Publish payment settings in Registrations after configuring the organizer receiver.",
+          });
+        }
+        const settings = await getSettingsMap(eventId);
+        const currentSchedule = getEventState(settings);
+        if (currentSchedule.eventLifecycle === "past" || currentSchedule.eventScheduleStatus === "invalid") {
+          return res.status(409).json({
+            error: "event_schedule_invalid",
+            message: "Update the event date to a future date before opening registration.",
+          });
+        }
+        await appDb.upsertSettings({
+          event_public_page_enabled: "1",
+          event_catalog_visible: "0",
+          event_public_registration_enabled: "1",
+          event_public_bot_enabled: "1",
+          event_public_ticketing_mode: "inline",
+          reg_start: "",
+          reg_end: "",
+        }, eventId);
+        await appDb.updateEvent(eventId, { status: "active" });
+        await recordAudit(req, "event.web_registration_enabled", "event", eventId, {
+          registration_mode: "free", catalog_visible: false,
+        });
+        return res.json({ status: "active", registration_enabled: true, catalog_visible: false });
+      } catch (error) {
+        console.error("Failed to enable web registration:", error);
+        return res.status(500).json({ error: "enable_web_registration_failed" });
+      }
+    },
+  );
 
   app.post(
     "/api/events/:id/clone",

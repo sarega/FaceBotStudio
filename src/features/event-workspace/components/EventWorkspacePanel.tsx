@@ -39,6 +39,16 @@ type EventWorkspacePanelProps = {
   newEventOrganizerId: string;
   onNewEventOrganizerIdChange: (value: string) => void;
   newEventName: string;
+  newEventMode: "free" | "paid";
+  onNewEventModeChange: (value: "free" | "paid") => void;
+  newEventWebPage: boolean;
+  onNewEventWebPageChange: (value: boolean) => void;
+  newEventOpenNow: boolean;
+  onNewEventOpenNowChange: (value: boolean) => void;
+  newEventPrice: string;
+  onNewEventPriceChange: (value: string) => void;
+  newEventCapacity: string;
+  onNewEventCapacityChange: (value: string) => void;
   onNewEventNameChange: (value: string) => void;
   onCreateEvent: () => unknown;
   eventListQuery: string;
@@ -175,6 +185,16 @@ export function EventWorkspacePanel({
   newEventOrganizerId,
   onNewEventOrganizerIdChange,
   newEventName,
+  newEventMode,
+  onNewEventModeChange,
+  newEventWebPage,
+  onNewEventWebPageChange,
+  newEventOpenNow,
+  onNewEventOpenNowChange,
+  newEventPrice,
+  onNewEventPriceChange,
+  newEventCapacity,
+  onNewEventCapacityChange,
   onNewEventNameChange,
   onCreateEvent,
   eventListQuery,
@@ -276,6 +296,43 @@ export function EventWorkspacePanel({
             >
               Create Event
             </ActionButton>
+          </div>
+          <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3 text-sm sm:grid-cols-2">
+            <label className="font-medium">Registration type
+              <select value={newEventMode} onChange={(e) => onNewEventModeChange(e.target.value as "free" | "paid")}
+                className="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-2">
+                <option value="free">Free registration</option>
+                <option value="paid">Paid registration / Seminar</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
+              <input type="checkbox" checked={newEventWebPage} onChange={(e) => onNewEventWebPageChange(e.target.checked)} />
+              Event web page + AI web chat (no Facebook required)
+            </label>
+            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
+              <input type="checkbox" checked={newEventOpenNow} onChange={(e) => onNewEventOpenNowChange(e.target.checked)} />
+              Activate event and open registration now
+            </label>
+            <p className="rounded-xl bg-blue-50 p-3 text-xs text-blue-900">
+              This event is hidden from the public catalog. Share its direct URL only with attendees.
+              The URL itself is not password-protected.
+            </p>
+            {newEventMode === "paid" && <>
+              <label>Price per attendee (THB)
+                <input className="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-2"
+                  type="number" min="1" step="0.01" value={newEventPrice}
+                  onChange={(e) => onNewEventPriceChange(e.target.value)} placeholder="e.g. 2500" />
+              </label>
+              <label>Capacity
+                <input className="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-2"
+                  type="number" min="1" value={newEventCapacity}
+                  onChange={(e) => onNewEventCapacityChange(e.target.value)} />
+              </label>
+              <p className="sm:col-span-2 text-xs text-amber-800">
+                Paid events start as an unpublished payment draft. Review the organizer’s PromptPay
+                receiver and enable paid bookings in Registrations before accepting money.
+              </p>
+            </>}
           </div>
         </div>
       )}

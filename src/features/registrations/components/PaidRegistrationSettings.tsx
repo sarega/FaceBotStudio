@@ -84,6 +84,18 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
   return (
     <form onSubmit={save} className="space-y-3">
       {!settings && <p>Saving these settings switches this event to Paid Registration. Public bookings open when you publish.</p>}
+      {settings?.published === 0 && (
+        <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Paid registration is in DRAFT. Customers cannot sign up until you configure the Organizer payment
+          receiver, enable the server Paid Registration feature, tick "Accept public paid bookings",
+          and save. Set your event status to Active as well.
+        </p>
+      )}
+      {settings?.published === 1 && (
+        <p role="status" className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-900">
+          Paid registration is published. The event must also be Active with an open registration window.
+        </p>
+      )}
       <fieldset disabled={busy} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-3">
           <label>Capacity<input className={field} name="capacity" type="number" min={1} step={1} required defaultValue={settings?.capacity} /></label>

@@ -80,6 +80,50 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       await delay(150);
     }
     assert.ok(ready, "local web server did not start");
+    const staffCreateHeaders = {
+      Cookie: "fbs_session=test-reviewer; fbs_csrf=staff-csrf", Origin: origin,
+      "x-csrf-token": "staff-csrf", "Content-Type": "application/json",
+    };
+    const freeCreated = await fetch(origin + "/api/events", {
+      method: "POST", headers: staffCreateHeaders,
+      body: JSON.stringify({ name:"Web only internal session", registration_mode:"free",
+        web_page_enabled:true,open_registration_now:true }),
+    });
+    assert.equal(freeCreated.status, 201, await freeCreated.clone().text());
+    const freeEvent = await freeCreated.json();
+    assert.equal((await db.getEventById(freeEvent.id))?.status, "active");
+    const freeSettings = await db.getSettingsMap(freeEvent.id);
+    assert.equal(freeSettings.event_public_page_enabled, "1");
+    assert.equal(freeSettings.event_public_registration_enabled, "1");
+    assert.equal(freeSettings.event_catalog_visible, "0");
+    assert.equal(freeSettings.event_public_bot_enabled, "1");
+    const freePublic = await fetch(origin + "/api/public/events/" + freeEvent.slug);
+    assert.equal(freePublic.status, 200);
+    assert.equal((await freePublic.json()).event.registration_enabled, true);
+    const allCatalogEntries = await (await fetch(origin + "/api/public/events")).json();
+    assert.equal(allCatalogEntries.events.some(({ slug }: { slug: string }) => slug === freeEvent.slug), false);
+    const oldFree = await db.createEvent({ name:"Existing web-only session",organizer_id:"org_default" });
+    assert.equal((await db.getEventById(oldFree.id))?.status, "pending");
+    const enabled = await fetch(origin + "/api/events/" + oldFree.id + "/enable-web-registration", {
+      method:"POST",headers:staffCreateHeaders,
+    });
+    assert.equal(enabled.status, 200, await enabled.clone().text());
+    assert.equal((await db.getEventById(oldFree.id))?.status, "active");
+    assert.equal((await db.getSettingsMap(oldFree.id)).event_public_page_enabled, "1");
+    const paidCreated = await fetch(origin + "/api/events", {
+      method:"POST",headers:staffCreateHeaders,
+      body:JSON.stringify({ name:"Private paid retreat", registration_mode:"paid",
+        web_page_enabled:true,open_registration_now:true,price_thb:2500,capacity:25 }),
+    });
+    assert.equal(paidCreated.status, 201, await paidCreated.clone().text());
+    const paidEvent = await paidCreated.json();
+    const paidDraft = await db.readPaidSettings(paidEvent.id);
+    assert.equal(Number(paidDraft?.published), 0);
+    assert.equal((paidDraft?.categories as Array<{unit_minor:number}>)[0]?.unit_minor,250000);
+    assert.equal((await fetch(origin + "/api/events/" + paidEvent.id + "/enable-web-registration", {
+      method:"POST",headers:staffCreateHeaders,
+    })).status,409);
+    assert.equal((await db.getSettingsMap(paidEvent.id)).event_public_registration_enabled, "0");
     const prefix = `${origin}/api/public/events/http-paid-workshop`;
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 200);
     const publicCatalog = await (await fetch(`${origin}/api/public/events`)).json();

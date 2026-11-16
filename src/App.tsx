@@ -3219,6 +3219,11 @@ export default function App() {
   const [eventMessage, setEventMessage] = useState("");
   const [newEventName, setNewEventName] = useState("");
   const [newEventOrganizerId, setNewEventOrganizerId] = useState("");
+  const [newEventMode, setNewEventMode] = useState<"free" | "paid">("free");
+  const [newEventWebPage, setNewEventWebPage] = useState(true);
+  const [newEventOpenNow, setNewEventOpenNow] = useState(true);
+  const [newEventPrice, setNewEventPrice] = useState("");
+  const [newEventCapacity, setNewEventCapacity] = useState("100");
   const [eventCreateOpen, setEventCreateOpen] = useState(false);
   const [newPageId, setNewPageId] = useState("");
   const [newPageName, setNewPageName] = useState("");
@@ -8968,7 +8973,12 @@ export default function App() {
       const res = await apiFetch("/api/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, event_public_organizer_profile_id: newEventOrganizerId }),
+        body: JSON.stringify({
+          name, event_public_organizer_profile_id: newEventOrganizerId,
+          registration_mode: newEventMode, web_page_enabled: newEventWebPage,
+          open_registration_now: newEventOpenNow,
+          ...(newEventMode === "paid" ? { price_thb: Number(newEventPrice), capacity: Number(newEventCapacity) } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -8976,6 +8986,8 @@ export default function App() {
       }
       setNewEventName("");
       setNewEventOrganizerId("");
+      setNewEventMode("free");
+      setNewEventPrice("");
       setEventCreateOpen(false);
       await fetchEvents();
       await fetchChannels();
@@ -8986,6 +8998,25 @@ export default function App() {
       window.setTimeout(() => setEventMessage(""), 2500);
     } catch (err) {
       setEventMessage(err instanceof Error ? err.message : "Failed to create event");
+    } finally {
+      setEventLoading(false);
+    }
+  };
+
+  const handleEnableWebRegistration = async () => {
+    if (!selectedEventId) return;
+    setEventLoading(true);
+    setEventMessage("");
+    try {
+      const response = await apiFetch("/api/events/" + encodeURIComponent(selectedEventId) + "/enable-web-registration", {
+        method: "POST",
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || result.error || "Could not enable registration");
+      await Promise.all([fetchEvents(), fetchSettings(selectedEventId)]);
+      setEventMessage("Web registration and AI chat enabled. This event is hidden from the public catalog.");
+    } catch (error) {
+      setEventMessage(error instanceof Error ? error.message : "Could not enable web registration");
     } finally {
       setEventLoading(false);
     }
@@ -10480,6 +10511,7 @@ export default function App() {
               saveEventDetails={saveEventDetails}
               saving={saving}
               handleUpdateEvent={handleUpdateEvent}
+              handleEnableWebRegistration={handleEnableWebRegistration}
               handleSetEventBotEnabled={handleSetEventBotEnabled}
               eventStatusToggle={eventStatusToggle}
               eventBotRunning={eventBotRunning}
@@ -10556,6 +10588,16 @@ export default function App() {
                   onNewEventOrganizerIdChange={setNewEventOrganizerId}
                   newEventName={newEventName}
                   onNewEventNameChange={setNewEventName}
+                  newEventMode={newEventMode}
+                  onNewEventModeChange={setNewEventMode}
+                  newEventWebPage={newEventWebPage}
+                  onNewEventWebPageChange={setNewEventWebPage}
+                  newEventOpenNow={newEventOpenNow}
+                  onNewEventOpenNowChange={setNewEventOpenNow}
+                  newEventPrice={newEventPrice}
+                  onNewEventPriceChange={setNewEventPrice}
+                  newEventCapacity={newEventCapacity}
+                  onNewEventCapacityChange={setNewEventCapacity}
                   onCreateEvent={handleCreateEvent}
                   eventListQuery={eventListQuery}
                   onEventListQueryChange={setEventListQuery}

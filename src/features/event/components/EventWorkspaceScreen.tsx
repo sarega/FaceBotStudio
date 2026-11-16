@@ -142,6 +142,7 @@ type EventWorkspaceScreenProps = {
     successMessage?: string;
     silent?: boolean;
   }) => unknown;
+  handleEnableWebRegistration: () => unknown;
   handleSetEventBotEnabled: (enabled: boolean) => unknown;
   eventStatusToggle: EventStatusToggle;
   eventBotRunning: boolean;
@@ -453,6 +454,7 @@ export function EventWorkspaceScreen({
   saveEventDetails,
   saving,
   handleUpdateEvent,
+  handleEnableWebRegistration,
   handleSetEventBotEnabled,
   eventStatusToggle,
   eventBotRunning,
@@ -1254,7 +1256,16 @@ export function EventWorkspaceScreen({
                       <div className={`${publicSetupPanel === "essentials" ? "flex" : "hidden"} md:col-span-2 flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-4`}>
                         <div className="mb-1 w-full">
                           <p className="text-sm font-semibold text-slate-900">Publishing & registration</p>
+                          <p className="mt-1 text-xs text-slate-600">Open free web registration without connecting Facebook or displaying the event in the public catalog.</p>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleEnableWebRegistration()}
+                          disabled={eventLoading}
+                          className="w-full rounded-xl border border-blue-300 bg-blue-50 px-4 py-3 text-left text-sm font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-50"
+                        >
+                          Enable web registration + AI chat now (Free Event)
+                        </button>
                         <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input
                             type="checkbox"

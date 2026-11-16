@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.1",
+    date: "2026-11-16",
+    title: "Faster event setup and web registration",
+    features: [
+      "New Event now asks for Free or Paid Registration and whether to enable the event web page and AI chat",
+      "Free events can open web registration immediately without Facebook or public catalog listing",
+      "Existing free events get a one-click enable action; paid drafts remain safely unpublished until configured",
+    ],
+  },
+  {
     version: "0.8.0",
     date: "2026-11-16",
     title: "Paid Seminar Registration",
