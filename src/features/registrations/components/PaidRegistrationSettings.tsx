@@ -12,6 +12,24 @@ type Settings = {
   categories: { id: string; label: string; unit_minor: number; quota: number | null }[];
 };
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type Readiness = {
+  checks: Record<string, boolean>;
+  paid_ready: boolean;
+  bot_ready: boolean;
+};
+const readinessLabels: Record<string,string> = {
+  event_active: "Event status is Active",
+  event_web_page: "Event web page enabled",
+  paid_published: "Paid bookings published (Accept public paid bookings)",
+  paid_server_enabled: "Railway: PAID_REGISTRATION_PUBLIC_ENABLED=1",
+  customer_accounts_enabled: "Railway: CUSTOMER_APP_ENABLED=1",
+  customer_signup_enabled: "Railway: CUSTOMER_ACCOUNT_REGISTRATION_ENABLED=1 (new customers)",
+  slip_encryption_ready: "Railway: PAID_PROOF_ENCRYPTION_KEY set to a 64-character hexadecimal key",
+  organizer_receiver_ready: "Organizer financial profile: active PromptPay receiver",
+  event_chat_enabled: "Event web Help Bot enabled",
+  chat_session_secret: "Railway: PUBLIC_CHAT_SESSION_SECRET or compatible ticket/media secret configured",
+};
+
 const field = "mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2";
 
 function localDateInput(ms: number | null) {
@@ -151,9 +169,49 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
   const [settings, setSettings] = useState<Settings | null>();
   const [error, setError] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
+  const [readinessError, setReadinessError] = useState("");
+  const [publishing, setPublishing] = useState(false);
   const fetchRef = useRef(apiFetch);
   fetchRef.current = apiFetch;
   const path = `/api/events/${encodeURIComponent(eventId)}/paid-registration/settings`;
+  async function loadReadiness() {
+    try {
+      const res = await fetchRef.current("/api/events/" + encodeURIComponent(eventId) + "/paid-registration/readiness");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Readiness check failed");
+      setReadiness(data as Readiness);
+      setReadinessError("");
+    } catch (err) {
+      setReadinessError(err instanceof Error ? err.message : "Readiness check failed");
+    }
+  }
+  async function publishNow() {
+    if (!settings || publishing) return;
+    setPublishing(true);
+    setReadinessError("");
+    try {
+      const response = await fetchRef.current(path, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version: settings.version, capacity: settings.capacity, hold_minutes: settings.hold_minutes,
+          cutoff_ms: settings.cutoff_ms, published: true, categories: settings.categories,
+          fields: settings.fields,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not publish paid booking");
+      setSettings(data.settings);
+      setSaved(true);
+      await loadReadiness();
+    } catch (err) {
+      setReadinessError(err instanceof Error ? err.message : "Could not publish");
+      await loadReadiness();
+    } finally {
+      setPublishing(false);
+    }
+  }
   useEffect(() => {
     if (!open) return;
     const request = new AbortController();
@@ -163,7 +221,10 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
     void fetchRef.current(path, { signal: request.signal }).then(async (response) => {
       if (!response.ok) throw new Error();
       const result = await response.json();
-      if (!request.signal.aborted) setSettings(result.settings);
+      if (!request.signal.aborted) {
+        setSettings(result.settings);
+        void loadReadiness();
+      }
     }).catch(() => { if (!request.signal.aborted) setError(true); });
     return () => request.abort();
   }, [open, path]);
@@ -174,7 +235,35 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
       {open && (error ? <p role="alert">Could not load paid registration settings.</p> :
         settings === undefined ? <p role="status">Loading settings…</p> :
           <SettingsForm key={settings?.version ?? 0} settings={settings} path={path} apiFetch={apiFetch}
-            onSaved={(result) => { setSettings(result); setSaved(true); }} />)}
+            onSaved={(result) => { setSettings(result); setSaved(true); void loadReadiness(); }} />)}
+      {open && settings !== undefined && <section className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-semibold">Event activation checks — registration + Help Bot</h3>
+          <button type="button" className="text-blue-700 underline" onClick={() => void loadReadiness()}>Recheck</button>
+        </div>
+        {readiness && <>
+          <p className="font-semibold">{readiness.paid_ready ? "Paid booking ready" : "Paid booking blocked"}
+            {" · "}{readiness.bot_ready ? "Help Bot session ready" : "Help Bot session blocked"}</p>
+          <div className="grid gap-1">
+            {Object.entries(readiness.checks).map(([key, ok]) =>
+              <p key={key} className={ok ? "text-green-800" : "font-medium text-red-700"}>
+                {ok ? "✓" : "✕"} {readinessLabels[key] || key}
+              </p>)}
+          </div>
+          {!readiness.checks.paid_published && Object.entries(readiness.checks).every(([key, ok]) =>
+            ok || key === "paid_published" || key === "customer_signup_enabled" ||
+            key === "event_chat_enabled" || key === "chat_session_secret") && (
+            <button type="button" disabled={publishing} onClick={() => void publishNow()}
+              className="rounded-lg bg-blue-700 px-3 py-2 font-semibold text-white disabled:opacity-50">
+              {publishing ? "Opening…" : "Publish paid registration now"}
+            </button>
+          )}
+          {!readiness.checks.customer_signup_enabled && <p className="text-xs text-amber-900">
+            Existing verified customer accounts can book; enable CUSTOMER_ACCOUNT_REGISTRATION_ENABLED=1 for new attendees.
+          </p>}
+        </>}
+        {readinessError && <p role="alert" className="text-red-700">{readinessError}</p>}
+      </section>}
       {open && saved && <p role="status">Settings saved.</p>}
     </section>
   );

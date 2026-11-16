@@ -7097,14 +7097,26 @@ export default function App() {
     const trimmed = publicChatInput.trim();
     if (!trimmed && publicChatPendingImages.length === 0) return;
 
-    const senderId = publicChatSenderId.trim();
-    if (!senderId) {
-      setPublicChatError("Event chat is still starting. Please try again in a moment.");
-      return;
-    }
-
     setPublicChatError("");
     setPublicChatSending(true);
+    let senderId = publicChatSenderId.trim();
+    if (!senderId) {
+      try {
+        // Recover a failed initial chat session without forcing visitors to reload the event page.
+        const sessionResponse = await apiFetch("/api/public/events/" +
+          encodeURIComponent(publicEventSlug) + "/chat/session");
+        const sessionData = await sessionResponse.json().catch(() => ({}));
+        if (!sessionResponse.ok) throw new Error(sessionData.error || "Help Bot session unavailable");
+        senderId = String(sessionData.sender_id || "").trim();
+        if (!senderId) throw new Error("Help Bot session unavailable");
+        setPublicChatSenderId(senderId);
+      } catch (sessionError) {
+        setPublicChatError(sessionError instanceof Error ? sessionError.message :
+          "Help Bot cannot connect. Please contact the organizer.");
+        setPublicChatSending(false);
+        return;
+      }
+    }
 
     try {
       const uploadedAttachments = publicChatPendingImages.length > 0

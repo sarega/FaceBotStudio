@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.2",
+    date: "2026-11-16",
+    title: "Paid registration and Help Bot readiness hotfix",
+    features: [
+      "Admin Paid Registration settings explain individual deployment and event blockers",
+      "One-click publish is available when payment prerequisites are satisfied",
+      "Web Help Bot retries creating its session without reloading the event page",
+    ],
+  },
+  {
     version: "0.8.1",
     date: "2026-11-16",
     title: "Faster event setup and web registration",

@@ -17087,6 +17087,44 @@ async function startServer() {
       return res.status(500).json({ error: "paid_settings_unavailable" });
     }
   });
+  // Operator-only diagnostics: never expose deployment configuration to unauthenticated visitors.
+  app.get("/api/events/:eventId/paid-registration/readiness",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      try {
+        const eventId = req.eventScope!.eventId;
+        const [event, settings, mode] = await Promise.all([
+          appDb.getEventById(eventId), getSettingsMap(eventId), appDb.readPaidMode(eventId),
+        ]);
+        if (!event) return res.status(404).json({ error: "event_not_found" });
+        const receiverProfile = await resolveEventOrganizerFinancialProfile(event, settings);
+        const payment = resolveOrganizerPaymentConfig(receiverProfile);
+        const checks = {
+          event_active: event.effective_status === "active",
+          event_web_page: isTruthySetting(settings.event_public_page_enabled),
+          event_chat_enabled: isTruthySetting(settings.event_public_bot_enabled),
+          chat_session_secret: Boolean(getPublicChatSessionSecret()),
+          paid_published: mode?.published === true,
+          paid_server_enabled: process.env.PAID_REGISTRATION_PUBLIC_ENABLED === "1",
+          customer_accounts_enabled: isCustomerAppEnabled(),
+          customer_signup_enabled: isCustomerAccountRegistrationEnabled(),
+          slip_encryption_ready: paidProofEncryptionConfigured(),
+          organizer_receiver_ready: payment.promptpay_ready && payment.source === "organizer_profile",
+        };
+        res.setHeader("Cache-Control", "private, no-store");
+        return res.json({ checks,
+          paid_ready: checks.event_active && checks.event_web_page && checks.paid_published &&
+            checks.paid_server_enabled && checks.customer_accounts_enabled &&
+            checks.slip_encryption_ready && checks.organizer_receiver_ready,
+          bot_ready: checks.event_active && checks.event_web_page && checks.event_chat_enabled &&
+            checks.chat_session_secret,
+        });
+      } catch (error) {
+        console.error("Failed paid registration readiness:", error);
+        return res.status(500).json({ error: "readiness_check_failed" });
+      }
+    },
+  );
+
   app.patch(paidSettingsPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);

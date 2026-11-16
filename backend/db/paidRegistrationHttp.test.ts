@@ -201,6 +201,14 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(downloaded.headers.get("cache-control"), "private, no-store");
     assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), image);
     const eventPrefix = `${origin}/api/events/${event.id}/paid-registration`;
+    const readinessResponse = await fetch(eventPrefix + "/readiness", { headers: staffHeaders });
+    assert.equal(readinessResponse.status, 200);
+    const readiness = await readinessResponse.json();
+    assert.equal(readiness.paid_ready, true);
+    assert.equal(readiness.checks.paid_published, true);
+    assert.equal(readiness.checks.slip_encryption_ready, true);
+    assert.equal(readiness.checks.event_chat_enabled, true);
+    assert.equal((await fetch(eventPrefix + "/readiness", { headers: headers("test-owner") })).status, 401);
     const queue = await fetch(`${eventPrefix}/review-queue`, { headers: staffHeaders });
     assert.equal(queue.status, 200);
     assert.equal((await queue.json()).reviews[0].attempt_id, pending.attempt_id);

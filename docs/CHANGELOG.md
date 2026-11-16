@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.2 - 2026-11-16
+
+- Added secure admin-only Paid Registration readiness checks for server flags, account availability, encryption, organizer receiver and web Help Bot session.
+- Added an actionable activation checklist and safe one-click paid publishing in Registration settings. Payment secrets must be configured separately.
+- Web Help Bot retries starting a missing session when the visitor sends a message and displays the actual session error.
+- Added HTTP permissions and readiness regression tests.
+
 ## 0.8.1 - 2026-11-16
 
 - Added New Event registration type (Free / Paid Seminar), web-page + AI chat choice, optional immediate activation, private catalog visibility by default, and basic paid price/capacity draft settings.
