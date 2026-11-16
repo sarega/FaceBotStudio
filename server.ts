@@ -12723,14 +12723,16 @@ async function sendCurrentNotificationDelivery(delivery: NotificationDeliveryRow
     const link = buildAbsoluteAppAssetUrl(`/app/orders?paid_booking=${encodeURIComponent(String(booking.reference))}`);
     if (!link || !/^https?:\/\//i.test(link)) throw new NotificationDeliveryError("APP_URL is required for paid booking email", true);
     const safeLink = link.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-    const subject = "Your paid registration is confirmed";
+    const subject = "ยืนยันการลงทะเบียนแล้ว / Registration confirmed";
     return sendWithCurrentNotificationSender({
       ...delivery,
       recipient: account.email,
       payload_json: JSON.stringify({
         subject,
-        text: `${subject}. Open Orders to view the admission QR for each attendee: ${link}`,
-        html: `<p>${subject}.</p><p><a href="${safeLink}">Open Orders</a> to view each attendee’s admission QR.</p>`,
+        text: "ยืนยันการชำระเงินและลงทะเบียนแล้ว ดู QR เข้างานของแต่ละคน: " + link +
+          "\nPayment confirmed. View each attendee's admission QR: " + link,
+        html: "<p>ยืนยันการชำระเงินและลงทะเบียนแล้ว</p><p>Payment confirmed. Your registration is approved.</p>" +
+          '<p><a href="' + safeLink + '">ดูบัตรเข้างาน / View admission QR tickets</a></p>',
       }),
     });
   }
@@ -17129,7 +17131,8 @@ async function startServer() {
           organizer_receiver_ready: externalManual || (payment.promptpay_ready && payment.source === "organizer_profile"),
         };
         res.setHeader("Cache-Control", "private, no-store");
-        return res.json({ checks, payment_mode: mode?.paymentMode ?? "promptpay",
+        return res.json({ checks, proof_upload_ready: paidProofEncryptionConfigured(),
+          payment_mode: mode?.paymentMode ?? "promptpay",
           paid_ready: checks.event_active && checks.event_web_page && checks.paid_published &&
             checks.paid_server_enabled && checks.customer_accounts_enabled &&
             checks.slip_encryption_ready && checks.organizer_receiver_ready,

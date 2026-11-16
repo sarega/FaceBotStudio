@@ -206,6 +206,64 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(invalidUpload.status,415);
     assert.equal((await fetch(displayUrl,{headers:staffCreateHeaders}).then(r=>r.json())).qr_png_base64,
       qrUploaded.qr_png_base64);
+    // External/manual booking must accept an encrypted bank-transfer slip,
+    // queue it for staff review, then issue credentials only after bank verification.
+    const externalProofBooked = await fetch(externalPublic + "/paid-bookings", {
+      method: "POST", headers: { ...headers("test-owner"), "Content-Type": "application/json",
+        "Idempotency-Key": "external-slip-booking", "x-csrf-token": "fixture-csrf" },
+      body: JSON.stringify({ pricing_version: 2, contact: { name: "Bank Transfer Test" },
+        attendees: [{ category_id: "general", first_name: "Paid", last_name: "Externally" }] }),
+    });
+    assert.equal(externalProofBooked.status, 201, await externalProofBooked.clone().text());
+    const externalSlipBooking = await externalProofBooked.json();
+    const externalOwnedPath = origin + "/api/customer/paid-bookings/" + paidEvent.id + "/" + externalSlipBooking.id;
+    assert.equal((await fetch(externalOwnedPath, { headers: headers("test-other") })).status, 404);
+    const paymentDisplay = await fetch(externalOwnedPath + "/payment-display", { headers: headers("test-owner") });
+    assert.equal(paymentDisplay.status, 200);
+    assert.equal((await paymentDisplay.json()).account_number, "123-4-56789-0");
+    const externalProof = await fetch(externalOwnedPath + "/proofs", {
+      method: "POST", body: Uint8Array.from(qrFixture),
+      headers: { ...headers("test-owner"), "Content-Type": "application/octet-stream",
+        "Idempotency-Key": "external-slip-proof", "x-csrf-token": "fixture-csrf",
+        "x-booking-version": "1", "x-claimed-minor": "250000",
+        "x-claimed-transfer-at": new Date().toISOString(), "x-payment-method": "bank_transfer",
+        "x-proof-mime": "image/png", "x-payment-reference": "external-slip-test" },
+    });
+    assert.equal(externalProof.status, 202, await externalProof.clone().text());
+    const externalReceipt = await externalProof.json();
+    assert.equal(externalReceipt.status, "verification_pending");
+    assert.equal((await fetch(externalOwnedPath, { headers: headers("test-owner") }).then(r => r.json())).status,
+      "verification_pending");
+    const externalQueueAfterUpload = await fetch(externalPrefix + "/review-queue?reference=" +
+      externalSlipBooking.reference, { headers: staffCreateHeaders });
+    assert.equal(externalQueueAfterUpload.status, 200);
+    const externalReviews = (await externalQueueAfterUpload.json()).reviews;
+    assert.equal(externalReviews[0].attempt_id, externalReceipt.attempt_id);
+    const reviewedProof = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id +
+      "/proofs/" + externalReceipt.attempt_id, { headers: staffCreateHeaders });
+    assert.equal(reviewedProof.status, 200);
+    assert.deepEqual(Buffer.from(await reviewedProof.arrayBuffer()), qrFixture);
+    const approvedExternalSlip = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/review", {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "external-slip-review" },
+      body: JSON.stringify({ decision: "approve", attempt_id: externalReceipt.attempt_id,
+        version: externalReceipt.version, reason: "Verified transfer in organizer bank account",
+        observed: { amount_minor: 250000, currency: "THB",
+          paid_at: new Date().toISOString(), reference: "external-bank-verified-9021",
+          receiver_id: "EXTERNAL_MANUAL" } }),
+    });
+    assert.equal(approvedExternalSlip.status, 200, await approvedExternalSlip.clone().text());
+    assert.equal((await approvedExternalSlip.json()).status, "confirmed");
+    const externalConfirmed = await fetch(externalOwnedPath, { headers: headers("test-owner") });
+    const externalConfirmedDetail = await externalConfirmed.json();
+    assert.equal(externalConfirmedDetail.status, "confirmed");
+    const externalCredential = await fetch(externalOwnedPath + "/attendees/" +
+      externalConfirmedDetail.attendees[0].id + "/credential", { headers: headers("test-owner") });
+    assert.equal(externalCredential.status, 200);
+    assert.equal(externalCredential.headers.get("content-type"), "image/png");
+    const confirmationDeliveries = await db.listNotificationDeliveries({ related_type: "paid_booking", limit: 30 });
+    assert.ok(confirmationDeliveries.some((row) =>
+      row.kind === "paid_booking.confirmed" && row.related_id === externalSlipBooking.id),
+      "external bank verification must enqueue the confirmation email");
     const externalApproval = await fetch(externalPrefix + "/bookings/" + externalBooking.id + "/review", {
       method:"POST", headers:{ ...staffCreateHeaders, "Idempotency-Key":"external-http-review" },
       body:JSON.stringify({ decision:"approve", version:1, reason:"Organizer confirmed payment externally",
@@ -398,7 +456,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       if (attempt === 39) assert.fail("Missing reply to replayed confirmation");
       await delay(75);
     }
-    assert.equal((await db.listOwnedPaidBookings(ownerAccount!.account.id, 10, 0)).length, 4);
+    assert.equal((await db.listOwnedPaidBookings(ownerAccount!.account.id, 10, 0)).length, 5);
     const response = await fetch(`${eventPrefix}/summary`, { headers: staffHeaders });
     assert.equal(response.status, 200);
     const { summary } = await response.json();

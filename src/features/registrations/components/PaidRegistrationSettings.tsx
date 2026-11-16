@@ -19,6 +19,7 @@ type Readiness = {
   payment_mode: "promptpay" | "external_manual";
   paid_ready: boolean;
   bot_ready: boolean;
+  proof_upload_ready?: boolean;
 };
 const readinessLabels: Record<string,string> = {
   event_active: "Event status is Active",
@@ -279,6 +280,11 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
             <pre className="paid-admin-env overflow-x-auto rounded-lg p-2 text-xs">{"CUSTOMER_APP_ENABLED=1\nCUSTOMER_ACCOUNT_REGISTRATION_ENABLED=1\nPAID_REGISTRATION_PUBLIC_ENABLED=1"}</pre>
             <p>กด Deploy หลังแก้ค่า แล้วกลับมากด Recheck ที่นี่</p>
           </div>}
+          {readiness.payment_mode === "external_manual" && readiness.proof_upload_ready === false &&
+            <p className="paid-admin-problem mt-2">
+              รับสลิปยังไม่ได้: ตั้งค่า Railway PAID_PROOF_ENCRYPTION_KEY (64 hex) แล้ว Deploy /
+              Slip upload needs PAID_PROOF_ENCRYPTION_KEY.
+            </p>}
           {!readiness.checks.event_active && <p className="paid-admin-problem mt-2">กรุณาตั้งสถานะ Event เป็น Active ใน Event Setup</p>}
           {!readiness.checks.event_web_page && <p className="paid-admin-problem mt-2">กรุณาเปิด Event Web Page ใน Public Page Builder</p>}
           {!readiness.checks.paid_published && <p className="paid-admin-problem mt-2">ยังไม่ได้ Publish Paid Registration — กด “บันทึกและเปิดรับสมัคร” ในฟอร์มด้านบน</p>}
@@ -314,7 +320,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
               <p key={key} className={ok ? "paid-admin-check-ok" : "paid-admin-check-bad font-medium"}>
                 {ok ? "✓" : "✕"} {readiness.payment_mode === "external_manual" &&
                   (key === "organizer_receiver_ready" || key === "slip_encryption_ready")
-                    ? "Not required for external/manual payment" : readinessLabels[key] || key}
+                    ? "Not required for external/manual publishing" : readinessLabels[key] || key}
               </p>)}
           </div>
           {!readiness.checks.paid_published && Object.entries(readiness.checks).every(([key, ok]) =>

@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.2",
+    date: "2026-11-17",
+    title: "Bank transfer invoice and slip verification",
+    features: [
+      "Reserve now opens a payment invoice with organizer QR and bank details",
+      "External/manual bookings accept encrypted payment slips and wait for staff approval",
+      "Confirmed attendees receive admission QR tickets and a bilingual confirmation email",
+    ],
+  },
+  {
     version: "0.9.1",
     date: "2026-11-17",
     title: "Familiar account navigation on public events",

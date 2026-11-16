@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2 - 2026-11-17
+
+- Complete external/manual bank-transfer registration UX: Reserve leads directly to the attendee's private payment invoice in My Bookings, with amount, reference, deadline, organizer bank account and uploaded QR.
+- Reuse the existing encrypted payment slip upload with bank_transfer method in external/manual mode; submission transitions the booking to verification_pending. My Bookings includes the full invoice and submission flow for revisits.
+- Existing staff Paid Registration Reviews can inspect the uploaded slip and approve only after independently matching actual bank transfer, issuing distinct attendee admission QR tickets.
+- Existing paid_booking.confirmed transactional email notification is now bilingual Thai/English; delivery requires a configured email provider.
+- Distinguish publishing a bank-transfer event from the separate requirement to configure PAID_PROOF_ENCRYPTION_KEY for secure slip uploads, with actionable admin/error messaging.
+- Added HTTP regression: external bank details, private slip upload, staff review, credential issuance, and queued confirmation email.
+
 ## 0.9.1 - 2026-11-17
 
 - Added shared customer profile avatar and dropdown navigation across the public Event Catalog and Event pages.

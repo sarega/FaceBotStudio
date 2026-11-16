@@ -155,7 +155,7 @@ export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFet
   return (
     <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
       <div className="flex items-center gap-4">
-        <button type="button" className="font-semibold text-blue-700 underline" aria-expanded={open} onClick={() => setOpen(!open)}>Paid registration reviews</button>
+        <button type="button" className="font-semibold text-blue-700 underline" aria-expanded={open} onClick={() => setOpen(!open)}>ตรวจสลิป / Review payments</button>
         {open && <button type="button" className="underline" onClick={() => setRefresh((value) => value + 1)}>Refresh</button>}
       </div>
       {open && <>

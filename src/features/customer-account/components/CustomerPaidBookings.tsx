@@ -13,8 +13,8 @@ type Booking = {
 type Detail = { status: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual"; attendees: { id: string; first_name: string; last_name: string; category_label: string }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 
-function PaidProofForm({ path, version, totalMinor, onSubmitted }: {
-  path: string; version: number; totalMinor: number; onSubmitted: () => void;
+function PaidProofForm({ path, version, totalMinor, paymentMode, onSubmitted }: {
+  path: string; version: number; totalMinor: number; paymentMode: "promptpay" | "external_manual"; onSubmitted: () => void;
 }) {
   const [file, setFile] = useState<File>();
   const [amount, setAmount] = useState((totalMinor / 100).toFixed(2));
@@ -55,13 +55,18 @@ function PaidProofForm({ path, version, totalMinor, onSubmitted }: {
         headers: {
           "Content-Type": "application/octet-stream", "Idempotency-Key": command.current.key,
           "x-booking-version": String(version), "x-claimed-minor": String(minor),
-          "x-claimed-transfer-at": claimedDate, "x-payment-method": "promptpay",
+          "x-claimed-transfer-at": claimedDate, "x-payment-method": paymentMode === "external_manual" ? "bank_transfer" : "promptpay",
           "x-proof-mime": file.type, "x-payment-reference": normalizedRef,
         },
       });
       onSubmitted();
-    } catch {
-      setError("Could not submit the proof. Retry with the same details or refresh to check the booking status.");
+    } catch (failure) {
+      const code = failure instanceof Error ? failure.message : "";
+      setError(code === "proof_storage_unavailable"
+        ? "ยังไม่เปิดระบบเก็บสลิปอย่างปลอดภัย กรุณาติดต่อผู้จัดงาน / Secure slip upload is not configured."
+        : code === "hold_expired"
+          ? "หมดเวลาชำระเงินแล้ว กรุณาติดต่อผู้จัดงาน / Payment deadline has passed."
+          : "ส่งสลิปไม่สำเร็จ กรุณาลองใหม่ / Slip upload failed. Please retry.");
     } finally {
       submitting.current = false;
       setBusy(false);
@@ -71,22 +76,22 @@ function PaidProofForm({ path, version, totalMinor, onSubmitted }: {
   const input = "mt-1 block w-full rounded-lg border border-white/20 bg-slate-950 px-3 py-2 text-white";
   return (
     <form onSubmit={submit} className="space-y-3 rounded-xl border border-white/10 p-3">
-      <img src={`${path}/payment-qr`} alt="PromptPay payment QR for this booking" className="h-40 w-40 rounded-lg bg-white p-2" />
-      <p className="text-slate-300">Pay the full booking amount in one transfer, then upload the receipt for manual review.</p>
+      {paymentMode === "promptpay" && <img src={`${path}/payment-qr`} alt="PromptPay payment QR for this booking" className="h-40 w-40 rounded-lg bg-white p-2" />}
+      <p className="text-slate-300">โอนเงินแล้วแนบสลิป / Transfer the full amount, then upload your payment slip.</p>
       <fieldset disabled={busy} className="space-y-3">
-        <label className="block">Amount transferred (THB)
+        <label className="block">จำนวนเงินที่โอน / Amount (THB)
           <input className={input} inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required />
         </label>
-        <label className="block">Transfer date and time (your device’s timezone)
+        <label className="block">วันเวลาโอน / Transfer date and time
           <input className={input} type="datetime-local" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} required />
         </label>
-        <label className="block">Bank reference (optional)
+        <label className="block">เลขอ้างอิงธนาคาร (ถ้ามี) / Bank reference (optional)
           <input className={input} maxLength={255} value={reference} onChange={(event) => setReference(event.target.value)} />
         </label>
-        <label className="block">Payment proof
+        <label className="block">สลิปชำระเงิน / Payment slip
           <input className={input} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setFile(event.target.files?.[0])} required />
         </label>
-        <button type="submit" className="rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white">{busy ? "Submitting…" : "Submit payment proof"}</button>
+        <button type="submit" className="rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white">{busy ? "กำลังส่ง… / Submitting…" : "ส่งสลิป / Submit payment slip"}</button>
       </fieldset>
       {error && <p role="alert" className="text-rose-300">{error}</p>}
     </form>
@@ -96,27 +101,34 @@ function PaidProofForm({ path, version, totalMinor, onSubmitted }: {
 type PaymentDisplay = { bank_name: string; account_name: string; account_number: string; qr_png_base64: string };
 function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; bookingId: string }) {
   const [details,setDetails] = useState<PaymentDisplay>();
+  const [loading,setLoading] = useState(true);
   useEffect(() => {
     const abort = new AbortController();
     void customerApi<PaymentDisplay>("/api/customer/paid-bookings/" + encodeURIComponent(eventId) + "/" +
       encodeURIComponent(bookingId) + "/payment-display", {signal:abort.signal})
-      .then(setDetails).catch(() => undefined);
+      .then(setDetails).catch(() => undefined).finally(() => {
+        if (!abort.signal.aborted) setLoading(false);
+      });
     return () => abort.abort();
   },[eventId,bookingId]);
-  if (!details || !(details.bank_name || details.account_name || details.account_number || details.qr_png_base64)) {
-    return <p className="text-sm text-slate-300">Contact the organizer for the external payment instructions.</p>;
+  if (loading) return <p role="status" className="text-sm text-slate-300">กำลังโหลดบัญชีรับเงิน / Loading payment details…</p>;
+  if (!details || !(details.account_name && (details.account_number || details.qr_png_base64))) {
+    return <p role="alert" className="rounded-lg border border-amber-600/40 bg-amber-900/30 p-3 text-sm text-amber-100">
+      ยังไม่มีข้อมูลบัญชีรับเงิน กรุณาติดต่อผู้จัดงานก่อนโอน<br />
+      Payment details are incomplete. Contact the organizer before transferring.
+    </p>;
   }
   return <div className="space-y-2 rounded-lg border border-white/20 p-3 text-sm">
-    <strong>Payment details supplied by the organizer</strong>
-    {!!details.bank_name && <p>Bank: {details.bank_name}</p>}
-    {!!details.account_name && <p>Account name: {details.account_name}</p>}
-    {!!details.account_number && <p>Account number: <span className="font-mono">{details.account_number}</span></p>}
+    <strong>ชำระเงิน / Bank transfer details</strong>
+    {!!details.bank_name && <p>ธนาคาร / Bank: {details.bank_name}</p>}
+    {!!details.account_name && <p>ชื่อบัญชี / Recipient: <strong>{details.account_name}</strong></p>}
+    {!!details.account_number && <p>เลขบัญชี / Account: <span className="font-mono font-semibold">{details.account_number}</span></p>}
     {!!details.qr_png_base64 && <div className="space-y-1">
       <img src={"data:image/png;base64," + details.qr_png_base64} alt="Organizer-provided payment QR code"
         className="max-h-72 max-w-72 rounded-xl bg-white p-3" />
-      <p className="text-xs">Verify the recipient name and amount in your banking app before transferring.</p>
+      <p className="text-xs">ตรวจชื่อผู้รับและยอดเงินในแอปธนาคารก่อนโอน / Confirm recipient and amount in your bank app.</p>
     </div>}
-    <p className="text-xs text-slate-300">Your QR admission ticket will be issued only after the organizer confirms payment.</p>
+    <p className="text-xs text-slate-300">บัตรเข้างานจะออกหลังผู้จัดงานยืนยันยอดเงินจริง / Admission QR follows payment verification.</p>
   </div>;
 }
 export function CustomerPaidBookings() {
@@ -170,9 +182,11 @@ export function CustomerPaidBookings() {
           <p>{booking.status.replaceAll("_", " ")} · {new Intl.NumberFormat(undefined, { style: "currency", currency: "THB" }).format(booking.total_due_minor / 100)}</p>
           {booking.status === "awaiting_payment" && <p>Pay by {new Date(booking.due_at).toLocaleString()}</p>}
           <button type="button" aria-expanded={selected?.id === booking.id} className="text-blue-300 underline"
-            onClick={() => { setError(""); setDetail(undefined); setSelected(selected?.id === booking.id ? undefined : booking); }}>Booking details</button>
+            onClick={() => { setError(""); setDetail(undefined); setSelected(selected?.id === booking.id ? undefined : booking); }}>
+            {booking.status === "awaiting_payment" ? "ใบแจ้งชำระเงิน / Payment invoice" : "รายละเอียดการจอง / Booking details"}
+          </button>
           {selected?.id === booking.id && detail && (
-            <div className="space-y-3">
+            <div className="space-y-3" aria-label="Payment and booking details">
             <ul className="space-y-1">{detail.attendees.map((attendee) => (
               <li key={attendee.id}>
                 {attendee.first_name} {attendee.last_name} · {attendee.category_label}
@@ -184,26 +198,18 @@ export function CustomerPaidBookings() {
                 )}
               </li>
             ))}</ul>
-            {detail.status === "awaiting_payment" && detail.payment_mode === "external_manual" && (
-              <p role="status" className="rounded-lg border border-blue-500/40 bg-blue-950/40 p-3 text-sm">
-                Your place is reserved until the payment deadline. Please pay through the organizer's external instructions.
-                The bank details or recipient QR, if provided, are shown below. The organizer will confirm payment manually;
-                attendee admission QR codes appear after confirmation.
-              </p>
-            )}
-            {detail.status === "awaiting_payment" && detail.payment_mode === "external_manual" && (
-              <ExternalPaymentInstructions eventId={booking.event_id} bookingId={booking.id} />
-            )}
-            {detail.status === "awaiting_payment" && detail.payment_mode !== "external_manual" && (
-              <PaidProofForm key={booking.id} path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}`}
-                version={detail.version} totalMinor={booking.total_due_minor} onSubmitted={() => {
+            {detail.status === "awaiting_payment" && <>
+              <p className="font-semibold">ใบแจ้งชำระเงิน / Payment invoice · {new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"}).format(booking.total_due_minor / 100)}</p>
+              {detail.payment_mode === "external_manual" && <ExternalPaymentInstructions eventId={booking.event_id} bookingId={booking.id} />}
+              <PaidProofForm key={booking.id} path={"/api/customer/paid-bookings/" + encodeURIComponent(booking.event_id) + "/" + encodeURIComponent(booking.id)}
+                paymentMode={detail.payment_mode} version={detail.version} totalMinor={booking.total_due_minor} onSubmitted={() => {
                   const updated = { ...booking, status: "verification_pending" };
                   setDetail(undefined);
                   setSelected(updated);
                   setPage((current) => current && { ...current, bookings: current.bookings.map((row) => row.id === booking.id ? updated : row) });
                 }} />
-            )}
-            {detail.status === "verification_pending" && <p role="status">Payment proof is pending verification.</p>}
+            </>}
+            {detail.status === "verification_pending" && <p role="status">รับสลิปแล้ว รอการตรวจสอบ / Slip received. Awaiting verification.</p>}
             </div>
           )}
         </article>

@@ -124,6 +124,8 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
       });
       setBooking(result);
       localStorage.setItem(recoveryKey, `${result.event_id}/${result.id}`);
+      // The next step is the private payment invoice, not a bare booking reference.
+      window.location.assign("/app/orders?paid_booking=" + encodeURIComponent(result.reference));
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : "";
       setError(errors[message] || "The booking could not be completed. Retry to check the result.");
@@ -201,6 +203,10 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
         <div role="status" className="space-y-2 text-sm text-slate-700">
           <p className="font-semibold">{booking.status.replaceAll("_", " ")}</p>
           <p className="break-all">Booking reference {booking.reference}</p>
+          {booking.status === "awaiting_payment" && <a className="paid-signup-primary inline-flex rounded-lg px-4 py-3 font-semibold"
+            href={"/app/orders?paid_booking=" + encodeURIComponent(booking.reference)}>
+            ชำระเงิน / Continue to payment
+          </a>}
           <p>Total due {money.format(booking.total_due_minor / 100)}</p>
           <a className="text-blue-700 underline" href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>Open booking in Orders</a>
           {booking.status === "awaiting_payment" && <p>Pay by {new Intl.DateTimeFormat(undefined, {
