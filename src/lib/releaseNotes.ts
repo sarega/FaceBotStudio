@@ -1,5 +1,17 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.0",
+    date: "2026-11-16",
+    title: "Paid Seminar Registration",
+    features: [
+      "Event-specific paid registration adds capacity holds, group bookings, seminar forms and deferred full payments",
+      "Secure slip review and audited payment approval unlock attendee-specific QR admission",
+      "Admin booking operations cover extensions, cancellations, capacity-checked reinstatement and recorded full refunds",
+      "Opt-in payment reminders and Telegram staff review alerts improve follow-up on pending payments",
+      "Messenger and customer self-service booking are protected by opt-in feature configuration",
+    ],
+  },
+  {
     version: "0.7.3",
     date: "2026-08-12",
     title: "Event-scoped Gatekeeper access",

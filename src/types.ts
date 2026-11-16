@@ -490,7 +490,8 @@ export interface PublicEventPageResponse {
     date_label: string;
     timezone: string;
     registration_enabled: boolean;
-    ticketing_mode: "inline" | "external" | "customer";
+    ticketing_mode: "inline" | "external" | "customer" | "paid_registration";
+    paid_registration_enabled?: boolean;
     external_ticket_url: string;
     customer_checkout_enabled: boolean;
     ticket_sales: {

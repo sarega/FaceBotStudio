@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 - 2026-11-16
+
+- Added opt-in Paid Registration for seminars and retreats with per-event pricing, time-limited capacity holds, group bookings, booking recovery and configurable attendee fields.
+- Added encrypted payment proof intake (AES-256-GCM), full-payment manual verification, financial audit, PromptPay instructions, and per-attendee QR admission issued only after confirmation.
+- Added Messenger booking and confirmation flows, customer bookings, staff review dashboard, and paid check-in through the existing event authorization system.
+- Added admin booking lookup, hold extension, capacity-checked reinstatement, cancellation, and audit-backed recording of completed full refunds with QR revocation. Refund recording does **not** transfer money.
+- Hardened duplicate bank reference detection across Paid Registration and Direct Ticketing; added shared PostgreSQL transaction-scoped reference locking and HTTP 409 conflict handling.
+- Added pending-review escalation through the autonomous Telegram Admin Agent when staff review has been waiting for at least 24 hours.
+- Added optional, idempotent 24-hour payment-deadline email reminders for eligible unpaid holds, with entitlement revalidation at delivery and a default-off environment toggle.
+- Added additive PostgreSQL migrations 040–049 and mirrored SQLite schema, group booking, payment and admission tests. Public Paid Registration remains disabled by default until deliberately configured.
+
 ## 0.7.3 - 2026-08-12
 
 - Added Gatekeeper (`checker`) accounts with explicit per-Event access assignments managed from Team Access; newly created Events are not automatically exposed to restricted accounts.

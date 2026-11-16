@@ -266,6 +266,11 @@ export function CustomerAccountScreen() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: form.email, password: form.password }),
         });
+        const reference = new URLSearchParams(window.location.search).get("paid_booking") || "";
+        if (data.account.email_verified_at && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(reference)) {
+          window.location.assign(`/app/orders?paid_booking=${encodeURIComponent(reference)}`);
+          return;
+        }
         setAccount(data.account);
         setField("password", "");
         navigate("profile");

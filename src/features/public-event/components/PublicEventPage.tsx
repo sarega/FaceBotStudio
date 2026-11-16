@@ -21,6 +21,7 @@ import { PublicContactActionLink, StatusBadge, type BadgeTone } from "../../../c
 import { renderEventDescriptionHtml } from "../../../lib/eventDescriptionHtml";
 import { CountdownSection } from "./CountdownSection";
 import { OrganizerCard } from "./OrganizerCard";
+import { PaidRegistrationPanel } from "./PaidRegistrationPanel";
 import { PlatformBrandPane } from "./PlatformBrandPane";
 import { PlatformFooter } from "./PlatformFooter";
 import { SpeakersSection } from "./SpeakersSection";
@@ -315,6 +316,7 @@ export function PublicEventPage({
   const externalTicketing = Boolean(
     page?.event.ticketing_mode === "external" && page.event.external_ticket_url,
   );
+  const paidRegistration = page?.event.ticketing_mode === "paid_registration";
   const customerTicketing = page?.event.ticketing_mode === "customer";
   const customerCheckoutEnabled = Boolean(page?.event.customer_checkout_enabled);
   const contactVisible = Boolean(
@@ -612,7 +614,7 @@ export function PublicEventPage({
                       rel={externalTicketing ? "noopener noreferrer" : undefined}
                       className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-4.5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                     >
-                      {customerTicketing ? "Choose performance" : page.event.cta_label}
+                      {paidRegistration ? "Paid registration" : customerTicketing ? "Choose performance" : page.event.cta_label}
                     </a>
                   )}
                   {page.location.map_url && (
@@ -636,7 +638,9 @@ export function PublicEventPage({
               </div>
 
               <aside id={customerTicketing ? "public-ticketing" : "public-registration"} className="order-1 space-y-4 xl:order-2 xl:sticky xl:top-5 xl:self-start">
-                {customerTicketing ? (
+                {paidRegistration ? (
+                  <PaidRegistrationPanel key={page.event.slug} slug={page.event.slug} eventId={page.event.id} enabled={Boolean(page.event.paid_registration_enabled)} timezone={page.event.timezone} />
+                ) : customerTicketing ? (
                   <TicketSalesCard event={page.event} />
                 ) : externalTicketing ? (
                   <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">

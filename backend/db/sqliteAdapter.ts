@@ -1,3 +1,5 @@
+import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
+import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS, NEW_EVENT_TEMPLATE_ENTRIES } from "./defaultSettings";
@@ -1472,7 +1474,167 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.deleteExpiredCustomerSessions();
     await this.deleteExpiredCustomerAccountTokens();
 
+    this.db.transaction(() => {
+      for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql"]) {
+        this.db.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
+      }
+      for (const table of ["registrations", "event_performances"]) {
+        this.db.exec(`
+          CREATE TRIGGER IF NOT EXISTS trg_paid_${table}_legacy_guard BEFORE INSERT ON ${table}
+          WHEN EXISTS (SELECT 1 FROM paid_event_settings WHERE event_id=NEW.event_id)
+          BEGIN SELECT RAISE(ABORT, 'paid_registration_required'); END;
+        `);
+      }
+    }).immediate();
     this.initialized = true;
+  }
+
+  private async runPaidCommand<T>(eventId: string, build: (organizationId: string) => PaidCommand<T>): Promise<T> {
+    return this.db.transaction(() => {
+      const event = this.db.prepare("SELECT organizer_id FROM events WHERE id=?").get(eventId) as { organizer_id: string } | undefined;
+      if (!event) throw new PaidBookingError("event_not_found");
+      const command = build(event.organizer_id);
+      let step = command.next();
+      while (step.done === false) {
+        const statement = this.db.prepare(step.value.sql);
+        const rows = statement.reader
+          ? statement.all(...step.value.params) as PaidRow[]
+          : (statement.run(...step.value.params), []);
+        step = command.next(rows);
+      }
+      return step.value;
+    }).immediate();
+  }
+
+  async createPaidBooking(input: PaidBookingInput) {
+    return this.runPaidCommand(input.eventId, (organizationId) => createPaidBooking(input.eventId, organizationId, input));
+  }
+
+  async readPaidCredential(eventId: string, bookingId: string, attendeeId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readPaidCredential(eventId, bookingId, attendeeId, customerId));
+  }
+
+  async checkInPaidCredential(eventId: string, credential: string, actor: string, organizationId?: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (organizationId !== undefined && organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return checkInPaidCredential(eventId, credential, actor);
+    });
+  }
+
+  async readPaidPaymentInstructions(eventId: string, bookingId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readPaidPaymentInstructions(eventId, bookingId, customerId));
+  }
+
+  async createPaidMessengerLinkToken(eventId: string, customerId: string, tokenHash: string) {
+    return this.runPaidCommand(eventId, () => createPaidMessengerLinkToken(eventId, customerId, tokenHash));
+  }
+
+  async exchangePaidMessengerLinkToken(eventId: string, pageId: string, senderId: string, tokenHash: string) {
+    return this.runPaidCommand(eventId, () => exchangePaidMessengerLinkToken(eventId, pageId, senderId, tokenHash));
+  }
+
+  async unlinkPaidMessenger(eventId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => unlinkPaidMessenger(eventId, customerId));
+  }
+
+  async createPaidMessengerDraft(input: PaidMessengerDraftInput) {
+    return this.runPaidCommand(input.eventId, () => createPaidMessengerDraft(input));
+  }
+
+  async confirmPaidMessengerDraft(input: PaidMessengerConfirmInput) {
+    return this.runPaidCommand(input.eventId, (ownerId) => confirmPaidMessengerDraft(input, ownerId));
+  }
+
+  async readPaidMessengerStatus(eventId: string, pageId: string, senderId: string, reference: string) {
+    return this.runPaidCommand(eventId, () => readPaidMessengerStatus(eventId, pageId, senderId, reference));
+  }
+
+  async readPaidMessengerCustomer(eventId: string, pageId: string, senderId: string) {
+    return this.runPaidCommand(eventId, () => readPaidMessengerCustomer(eventId, pageId, senderId));
+  }
+
+  async readPaidAdminBooking(eventId: string, organizationId: string, reference: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (ownerId !== organizationId) throw new PaidBookingError("event_not_found");
+      return readPaidAdminBooking(eventId, organizationId, reference);
+    });
+  }
+
+  async managePaidBooking(input: PaidAdminAction) {
+    return this.runPaidCommand(input.eventId, (ownerId) => {
+      if (ownerId !== input.organizationId) throw new PaidBookingError("event_not_found");
+      return managePaidBooking(input);
+    });
+  }
+
+  async readPaidEventSummary(eventId: string, organizationId: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return readPaidEventSummary(eventId);
+    });
+  }
+
+  async listPaidReviewQueue(eventId: string, organizationId: string, offset: number, reference?: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return listPaidReviewQueue(eventId, offset, reference);
+    });
+  }
+
+  async reviewPaidProof(input: PaidReviewInput) {
+    return this.runPaidCommand(input.eventId, (ownerId) => {
+      if (ownerId !== input.organizationId) throw new PaidBookingError("event_not_found");
+      return reviewPaidProof(input);
+    });
+  }
+
+  async readPaidProof(eventId: string, bookingId: string, attemptId: string, organizationId: string) {
+    return this.runPaidCommand(eventId, (ownerId) =>
+      ownerId === organizationId ? readPaidProof(eventId, bookingId, attemptId) : (function* () { return undefined; })(),
+    );
+  }
+
+  async submitPaidProof(input: PaidProofInput) {
+    return this.runPaidCommand(input.eventId, () => submitPaidProof(input));
+  }
+
+  async expirePaidBookings(eventId: string) {
+    return this.runPaidCommand(eventId, () => expirePaidBookings(eventId));
+  }
+
+  async readPaidCatalog(eventId: string) {
+    return this.runPaidCommand(eventId, () => readPaidCatalog(eventId));
+  }
+
+  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "") {
+    const rows = this.db.prepare(OWNED_BOOKING_LIST_SQL).all(Date.now(), customerId, reference, reference, limit, offset) as PaidRow[];
+    return serializePaidBookingList(rows);
+  }
+
+  async readOwnedPaidBooking(eventId: string, id: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId));
+  }
+
+  async readPaidMode(eventId: string) {
+    const row = this.db.prepare("SELECT published FROM paid_event_settings WHERE event_id=?")
+      .get(eventId) as { published: number } | undefined;
+    return row ? { published: row.published === 1 } : undefined;
+  }
+
+  async readPaidSettings(eventId: string) {
+    return this.runPaidCommand(eventId, () => readPaidSettings(eventId));
+  }
+
+  async savePaidSettings(eventId: string, input: PaidSettingsInput) {
+    return this.runPaidCommand(eventId, (organizationId) => savePaidSettings(eventId, organizationId, input));
+  }
+
+  async listDuePaidEvents(now: number): Promise<string[]> {
+    const rows = this.db.prepare(
+      "SELECT event_id FROM paid_bookings WHERE state='awaiting_payment' AND due_ms<=? AND " +
+      "(due_ms<=? OR (due_ms>? AND due_ms-created_ms>=86400000)) GROUP BY event_id ORDER BY MIN(due_ms) LIMIT 100",
+    ).all(process.env.PAID_REGISTRATION_REMINDERS_ENABLED === "1" ? now+86400000 : now, now, now) as { event_id: string }[];
+    return rows.map(({ event_id }) => event_id);
   }
 
   async ping() {
@@ -1812,6 +1974,9 @@ export class SqliteAppDatabase implements AppDatabase {
         ).run(id, senderId, eventId, input.customer_account_id || null, channelPlatform, channelExternalId, firstName, lastName, phone, email);
         return { statusCode: 200, content: { id, status: "success" } };
       } catch (error: any) {
+        if (String(error?.message).includes("paid_registration_required")) {
+          return { statusCode: 409, content: { error: "paid_registration_required" } };
+        }
         if (String(error?.message || "").includes("UNIQUE")) continue;
         throw error;
       }
@@ -2538,6 +2703,12 @@ export class SqliteAppDatabase implements AppDatabase {
       if (!order) return undefined;
       if (order.status === "paid" && input.payment_status === "verified") return order;
       if (!["pending_payment", "payment_submitted"].includes(order.status) && input.payment_status !== "refunded") return order;
+      if (input.payment_status === "verified") {
+        const paymentRef = String(input.payment_reference || order.payment_reference || "").trim().normalize("NFKC").toUpperCase();
+        if (paymentRef && this.db.prepare("SELECT 1 FROM paid_payment_attempts WHERE status='verified' AND trusted_reference=? LIMIT 1").get(paymentRef)) {
+          throw new Error("duplicate_reference_or_proof");
+        }
+      }
       const nextStatus = input.payment_status === "verified" ? "paid" : input.payment_status === "refunded" ? "refunded" : "rejected";
       const ticketStatus = input.payment_status === "verified" ? "issued" : "voided";
       this.db.prepare("UPDATE direct_orders SET status=?,payment_reference=COALESCE(?,payment_reference),rejection_reason=?,hold_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?")
@@ -2596,6 +2767,12 @@ export class SqliteAppDatabase implements AppDatabase {
   async updateDirectTicketPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
     const update = this.db.transaction(() => {
       const ticket = this.directTicketQuery("WHERE t.id = ?", [id])[0]; if (!ticket || (ticket.status !== "held" && input.payment_status !== "refunded")) return ticket;
+      if (input.payment_status === "verified") {
+        const paymentRef = String(input.payment_reference || ticket.payment_reference || "").trim().normalize("NFKC").toUpperCase();
+        if (paymentRef && this.db.prepare("SELECT 1 FROM paid_payment_attempts WHERE status='verified' AND trusted_reference=? LIMIT 1").get(paymentRef)) {
+          throw new Error("duplicate_reference_or_proof");
+        }
+      }
       const issued = input.payment_status === "verified";
       this.db.prepare(`UPDATE direct_tickets SET payment_status=?, payment_reference=COALESCE(?,payment_reference), payment_verified_by_user_id=?, payment_verified_at=CURRENT_TIMESTAMP, rejection_reason=?, status=?, issued_at=CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE issued_at END, voided_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP END, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(input.payment_status,input.payment_reference || null,input.verified_by_user_id || null,input.rejection_reason || null,issued ? "issued" : "voided",issued ? 1 : 0,issued ? 1 : 0,id);
       this.db.prepare("UPDATE direct_seats SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(issued ? "issued" : "available", ticket.seat_id);

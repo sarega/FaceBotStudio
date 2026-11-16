@@ -1,3 +1,8 @@
+import { paidProofEncryptionConfigured } from "./backend/paidProofEncryption";
+import { parsePaidSeminarFields } from "./backend/paidSeminarFields";
+import { parsePaidMessengerCommand, paidMessengerStatusText } from "./backend/paidMessenger";
+import { detectPaidProofImage } from "./backend/paidProofImage";
+import { PaidBookingError } from "./backend/db/paidRegistration";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Server as HttpServer } from "node:http";
 import helmet from "helmet";
@@ -6,7 +11,7 @@ import { Parser } from "json2csv";
 import { Resvg } from "@resvg/resvg-js";
 import { PDFDocument, rgb } from "pdf-lib";
 import QRCode from "qrcode";
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -4914,7 +4919,8 @@ async function buildPublicEventPagePayload(
   });
   const configuredExternalTicketUrl = String(settings.event_public_external_ticket_url || "").trim();
   const externalTicketUrl = /^https?:\/\//i.test(configuredExternalTicketUrl) ? configuredExternalTicketUrl : "";
-  const ticketingMode = settings.event_public_ticketing_mode === "customer"
+  const paidSettings = await appDb.readPaidMode(event.id);
+  const ticketingMode = paidSettings ? "paid_registration" : settings.event_public_ticketing_mode === "customer"
     ? "customer"
     : settings.event_public_ticketing_mode === "external" && externalTicketUrl
       ? "external"
@@ -4976,6 +4982,7 @@ async function buildPublicEventPagePayload(
       timezone: normalizeTimeZone(settings.event_timezone),
       registration_enabled: ticketingMode === "inline" && isTruthySetting(settings.event_public_registration_enabled ?? "1"),
       ticketing_mode: ticketingMode,
+      paid_registration_enabled: paidSettings?.published === true && paidPublicEnrollmentEnabled(),
       external_ticket_url: externalTicketUrl,
       customer_checkout_enabled: customerCheckoutEnabled,
       ticket_sales: ticketSales,
@@ -5078,12 +5085,15 @@ async function buildPublicEventCatalogEntry(
   });
   if (!publicSlug) return null;
 
-  const customerTicketingSelected = settings.event_public_ticketing_mode === "customer";
-  const externalTicketUrl = settings.event_public_ticketing_mode === "external"
+  const paidMode = await appDb.readPaidMode(event.id);
+  const paidCatalog = paidMode?.published && paidPublicEnrollmentEnabled() ? await appDb.readPaidCatalog(event.id) : undefined;
+  if (paidMode && !paidCatalog?.categories.length) return null;
+  const customerTicketingSelected = !paidMode && settings.event_public_ticketing_mode === "customer";
+  const externalTicketUrl = !paidMode && settings.event_public_ticketing_mode === "external"
     ? normalizePublicExternalTicketUrl(settings.event_public_external_ticket_url)
     : "";
-  const registrationEnabled = settings.event_public_ticketing_mode === "inline"
-    && isTruthySetting(settings.event_public_registration_enabled ?? "1");
+  const registrationEnabled = Boolean(paidCatalog) || (!paidMode && settings.event_public_ticketing_mode === "inline"
+    && isTruthySetting(settings.event_public_registration_enabled ?? "1"));
   const directTicketingEnabled = customerTicketingSelected && isPublicDirectTicketingEnabled(settings);
   const customerCheckoutEnabled = customerTicketingSelected && isCustomerPaidCheckoutEnabled(settings);
   if (!hasPublicCatalogAction({ registrationEnabled, externalTicketUrl, directTicketingEnabled })) return null;
@@ -5103,7 +5113,7 @@ async function buildPublicEventCatalogEntry(
   const organizer = buildOrganizerProfileResponse(organizerProfile, settings, event.organizer_id, event.organizer_name || "");
   const availability = resolvePublicCatalogAvailability({
     registrationEnabled,
-    registrationAvailability: event.registration_availability || getEventState(settings).registrationStatus,
+    registrationAvailability: paidCatalog ? "open" : event.registration_availability || getEventState(settings).registrationStatus,
     externalTicketUrl,
     directTicketingEnabled,
     availableSeatCount: availableSeats.length,
@@ -5138,7 +5148,8 @@ async function buildPublicEventCatalogEntry(
       direct_ticketing_enabled: directTicketingEnabled,
       customer_checkout_enabled: customerCheckoutEnabled,
     },
-    starting_price: prices.length > 0 ? Math.min(...prices) : null,
+    starting_price: paidCatalog ? Math.min(...paidCatalog.categories.map(({ unit_minor }) => unit_minor / 100))
+      : prices.length > 0 ? Math.min(...prices) : null,
     performance_summary: {
       count: activePerformances.length,
       upcoming: activePerformances.slice(0, 3).map((performance) => ({
@@ -11361,6 +11372,10 @@ function isTruthySetting(value: unknown) {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+function paidPublicEnrollmentEnabled() {
+  return process.env.PAID_REGISTRATION_PUBLIC_ENABLED === "1" && isCustomerAppEnabled() && paidProofEncryptionConfigured();
+}
+
 function isCustomerAppEnabled() {
   return isTruthySetting(process.env.CUSTOMER_APP_ENABLED ?? "0");
 }
@@ -12634,7 +12649,80 @@ async function sendFacebookNotificationDelivery(delivery: NotificationDeliveryRo
 }
 
 async function sendCurrentNotificationDelivery(delivery: NotificationDeliveryRow): Promise<NotificationSendResult> {
+  if (delivery.kind === "paid_booking.messenger_confirmed") {
+    const payload = JSON.parse(delivery.payload_json) as {
+      eventId: string; customerId: string; pageId: string; senderId: string; language: string; inboundMs: number;
+    };
+    if (Date.now() - payload.inboundMs >= 24 * 60 * 60_000) {
+      throw new NotificationDeliveryError("Messenger response window expired", false);
+    }
+    const routing = await resolveFacebookInboundRouting(payload.pageId);
+    const customerId = await appDb.readPaidMessengerCustomer(payload.eventId, payload.pageId, payload.senderId);
+    const booking = customerId === payload.customerId && delivery.related_id
+      ? await appDb.readOwnedPaidBooking(payload.eventId, delivery.related_id, customerId) : undefined;
+    if (!routing.channel?.is_active || !routing.activeCandidateIds.includes(payload.eventId) ||
+        !booking || booking.state !== "confirmed" || booking.payment_state !== "verified") {
+      throw new NotificationDeliveryError("Messenger booking confirmation is no longer eligible for delivery", false);
+    }
+    const link = buildAbsoluteAppAssetUrl(`/app/orders?paid_booking=${encodeURIComponent(String(booking.reference))}`);
+    if (!link || !/^https?:\/\//i.test(link)) throw new NotificationDeliveryError("APP_URL is required for booking confirmation", true);
+    const text = payload.language === "th"
+      ? `ยืนยันการจองแล้ว เข้าสู่ระบบเพื่อเปิด QR เข้างานรายคน ${link}`
+      : `Your booking is confirmed. Sign in to open each attendee’s admission QR: ${link}`;
+    return sendFacebookNotificationDelivery({
+      ...delivery,
+      payload_json: JSON.stringify({ type: "text", recipient_id: payload.senderId, page_id: payload.pageId, text }),
+    });
+  }
   if (delivery.channel === "facebook") return sendFacebookNotificationDelivery(delivery);
+  if (delivery.kind === "paid_booking.payment_reminder") {
+    const payload = JSON.parse(delivery.payload_json) as { eventId:string; customerId:string };
+    const booking = delivery.related_id &&
+      await appDb.readOwnedPaidBooking(payload.eventId, delivery.related_id, payload.customerId);
+    const account = await appDb.getCustomerAccountById(payload.customerId);
+    if (!booking || booking.state !== "awaiting_payment" || Number(booking.due_ms) <= Date.now() ||
+        !account || !isVerifiedCustomer(account)) {
+      throw new NotificationDeliveryError("Booking no longer eligible for payment reminder", false);
+    }
+    const preferences = await appDb.getCustomerNotificationPreferences(account.id);
+    if (!preferences.email_transactional_enabled) return {};
+    const link = buildAbsoluteAppAssetUrl("/app/orders?paid_booking=" + encodeURIComponent(String(booking.reference)));
+    if (!link || !/^https?:\/\//i.test(link)) throw new NotificationDeliveryError("APP_URL required for payment reminder",true);
+    const deadline = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Bangkok",dateStyle:"medium",timeStyle:"short",
+    }).format(Number(booking.due_ms));
+    const subject="Paid registration payment deadline reminder";
+    const textMessage="Your reserved place is awaiting payment verification. Deadline: "+deadline+
+      " (Asia/Bangkok). Sign in to review the amount and upload your payment proof: "+link;
+    return sendWithCurrentNotificationSender({
+      ...delivery,recipient:account.email,
+      payload_json:JSON.stringify({ subject,text:textMessage,html:
+        "<p>"+textMessage.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</p>" }),
+    });
+  }
+  if (delivery.kind === "paid_booking.confirmed") {
+    const payload = JSON.parse(delivery.payload_json) as { eventId: string; customerId: string };
+    const booking = delivery.related_id && await appDb.readOwnedPaidBooking(payload.eventId, delivery.related_id, payload.customerId);
+    const account = await appDb.getCustomerAccountById(payload.customerId);
+    if (!booking || booking.state !== "confirmed" || booking.payment_state !== "verified" || !account || !isVerifiedCustomer(account)) {
+      throw new NotificationDeliveryError("Paid booking confirmation is no longer eligible for delivery", false);
+    }
+    const preferences = await appDb.getCustomerNotificationPreferences(account.id);
+    if (!preferences.email_transactional_enabled) return {};
+    const link = buildAbsoluteAppAssetUrl(`/app/orders?paid_booking=${encodeURIComponent(String(booking.reference))}`);
+    if (!link || !/^https?:\/\//i.test(link)) throw new NotificationDeliveryError("APP_URL is required for paid booking email", true);
+    const safeLink = link.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const subject = "Your paid registration is confirmed";
+    return sendWithCurrentNotificationSender({
+      ...delivery,
+      recipient: account.email,
+      payload_json: JSON.stringify({
+        subject,
+        text: `${subject}. Open Orders to view the admission QR for each attendee: ${link}`,
+        html: `<p>${subject}.</p><p><a href="${safeLink}">Open Orders</a> to view each attendee’s admission QR.</p>`,
+      }),
+    });
+  }
   return sendWithCurrentNotificationSender(delivery);
 }
 
@@ -13199,6 +13287,7 @@ async function handleIncomingFacebookText(
   attachments: CreateMessageAttachmentInput[] = [],
   messageMid?: string,
   dedupKey?: string,
+  inboundMs = 0,
 ) {
   const trimmed = String(text || "").trim();
   if (!trimmed && attachments.length === 0) return;
@@ -13217,6 +13306,28 @@ async function handleIncomingFacebookText(
   });
   if (routing.activeCandidateIds.length === 0) {
     console.warn(`No active event mapping found for Facebook page ${pageId || "unknown"}; skipping automated reply`);
+    return;
+  }
+
+  const paidLink = /^LINK-PAID ([a-f0-9]{64})$/i.exec(trimmed);
+  if (paidLink) {
+    if (!pageId || !routing.channel?.is_active || !String(process.env.FACEBOOK_APP_SECRET || "").trim()) return;
+    const tokenHash = hashSessionToken(paidLink[1].toLowerCase());
+    let linked = false;
+    for (const candidate of routing.activeCandidateIds) {
+      linked = await appDb.exchangePaidMessengerLinkToken(candidate, pageId, senderId, tokenHash);
+      if (linked) {
+        await appDb.setChannelSenderEventSelection(routing.channel.id, senderId, candidate);
+        break;
+      }
+    }
+    await enqueueFacebookTextMessage(
+      senderId,
+      linked ? "เชื่อมบัญชีสำหรับการจองสำเร็จ / Booking account linked."
+        : "เชื่อมบัญชีไม่สำเร็จ กรุณาสร้างรหัสใหม่ / Could not link. Generate a new code.",
+      pageId,
+      { kind: "facebook.paid_booking.link", idempotencyKey: buildFacebookOutboundIdempotencyKey(messageMid || dedupKey, "paid-link") },
+    );
     return;
   }
 
@@ -13249,6 +13360,93 @@ async function handleIncomingFacebookText(
   if (!selection.eventId) return;
 
   const eventId = selection.eventId;
+  const paidCommand = parsePaidMessengerCommand(trimmed);
+  if (paidCommand && (!("natural" in paidCommand) || await appDb.readPaidMode(eventId))) {
+    if (!pageId || !routing.channel?.is_active || !String(process.env.FACEBOOK_APP_SECRET || "").trim()) return;
+    const { thai } = paidCommand;
+    let reply: string;
+    if (paidCommand.action === "prices") {
+      const catalog = paidPublicEnrollmentEnabled() ? await appDb.readPaidCatalog(eventId) : undefined;
+      const settings = await getSettingsMap(eventId);
+      const event = await appDb.getEventById(eventId);
+      if (!catalog?.categories.length || !event || !isTruthySetting(settings.event_public_page_enabled ?? "0")) {
+        reply = thai ? "กิจกรรมนี้ยังไม่เปิดให้จองแบบชำระเงิน" : "Paid registration is unavailable for this event.";
+      } else {
+        const formatter = new Intl.NumberFormat(thai ? "th-TH" : "en-TH", { currency: "THB", style: "currency" });
+        const lines = catalog.categories.slice(0, 12).map((item) => `${item.label} (${item.id}): ${formatter.format(item.unit_minor / 100)}`);
+        const payload = await buildPublicEventPagePayload(event, settings);
+        const link = payload?.event.slug && buildAbsoluteAppAssetUrl(`/events/${encodeURIComponent(payload.event.slug)}`);
+        reply = [thai ? "ราคาต่อผู้เข้าร่วม" : "Price per attendee", ...lines, link].filter(Boolean).join("\n");
+      }
+    } else if ((paidCommand.action === "status" || paidCommand.action === "proof" || paidCommand.action === "qr")) {
+      const status = await appDb.readPaidMessengerStatus(eventId, pageId, senderId, paidCommand.reference);
+      if (!status) {
+        reply = thai ? "ไม่พบการจองสำหรับบัญชีที่เชื่อมไว้ กรุณาตรวจสอบในหน้า Orders หลังเข้าสู่ระบบ"
+          : "No booking found for the linked account. Sign in to Orders to recover it.";
+      } else {
+        const settings = await getSettingsMap(eventId);
+        const link = buildAbsoluteAppAssetUrl(`/app/orders?paid_booking=${encodeURIComponent(paidCommand.reference)}`);
+        const instruction = paidCommand.action === "proof" && status.state === "awaiting_payment"
+          ? (thai ? "เข้าสู่ระบบเพื่อแนบสลิปในหน้าการจอง" : "Sign in to upload payment proof on the booking page.")
+          : paidCommand.action === "qr" && status.state === "confirmed"
+            ? (thai ? "เข้าสู่ระบบเพื่อเปิด QR เข้างานรายคน" : "Sign in to open each attendee’s admission QR.")
+            : "";
+        reply = [paidMessengerStatusText(status, thai, normalizeTimeZone(settings.event_timezone)), instruction, link].filter(Boolean).join("\n");
+      }
+    } else {
+      const help = thai
+        ? "กรุณาระบุจำนวนคน รหัสหมวด และชื่อ-นามสกุลทุกคน เช่น ขอจอง 2 คน หมวด adult ชื่อ สมชาย ใจดี และ สมหญิง ใจดี ส่ง ราคาจอง เพื่อดูรหัสหมวด"
+        : "Give the group size, category code and each full name. For example: Please book 2 places in adult for Alice Smith and Bob Jones. Send paid prices for category codes.";
+      reply = help;
+      if (paidCommand.action !== "help") {
+        try {
+          const settings = await getSettingsMap(eventId);
+          const event = await appDb.getEventById(eventId);
+          if (!event || !paidPublicEnrollmentEnabled() ||
+              !isTruthySetting(settings.event_public_page_enabled ?? "0")) {
+            throw new PaidBookingError("registration_unavailable");
+          }
+          if (paidCommand.action === "draft") {
+            const messageKey = outboundIdempotencyKey("paid-draft");
+            if (!messageKey) throw new PaidBookingError("invalid_booking");
+            const quote = await appDb.createPaidMessengerDraft({ eventId, pageId, senderId, messageKey, attendees: paidCommand.attendees });
+            const total = new Intl.NumberFormat(thai ? "th-TH" : "en-TH", { currency: "THB", style: "currency" }).format(quote.totalMinor / 100);
+            reply = thai ? `ผู้เข้าร่วม ${quote.count} คน ยอดรวม ${total} ส่ง ยืนยันจอง ${quote.id} ภายใน 15 นาทีเพื่อกันที่`
+              : `${quote.count} attendee(s), total ${total}. Send paid confirm ${quote.id} within 15 minutes to reserve places.`;
+          } else {
+            const payment = resolveOrganizerPaymentConfig(await resolveEventOrganizerFinancialProfile(event, settings));
+            const receiver = payment.promptpay_ready && payment.source === "organizer_profile"
+              ? { id: payment.receiver_id.replace(/[^0-9]/g, ""), name: payment.receiver_name, profileVersion: payment.profile_version }
+              : undefined;
+            const receipt = await appDb.confirmPaidMessengerDraft({ eventId, pageId, senderId, receiver, draftId: paidCommand.draftId, language: thai ? "th" : "en", inboundMs });
+            const status = await appDb.readPaidMessengerStatus(eventId, pageId, senderId, receipt.reference);
+            const text = status ? paidMessengerStatusText(status, thai, normalizeTimeZone(settings.event_timezone)) : "";
+            const link = buildAbsoluteAppAssetUrl(`/app/orders?paid_booking=${encodeURIComponent(receipt.reference)}`);
+            reply = [thai ? `เลขอ้างอิง ${receipt.reference}` : `Booking reference ${receipt.reference}`, text, link].filter(Boolean).join("\n");
+          }
+        } catch (error) {
+          if (!(error instanceof PaidBookingError)) throw error;
+          if (error.code === "seminar_form_required") {
+            const event = await appDb.getEventById(eventId);
+            const settings = await getSettingsMap(eventId);
+            const payload = event && await buildPublicEventPagePayload(event, settings);
+            const url = payload && buildAbsoluteAppAssetUrl(`/events/${encodeURIComponent(payload.event.slug)}#public-registration`);
+            reply = [thai ? "กิจกรรมนี้ต้องกรอกข้อมูลสัมมนา กรุณาจองจากหน้าเว็บ" : "This event requires seminar details. Complete the booking on the event page.", url].filter(Boolean).join("\n");
+          } else if (error.code === "messenger_link_required") {
+            reply = thai ? "กรุณาเชื่อมบัญชีจากหน้ากิจกรรมก่อนจอง" : "Link your verified account from the event page before booking.";
+          } else if (error.code === "capacity_exhausted") {
+            reply = thai ? "ที่ว่างไม่พอสำหรับกลุ่มนี้" : "There is not enough capacity for this group.";
+          } else {
+            reply = thai ? "จองไม่สำเร็จ กรุณาตรวจสอบราคาแล้วเริ่มใหม่จากหน้ากิจกรรม" : "Could not book. Check the latest prices and start again from the event page.";
+          }
+        }
+      }
+    }
+    await enqueueFacebookTextMessage(senderId, reply, pageId, {
+      kind: "facebook.paid_booking.status", idempotencyKey: outboundIdempotencyKey("paid-command"),
+    });
+    return;
+  }
   await saveMessage(senderId, trimmed, "incoming", eventId, pageId, attachments);
   const conversationKey = buildInboundConversationKey("facebook", senderId, eventId, pageId);
   markInboundConversationActivity(conversationKey);
@@ -13974,6 +14172,7 @@ async function processFacebookInboundJob(job: FacebookInboundJob) {
       job.attachments || [],
       job.messageMid || undefined,
       job.dedupKey,
+      job.eventTimestamp,
     );
   } catch (error) {
     void recordFacebookInboundFailure({
@@ -14224,6 +14423,22 @@ async function runAutonomousAdminAgentCheck() {
 
     if (settings.criticalAlertsEnabled) {
       const issues = criticalIssues(snapshots, diagnostics);
+      // Paid payment evidence must not wait for review without operator visibility.
+      // Use existing per-event authorization and avoid putting customer names or slips in Telegram.
+      for (const event of events) {
+        try {
+          const mode = await appDb.readPaidMode(event.id);
+          if (!mode?.published) continue;
+          const pending = await appDb.listPaidReviewQueue(event.id, ownerEvent.organizer_id, 0);
+          const overdue = pending.filter((item) => Number(item.created_ms) > 0 &&
+            now.getTime() - Number(item.created_ms) >= 24 * 60 * 60_000);
+          if (overdue.length) {
+            issues.push(`Paid Registration: ${event.name} มีรายการรอตรวจเกิน 24 ชั่วโมง ${overdue.length}${pending.length >= 21 ? "+" : ""} รายการ (ตรวจสอบใน Event Dashboard)`);
+          }
+        } catch (error) {
+          console.warn("[autonomous-agent] Paid review backlog unavailable for event", event.id, error);
+        }
+      }
       if (issues.length) {
         const alert = [
           "🚨 FaceBotStudio · แจ้งเตือนปัญหาที่ต้องตรวจสอบ",
@@ -14238,6 +14453,7 @@ async function runAutonomousAdminAgentCheck() {
             invalidEventIds: snapshots.filter((event) => event.availability === "invalid").map((event) => event.id).sort(),
             deliveryFailures: diagnostics.failedDeliveries > 0,
             agentFailures: diagnostics.failedAgentActions > 0,
+            paidReviewIssues: issues.filter((item) => item.startsWith("Paid Registration:")),
           })).digest("hex").slice(0, 16);
           const key = "facebot:auto:critical:" + schedule.dateKey + ":" + chatId + ":" + signature;
           await sendAutonomousTelegramOnce(redis, key, settings.telegramBotToken, chatId, alert);
@@ -14302,6 +14518,18 @@ async function startServer() {
   await appDb.initialize();
 
   if (RUN_EMBEDDED_WORKER) {
+    let expiryRun: Promise<void> | undefined;
+    const sweepPaidHolds = () => {
+      if (expiryRun) return;
+      expiryRun = (async () => {
+        for (const eventId of await appDb.listDuePaidEvents(Date.now())) {
+          await appDb.expirePaidBookings(eventId);
+        }
+      })().catch(() => console.error("Paid booking expiry sweep failed")).finally(() => { expiryRun = undefined; });
+    };
+    const paidExpiryTimer = setInterval(sweepPaidHolds, 30_000);
+    registerShutdownHandle({ close: async () => { clearInterval(paidExpiryTimer); await expiryRun; } });
+    sweepPaidHolds();
     registerShutdownHandle(await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true }));
     registerShutdownHandle(await startEmbeddedInstagramWorker(processInstagramInboundJob, { enabled: true }));
     registerShutdownHandle(await startEmbeddedLineWorker(processLineInboundJob, { enabled: true }));
@@ -16766,12 +16994,427 @@ async function startServer() {
       await sendDirectTicketDecisionEmail(verified);
       return res.json({ status: "verified", ticket_id: verified.id });
     } catch (error) {
-      if ((error as { code?: string }).code === "23505" || /unique/i.test(String((error as Error)?.message || ""))) {
+      if ((error as { code?: string }).code === "23505" || /unique|duplicate_reference_or_proof/i.test(String((error as Error)?.message || ""))) {
         await recordAudit(req, "direct_payment.duplicate_reference_rejected", "direct_ticket", ticket.id, { event_id: ticket.event_id, transaction_reference: transactionReference });
         return res.status(409).json({ error: "Transaction reference has already been used" });
       }
       console.error("Failed to process direct payment webhook:", error);
       return res.status(500).json({ error: "Failed to process payment notification" });
+    }
+  });
+
+  const paidSettingsPath = "/api/events/:eventId/paid-registration/settings";
+  const paidSettingsScope = requireEventScope({ paramKey: "eventId", queryKey: null, bodyKey: null, allowDefault: false, allowCheckinAccess: false });
+  app.get(paidSettingsPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+    try {
+      return res.json({ settings: await appDb.readPaidSettings(req.eventScope!.eventId) ?? null });
+    } catch {
+      return res.status(500).json({ error: "paid_settings_unavailable" });
+    }
+  });
+  app.patch(paidSettingsPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+    try {
+      const body = readObjectBody(req);
+      const { capacity, version, hold_minutes, published, categories, cutoff_ms } = body;
+      const fields = body.fields === undefined ? undefined : parsePaidSeminarFields(body.fields);
+      if (body.fields !== undefined && !fields) return res.status(400).json({ error: "invalid_seminar_fields" });
+      const integer = (value: unknown, min: number, max = 2_147_483_647): value is number =>
+        typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
+      if (!integer(capacity, 1) || !integer(version, 0, 2_147_483_646) || !integer(hold_minutes, 1) ||
+          typeof published !== "boolean" || (cutoff_ms != null && !integer(cutoff_ms, 1, 8_640_000_000_000_000)) ||
+          !Array.isArray(categories) || !categories.length || categories.length > 100) {
+        return res.status(400).json({ error: "invalid_paid_settings" });
+      }
+      const parsed = [];
+      const ids = new Set<string>();
+      for (const category of categories) {
+        if (!category || typeof category.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(category.id) ||
+            ids.has(category.id) || typeof category.label !== "string" || !category.label.trim() ||
+            category.label.length > 180 || !integer(category.unit_minor, 1) ||
+            (category.quota != null && !integer(category.quota, 1, capacity))) {
+          return res.status(400).json({ error: "invalid_paid_category" });
+        }
+        ids.add(category.id);
+        parsed.push({ id: category.id, label: category.label.trim(), unitMinor: category.unit_minor, quota: category.quota ?? null });
+      }
+      if (published && !paidPublicEnrollmentEnabled()) {
+        return res.status(409).json({ error: "paid_enrollment_disabled" });
+      }
+      if (published) {
+        const eventId = req.eventScope!.eventId;
+        const event = await appDb.getEventById(eventId);
+        const profile = event && await resolveEventOrganizerFinancialProfile(event, await getSettingsMap(eventId));
+        const payment = resolveOrganizerPaymentConfig(profile);
+        if (!payment.promptpay_ready || payment.source !== "organizer_profile") {
+          return res.status(409).json({ error: "payment_profile_unavailable" });
+        }
+      }
+      const settings = await appDb.savePaidSettings(req.eventScope!.eventId, {
+        organizationId: req.auth!.user.organization_id, capacity, version, holdMinutes: hold_minutes,
+        published, cutoffMs: cutoff_ms as number | null ?? null, categories: parsed, fields,
+      });
+      return res.json({ settings });
+    } catch (error) {
+      if (error instanceof PaidBookingError) return res.status(error.code === "event_not_found" ? 404 : 409).json({ error: error.code });
+      return res.status(500).json({ error: "paid_settings_unavailable" });
+    }
+  });
+
+  app.get("/api/public/events/:slug/paid-registration", publicRegistrationRateLimit, async (req, res) => {
+    try {
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "registration_unavailable" });
+      }
+      if (!paidPublicEnrollmentEnabled()) return res.status(404).json({ error: "registration_unavailable" });
+      const catalog = await appDb.readPaidCatalog(match.event.id);
+      if (!catalog) return res.status(404).json({ error: "registration_unavailable" });
+      return res.json({ registration_mode: "paid_registration", currency: "THB", ...catalog });
+    } catch {
+      return res.status(500).json({ error: "catalog_unavailable" });
+    }
+  });
+
+  app.post("/api/public/events/:slug/paid-bookings", publicRegistrationRateLimit, requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!paidPublicEnrollmentEnabled()) return res.status(404).json({ error: "registration_unavailable" });
+      const match = await resolvePublicEventBySlug(req.params.slug);
+      if (!match || !isTruthySetting(match.settings.event_public_page_enabled ?? "0")) {
+        return res.status(404).json({ error: "registration_unavailable" });
+      }
+      const body = readObjectBody(req);
+      const key = (req.get("Idempotency-Key") || "").trim();
+      const issues: ValidationIssue[] = [];
+      if (!key || key.length > 128) issues.push({ field: "Idempotency-Key", message: "A valid idempotency key is required" });
+      if (!Number.isSafeInteger(body.pricing_version) || Number(body.pricing_version) < 1) {
+        issues.push({ field: "pricing_version", message: "A valid pricing version is required" });
+      }
+      if (!Array.isArray(body.attendees) || body.attendees.length === 0 || body.attendees.length > 100) {
+        issues.push({ field: "attendees", message: "Send between 1 and 100 attendees" });
+        return respondValidationError(res, issues);
+      }
+      const asRecord = (value: unknown): Record<string, unknown> =>
+        value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+      const readContact = (value: Record<string, unknown>, path: string) => {
+        const email = readOptionalString(value, "email", 320);
+        if (email && !isLikelyEmailAddress(email)) issues.push({ field: `${path}.email`, message: "Invalid email" });
+        return { email, phone: readOptionalString(value, "phone", 64) };
+      };
+      const contact = asRecord(body.contact);
+      const name = readRequiredString(contact, "name", issues, { label: "Contact name", maxLength: 180 });
+      const contactDetails = readContact(contact, "contact");
+      const attendees = body.attendees.map((record, index) => {
+        const row = asRecord(record);
+        return {
+          categoryId: readRequiredString(row, "category_id", issues, { label: "Category", maxLength: 128 }),
+          firstName: readRequiredString(row, "first_name", issues, { label: "First name", maxLength: 180 }),
+          lastName: readRequiredString(row, "last_name", issues, { label: "Last name", maxLength: 180 }),
+          answers: row.answers,
+          ...readContact(row, `attendees.${index}`),
+        };
+      });
+      if (issues.length) return respondValidationError(res, issues);
+      const profile = await resolveEventOrganizerFinancialProfile(match.event, match.settings);
+      const payment = resolveOrganizerPaymentConfig(profile);
+      const receiver = payment.promptpay_ready && payment.source === "organizer_profile"
+        ? { id: payment.receiver_id.replace(/[^0-9]/g, ""), name: payment.receiver_name, profileVersion: payment.profile_version }
+        : undefined;
+      const booking = await appDb.createPaidBooking({
+        eventId: match.event.id, customerId: req.customer!.account.id, key, pricingVersion: Number(body.pricing_version),
+        contact: { name, ...contactDetails }, attendees, answers: body.answers, receiver,
+      });
+      return res.status(201).json({
+        id: booking.id, event_id: match.event.id, reference: booking.reference, status: booking.state, payment_status: "unpaid",
+        currency: booking.currency, total_due_minor: booking.totalMinor, due_at: new Date(booking.dueMs).toISOString(), version: booking.version,
+      });
+    } catch (error) {
+      if (error instanceof PaidBookingError) {
+        if (error.code === "invalid_seminar_answers") return res.status(422).json({ error: error.code });
+        if (error.code === "payment_profile_unavailable") return res.status(503).json({ error: error.code });
+        const unavailable = error.code === "registration_unavailable" || error.code === "event_not_found";
+        return res.status(unavailable ? 404 : 409).json({ error: error.code });
+      }
+      return res.status(500).json({ error: "booking_unavailable" });
+    }
+  });
+
+  app.post("/api/customer/paid-bookings/:eventId/messenger-link", publicRegistrationRateLimit,
+    requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+      try {
+        if (!String(process.env.FACEBOOK_APP_SECRET || "").trim()) return res.status(503).json({ error: "messenger_link_unavailable" });
+        const token = randomBytes(32).toString("hex");
+        const expiresMs = await appDb.createPaidMessengerLinkToken(req.params.eventId, req.customer!.account.id, hashSessionToken(token));
+        return res.status(201).set("Cache-Control", "private, no-store").json({
+          command: `LINK-PAID ${token}`, expires_at: new Date(expiresMs).toISOString(),
+        });
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });
+        return res.status(500).json({ error: "messenger_link_unavailable" });
+      }
+    },
+  );
+  app.delete("/api/customer/paid-bookings/:eventId/messenger-link", requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    try {
+      await appDb.unlinkPaidMessenger(req.params.eventId, req.customer!.account.id);
+      return res.status(204).end();
+    } catch (error) {
+      if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });
+      return res.status(500).json({ error: "messenger_link_unavailable" });
+    }
+  });
+
+  app.get("/api/customer/paid-bookings", requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    const offset = Number(req.query.offset ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0) return res.status(400).json({ error: "invalid_offset" });
+    const reference = typeof req.query.reference === "string" ? req.query.reference.trim().toLowerCase() : "";
+    if (reference && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(reference)) {
+      return res.status(400).json({ error: "invalid_reference" });
+    }
+    try {
+      const pageSize = 20;
+      const bookings = await appDb.listOwnedPaidBookings(req.customer!.account.id, pageSize + 1, offset, reference);
+      return res.set("Cache-Control", "private, no-store").json({
+        bookings: bookings.slice(0, pageSize), next_offset: bookings.length > pageSize ? offset + pageSize : null,
+      });
+    } catch {
+      return res.status(500).json({ error: "booking_unavailable" });
+    }
+  });
+
+  app.get("/api/customer/paid-bookings/:eventId/:id/attendees/:attendeeId/credential",
+    requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+      try {
+        const credential = await appDb.readPaidCredential(
+          req.params.eventId, req.params.id, req.params.attendeeId, req.customer!.account.id,
+        );
+        if (!credential) return res.status(404).json({ error: "credential_not_found" });
+        const image = await QRCode.toBuffer(credential, { width: 480, margin: 3 });
+        return res.set("Cache-Control", "private, no-store").type("image/png").send(image);
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({ error: "credential_not_found" });
+        return res.status(500).json({ error: "credential_unavailable" });
+      }
+    },
+  );
+
+  const paidCheckin = async (req: AuthenticatedRequest, res: Response, eventId: string, actor: string, organizationId?: string) => {
+    const credential = readObjectBody(req).credential;
+    if (typeof credential !== "string" || credential.length > 64) return res.status(400).json({ error: "invalid_credential" });
+    try {
+      const result = await appDb.checkInPaidCredential(eventId, credential, actor, organizationId);
+      if (!result) return res.status(404).json({ error: "Invalid or unavailable admission QR" });
+      return res.status(result.already_checked_in ? 409 : 200).json({
+        ...result, error: result.already_checked_in ? "Already checked in" : undefined,
+      });
+    } catch (error) {
+      if (error instanceof PaidBookingError) return res.status(404).json({ error: "credential_not_found" });
+      return res.status(500).json({ error: "checkin_unavailable" });
+    }
+  };
+
+  app.post("/api/events/:eventId/paid-registration/checkin",
+    requireRoles(["owner", "admin", "operator", "cashier", "checker"]), paidSettingsScope,
+    (req: AuthenticatedRequest, res) => paidCheckin(req, res, req.eventScope!.eventId, req.auth!.user.id, req.auth!.user.organization_id),
+  );
+  app.post("/api/checkin-access/checkin-paid", checkinAccessIpRateLimit, checkinAccessCheckinRateLimit,
+    requireEventScope({ allowDefault: false, allowCheckinAccess: true, queryKey: null, bodyKey: null, paramKey: null }),
+    (req: AuthenticatedRequest, res) => {
+      const session = req.checkinAccess;
+      if (!session) return res.status(401).json({ error: "Check-in access session not found or expired" });
+      return paidCheckin(req, res, session.eventId, `checkin:${session.checkinSessionId}`);
+    },
+  );
+
+  app.get("/api/customer/paid-bookings/:eventId/:id/payment-qr", requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    try {
+      const instructions = await appDb.readPaidPaymentInstructions(req.params.eventId, req.params.id, req.customer!.account.id);
+      if (!instructions) return res.status(404).json({ error: "booking_not_payable" });
+      const payload = buildPromptPayPayload(instructions.receiverId, instructions.totalMinor / 100);
+      if (!payload) return res.status(503).json({ error: "payment_profile_unavailable" });
+      const image = await QRCode.toBuffer(payload, { width: 480, margin: 2 });
+      return res.set("Cache-Control", "private, no-store").type("image/png").send(image);
+    } catch (error) {
+      if (error instanceof PaidBookingError) return res.status(404).json({ error: "booking_not_payable" });
+      return res.status(500).json({ error: "payment_qr_unavailable" });
+    }
+  });
+
+  app.get("/api/events/:eventId/paid-registration/summary",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      try {
+        const summary = await appDb.readPaidEventSummary(req.eventScope!.eventId, req.auth!.user.organization_id);
+        return res.set("Cache-Control", "private, no-store").json({ summary: summary ?? null });
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });
+        return res.status(500).json({ error: "paid_summary_unavailable" });
+      }
+    },
+  );
+
+  app.get("/api/events/:eventId/paid-registration/review-queue",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      const offset = Number(req.query.offset ?? 0);
+      if (!Number.isSafeInteger(offset) || offset < 0) return res.status(400).json({ error: "invalid_offset" });
+      const reference = typeof req.query.reference === "string" ? req.query.reference.trim().toLowerCase() : undefined;
+      if (reference && !/^[a-f0-9-]{36}$/.test(reference)) return res.status(400).json({ error: "invalid_reference" });
+      try {
+        const rows = await appDb.listPaidReviewQueue(req.eventScope!.eventId, req.auth!.user.organization_id, offset, reference);
+        return res.set("Cache-Control", "private, no-store").json({
+          reviews: rows.slice(0, 20), next_offset: rows.length > 20 ? offset + 20 : null,
+        });
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });
+        return res.status(500).json({ error: "review_queue_unavailable" });
+      }
+    },
+  );
+
+  app.get("/api/events/:eventId/paid-registration/bookings/by-reference/:reference",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      if (!/^[a-f0-9-]{36}$/i.test(req.params.reference)) return res.status(400).json({ error: "invalid_reference" });
+      try {
+        const booking = await appDb.readPaidAdminBooking(req.eventScope!.eventId,
+          req.auth!.user.organization_id, req.params.reference.toLowerCase());
+        return res.set("Cache-Control", "private, no-store").status(booking ? 200 : 404).json(booking ? { booking } : { error: "booking_not_found" });
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({ error: error.code });
+        return res.status(500).json({ error: "booking_unavailable" });
+      }
+    },
+  );
+
+  app.post("/api/events/:eventId/paid-registration/bookings/:id/manage",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      const body = readObjectBody(req);
+      const action = String(body.action || "");
+      const key = req.get("Idempotency-Key")?.trim() || "";
+      if (!["extend","cancel","reinstate","refund"].includes(action) ||
+          !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
+          typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
+          (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
+            Number(body.hold_minutes) < 5 || Number(body.hold_minutes) > 43200)) ||
+          (action === "refund" && (typeof body.refund_reference !== "string" || !body.refund_reference.trim()))) {
+        return res.status(400).json({ error: "invalid_admin_action" });
+      }
+      try {
+        const result = await appDb.managePaidBooking({
+          eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
+          actorId:req.auth!.user.id,key,version:Number(body.version),
+          action:action as "extend"|"cancel"|"reinstate"|"refund",reason:body.reason.trim(),
+          holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
+          refundReference:typeof body.refund_reference === "string" ? body.refund_reference : undefined,
+        });
+        return res.set("Cache-Control","private, no-store").json(result);
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(
+          error.code === "booking_not_found" || error.code === "event_not_found" ? 404 :
+          error.code === "invalid_admin_action" ? 400 : 409,
+        ).json({ error:error.code });
+        if (/unique/i.test(String((error as Error).message))) return res.status(409).json({ error:"duplicate_refund_reference" });
+        return res.status(500).json({ error:"booking_management_unavailable" });
+      }
+    },
+  );
+
+  app.post("/api/events/:eventId/paid-registration/bookings/:id/review",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      const body = readObjectBody(req);
+      const key = req.get("Idempotency-Key")?.trim() || "";
+      const { decision, version, attempt_id, reason } = body;
+      const observed = body.observed as Record<string, unknown> | undefined;
+      if (!key || key.length > 128 || (decision !== "approve" && decision !== "reject" && decision !== "flag") ||
+          !Number.isSafeInteger(version) || Number(version) < 1 ||
+          (attempt_id == null ? decision !== "approve" : typeof attempt_id !== "string" || !attempt_id || attempt_id.length > 128) ||
+          typeof reason !== "string" || !reason.trim() || reason.length > 1000 ||
+          (decision === "approve" && (!observed || observed.currency !== "THB" ||
+            typeof observed.reference !== "string" || typeof observed.receiver_id !== "string" ||
+            typeof observed.paid_at !== "string" || !Number.isSafeInteger(observed.amount_minor)))) {
+        return res.status(400).json({ error: "invalid_review" });
+      }
+      try {
+        const result = await appDb.reviewPaidProof({
+          eventId: req.eventScope!.eventId, bookingId: req.params.id, attemptId: typeof attempt_id === "string" ? attempt_id : undefined,
+          organizationId: req.auth!.user.organization_id, reviewerId: req.auth!.user.id,
+          key, version: Number(version), decision, reason: reason.trim(),
+          observed: decision === "approve" && observed ? {
+            amountMinor: Number(observed.amount_minor), transferMs: Date.parse(String(observed.paid_at)),
+            reference: String(observed.reference), receiverNamespace: String(observed.receiver_id),
+          } : undefined,
+        });
+        return res.set("Cache-Control", "private, no-store").json(result);
+      } catch (error) {
+        if (error instanceof PaidBookingError) {
+          const missing = ["event_not_found", "booking_not_found", "attempt_not_found"].includes(error.code);
+          return res.status(missing ? 404 : error.code === "invalid_review" ? 400 : 409).json({ error: error.code });
+        }
+        return res.status(500).json({ error: "review_unavailable" });
+      }
+    },
+  );
+
+  app.post("/api/customer/paid-bookings/:eventId/:id/proofs", publicRegistrationRateLimit, requireVerifiedCustomer,
+    express.raw({ type: "application/octet-stream", limit: "4mb", inflate: false }),
+    async (req: AuthenticatedRequest, res) => {
+      const key = req.get("Idempotency-Key")?.trim() || "";
+      const version = Number(req.get("x-booking-version"));
+      const claimedMinor = Number(req.get("x-claimed-minor"));
+      const claimedTransferMs = Date.parse(req.get("x-claimed-transfer-at") || "");
+      const method = req.get("x-payment-method");
+      const reference = req.get("x-payment-reference")?.trim() || null;
+      if (!key || key.length > 128 || !Number.isSafeInteger(version) || version < 1 ||
+          !Number.isSafeInteger(claimedMinor) || claimedMinor < 1 || !Number.isSafeInteger(claimedTransferMs) ||
+          claimedTransferMs < 1 || (reference?.length ?? 0) > 255 || (method !== "promptpay" && method !== "bank_transfer")) {
+        return res.status(400).json({ error: "invalid_proof_metadata" });
+      }
+      const bytes = Buffer.isBuffer(req.body) ? req.body : undefined;
+      if (!paidProofEncryptionConfigured()) return res.status(503).json({ error: "proof_storage_unavailable" });
+      const mime = bytes && await detectPaidProofImage(bytes);
+      if (!bytes || !mime || mime !== req.get("x-proof-mime")) return res.status(415).json({ error: "invalid_proof_image" });
+      try {
+        const result = await appDb.submitPaidProof({
+          eventId: req.params.eventId, bookingId: req.params.id, customerId: req.customer!.account.id,
+          key, version, method, claimedMinor, claimedTransferMs, reference, mime, content: bytes,
+        });
+        return res.status(202).set("Cache-Control", "private, no-store").json(result);
+      } catch (error) {
+        if (error instanceof PaidBookingError) {
+          const missing = ["booking_not_found", "event_not_found"].includes(error.code);
+          return res.status(missing ? 404 : error.code === "proof_storage_unavailable" ? 503 : 409).json({ error: missing ? "booking_not_found" : error.code });
+        }
+        return res.status(500).json({ error: "proof_unavailable" });
+      }
+    },
+  );
+
+  app.get("/api/events/:eventId/paid-registration/bookings/:id/proofs/:attemptId",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      try {
+        const proof = await appDb.readPaidProof(req.eventScope!.eventId, req.params.id, req.params.attemptId, req.auth!.user.organization_id);
+        if (!proof) return res.status(404).json({ error: "proof_not_found" });
+        await recordAudit(req, "paid_registration.proof_viewed", "paid_booking", req.params.id, {
+          event_id: req.eventScope!.eventId, attempt_id: req.params.attemptId,
+        });
+        return res.set({
+          "Content-Type": proof.mime, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+          "Content-Disposition": "inline", "Content-Security-Policy": "sandbox; default-src 'none'",
+        }).send(proof.content);
+      } catch {
+        return res.status(500).json({ error: "proof_unavailable" });
+      }
+    },
+  );
+
+  app.get("/api/customer/paid-bookings/:eventId/:id", requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+    try {
+      const booking = await appDb.readOwnedPaidBooking(req.params.eventId, req.params.id, req.customer!.account.id);
+      if (!booking) return res.status(404).json({ error: "booking_not_found" });
+      const { state, due_ms, total_minor, ...details } = booking;
+      return res.set("Cache-Control", "private, no-store").json({
+        ...details, status: state, due_at: new Date(Number(due_ms)).toISOString(), total_due_minor: total_minor,
+      });
+    } catch (error) {
+      if (error instanceof PaidBookingError) return res.status(404).json({ error: "booking_not_found" });
+      return res.status(500).json({ error: "booking_unavailable" });
     }
   });
 
@@ -18345,7 +18988,7 @@ async function startServer() {
       }
       return res.json(serializeCustomerOrder(updated));
     } catch (error) {
-      if ((error as { code?: string }).code === "23505" || /unique/i.test(String((error as Error)?.message || ""))) return res.status(409).json({ error: "This bank transaction reference has already been used" });
+      if ((error as { code?: string }).code === "23505" || /unique|duplicate_reference_or_proof/i.test(String((error as Error)?.message || ""))) return res.status(409).json({ error: "This bank transaction reference has already been used" });
       console.error("Failed to update direct order payment:", error);
       return res.status(500).json({ error: "Failed to update order payment" });
     }
@@ -18381,7 +19024,7 @@ async function startServer() {
     try {
       ticket = await appDb.updateDirectTicketPayment(req.params.id, { payment_status: paymentStatus, payment_reference: paymentReference, rejection_reason: readOptionalString(body, "rejection_reason", 500), verified_by_user_id: req.auth?.user.id });
     } catch (error) {
-      if ((error as { code?: string }).code === "23505" || /unique/i.test(String((error as Error)?.message || ""))) {
+      if ((error as { code?: string }).code === "23505" || /unique|duplicate_reference_or_proof/i.test(String((error as Error)?.message || ""))) {
         return res.status(409).json({ error: "This bank transaction reference has already been used" });
       }
       console.error("Failed to update direct-ticket payment:", error);

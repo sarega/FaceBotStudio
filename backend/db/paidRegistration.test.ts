@@ -1,0 +1,347 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import type { PaidBookingInput } from "./paidRegistration";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import Database from "better-sqlite3";
+import { SqliteAppDatabase } from "./sqliteAdapter";
+
+async function raceGroups(file: string, command: PaidBookingInput) {
+  const adapterUrl = new URL("./sqliteAdapter.ts", import.meta.url).href;
+  const source = `
+    import { SqliteAppDatabase } from ${JSON.stringify(adapterUrl)};
+    const db = new SqliteAppDatabase(process.argv[1]);
+    process.once("message", async (input) => {
+      try {
+        await db.createPaidBooking(input);
+        process.send("booked");
+      } catch (error) {
+        process.send(error.code || "unexpected");
+      } finally {
+        await db.close();
+        process.disconnect();
+      }
+    });
+    process.send("ready");
+  `;
+  const children = Array.from({ length: 2 }, () => spawn(process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", source, file],
+    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  ));
+  const exited = children.map((child) => once(child, "exit"));
+  try {
+    await Promise.all(children.map(async (child) => {
+      const [message] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+      assert.equal(message, "ready");
+    }));
+    const outcomes = children.map((child) => once(child, "message", { signal: AbortSignal.timeout(10_000) }));
+    children.forEach((child, index) => child.send({ ...command, key: `race-${index}` }));
+    return (await Promise.all(outcomes)).map(([message]) => message).sort();
+  } finally {
+    children.forEach((child) => { if (child.exitCode === null) child.kill(); });
+    await Promise.all(exited);
+  }
+}
+
+test("paid groups reserve capacity, replay safely, and expire once", async () => {
+  process.env.PAID_PROOF_ENCRYPTION_KEY = "01".repeat(32);
+  const directory = mkdtempSync(join(tmpdir(), "facebot-paid-"));
+  const file = join(directory, "test.db");
+  const db = new SqliteAppDatabase(file);
+  const second = new SqliteAppDatabase(file);
+  const fixture = new Database(file);
+  try {
+    await db.initialize();
+    await second.initialize();
+    const event = await db.createEvent({ name: "Paid workshop", organizer_id: "org_default" });
+    await db.updateEvent(event.id, { status: "active" });
+    const customer = await db.createCustomerAccount({
+      email: "paid@example.com", normalized_email: "paid@example.com", password_hash: "fixture",
+      first_name: "A", last_name: "B", phone: "", normalized_phone: "", accepted_terms_at: new Date(), accepted_privacy_at: new Date(),
+    });
+    const settings = {
+      organizationId: "org_default", version: 0, capacity: 3, holdMinutes: 15, cutoffMs: null, published: true,
+      categories: [{ id: "adult", label: "Adult", unitMinor: 25000, quota: 2 }],
+    };
+    await assert.rejects(db.savePaidSettings(event.id, { ...settings, organizationId: "other" }), /event_not_found/);
+    await db.savePaidSettings(event.id, settings);
+    await assert.rejects(second.savePaidSettings(event.id, settings), /version_conflict/);
+    assert.throws(() => fixture.prepare("INSERT INTO registrations (id,event_id,first_name,last_name) VALUES ('LEGACY',?,'Legacy','Guest')").run(event.id), /paid_registration_required/);
+    const command = {
+      eventId: event.id, customerId: customer.id, key: "accept-quote", pricingVersion: 1,
+      contact: { name: "Buyer" },
+      receiver: { id: "0812345678", name: "Organizer", profileVersion: 1 },
+      attendees: [
+        { categoryId: "adult", firstName: "One", lastName: "Guest" },
+        { categoryId: "adult", firstName: "Two", lastName: "Guest" },
+      ],
+    };
+    assert.deepEqual(await db.readPaidCatalog(event.id), {
+      pricing_version: 1, fields: [], categories: [{ id: "adult", label: "Adult", unit_minor: 25000 }],
+    });
+    const receipt = await db.createPaidBooking(command);
+    fixture.prepare("UPDATE customer_accounts SET status='active',email_verified_at=CURRENT_TIMESTAMP WHERE id=?").run(customer.id);
+    await db.createPaidMessengerLinkToken(event.id, customer.id, "hash-one");
+    assert.equal(await second.exchangePaidMessengerLinkToken(event.id, "page", "sender", "hash-one"), true);
+    assert.equal(await second.exchangePaidMessengerLinkToken(event.id, "page", "sender", "hash-one"), true);
+    assert.equal(await second.exchangePaidMessengerLinkToken(event.id, "other-page", "other-sender", "hash-one"), false);
+    assert.equal(await db.readPaidMessengerCustomer(event.id, "page", "sender"), customer.id);
+    assert.equal((await db.readPaidMessengerStatus(event.id, "page", "sender", receipt.reference))?.state, "awaiting_payment");
+    assert.equal(await db.readPaidMessengerStatus(event.id, "page", "unknown-sender", receipt.reference), undefined);
+    assert.equal(await db.readPaidMessengerStatus(event.id, "other-page", "sender", receipt.reference), undefined);
+    assert.equal(await db.readPaidMessengerCustomer(event.id, "other-page", "sender"), undefined);
+    await db.unlinkPaidMessenger(event.id, customer.id);
+    assert.equal(await db.readPaidMessengerCustomer(event.id, "page", "sender"), undefined);
+    assert.equal(await db.exchangePaidMessengerLinkToken(event.id, "page", "sender", "hash-one"), false);
+    assert.equal(await second.readOwnedPaidBooking(event.id, receipt.id, "other-customer"), undefined);
+    const owned = await second.readOwnedPaidBooking(event.id, receipt.id, customer.id);
+    assert.equal(owned?.state, "awaiting_payment");
+    assert.equal((await db.listOwnedPaidBookings(customer.id, 20, 0))[0]?.id, receipt.id);
+    assert.deepEqual(await second.listOwnedPaidBookings("other-customer", 20, 0), []);
+    assert.equal((owned?.attendees as unknown[]).length, 2);
+    assert.equal(receipt.totalMinor, 50000);
+    assert.deepEqual(await second.createPaidBooking(command), receipt);
+    await assert.rejects(second.createPaidBooking({ ...command, contact: { name: "Changed" } }), /idempotency_conflict/);
+    await assert.rejects(second.createPaidBooking({ ...command, key: "another-group" }), /capacity_exhausted/);
+    await assert.rejects(second.createPaidBooking({ ...command, key: "one-guest", attendees: command.attendees.slice(0, 1) }), /capacity_exhausted/);
+    await assert.rejects(db.savePaidSettings(event.id, { ...settings, version: 1, capacity: 1 }), /capacity_in_use/);
+    fixture.prepare("UPDATE paid_bookings SET created_ms=1,due_ms=2 WHERE id=?").run(receipt.id);
+    assert.deepEqual(await db.listDuePaidEvents(Date.now()), [event.id]);
+    assert.equal(await second.expirePaidBookings(event.id), 1);
+    assert.equal(await db.expirePaidBookings(event.id), 0);
+    assert.deepEqual(await raceGroups(file, command), ["booked", "capacity_exhausted"]);
+    assert.equal((fixture.prepare("SELECT COUNT(*) AS count FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id WHERE b.state='awaiting_payment'").get() as { count: number }).count, 2);
+    assert.equal((await db.listOwnedPaidBookings(customer.id, 20, 0)).length, 2);
+    const bookings = await db.listOwnedPaidBookings(customer.id, 20, 0);
+    const active = bookings.find((booking) => booking.status === "awaiting_payment")!;
+    const proof = {
+      eventId: event.id, bookingId: String(active.id), customerId: customer.id, key: "slip", version: 1,
+      method: "promptpay" as const, claimedMinor: 50000, claimedTransferMs: Date.now(), reference: null,
+      mime: "image/png" as const, content: Buffer.from("repository-level proof fixture"),
+    };
+    await assert.rejects(db.submitPaidProof({ ...proof, customerId: "other" }), /booking_not_found/);
+    await assert.rejects(db.submitPaidProof({ ...proof, bookingId: receipt.id }), /hold_expired/);
+    const submitted = await db.submitPaidProof(proof);
+    assert.equal(submitted.status, "verification_pending");
+    const [queued] = await db.listPaidReviewQueue(event.id, "org_default", 0);
+    assert.equal(queued.attempt_id, submitted.attempt_id);
+    assert.equal(queued.receiver_last_four, "5678");
+    assert.ok(!("receiver_id" in queued) && !("content" in queued));
+    await assert.rejects(db.listPaidReviewQueue(event.id, "other", 0), /event_not_found/);
+    assert.deepEqual(await second.submitPaidProof(proof), submitted);
+    await assert.rejects(second.submitPaidProof({ ...proof, claimedMinor: 49000 }), /idempotency_conflict/);
+    const originalWindow = fixture.prepare("SELECT created_ms,due_ms FROM paid_bookings WHERE id=?").get(active.id) as { created_ms: number; due_ms: number };
+    fixture.prepare("UPDATE paid_bookings SET created_ms=1,due_ms=2 WHERE id=?").run(active.id);
+    assert.equal(await second.expirePaidBookings(event.id), 0);
+    fixture.prepare("UPDATE paid_bookings SET created_ms=?,due_ms=? WHERE id=?").run(originalWindow.created_ms, originalWindow.due_ms, active.id);
+    assert.equal((await db.readOwnedPaidBooking(event.id, String(active.id), customer.id))?.payment_state, "proof_submitted");
+    assert.equal(fixture.prepare("SELECT COUNT(*) AS count FROM paid_proofs").pluck().get(), 1);
+    const ciphertext = fixture.prepare("SELECT content FROM paid_proofs").pluck().get();
+    assert.ok(Buffer.isBuffer(ciphertext) && !ciphertext.includes(proof.content));
+    assert.deepEqual((await db.readPaidProof(event.id, String(active.id), submitted.attempt_id, "org_default"))?.content, proof.content);
+    assert.equal(await db.readPaidProof(event.id, String(active.id), submitted.attempt_id, "other"), undefined);
+    const countCredentials = () => fixture.prepare("SELECT COUNT(*) FROM paid_credentials").pluck().get();
+    assert.equal(countCredentials(), 0);
+    const review = {
+      eventId: event.id, bookingId: String(active.id), attemptId: submitted.attempt_id,
+      organizationId: "org_default", reviewerId: "test-reviewer", key: "approve", version: 2,
+      decision: "approve" as const, reason: "Matched against test bank statement",
+      observed: { amountMinor: 49999, transferMs: originalWindow.created_ms, reference: "bank-ref", receiverNamespace: "0812345678" },
+    };
+    await assert.rejects(second.reviewPaidProof({ ...review, organizationId: "other" }), /event_not_found/);
+    await assert.rejects(db.reviewPaidProof({ ...review, observed: { ...review.observed, receiverNamespace: "0899999999" } }), /receiver_mismatch/);
+    const underpaid = await db.reviewPaidProof(review);
+    assert.equal(underpaid.payment_status, "underpaid");
+    assert.equal(countCredentials(), 0);
+    const approval = { ...review, key: "exact", version: 3, observed: { ...review.observed, amountMinor: 50000 } };
+    const confirmed = await db.reviewPaidProof(approval);
+    assert.equal(confirmed.status, "confirmed");
+    assert.deepEqual(await db.listPaidReviewQueue(event.id, "org_default", 0), []);
+    assert.deepEqual(await second.reviewPaidProof(approval), confirmed);
+    await assert.rejects(second.reviewPaidProof({ ...approval, key: "again" }), /state_conflict/);
+    assert.equal(countCredentials(), 2);
+    const deliveries = await db.listNotificationDeliveries({ related_type: "paid_booking", related_id: String(active.id) });
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].kind, "paid_booking.confirmed");
+    const confirmedBooking = await db.readOwnedPaidBooking(event.id, String(active.id), customer.id);
+    const [first, secondAttendee] = confirmedBooking?.attendees as { id: string }[];
+    const credential = await db.readPaidCredential(event.id, String(active.id), first.id, customer.id);
+    assert.ok(credential);
+    assert.notEqual(await db.readPaidCredential(event.id, String(active.id), secondAttendee.id, customer.id), credential);
+    assert.equal(await db.readPaidCredential(event.id, String(active.id), first.id, "other-customer"), undefined);
+    assert.equal(await db.checkInPaidCredential(event.id, "fbs-paid:invalid", "checker"), undefined);
+    const otherEvent = await db.createEvent({ name: "Other event", organizer_id: "org_default" });
+    await db.updateEvent(otherEvent.id, { status: "active" });
+    assert.equal(await db.checkInPaidCredential(otherEvent.id, credential, "checker"), undefined);
+    assert.equal((await db.checkInPaidCredential(event.id, credential, "checker"))?.already_checked_in, false);
+    assert.equal((await second.checkInPaidCredential(event.id, credential, "checker"))?.already_checked_in, true);
+    fixture.prepare("UPDATE paid_credentials SET revoked_ms=1 WHERE attendee_id=?").run(first.id);
+    assert.equal(await db.checkInPaidCredential(event.id, credential, "checker"), undefined);
+    await db.savePaidSettings(otherEvent.id, settings);
+    const manualBooking = await db.createPaidBooking({ ...command, eventId: otherEvent.id });
+    const manualReview = {
+      ...approval, eventId: otherEvent.id, bookingId: manualBooking.id, attemptId: undefined, version: 1,
+      observed: { ...approval.observed, transferMs: Date.now() },
+    };
+    await assert.rejects(db.reviewPaidProof(manualReview), /duplicate_reference_or_proof/);
+    assert.equal((await db.readOwnedPaidBooking(otherEvent.id, manualBooking.id, customer.id))?.state, "awaiting_payment");
+    const manualConfirmed = await db.reviewPaidProof({
+      ...manualReview, observed: { ...manualReview.observed, reference: "manual-bank-ref" },
+    });
+    assert.equal(manualConfirmed.status, "confirmed");
+    assert.equal(fixture.prepare("SELECT method FROM paid_payment_attempts WHERE booking_id=?").pluck().get(manualBooking.id), "manual");
+    // A paid settlement must not be accepted again through legacy Direct Ticketing.
+    const directEvent = await db.createEvent({ name: "Separate direct checkout event", organizer_id: "org_default" });
+    fixture.prepare("INSERT INTO event_performances (id,event_id,code,title,starts_at) VALUES (?,?,?,?,?)")
+      .run("cross-performance", directEvent.id, "cross", "Cross-domain settlement test", "2026-12-01T12:00:00Z");
+    fixture.prepare("INSERT INTO direct_seats (id,event_id,performance_id,zone,row_label,seat_label) VALUES (?,?,?,?,?,?)")
+      .run("cross-seat", directEvent.id, "cross-performance", "A", "1", "1");
+    fixture.prepare("INSERT INTO direct_tickets (id,event_id,performance_id,seat_id,ticket_class,payment_status,status) VALUES (?,?,?,?,?,?,?)")
+      .run("cross-ticket", directEvent.id, "cross-performance", "cross-seat", "Adult", "awaiting_payment", "held");
+    fixture.prepare("INSERT INTO direct_orders (id,event_id,performance_id,status) VALUES (?,?,?,?)")
+      .run("cross-order", directEvent.id, "cross-performance", "pending_payment");
+    await assert.rejects(db.updateDirectTicketPayment("cross-ticket", {
+      payment_status: "verified", payment_reference: " manual-bank-ref ",
+    }), /duplicate_reference_or_proof/);
+    await assert.rejects(db.updateDirectOrderPayment("cross-order", {
+      payment_status: "verified", payment_reference: "manual-bank-ref",
+    }), /duplicate_reference_or_proof/);
+    assert.equal(fixture.prepare("SELECT status FROM direct_tickets WHERE id='cross-ticket'").pluck().get(), "held");
+    assert.equal(fixture.prepare("SELECT status FROM direct_orders WHERE id='cross-order'").pluck().get(), "pending_payment");
+    // The reverse direction also fails closed: a Direct Ticketing settlement cannot confirm a new paid booking.
+    assert.equal((await db.updateDirectTicketPayment("cross-ticket", {
+      payment_status: "verified", payment_reference: "DIRECT-BANK-REF",
+    }))?.payment_status, "verified");
+    const crossPaidEvent = await db.createEvent({ name: "Cross-system paid event", organizer_id: "org_default" });
+    await db.updateEvent(crossPaidEvent.id, { status: "active" });
+    await db.savePaidSettings(crossPaidEvent.id, settings);
+    const crossPaidBooking = await db.createPaidBooking({ ...command, eventId: crossPaidEvent.id });
+    await assert.rejects(db.reviewPaidProof({
+      ...manualReview, eventId: crossPaidEvent.id, bookingId: crossPaidBooking.id, key: "direct-ref-reuse",
+      observed: { ...manualReview.observed, transferMs: Date.now(), reference: "direct-bank-ref" },
+    }), /duplicate_reference_or_proof/);
+    assert.equal((await db.readOwnedPaidBooking(crossPaidEvent.id, crossPaidBooking.id, customer.id))?.state, "awaiting_payment");
+
+    const operationsEvent = await db.createEvent({ name: "Admin operations fixture", organizer_id: "org_default" });
+    await db.updateEvent(operationsEvent.id, { status: "active" });
+    await db.savePaidSettings(operationsEvent.id, settings);
+    const operationsBooking = await db.createPaidBooking({ ...command, eventId: operationsEvent.id, key: "admin-hold" });
+    const common = { eventId: operationsEvent.id, bookingId: operationsBooking.id,
+      organizationId: "org_default", actorId: "reviewer", reason: "Customer requested" };
+    assert.equal((await db.readPaidAdminBooking(operationsEvent.id, "org_default", operationsBooking.reference))?.state, "awaiting_payment");
+    await assert.rejects(db.readPaidAdminBooking(operationsEvent.id, "other", operationsBooking.reference), /event_not_found/);
+    const extended = await db.managePaidBooking({ ...common, action: "extend", key: "extend-hold",
+      version: 1, holdMinutes: 120 });
+    assert.equal(extended.status, "awaiting_payment");
+    assert.deepEqual(await db.managePaidBooking({ ...common, action: "extend", key: "extend-hold",
+      version: 1, holdMinutes: 120 }), extended);
+    await assert.rejects(db.managePaidBooking({ ...common, action: "extend", key: "conflicting",
+      version: 1, holdMinutes: 120 }), /version_conflict/);
+    fixture.prepare("UPDATE paid_bookings SET created_ms=1,due_ms=2 WHERE id=?").run(operationsBooking.id);
+    assert.equal(await db.expirePaidBookings(operationsEvent.id), 1);
+    const restored = await db.managePaidBooking({ ...common, action: "reinstate", key: "reinstate",
+      version: 3, holdMinutes: 60 });
+    assert.equal(restored.status, "awaiting_payment");
+    const cancelled = await db.managePaidBooking({ ...common, action: "cancel", key: "cancel",
+      version: 4 });
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal((await db.readPaidEventSummary(operationsEvent.id, "org_default"))?.held_attendees, 0);
+    // Opt-in, idempotent reminder for 24h+ holds that are nearing the payment deadline.
+    await db.savePaidSettings(operationsEvent.id, {
+      ...settings, version: 1, holdMinutes: 48 * 60,
+    });
+    const reminderBooking = await db.createPaidBooking({
+      ...command, eventId: operationsEvent.id, pricingVersion: 2, key: "reminder-booking",
+    });
+    const reminderNow = Date.now();
+    fixture.prepare("UPDATE paid_bookings SET created_ms=?,due_ms=? WHERE id=?")
+      .run(reminderNow - 25 * 60 * 60_000, reminderNow + 23 * 60 * 60_000, reminderBooking.id);
+    const oldReminderFlag = process.env.PAID_REGISTRATION_REMINDERS_ENABLED;
+    try {
+      delete process.env.PAID_REGISTRATION_REMINDERS_ENABLED;
+      await db.expirePaidBookings(operationsEvent.id);
+      assert.equal((await db.listNotificationDeliveries({
+        related_type: "paid_booking", related_id: reminderBooking.id,
+      })).length, 0);
+      process.env.PAID_REGISTRATION_REMINDERS_ENABLED = "1";
+      await db.expirePaidBookings(operationsEvent.id);
+      await db.expirePaidBookings(operationsEvent.id);
+      const reminders = await db.listNotificationDeliveries({
+        related_type: "paid_booking", related_id: reminderBooking.id,
+      });
+      assert.equal(reminders.length, 1);
+      assert.equal(reminders[0].kind, "paid_booking.payment_reminder");
+    } finally {
+      if (oldReminderFlag === undefined) delete process.env.PAID_REGISTRATION_REMINDERS_ENABLED;
+      else process.env.PAID_REGISTRATION_REMINDERS_ENABLED = oldReminderFlag;
+    }
+    const refundRecord = {
+      eventId: otherEvent.id, bookingId: manualBooking.id, organizationId: "org_default",
+      actorId: "reviewer", key: "refund-paid", version: 2, action: "refund" as const,
+      reason: "Full bank refund verified", refundReference: "refund-external-001",
+    };
+    const refund = await db.managePaidBooking(refundRecord);
+    assert.equal(refund.status, "cancelled");
+    assert.equal(refund.payment_status, "refunded");
+    assert.deepEqual(await db.managePaidBooking(refundRecord), refund);
+    assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_refunds WHERE booking_id=?").pluck().get(manualBooking.id), 1);
+    assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_credentials WHERE booking_id=? AND revoked_ms IS NULL").pluck().get(manualBooking.id), 0);
+
+    const messengerEvent = await db.createEvent({ name: "Messenger workshop", organizer_id: "org_default" });
+    await db.updateEvent(messengerEvent.id, { status: "active" });
+    await db.savePaidSettings(messengerEvent.id, settings);
+    await db.createPaidMessengerLinkToken(messengerEvent.id, customer.id, "messenger-fixture");
+    assert.equal(await db.exchangePaidMessengerLinkToken(messengerEvent.id, "page", "sender", "messenger-fixture"), true);
+    const draftInput = {
+      eventId: messengerEvent.id, pageId: "page", senderId: "sender", messageKey: "message-1", attendees: command.attendees,
+    };
+    const quote = await db.createPaidMessengerDraft(draftInput);
+    assert.equal(quote.totalMinor, 50000);
+    assert.deepEqual(await second.createPaidMessengerDraft(draftInput), quote);
+    assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_bookings WHERE event_id=?").pluck().get(messengerEvent.id), 0);
+    const confirm = { ...draftInput, draftId: quote.id, receiver: command.receiver, language: "th" as const, inboundMs: Date.now() };
+    await assert.rejects(db.confirmPaidMessengerDraft({ ...confirm, senderId: "other" }), /messenger_link_required/);
+    const messengerBooking = await db.confirmPaidMessengerDraft(confirm);
+    assert.deepEqual(await second.confirmPaidMessengerDraft(confirm), messengerBooking);
+    assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_bookings WHERE event_id=?").pluck().get(messengerEvent.id), 1);
+    await db.reviewPaidProof({
+      ...manualReview, eventId: messengerEvent.id, bookingId: messengerBooking.id,
+      observed: { ...manualReview.observed, transferMs: Date.now(), reference: "messenger-bank-ref" },
+    });
+    const messengerDeliveries = await db.listNotificationDeliveries({ related_type: "paid_booking", related_id: messengerBooking.id });
+    assert.deepEqual(messengerDeliveries.map(({ kind }) => kind).sort(), ["paid_booking.confirmed", "paid_booking.messenger_confirmed"]);
+    const delivery = messengerDeliveries.find(({ channel }) => channel === "facebook");
+    assert.equal(JSON.parse(delivery!.payload_json).language, "th");
+    const seminar = await db.createEvent({ name: "Residential seminar", organizer_id: "org_default" });
+    await db.updateEvent(seminar.id, { status: "active" });
+    await db.savePaidSettings(seminar.id, {
+      ...settings, fields: [
+        { key: "arrival", scope: "booking", required: true },
+        { key: "accommodation", scope: "attendee", required: true },
+      ],
+    });
+    const seminarCommand = { ...command, eventId: seminar.id };
+    await assert.rejects(db.createPaidBooking(seminarCommand), /invalid_seminar_answers/);
+    const withAnswers = {
+      ...seminarCommand, answers: { arrival: "2026-11-18" },
+      attendees: command.attendees.map((attendee) => ({ ...attendee, answers: { accommodation: "no" } })),
+    };
+    await assert.rejects(db.createPaidBooking({ ...withAnswers, answers: { arrival: "2026-02-31" } }), /invalid_seminar_answers/);
+    await assert.rejects(db.createPaidBooking({ ...withAnswers, answers: { arrival: "2026-11-18", food: "extra" } }), /invalid_seminar_answers/);
+    const seminarBooking = await db.createPaidBooking(withAnswers);
+    assert.deepEqual(await second.createPaidBooking(withAnswers), seminarBooking);
+    const stored = fixture.prepare("SELECT contact_json FROM paid_bookings WHERE id=?").pluck().get(seminarBooking.id);
+    assert.deepEqual(JSON.parse(String(stored)).answers, [{ key: "arrival", label: "Arrival date", value: "2026-11-18" }]);
+    assert.deepEqual(fixture.prepare("SELECT action FROM paid_audit_events WHERE booking_id=? ORDER BY occurred_ms").all(receipt.id), [
+      { action: "create" }, { action: "expire" },
+    ]);
+  } finally {
+    fixture.close();
+    await second.close();
+    await db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

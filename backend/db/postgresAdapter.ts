@@ -1,3 +1,4 @@
+import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand } from "./paidRegistration";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
@@ -664,6 +665,179 @@ export class PostgresAppDatabase implements AppDatabase {
     this.initialized = true;
   }
 
+  private async runPaidCommand<T>(eventId: string, build: (organizationId: string) => PaidCommand<T>, settlementReference?: string): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: [event] } = await client.query<{ organizer_id: string }>(
+        "SELECT organizer_id FROM events WHERE id=$1 FOR UPDATE", [eventId],
+      );
+      if (!event) throw new PaidBookingError("event_not_found");
+      // Serialize trusted reference checks across paid, direct-order and direct-ticket approvals.
+      if (settlementReference) await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`facebot:verified-payment:${settlementReference}`],
+      );
+      const command = build(event.organizer_id);
+      let step = command.next();
+      while (step.done === false) {
+        let index = 0;
+        const sql = step.value.sql.replace(/\?/g, () => `$${++index}`);
+        const { rows } = await client.query<Record<string, unknown>>(sql, step.value.params);
+        step = command.next(rows);
+      }
+      await client.query("COMMIT");
+      return step.value;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createPaidBooking(input: PaidBookingInput) {
+    return this.runPaidCommand(input.eventId, (organizationId) => createPaidBooking(input.eventId, organizationId, input));
+  }
+
+  async readPaidCredential(eventId: string, bookingId: string, attendeeId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readPaidCredential(eventId, bookingId, attendeeId, customerId));
+  }
+
+  async checkInPaidCredential(eventId: string, credential: string, actor: string, organizationId?: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (organizationId !== undefined && organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return checkInPaidCredential(eventId, credential, actor);
+    });
+  }
+
+  async readPaidPaymentInstructions(eventId: string, bookingId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readPaidPaymentInstructions(eventId, bookingId, customerId));
+  }
+
+  async createPaidMessengerLinkToken(eventId: string, customerId: string, tokenHash: string) {
+    return this.runPaidCommand(eventId, () => createPaidMessengerLinkToken(eventId, customerId, tokenHash));
+  }
+
+  async exchangePaidMessengerLinkToken(eventId: string, pageId: string, senderId: string, tokenHash: string) {
+    return this.runPaidCommand(eventId, () => exchangePaidMessengerLinkToken(eventId, pageId, senderId, tokenHash));
+  }
+
+  async unlinkPaidMessenger(eventId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => unlinkPaidMessenger(eventId, customerId));
+  }
+
+  async createPaidMessengerDraft(input: PaidMessengerDraftInput) {
+    return this.runPaidCommand(input.eventId, () => createPaidMessengerDraft(input));
+  }
+
+  async confirmPaidMessengerDraft(input: PaidMessengerConfirmInput) {
+    return this.runPaidCommand(input.eventId, (ownerId) => confirmPaidMessengerDraft(input, ownerId));
+  }
+
+  async readPaidMessengerStatus(eventId: string, pageId: string, senderId: string, reference: string) {
+    return this.runPaidCommand(eventId, () => readPaidMessengerStatus(eventId, pageId, senderId, reference));
+  }
+
+  async readPaidMessengerCustomer(eventId: string, pageId: string, senderId: string) {
+    return this.runPaidCommand(eventId, () => readPaidMessengerCustomer(eventId, pageId, senderId));
+  }
+
+  async readPaidAdminBooking(eventId: string, organizationId: string, reference: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (ownerId !== organizationId) throw new PaidBookingError("event_not_found");
+      return readPaidAdminBooking(eventId, organizationId, reference);
+    });
+  }
+
+  async managePaidBooking(input: PaidAdminAction) {
+    return this.runPaidCommand(input.eventId, (ownerId) => {
+      if (ownerId !== input.organizationId) throw new PaidBookingError("event_not_found");
+      return managePaidBooking(input);
+    });
+  }
+
+  async readPaidEventSummary(eventId: string, organizationId: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return readPaidEventSummary(eventId);
+    });
+  }
+
+  async listPaidReviewQueue(eventId: string, organizationId: string, offset: number, reference?: string) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return listPaidReviewQueue(eventId, offset, reference);
+    });
+  }
+
+  async reviewPaidProof(input: PaidReviewInput) {
+    try {
+      return await this.runPaidCommand(input.eventId, (ownerId) => {
+        if (ownerId !== input.organizationId) throw new PaidBookingError("event_not_found");
+        return reviewPaidProof(input);
+      }, input.decision === "approve" ? input.observed?.reference.trim().normalize("NFKC").toUpperCase() : undefined);
+    } catch (error) {
+      if ((error as { constraint?: string })?.constraint === "idx_paid_trusted_reference") {
+        throw new PaidBookingError("duplicate_reference_or_proof");
+      }
+      throw error;
+    }
+  }
+
+  async readPaidProof(eventId: string, bookingId: string, attemptId: string, organizationId: string) {
+    return this.runPaidCommand(eventId, (ownerId) =>
+      ownerId === organizationId ? readPaidProof(eventId, bookingId, attemptId) : (function* () { return undefined; })(),
+    );
+  }
+
+  async submitPaidProof(input: PaidProofInput) {
+    return this.runPaidCommand(input.eventId, () => submitPaidProof(input));
+  }
+
+  async expirePaidBookings(eventId: string) {
+    return this.runPaidCommand(eventId, () => expirePaidBookings(eventId));
+  }
+
+  async readPaidCatalog(eventId: string) {
+    return this.runPaidCommand(eventId, () => readPaidCatalog(eventId));
+  }
+
+  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "") {
+    let index = 0;
+    const sql = OWNED_BOOKING_LIST_SQL.replace(/\?/g, () => `$${++index}`);
+    const { rows } = await this.pool.query<Record<string, unknown>>(sql, [Date.now(), customerId, reference, reference, limit, offset]);
+    return serializePaidBookingList(rows);
+  }
+
+  async readOwnedPaidBooking(eventId: string, id: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId));
+  }
+
+  async readPaidMode(eventId: string) {
+    const { rows: [row] } = await this.pool.query<{ published: number }>(
+      "SELECT published FROM paid_event_settings WHERE event_id=$1", [eventId],
+    );
+    return row ? { published: row.published === 1 } : undefined;
+  }
+
+  async readPaidSettings(eventId: string) {
+    return this.runPaidCommand(eventId, () => readPaidSettings(eventId));
+  }
+
+  async savePaidSettings(eventId: string, input: PaidSettingsInput) {
+    return this.runPaidCommand(eventId, (organizationId) => savePaidSettings(eventId, organizationId, input));
+  }
+
+  async listDuePaidEvents(now: number): Promise<string[]> {
+    const { rows } = await this.pool.query<{ event_id: string }>(
+      "SELECT event_id FROM paid_bookings WHERE state='awaiting_payment' AND due_ms<=$1 AND " +
+      "(due_ms<=$2 OR (due_ms>$2 AND due_ms-created_ms >= 86400000)) GROUP BY event_id ORDER BY MIN(due_ms) LIMIT 100",
+      [process.env.PAID_REGISTRATION_REMINDERS_ENABLED === "1" ? now+86400000 : now, now],
+    );
+    return rows.map(({ event_id }) => event_id);
+  }
+
   async ping() {
     await this.pool.query("SELECT 1");
   }
@@ -1008,6 +1182,11 @@ export class PostgresAppDatabase implements AppDatabase {
     try {
       await client.query("BEGIN");
       await client.query("SELECT id FROM events WHERE id = $1 FOR UPDATE", [eventId]);
+      const paidEvent = await client.query("SELECT 1 FROM paid_event_settings WHERE event_id=$1", [eventId]);
+      if (paidEvent.rowCount) {
+        await client.query("ROLLBACK");
+        return { statusCode: 409, content: { error: "paid_registration_required" } };
+      }
 
       const activeRowsResult = await client.query<{ id: string; first_name: string; last_name: string }>(
         "SELECT id, first_name, last_name FROM registrations WHERE event_id = $1 AND status != 'cancelled'",
@@ -1831,6 +2010,16 @@ export class PostgresAppDatabase implements AppDatabase {
       if (!order) { await client.query("ROLLBACK"); return undefined; }
       if (order.status === "paid" && input.payment_status === "verified") { await client.query("ROLLBACK"); return this.getDirectOrderById(id); }
       if (!["pending_payment", "payment_submitted"].includes(String(order.status)) && input.payment_status !== "refunded") { await client.query("ROLLBACK"); return this.getDirectOrderById(id); }
+      if (input.payment_status === "verified") {
+        const paymentRef = String(input.payment_reference || order.payment_reference || "").trim().normalize("NFKC").toUpperCase();
+        if (paymentRef) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`facebot:verified-payment:${paymentRef}`]);
+          const duplicate = await client.query(
+            "SELECT 1 FROM paid_payment_attempts WHERE status='verified' AND trusted_reference=$1 LIMIT 1", [paymentRef],
+          );
+          if (duplicate.rows.length) throw new Error("duplicate_reference_or_proof");
+        }
+      }
       const nextStatus = input.payment_status === "verified" ? "paid" : input.payment_status === "refunded" ? "refunded" : "rejected";
       const ticketStatus = input.payment_status === "verified" ? "issued" : "voided";
       await client.query("UPDATE direct_orders SET status=$1,payment_reference=COALESCE($2,payment_reference),rejection_reason=$3,hold_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$4", [nextStatus,input.payment_reference || null,input.rejection_reason || null,id]);
@@ -1886,7 +2075,7 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async updateDirectTicketPayment(id: string, input: { payment_status: "verified" | "rejected" | "refunded"; payment_reference?: string | null; verified_by_user_id?: string | null; rejection_reason?: string | null }) {
-    const client=await this.pool.connect(); try { await client.query("BEGIN"); const current=await client.query<Record<string,unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE",[id]); const ticket=current.rows[0]; if(!ticket || (ticket.status!=="held" && input.payment_status!=="refunded")) { await client.query("ROLLBACK"); return this.getDirectTicketById(id); } const issued=input.payment_status==="verified"; await client.query(`UPDATE direct_tickets SET payment_status=$1,payment_reference=COALESCE($2,payment_reference),payment_verified_by_user_id=$3,payment_verified_at=CURRENT_TIMESTAMP,rejection_reason=$4,status=$5,issued_at=CASE WHEN $6 THEN CURRENT_TIMESTAMP ELSE issued_at END,voided_at=CASE WHEN $6 THEN NULL ELSE CURRENT_TIMESTAMP END,updated_at=CURRENT_TIMESTAMP WHERE id=$7`,[input.payment_status,input.payment_reference||null,input.verified_by_user_id||null,input.rejection_reason||null,issued?"issued":"voided",issued,id]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[issued?"issued":"available",ticket.seat_id]); await client.query("COMMIT"); return this.getDirectTicketById(id); } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+    const client=await this.pool.connect(); try { await client.query("BEGIN"); const current=await client.query<Record<string,unknown>>("SELECT * FROM direct_tickets WHERE id=$1 FOR UPDATE",[id]); const ticket=current.rows[0]; if(!ticket || (ticket.status!=="held" && input.payment_status!=="refunded")) { await client.query("ROLLBACK"); return this.getDirectTicketById(id); } if (input.payment_status === "verified") { const paymentRef = String(input.payment_reference || ticket.payment_reference || "").trim().normalize("NFKC").toUpperCase(); if (paymentRef) { await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`facebot:verified-payment:${paymentRef}`]); const duplicate = await client.query("SELECT 1 FROM paid_payment_attempts WHERE status='verified' AND trusted_reference=$1 LIMIT 1", [paymentRef]); if (duplicate.rows.length) throw new Error("duplicate_reference_or_proof"); } } const issued=input.payment_status==="verified"; await client.query(`UPDATE direct_tickets SET payment_status=$1,payment_reference=COALESCE($2,payment_reference),payment_verified_by_user_id=$3,payment_verified_at=CURRENT_TIMESTAMP,rejection_reason=$4,status=$5,issued_at=CASE WHEN $6 THEN CURRENT_TIMESTAMP ELSE issued_at END,voided_at=CASE WHEN $6 THEN NULL ELSE CURRENT_TIMESTAMP END,updated_at=CURRENT_TIMESTAMP WHERE id=$7`,[input.payment_status,input.payment_reference||null,input.verified_by_user_id||null,input.rejection_reason||null,issued?"issued":"voided",issued,id]); await client.query("UPDATE direct_seats SET status=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[issued?"issued":"available",ticket.seat_id]); await client.query("COMMIT"); return this.getDirectTicketById(id); } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
 
   async submitDirectTicketPaymentProof(id: string, input: { payment_proof_mime: string; payment_proof_base64: string; payment_reference?: string | null }) {

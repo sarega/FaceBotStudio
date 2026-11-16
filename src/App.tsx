@@ -1,3 +1,5 @@
+import { PaidRegistrationSettings } from "./features/registrations/components/PaidRegistrationSettings";
+import { PaidReviewQueue } from "./features/registrations/components/PaidReviewQueue";
 import { lazy, Suspense, useDeferredValue, useState, useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { BrowserQRCodeReader, IScannerControls } from "@zxing/browser";
@@ -7978,9 +7980,10 @@ export default function App() {
   };
 
   const handleCheckinById = async (rawId: string, options?: { clearInputOnSuccess?: boolean }) => {
+    const paidCredential = rawId.trim().startsWith("fbs-paid:") ? rawId.trim() : "";
     const directTicketId = extractDirectTicketId(rawId);
     const normalizedId = extractRegistrationId(rawId);
-    if (!normalizedId && !directTicketId) {
+    if (!normalizedId && !directTicketId && !paidCredential) {
       setCheckinStatus("error");
       setCheckinErrorMessage("Invalid registration ID / QR code");
       return false;
@@ -7990,7 +7993,11 @@ export default function App() {
     setCheckinErrorMessage("");
     try {
       const requestBody = { id: normalizedId, event_id: selectedEventId };
-      const res = directTicketId
+      const paidRequest = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ credential: paidCredential }) };
+      const res = paidCredential ? await (checkinAccessMode
+        ? fetch("/api/checkin-access/checkin-paid", paidRequest)
+        : apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}/paid-registration/checkin`, paidRequest))
+        : directTicketId
         ? await (checkinAccessMode ? fetch("/api/checkin-access/checkin-direct", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -8008,14 +8015,14 @@ export default function App() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setCheckinStatus("success");
-        setSearchId(directTicketId || normalizedId);
+        setSearchId(paidCredential ? "" : directTicketId || normalizedId);
         const latest = directTicketId ? normalizeDirectCheckinTicket(data?.ticket) : normalizeCheckinRegistration(data?.registration);
         if (latest) {
           setCheckinLatestResult(latest);
-          if (!checkinAccessMode) {
+          if (!checkinAccessMode && !paidCredential) {
             setSelectedRegistrationId(latest.id);
           }
-        } else if (!checkinAccessMode && !directTicketId) {
+        } else if (!checkinAccessMode && !directTicketId && !paidCredential) {
           setSelectedRegistrationId(normalizedId);
         }
         if (checkinAccessMode && checkinAccessSession) {
@@ -8475,14 +8482,15 @@ export default function App() {
         if (!rawValue || scanBusyRef.current || scannerCooldownRef.current) return;
 
         const registrationId = extractRegistrationId(rawValue);
-        setLastScannedValue(rawValue);
-        if (!registrationId) return;
+        const paidCredential = rawValue.startsWith("fbs-paid:");
+        setLastScannedValue(paidCredential ? "Paid admission QR" : rawValue);
+        if (!registrationId && !paidCredential) return;
 
         scanBusyRef.current = true;
         scannerCooldownRef.current = true;
-        setSearchId(registrationId);
+        if (!paidCredential) setSearchId(registrationId);
         try {
-          await handleCheckinById(registrationId, { clearInputOnSuccess: false });
+          await handleCheckinById(paidCredential ? rawValue : registrationId, { clearInputOnSuccess: false });
         } finally {
           scanBusyRef.current = false;
           window.setTimeout(() => {
@@ -10843,6 +10851,12 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
+              {selectedEventId && (role === "owner" || role === "admin") && (
+                <>
+                  <PaidRegistrationSettings key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
+                  <PaidReviewQueue key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch} />
+                </>
+              )}
               <RegistrationsScreen
                 language={language}
                 filteredRegistrations={filteredRegistrations}

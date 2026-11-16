@@ -25,7 +25,7 @@ const PASSWORD_HASH_PARAM_STRING = `n=${PASSWORD_HASH_PARAMS.N},r=${PASSWORD_HAS
 export function isCustomerScopedCsrfPath(path: string) {
   const normalizedPath = String(path || "").trim();
   return normalizedPath.startsWith("/api/customer/")
-    || /^\/api\/public\/events\/[^/]+\/orders\/?$/.test(normalizedPath);
+    || /^\/api\/public\/events\/[^/]+\/(?:orders|paid-bookings)\/?$/.test(normalizedPath);
 }
 
 type CookieRequestLike = {
