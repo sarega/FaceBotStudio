@@ -116,6 +116,21 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
   return (
     <div className="surface-panel space-y-4 rounded-[1.75rem] p-4 sm:p-5">
       <h2 className="text-lg font-semibold text-slate-900">Paid registration</h2>
+      <section className="space-y-3 rounded-xl border-2 border-blue-300 bg-blue-50 p-4 text-slate-900">
+        <h3 className="text-base font-bold">สมัครบัญชีเพื่อเข้าร่วมงาน / Register for this event</h3>
+        <p className="text-sm">ผู้สมัครใหม่สร้างบัญชีด้วยชื่อและอีเมลก่อน จากนั้นกลับมาหน้านี้เพื่อจองที่นั่งได้โดยตรง ไม่ต้องใช้ Facebook หรือ Messenger</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <a className="rounded-xl bg-blue-700 px-4 py-3 text-center text-sm font-bold text-white hover:bg-blue-800"
+             href="/account/register" target="_blank" rel="noopener noreferrer">
+            สมัครบัญชีใหม่ · Create account
+          </a>
+          <a className="rounded-xl border-2 border-blue-500 bg-white px-4 py-3 text-center text-sm font-bold text-blue-800 hover:bg-blue-50"
+             href="/account/login" target="_blank" rel="noopener noreferrer">
+            เข้าสู่ระบบ · Sign in
+          </a>
+        </div>
+        <p className="text-xs text-blue-900">หลังยืนยันอีเมลแล้ว กลับมาที่แท็บ Event นี้ กรอกข้อมูลผู้เข้าร่วมและกดจอง</p>
+      </section>
       {catalog?.payment_mode === "external_manual" && <p role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
         Payment is arranged outside this website. Register to reserve a place; the organizer will verify payment
         and confirm your admission. No PromptPay setup or online payment is required here.
@@ -161,11 +176,12 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
             <p className="font-semibold">Total due {money.format(total / 100)}</p>
             <button className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white" type="submit">{busy ? "Reserving…" : "Reserve places"}</button>
           </fieldset>
-          <a className="text-sm text-blue-700 underline" href="/account" target="_blank" rel="noopener">Customer sign-in and email verification</a>
+
         </form>
-      ) : <p role="status" className="text-sm text-slate-700">{enabled && !error ? "Loading registration…" : "Paid registration is not accepting bookings yet. Please contact the organizer."}</p>}
+      ) : <p role="status" className="text-sm text-slate-700">{enabled && !error ? "Loading registration…" : "บัญชีผู้เข้าร่วมสมัครได้จากปุ่มด้านบน แต่การจองของ Event นี้ยังไม่เปิด ผู้จัดงานต้องตรวจการตั้งค่า Event และระบบบัญชี"}</p>}
+      {catalog?.payment_mode !== "external_manual" && (
       <details className="space-y-2 border-t border-slate-200 pt-3 text-sm text-slate-700">
-        <summary className="cursor-pointer font-medium">Messenger booking access</summary>
+        <summary className="cursor-pointer font-medium">Optional Messenger booking access</summary>
         <p>Generate a private code and send it to the organizer’s Messenger page within 10 minutes.</p>
         <div className="flex flex-wrap gap-3">
           <button type="button" disabled={messengerBusy} onClick={() => void updateMessenger("POST")} className="text-blue-700 underline">Generate code</button>
@@ -174,6 +190,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
         {messengerCode && <code className="block select-all break-all rounded-lg bg-slate-100 p-2">{messengerCode}</code>}
         {messengerMessage && <p role="status">{messengerMessage}</p>}
       </details>
+      )}
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     </div>
   );

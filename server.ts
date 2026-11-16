@@ -3758,7 +3758,15 @@ function getPrivateMediaAccessSecret() {
 
 function getPublicChatSessionSecret() {
   const configured = String(process.env.PUBLIC_CHAT_SESSION_SECRET || "").trim();
-  return configured || getPrivateMediaAccessSecret();
+  if (configured) return configured;
+  const sharedSecret = getPrivateMediaAccessSecret();
+  if (sharedSecret) return sharedSecret;
+  // Web-only event chat should not depend on Facebook or another optional secret.
+  // The private, stable database connection string is an existing server-side secret.
+  // Domain-separate the derived key so it cannot be used for other tokens.
+  const dbSecret = String(process.env.DATABASE_URL || "").trim();
+  return dbSecret ? createHmac("sha256", dbSecret)
+    .update("facebotstudio:web-chat-session:v1").digest("hex") : "";
 }
 
 function buildPublicChatSessionCookieName(eventId: string) {

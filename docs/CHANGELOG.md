@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.6 - 2026-11-16
+
+- Display prominent attendee Create Account and Sign In links directly on paid event pages, even if Paid Registration is not currently bookable. Registration remains account-based and email verified, without Facebook.
+- Show the exact Railway customer-account and paid-registration variables in the Event's Paid Registration settings, next to links to test account registration and login; preserve the advanced diagnostics section.
+- Fix web-only bot session initialization in production by deriving a domain-separated stable session key from the existing private PostgreSQL connection credential if optional chat/media/ticket secrets were not configured.
+- Do not bypass the existing paid booking financial or customer authentication safeguards. The deployment must still enable customer registration explicitly.
+
 ## 0.8.5 - 2026-11-16
 
 - Consolidated event paid registration into one workflow: payment mode, recipient QR and bank details, capacity/pricing, and Save & Open Registration.
