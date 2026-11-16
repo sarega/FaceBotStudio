@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.9 - 2026-11-16
+
+- Fixed Paid Registration admin activation/readiness color contrast for both light and dark themes, especially the washed-out pale status panel, unreadable links, and error/check text.
+- Added dedicated semantic style classes with matched background/foreground palettes, accessible link and focus colors, and improved diagnostic section contrast.
+
 ## 0.8.8 - 2026-11-16
 
 - Condensed the public Paid Registration account introduction into short Thai/English text and two plainly labeled account actions, eliminating redundant explanatory paragraphs.

@@ -262,46 +262,46 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
   }, [open, path]);
 
   return (
-    <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
+    <section className="paid-admin-settings space-y-3 rounded-2xl border p-4 text-sm">
       <button type="button" aria-expanded={open} className="font-semibold text-blue-700 underline" onClick={() => setOpen(!open)}>Paid registration settings</button>
       {open && (error ? <p role="alert">Could not load paid registration settings.</p> :
         settings === undefined ? <p role="status">Loading settings…</p> :
           <SettingsForm key={settings?.version ?? 0} settings={settings} path={path} eventId={eventId} apiFetch={apiFetch}
             onSaved={(result) => { setSettings(result); setSaved(true); void loadReadiness(); }} />)}
       {open && readiness && (
-        <section className={"rounded-xl border-2 p-3 " + (readiness.paid_ready && readiness.checks.customer_signup_enabled
-          ? "border-green-200 bg-green-50" : "border-amber-300 bg-amber-50")}>
+        <section className={"paid-admin-readiness rounded-xl border-2 p-3 " + (readiness.paid_ready && readiness.checks.customer_signup_enabled
+          ? "paid-admin-readiness-ready" : "paid-admin-readiness-warning")}>
           <h3 className="font-bold">{readiness.paid_ready && readiness.checks.customer_signup_enabled
             ? "หน้า Event พร้อมรับสมัครบัญชีและจองที่นั่ง" : "สิ่งที่ต้องเปิดก่อนให้ผู้เข้าร่วมสมัครบัญชีและลงทะเบียน"}</h3>
           {(!readiness.checks.customer_accounts_enabled || !readiness.checks.customer_signup_enabled ||
             !readiness.checks.paid_server_enabled) && <div className="mt-2 space-y-2 text-sm">
             <p>ตั้งค่าที่ <strong>Railway → FaceBotStudio Service → Variables</strong> (ไม่ใช่ Organizer Settings):</p>
-            <pre className="overflow-x-auto rounded-lg bg-white p-2 text-xs">{"CUSTOMER_APP_ENABLED=1\nCUSTOMER_ACCOUNT_REGISTRATION_ENABLED=1\nPAID_REGISTRATION_PUBLIC_ENABLED=1"}</pre>
+            <pre className="paid-admin-env overflow-x-auto rounded-lg p-2 text-xs">{"CUSTOMER_APP_ENABLED=1\nCUSTOMER_ACCOUNT_REGISTRATION_ENABLED=1\nPAID_REGISTRATION_PUBLIC_ENABLED=1"}</pre>
             <p>กด Deploy หลังแก้ค่า แล้วกลับมากด Recheck ที่นี่</p>
           </div>}
-          {!readiness.checks.event_active && <p className="mt-2 text-red-700">กรุณาตั้งสถานะ Event เป็น Active ใน Event Setup</p>}
-          {!readiness.checks.event_web_page && <p className="mt-2 text-red-700">กรุณาเปิด Event Web Page ใน Public Page Builder</p>}
-          {!readiness.checks.paid_published && <p className="mt-2 text-red-700">ยังไม่ได้ Publish Paid Registration — กด “บันทึกและเปิดรับสมัคร” ในฟอร์มด้านบน</p>}
+          {!readiness.checks.event_active && <p className="paid-admin-problem mt-2">กรุณาตั้งสถานะ Event เป็น Active ใน Event Setup</p>}
+          {!readiness.checks.event_web_page && <p className="paid-admin-problem mt-2">กรุณาเปิด Event Web Page ใน Public Page Builder</p>}
+          {!readiness.checks.paid_published && <p className="paid-admin-problem mt-2">ยังไม่ได้ Publish Paid Registration — กด “บันทึกและเปิดรับสมัคร” ในฟอร์มด้านบน</p>}
           <div className="mt-3 flex flex-wrap gap-3">
-            <a href="/account/register" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-800 underline">
+            <a href="/account/register" target="_blank" rel="noopener noreferrer" className="paid-admin-link font-semibold underline">
               ทดลองหน้าสมัครบัญชี
             </a>
-            <a href="/account/login" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-800 underline">
+            <a href="/account/login" target="_blank" rel="noopener noreferrer" className="paid-admin-link font-semibold underline">
               ทดลองหน้าเข้าสู่ระบบ
             </a>
-            <button type="button" className="font-semibold text-blue-800 underline" onClick={() => void loadReadiness()}>Recheck</button>
+            <button type="button" className="paid-admin-link font-semibold underline" onClick={() => void loadReadiness()}>Recheck</button>
           </div>
         </section>
       )}
-      {open && settings !== undefined && <details className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
+      {open && settings !== undefined && <details className="paid-admin-diagnostics space-y-2 rounded-xl border p-3">
         <summary className="cursor-pointer font-semibold">ตรวจสอบปัญหาการเปิดรับสมัคร / Help Bot (เฉพาะเมื่อมีปัญหา)</summary>
         <div className="flex items-center justify-between gap-2">
           <h3 className="font-semibold">Event activation checks — registration + Help Bot</h3>
-          <button type="button" className="text-blue-700 underline" onClick={() => void loadReadiness()}>Recheck</button>
+          <button type="button" className="paid-admin-link underline" onClick={() => void loadReadiness()}>Recheck</button>
         </div>
         {readiness && <>
           {readiness.payment_mode === "promptpay" && !readiness.checks.organizer_receiver_ready &&
-            <p className="rounded-lg bg-amber-100 p-2 font-semibold text-amber-900">
+            <p className="paid-admin-promptpay-warning rounded-lg p-2 font-semibold">
               โหมดปัจจุบันคือ PromptPay — การอัปโหลด QR ไม่ได้เปลี่ยนโหมดรับเงินให้อัตโนมัติ
               ถ้ามีแค่รูป QR หรือเลขบัญชี ให้เลือก External payment / Admin verifies manually ในฟอร์มด้านบน
               แล้วกด “บันทึกและเปิดรับสมัคร”
@@ -311,7 +311,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
             {" · "}{readiness.bot_ready ? "Help Bot session ready" : "Help Bot session blocked"}</p>
           <div className="grid gap-1">
             {Object.entries(readiness.checks).map(([key, ok]) =>
-              <p key={key} className={ok ? "text-green-800" : "font-medium text-red-700"}>
+              <p key={key} className={ok ? "paid-admin-check-ok" : "paid-admin-check-bad font-medium"}>
                 {ok ? "✓" : "✕"} {readiness.payment_mode === "external_manual" &&
                   (key === "organizer_receiver_ready" || key === "slip_encryption_ready")
                     ? "Not required for external/manual payment" : readinessLabels[key] || key}
@@ -325,11 +325,11 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
               {publishing ? "Opening…" : "Publish paid registration now"}
             </button>
           )}
-          {!readiness.checks.customer_signup_enabled && <p className="text-xs text-amber-900">
+          {!readiness.checks.customer_signup_enabled && <p className="paid-admin-warning-text text-xs">
             Existing verified customer accounts can book; enable CUSTOMER_ACCOUNT_REGISTRATION_ENABLED=1 for new attendees.
           </p>}
         </>}
-        {readinessError && <p role="alert" className="text-red-700">{readinessError}</p>}
+        {readinessError && <p role="alert" className="paid-admin-problem">{readinessError}</p>}
       </details>}
       {open && saved && <p role="status">Settings saved.</p>}
     </section>

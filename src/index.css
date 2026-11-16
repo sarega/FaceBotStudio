@@ -1999,3 +1999,82 @@ html.theme-dark .chat-scroll::-webkit-scrollbar-thumb:hover {
     border-top-color: transparent !important;
   }
 }
+
+
+/* Paid registration admin status: explicit foreground/background pairs.
+   Do not mix pale notice backgrounds with dark-theme utility color overrides. */
+.paid-admin-settings {
+  background: #fff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+.paid-admin-readiness-warning {
+  background: #fffbeb;
+  color: #78350f;
+  border-color: #f59e0b;
+}
+.paid-admin-readiness-ready {
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #10b981;
+}
+.paid-admin-env {
+  background: #fff;
+  color: #172554;
+  border: 1px solid #cbd5e1;
+}
+.paid-admin-link { color: #1d4ed8; }
+.paid-admin-link:hover { color: #1e40af; }
+.paid-admin-problem,
+.paid-admin-check-bad { color: #b91c1c; }
+.paid-admin-check-ok { color: #166534; }
+.paid-admin-warning-text { color: #92400e; }
+.paid-admin-diagnostics {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1e3a8a;
+}
+.paid-admin-promptpay-warning {
+  background: #fef3c7;
+  color: #78350f;
+}
+html.theme-dark .paid-admin-settings {
+  background: #0f172a;
+  color: #f1f5f9;
+  border-color: #334155;
+}
+html.theme-dark .paid-admin-readiness-warning {
+  background: #392514;
+  color: #fef3c7;
+  border-color: #f59e0b;
+}
+html.theme-dark .paid-admin-readiness-ready {
+  background: #10372f;
+  color: #d1fae5;
+  border-color: #34d399;
+}
+html.theme-dark .paid-admin-env {
+  background: #101e33;
+  color: #e2e8f0;
+  border-color: #64748b;
+}
+html.theme-dark .paid-admin-link { color: #93c5fd; }
+html.theme-dark .paid-admin-link:hover { color: #bfdbfe; }
+html.theme-dark .paid-admin-problem,
+html.theme-dark .paid-admin-check-bad { color: #fca5a5; }
+html.theme-dark .paid-admin-check-ok { color: #86efac; }
+html.theme-dark .paid-admin-warning-text { color: #fde68a; }
+html.theme-dark .paid-admin-diagnostics {
+  background: #11243b;
+  color: #dbeafe;
+  border-color: #3b82f6;
+}
+html.theme-dark .paid-admin-promptpay-warning {
+  background: #453018;
+  color: #fde68a;
+}
+.paid-admin-settings a:focus-visible,
+.paid-admin-settings button:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}

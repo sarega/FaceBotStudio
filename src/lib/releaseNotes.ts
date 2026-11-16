@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.9",
+    date: "2026-11-16",
+    title: "Readable Paid Registration setup status",
+    features: [
+      "Fixed light/dark contrast of registration activation notices",
+      "Readable warning, success, error, and link colors",
+      "Clearer technical readiness diagnostics",
+    ],
+  },
+  {
     version: "0.8.8",
     date: "2026-11-16",
     title: "Clearer bilingual registration and theme contrast",
