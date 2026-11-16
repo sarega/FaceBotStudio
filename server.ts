@@ -561,6 +561,7 @@ function getSystemInstruction(
   const currentEventName = normalizeOptionalText(settings.event_name);
   return [
     globalPrompt,
+    "Customer-facing language policy (applies to every event and overrides conflicting language instructions in Event Context, knowledge, or earlier replies): Reply in the language of the customer's latest meaningful message. If the customer explicitly requests a response language, use that language. Switch immediately when the customer switches languages, including between Thai, English, and other languages. For brief ambiguous messages (numbers, names, emoji, or yes/no without a clear language), preserve the established language from the customer's recent messages, not the assistant's messages. If no customer language can be determined, default to Thai. Do not infer the response language from the event description, retrieved documents, or system prompt language. Preserve official event names, personal names, and required proper nouns in their original form. Do not add an unsolicited Thai translation to non-Thai replies.",
     currentEventId || currentEventName
       ? `Current Event Boundary:\n- Event ID: ${currentEventId || "-"}\n- Event Name: ${currentEventName || "-"}\nYou are answering ONLY for this event. Do not use, mention, compare, or infer details from any other event. If the user asks about another event, say this chat only supports the current event.`
       : "",
@@ -5464,7 +5465,7 @@ async function resolveFacebookEventForSender(
 
   if (isChangeEventCommand(text)) {
     await appDb.setChannelSenderEventSelection(channel.id, senderId);
-    return { responseText: buildEventSelectionPrompt(candidates) };
+    return { responseText: buildEventSelectionPrompt(candidates, text) };
   }
 
   const chosen = matchEventSelection(text, candidates);
@@ -5472,7 +5473,7 @@ async function resolveFacebookEventForSender(
     await appDb.setChannelSenderEventSelection(channel.id, senderId, chosen.id);
     return {
       eventId: chosen.id,
-      responseText: buildEventSelectedMessage(chosen.name),
+      responseText: buildEventSelectedMessage(chosen.name, text),
       selectionCompleted: true,
     };
   }
@@ -5483,7 +5484,7 @@ async function resolveFacebookEventForSender(
   }
 
   await appDb.setChannelSenderEventSelection(channel.id, senderId);
-  return { responseText: buildEventSelectionPrompt(candidates) };
+  return { responseText: buildEventSelectionPrompt(candidates, text) };
 }
 
 function extractFacebookStyleImageAttachments(webhookEvent: any) {
