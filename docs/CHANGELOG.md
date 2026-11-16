@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0 - 2026-11-17
+
+- Event Paid Registration now checks the actual customer account session before showing account controls.
+- Signed-in attendees see their name/email and "Book places" and "My account" actions, not misleading "Register" and "Sign in" buttons; unverified emails show a reminder.
+- Customer session is refreshed on focus/visibility when returning from a registration/login tab, and the primary booking contact is prefilled from the account.
+- Unauthenticated visitors continue seeing the concise bilingual Register / Sign in actions, with light/dark theme styling preserved.
+
 ## 0.8.9 - 2026-11-16
 
 - Fixed Paid Registration admin activation/readiness color contrast for both light and dark themes, especially the washed-out pale status panel, unreadable links, and error/check text.

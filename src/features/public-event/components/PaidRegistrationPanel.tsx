@@ -1,6 +1,6 @@
 import { paidSeminarFields, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { customerApi } from "../../customer-account/components/CustomerAccountScreen";
+import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
 
 type Catalog = { payment_mode?: "promptpay" | "external_manual"; pricing_version: number; fields: PaidSeminarField[]; categories: { id: string; label: string; unit_minor: number }[] };
 type Attendee = { category_id: string; first_name: string; last_name: string; answers?: Record<string, string> };
@@ -40,6 +40,8 @@ function SeminarInputs({ fields, values, onChange }: {
 
 export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { slug: string; eventId: string; enabled: boolean; timezone: string }) {
   const [catalog, setCatalog] = useState<Catalog>();
+  const [customerAccount, setCustomerAccount] = useState<CustomerAccount | null>(null);
+  const [accountLoading, setAccountLoading] = useState(true);
   const [contact, setContact] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [attendees, setAttendees] = useState<Attendee[]>([]);
@@ -52,6 +54,40 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
   const command = useRef<{ request: string; key: string } | undefined>(undefined);
   const prefix = `/api/public/events/${encodeURIComponent(slug)}`;
   const recoveryKey = `paid-booking:${slug}`;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let generation = 0;
+    async function refreshAccount() {
+      const current = ++generation;
+      setAccountLoading(true);
+      try {
+        const response = await customerApi<{account: CustomerAccount}>("/api/customer/account/me", {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || current !== generation) return;
+        setCustomerAccount(response.account);
+        setContact((old) => old || [response.account.first_name, response.account.last_name].filter(Boolean).join(" "));
+      } catch {
+        if (controller.signal.aborted || current !== generation) return;
+        setCustomerAccount(null);
+      } finally {
+        if (!controller.signal.aborted && current === generation) setAccountLoading(false);
+      }
+    }
+    void refreshAccount();
+    const onFocus = () => { void refreshAccount(); };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshAccount();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      controller.abort();
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -117,20 +153,49 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
     <div className="surface-panel space-y-4 rounded-[1.75rem] p-4 sm:p-5">
       <h2 className="text-lg font-semibold">ลงทะเบียน / Registration</h2>
       <section className="paid-signup-card space-y-3 rounded-xl p-3.5 sm:p-4" aria-label="Account access">
-        <p className="paid-signup-hint text-sm">
-          สมัครบัญชีและยืนยันอีเมลก่อนจอง<br />
-          Create an account and verify your email.
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <a className="paid-signup-primary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
-             href="/account/register" target="_blank" rel="noopener noreferrer">
-            สมัครบัญชี / Register
-          </a>
-          <a className="paid-signup-secondary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
-             href="/account/login" target="_blank" rel="noopener noreferrer">
-            เข้าสู่ระบบ / Sign in
-          </a>
-        </div>
+        {accountLoading ? (
+          <p className="paid-signup-hint text-sm" role="status">กำลังตรวจสอบบัญชี / Checking account…</p>
+        ) : customerAccount ? (
+          <>
+            <p className="paid-signup-hint text-sm">
+              <strong>เข้าสู่ระบบแล้ว / Signed in</strong>
+              <span className="mt-1 block break-words">{customerAccount.first_name} {customerAccount.last_name}</span>
+              <span className="block break-all text-xs">{customerAccount.email}</span>
+            </p>
+            {!customerAccount.email_verified_at && (
+              <p className="paid-signup-note rounded-lg p-2 text-sm">
+                กรุณายืนยันอีเมลก่อนจอง / Verify your email before booking.
+              </p>
+            )}
+            <div className="grid gap-2 sm:grid-cols-2">
+              <a className="paid-signup-primary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
+                 href="#public-registration-form">
+                ลงทะเบียนเข้างาน / Book places
+              </a>
+              <a className="paid-signup-secondary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
+                 href="/account" target="_blank" rel="noopener noreferrer">
+                บัญชีของฉัน / My account
+              </a>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="paid-signup-hint text-sm">
+              สมัครบัญชีและยืนยันอีเมลก่อนจอง<br />
+              Create an account and verify your email.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <a className="paid-signup-primary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
+                 href="/account/register" target="_blank" rel="noopener noreferrer">
+                สมัครบัญชี / Register
+              </a>
+              <a className="paid-signup-secondary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
+                 href="/account/login" target="_blank" rel="noopener noreferrer">
+                เข้าสู่ระบบ / Sign in
+              </a>
+            </div>
+          </>
+        )}
       </section>
       {catalog?.payment_mode === "external_manual" && <p role="status" className="paid-signup-note rounded-lg p-3 text-sm">
         ชำระเงินภายนอก · ผู้จัดงานยืนยันภายหลัง<br />
@@ -147,7 +212,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
           }).format(new Date(booking.due_at))} ({timezone})</p>}
         </div>
       ) : enabled && catalog && attendees.length > 0 ? (
-        <form onSubmit={submit} className="space-y-4">
+        <form id="public-registration-form" onSubmit={submit} className="scroll-mt-24 space-y-4">
           <fieldset disabled={busy} className="space-y-3">
             <label className="block text-sm font-medium">Primary contact name
               <input className={field} required maxLength={180} value={contact} onChange={(event) => setContact(event.target.value)} />

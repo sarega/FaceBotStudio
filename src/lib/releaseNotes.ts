@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.0",
+    date: "2026-11-17",
+    title: "Event registration recognizes signed-in accounts",
+    features: [
+      "Signed-in attendees see their name and booking controls instead of account creation prompts",
+      "Returning to the Event tab refreshes the account session",
+      "Primary booking contact is prefilled from the customer account",
+    ],
+  },
+  {
     version: "0.8.9",
     date: "2026-11-16",
     title: "Readable Paid Registration setup status",
