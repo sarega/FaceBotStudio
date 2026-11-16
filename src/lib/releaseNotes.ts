@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.5",
+    date: "2026-11-16",
+    title: "Simplified one-page paid event setup",
+    features: [
+      "Configure payment method, uploaded QR and bank details, pricing and capacity in one form",
+      "Save and Open Registration in one action",
+      "Advanced readiness diagnostics are tucked away until needed",
+    ],
+  },
+  {
     version: "0.8.4",
     date: "2026-11-16",
     title: "Upload recipient QR and bank details",

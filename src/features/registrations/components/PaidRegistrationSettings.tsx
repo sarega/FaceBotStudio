@@ -1,4 +1,4 @@
-import { PaidPaymentDisplaySettings } from "./PaidPaymentDisplaySettings";
+import { PaidPaymentDisplaySettings, type PaidPaymentDisplayHandle } from "./PaidPaymentDisplaySettings";
 import { paidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
@@ -41,8 +41,8 @@ function localDateInput(ms: number | null) {
   return new Date(ms - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-function SettingsForm({ settings, path, apiFetch, onSaved }: {
-  settings: Settings | null; path: string; apiFetch: ApiFetch; onSaved: (result: Settings) => void;
+function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
+  settings: Settings | null; path: string; eventId: string; apiFetch: ApiFetch; onSaved: (result: Settings) => void;
 }) {
   const [categories, setCategories] = useState<Category[]>(settings?.categories.map((category) => ({
     id: category.id, label: category.label, price: (category.unit_minor / 100).toFixed(2),
@@ -50,6 +50,7 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
   })) ?? [{ id: "general", label: "", price: "", quota: "" }]);
   const [seminar, setSeminar] = useState(settings?.fields ?? []);
   const [paymentMode, setPaymentMode] = useState(settings?.payment_mode === "external_manual" ? "external_manual" : "promptpay");
+  const displayRef = useRef<PaidPaymentDisplayHandle>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -57,6 +58,8 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
     event.preventDefault();
     if (busy) return;
     setError("");
+    const publish = (event.nativeEvent as SubmitEvent).submitter instanceof HTMLButtonElement &&
+      ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement).value === "publish";
     const data = new FormData(event.currentTarget);
     const cutoff = String(data.get("cutoff") || "");
     const parsedCategories = categories.map(({ id, label, price, quota }) => {
@@ -72,12 +75,16 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
     }
     setBusy(true);
     try {
+      if (paymentMode === "external_manual" && !(await displayRef.current?.save())) {
+        setError("บันทึกข้อมูลบัญชีหรือ QR ไม่สำเร็จ กรุณาลองอีกครั้ง");
+        return;
+      }
       const response = await apiFetch(path, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           version: settings?.version ?? 0, capacity: Number(data.get("capacity")),
           hold_minutes: Number(data.get("hold_minutes")), cutoff_ms: cutoff ? new Date(cutoff).getTime() : null,
-          published: data.has("published"), payment_mode: paymentMode, categories: parsedCategories, fields: seminar,
+          published: publish, payment_mode: paymentMode, categories: parsedCategories, fields: seminar,
         }),
       });
       const result = await response.json();
@@ -105,22 +112,11 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
 
   return (
     <form onSubmit={save} className="space-y-3">
-      {!settings && <p>Saving these settings switches this event to Paid Registration. Public bookings open when you publish.</p>}
-      {settings?.published === 0 && (
-        <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          Paid registration is in DRAFT. Customers cannot sign up until you configure the Organizer payment
-          receiver, enable the server Paid Registration feature, tick "Accept public paid bookings",
-          and save. Set your event status to Active as well.
-        </p>
-      )}
-      {settings?.published === 1 && (
-        <p role="status" className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-900">
-          Paid registration is published. The event must also be Active with an open registration window.
-        </p>
-      )}
+      <h3 className="font-bold">ตั้งค่าและเปิดรับสมัครได้ในหน้านี้ — ไม่ต้องไป Organizer</h3>
+      {settings?.published === 1 && <p role="status" className="rounded-lg border border-green-300 p-2 font-semibold text-green-800">ตั้งค่า Published แล้ว</p>}
       <fieldset disabled={busy} className="space-y-3">
         <fieldset className="rounded-xl border-2 border-blue-200 p-3">
-          <legend className="px-2 font-bold">How will attendees pay?</legend>
+          <legend className="px-2 font-bold">1. วิธีรับเงิน</legend>
           <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border bg-white p-3">
             <input type="radio" className="mt-1" checked={paymentMode === "external_manual"}
               onChange={() => setPaymentMode("external_manual")} />
@@ -135,6 +131,8 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
             <span className="block text-xs text-slate-600">Requires an Organizer receiving account and secure proof storage.</span></span>
           </label>
         </fieldset>
+        {paymentMode === "external_manual" && <PaidPaymentDisplaySettings ref={displayRef} eventId={eventId} apiFetch={apiFetch} />}
+        <h3 className="font-bold">3. จำนวนที่รับและราคา</h3>
         <div className="grid gap-3 sm:grid-cols-3">
           <label>Capacity<input className={field} name="capacity" type="number" min={1} step={1} required defaultValue={settings?.capacity} /></label>
           <label>Hold duration (minutes)<input className={field} name="hold_minutes" type="number" min={1} step={1} required defaultValue={settings?.hold_minutes} /></label>
@@ -176,8 +174,14 @@ function SettingsForm({ settings, path, apiFetch, onSaved }: {
             </div>;
           })}
         </fieldset>
-        <label className="flex gap-2"><input type="checkbox" name="published" defaultChecked={settings?.published === 1} /> Accept public paid bookings</label>
-        <button type="submit" className="rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white">{busy ? "Saving…" : "Save paid registration settings"}</button>
+        <div className="flex flex-wrap gap-2 border-t pt-4">
+          <button type="submit" name="action" value="publish" className="rounded-xl bg-blue-700 px-5 py-3 text-base font-bold text-white disabled:opacity-50">
+            {busy ? "กำลังบันทึก…" : "บันทึกและเปิดรับสมัคร"}
+          </button>
+          <button type="submit" name="action" value="draft" className="rounded-xl border px-4 py-3 font-semibold">
+            บันทึกแบบร่าง
+          </button>
+        </div>
       </fieldset>
       {error && <p role="alert" className="text-red-700">{error}</p>}
     </form>
@@ -254,10 +258,10 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
       <button type="button" aria-expanded={open} className="font-semibold text-blue-700 underline" onClick={() => setOpen(!open)}>Paid registration settings</button>
       {open && (error ? <p role="alert">Could not load paid registration settings.</p> :
         settings === undefined ? <p role="status">Loading settings…</p> :
-          <SettingsForm key={settings?.version ?? 0} settings={settings} path={path} apiFetch={apiFetch}
+          <SettingsForm key={settings?.version ?? 0} settings={settings} path={path} eventId={eventId} apiFetch={apiFetch}
             onSaved={(result) => { setSettings(result); setSaved(true); void loadReadiness(); }} />)}
-      {open && settings !== undefined && <PaidPaymentDisplaySettings eventId={eventId} apiFetch={apiFetch} />}
-      {open && settings !== undefined && <section className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
+      {open && settings !== undefined && <details className="space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3">
+        <summary className="cursor-pointer font-semibold">ตรวจสอบปัญหาการเปิดรับสมัคร / Help Bot (เฉพาะเมื่อมีปัญหา)</summary>
         <div className="flex items-center justify-between gap-2">
           <h3 className="font-semibold">Event activation checks — registration + Help Bot</h3>
           <button type="button" className="text-blue-700 underline" onClick={() => void loadReadiness()}>Recheck</button>
@@ -287,7 +291,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
           </p>}
         </>}
         {readinessError && <p role="alert" className="text-red-700">{readinessError}</p>}
-      </section>}
+      </details>}
       {open && saved && <p role="status">Settings saved.</p>}
     </section>
   );

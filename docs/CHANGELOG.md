@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.5 - 2026-11-16
+
+- Consolidated event paid registration into one workflow: payment mode, recipient QR and bank details, capacity/pricing, and Save & Open Registration.
+- Bank details are saved before publishing by the same primary action; QR uploads save directly with image validation.
+- Removed duplicate payment-display save controls and hid advanced diagnostics in a collapsible troubleshooting section.
+- Existing event data is retained; payment/server readiness requirements remain enforced.
+
 ## 0.8.4 - 2026-11-16
 
 - Added per-event upload of an existing recipient payment QR image (JPEG/PNG/WebP), plus bank name, account holder, and bank account number, without requiring a PromptPay ID.
