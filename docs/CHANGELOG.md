@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.8 - 2026-11-16
+
+- Condensed the public Paid Registration account introduction into short Thai/English text and two plainly labeled account actions, eliminating redundant explanatory paragraphs.
+- Styled the registration account card, primary and secondary buttons, and external payment notice with deliberate light/dark background and foreground contrasts, including focus-visible states.
+- Shortened the unavailable-booking message in both languages, preserving account signup visibility.
+
 ## 0.8.7 - 2026-11-16
 
 - Return exact missing deployment-variable names when publishing Paid Registration is rejected, without returning any secret values.

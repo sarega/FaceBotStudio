@@ -275,6 +275,59 @@ html.theme-dark .event-description-content blockquote { background: rgb(15 23 42
   --tw-ring-color: color-mix(in srgb, var(--public-theme) 72%, transparent) !important;
 }
 
+/* Paid event signup: short bilingual copy and theme-aware, high-contrast controls. */
+.public-event-themed .paid-signup-card {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #0f172a;
+}
+.public-event-themed .paid-signup-hint { color: #334155; }
+.public-event-themed .paid-signup-primary {
+  background: #1d4ed8;
+  color: #fff;
+  border: 1px solid #1d4ed8;
+}
+.public-event-themed .paid-signup-primary:hover { background: #1e40af; }
+.public-event-themed .paid-signup-secondary {
+  background: #fff;
+  border: 1px solid #64748b;
+  color: #1e3a8a;
+}
+.public-event-themed .paid-signup-secondary:hover { background: #dbeafe; }
+.public-event-themed .paid-signup-note {
+  background: #eff6ff;
+  color: #1e3a8a;
+  border: 1px solid #bfdbfe;
+}
+html.theme-dark .public-event-themed .paid-signup-card {
+  background: #14243a;
+  border-color: #475569;
+  color: #f8fafc;
+}
+html.theme-dark .public-event-themed .paid-signup-hint { color: #e2e8f0; }
+html.theme-dark .public-event-themed .paid-signup-primary {
+  background: #60a5fa;
+  border-color: #60a5fa;
+  color: #0b1220;
+}
+html.theme-dark .public-event-themed .paid-signup-primary:hover { background: #93c5fd; }
+html.theme-dark .public-event-themed .paid-signup-secondary {
+  background: #0f172a;
+  border-color: #93c5fd;
+  color: #dbeafe;
+}
+html.theme-dark .public-event-themed .paid-signup-secondary:hover { background: #1e3a5f; }
+html.theme-dark .public-event-themed .paid-signup-note {
+  background: #172e44;
+  border-color: #3b6a89;
+  color: #e0f2fe;
+}
+.public-event-themed .paid-signup-primary:focus-visible,
+.public-event-themed .paid-signup-secondary:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 2px;
+}
+
 @layer base {
   html {
     color-scheme: light;

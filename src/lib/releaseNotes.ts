@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.8.8",
+    date: "2026-11-16",
+    title: "Clearer bilingual registration and theme contrast",
+    features: [
+      "Short Thai and English signup copy on public event pages",
+      "Clear Create Account and Sign In actions",
+      "Improved paid registration appearance for light and dark themes",
+    ],
+  },
+  {
     version: "0.8.5",
     date: "2026-11-16",
     title: "Simplified one-page paid event setup",
