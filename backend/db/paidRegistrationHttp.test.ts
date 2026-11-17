@@ -539,6 +539,28 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await afterRefund.json()).booking.refunds.length, 1);
     // Coupons API: admin-only management, customer quote, one-use complimentary
     // booking, credentials, and no payment proof required.
+    // Regression: internal event.slug and public Event Settings slug can differ.
+    // The coupon Admin link must resolve through the public-event resolver.
+    const slugProbe = await db.createEvent({name:"Coupon Internal Route",organizer_id:"org_default"});
+    assert.notEqual(slugProbe.slug,"correct-coupon-public-route");
+    await db.updateEvent(slugProbe.id,{status:"active"});
+    await db.upsertSettings({event_public_page_enabled:"1",
+      event_public_slug:"correct-coupon-public-route"},slugProbe.id);
+    const probeCoupons=await fetch(origin+"/api/events/"+slugProbe.id+
+      "/paid-registration/coupons",{headers:staffCreateHeaders});
+    assert.equal(probeCoupons.status,200);
+    const probeInfo=await probeCoupons.json();
+    assert.equal(probeInfo.event_id,slugProbe.id);
+    assert.equal(probeInfo.event_slug,"correct-coupon-public-route");
+    assert.equal(probeInfo.public_page_enabled,true);
+    const probePage=await fetch(origin+"/api/public/events/"+probeInfo.event_slug);
+    assert.equal(probePage.status,200);
+    assert.equal((await probePage.json()).event.id,slugProbe.id);
+    assert.equal((await fetch(origin+"/api/public/events/"+slugProbe.slug)).status,404);
+    await db.upsertSettings({event_public_page_enabled:"0"},slugProbe.id);
+    const unpublishedProbe=await fetch(origin+"/api/events/"+slugProbe.id+
+      "/paid-registration/coupons",{headers:staffCreateHeaders});
+    assert.equal((await unpublishedProbe.json()).public_page_enabled,false);
     const couponAdminPath=origin+"/api/events/"+newExternalEvent.id+"/paid-registration/coupons";
     const couponDraft={code:"TEMPDELETE",kind:"fixed",value_minor:500,
       max_uses:1,per_customer_limit:1,starts_ms:null,ends_ms:null,enabled:true};

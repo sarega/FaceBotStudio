@@ -25,7 +25,7 @@ function blank(): Coupon {
 export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:ApiFetch}) {
   const [open,setOpen]=useState(false);
   const [coupons,setCoupons]=useState<Coupon[]>([]);
-  const [configuredEvent,setConfiguredEvent]=useState<{id:string;slug:string}|null>(null);
+  const [configuredEvent,setConfiguredEvent]=useState<{id:string;slug:string;name:string;publicPageEnabled:boolean}|null>(null);
   const [editing,setEditing]=useState<Coupon>(blank);
   const [editingCode,setEditingCode]=useState<string|null>(null);
   const [deleting,setDeleting]=useState<string|null>(null);
@@ -40,7 +40,9 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
       if(!response.ok) throw new Error(payload.error||"Could not load coupons");
       setCoupons(payload.coupons||[]);
       setConfiguredEvent(payload.event_id&&payload.event_slug?
-        {id:payload.event_id,slug:payload.event_slug}:null);
+        {id:payload.event_id,slug:payload.event_slug,
+          name:payload.event_name||payload.event_slug,
+          publicPageEnabled:payload.public_page_enabled===true}:null);
       setError("");
     } catch(e) {setError(e instanceof Error?e.message:"Coupons unavailable");}
   }
@@ -107,12 +109,21 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
     {open && <div className="mt-4 space-y-4">
       <p className="text-sm text-slate-600">One coupon per booking. Discounts apply after accommodation adjustments.
         Expired unpaid bookings release their usage quota automatically.</p>
-      {configuredEvent&&<p className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
-        คูปองชุดนี้ใช้กับ Event:
-        <a className="ml-1 font-semibold underline" href={"/events/"+encodeURIComponent(configuredEvent.slug)}
-          target="_blank" rel="noopener noreferrer">{configuredEvent.slug}</a>
-        <span className="ml-2 font-mono text-[10px] opacity-70">{configuredEvent.id}</span>
-      </p>}
+      {configuredEvent&&<div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+        <p className="font-semibold">คูปองสำหรับ Event: {configuredEvent.name}</p>
+        <p className="mt-1">Public slug: <code>{configuredEvent.slug}</code>
+          <span className="ml-2 font-mono text-[10px] opacity-70">ID: {configuredEvent.id}</span>
+        </p>
+        {configuredEvent.publicPageEnabled ?
+          <a className="mt-2 inline-flex rounded-md border border-blue-300 px-3 py-2 font-semibold underline"
+            href={"/events/"+encodeURIComponent(configuredEvent.slug)}
+            target="_blank" rel="noopener noreferrer">
+            เปิดหน้า Event นี้ / Open this Event
+          </a> :
+          <p className="mt-2 font-semibold text-amber-800">
+            Public Event page is disabled. Enable its public page in Event Settings before sharing a registration link.
+          </p>}
+      </div>}
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {coupons.map(c=><div key={c.code} className={"space-y-2 rounded-lg border p-3 text-sm " +
           (editingCode===c.code?"border-blue-500 bg-blue-50":"border-slate-200")}>

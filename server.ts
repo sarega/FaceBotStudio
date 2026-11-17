@@ -17135,9 +17135,20 @@ async function startServer() {
     requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
       try {
         const event=await appDb.getEventById(req.eventScope!.eventId);
+        if (!event) return res.status(404).json({error:"event_not_found"});
+        const settings=await getSettingsMap(event.id);
+        // Match the exact canonical public slug used by the public page resolver,
+        // not event.slug (internal event routing can use a different slug).
+        const publicSlug=resolveEnglishPublicSlug({
+          customSlug:String(settings.event_public_slug||""),
+          eventName:String(settings.event_name||event.name||""),
+          eventSlug:event.slug,
+          eventId:event.id,
+        });
+        const published=isTruthySetting(settings.event_public_page_enabled??"0");
         return res.set("Cache-Control","private, no-store")
-          .json({event_id:req.eventScope!.eventId,event_slug:event?.slug??null,
-            coupons:await appDb.listPaidCoupons(req.eventScope!.eventId)});
+          .json({event_id:event.id,event_name:event.name,event_slug:publicSlug,
+            public_page_enabled:published,coupons:await appDb.listPaidCoupons(event.id)});
       }
       catch {return res.status(500).json({error:"coupon_list_failed"});}
     });

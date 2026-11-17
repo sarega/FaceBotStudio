@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.4 - 2026-11-17
+
+- Fix Event link in Coupons & Promotions. The previous implementation incorrectly used internal event.slug instead of the canonical public slug resolved from Event Settings event_public_slug, so following the coupon link could open a non-existent or unrelated public page.
+- Resolve the coupon owner event by its scoped Event ID and return its canonical Public Event slug, event name, and public-page enabled status using the same slug logic as the actual public page API.
+- Display the owning Event name, canonical public slug and immutable Event ID in the coupon manager. Only show the public-page link if that event's public page is enabled; otherwise explain that it is not published.
+- Preserve current coupon ownership and redemptions. Do not automatically reassign coupons to a different event merely because an old link was wrong.
+- Add HTTP regression test with different internal and custom Public Event slugs, asserting the Admin link resolves to the exact same event and that the disabled-page state is recognized.
+
 ## 0.10.3 - 2026-11-17
 
 - Diagnose why an apparently enabled coupon is rejected in Public Event Checkout: split the former coupon_unavailable error into coupon_not_found (event/code mismatch), coupon_disabled, coupon_not_started, and coupon_expired.
