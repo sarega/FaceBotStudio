@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.7",
+    date: "2026-11-17",
+    title: "Custom registration defaults and food choices",
+    features: [
+      "Set default answers for seminar questions, including Accommodation = Yes",
+      "Food Preference can use free text or configurable dropdown options",
+      "Attendee selections remain editable and existing bookings remain unchanged",
+    ],
+  },
+  {
     version: "0.10.6",
     date: "2026-11-17",
     title: "Coupon code validation and current-price preview",
