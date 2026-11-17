@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3 - 2026-11-17
+
+- Audited guest and signed-in attendee flows in mobile Chromium viewports (320, 360, 390, and 430 CSS pixels), including login, event catalog, profile menu, and external bank-transfer invoice with mocked owned booking data.
+- Added Save QR image control so mobile attendees can use the same phone to import a recipient QR into a banking app, plus bilingual guidance.
+- Constrained large uploaded payment QR images to the payment card width on small screens.
+- Scroll directly to the invoice details when opening a newly placed booking by reference.
+- Removed the misleading secondary No orders yet message when the attendee already has paid registrations.
+
 ## 0.9.2 - 2026-11-17
 
 - Complete external/manual bank-transfer registration UX: Reserve leads directly to the attendee's private payment invoice in My Bookings, with amount, reference, deadline, organizer bank account and uploaded QR.

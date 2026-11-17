@@ -125,8 +125,13 @@ function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; 
     {!!details.account_number && <p>เลขบัญชี / Account: <span className="font-mono font-semibold">{details.account_number}</span></p>}
     {!!details.qr_png_base64 && <div className="space-y-1">
       <img src={"data:image/png;base64," + details.qr_png_base64} alt="Organizer-provided payment QR code"
-        className="max-h-72 max-w-72 rounded-xl bg-white p-3" />
-      <p className="text-xs">ตรวจชื่อผู้รับและยอดเงินในแอปธนาคารก่อนโอน / Confirm recipient and amount in your bank app.</p>
+        className="block h-auto w-full max-w-72 rounded-xl bg-white p-3 object-contain" />
+      <a href={"data:image/png;base64," + details.qr_png_base64} download="meetrix-payment-qr.png"
+        className="inline-flex min-h-11 items-center rounded-lg border border-blue-400/50 px-4 py-2 text-sm font-semibold text-blue-200 underline underline-offset-2">
+        บันทึก QR / Save QR image
+      </a>
+      <p className="text-xs">ใช้มือถือเครื่องเดียว: บันทึก QR แล้วนำเข้าแอปธนาคาร / Same phone: save the QR, then import it in your banking app.</p>
+      <p className="text-xs">ตรวจชื่อผู้รับและยอดเงินก่อนโอน / Verify the recipient and amount.</p>
     </div>}
     <p className="text-xs text-slate-300">บัตรเข้างานจะออกหลังผู้จัดงานยืนยันยอดเงินจริง / Admission QR follows payment verification.</p>
   </div>;
@@ -141,6 +146,13 @@ export function CustomerPaidBookings() {
   const [selected, setSelected] = useState<Booking>();
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState("");
+  const paymentAnchorRef = useRef<HTMLDivElement>(null);
+  const didScrollToInvoice = useRef(false);
+  useEffect(() => {
+    if (!reference || !detail || !selected || didScrollToInvoice.current) return;
+    didScrollToInvoice.current = true;
+    paymentAnchorRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+  }, [reference, detail, selected]);
   useEffect(() => {
     const request = new AbortController();
     setPage(undefined);
@@ -169,6 +181,7 @@ export function CustomerPaidBookings() {
       <h2 className="font-semibold text-white">Paid registrations</h2>
       {reference && <button type="button" className="text-sm text-blue-300 underline" onClick={() => {
         setReference("");
+        didScrollToInvoice.current = false;
         setSelected(undefined);
         window.history.replaceState(window.history.state, "", "/app/orders");
       }}>Show all paid registrations</button>}
@@ -186,7 +199,7 @@ export function CustomerPaidBookings() {
             {booking.status === "awaiting_payment" ? "ใบแจ้งชำระเงิน / Payment invoice" : "รายละเอียดการจอง / Booking details"}
           </button>
           {selected?.id === booking.id && detail && (
-            <div className="space-y-3" aria-label="Payment and booking details">
+            <div ref={paymentAnchorRef} className="scroll-mt-4 space-y-3" aria-label="Payment and booking details">
             <ul className="space-y-1">{detail.attendees.map((attendee) => (
               <li key={attendee.id}>
                 {attendee.first_name} {attendee.last_name} · {attendee.category_label}

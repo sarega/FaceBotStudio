@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.3",
+    date: "2026-11-17",
+    title: "Mobile payment experience improvements",
+    features: [
+      "Save bank payment QR image for use in mobile banking apps",
+      "Large QR images fit narrow phone screens",
+      "Deep-linked invoices open in view without confusing duplicate empty states",
+    ],
+  },
+  {
     version: "0.9.2",
     date: "2026-11-17",
     title: "Bank transfer invoice and slip verification",
