@@ -1136,6 +1136,7 @@ export interface AppDatabase {
   getCustomerAccountById(id: string): Promise<CustomerAccountRow | undefined>;
   getCustomerAccountByNormalizedEmail(normalizedEmail: string): Promise<CustomerAccountRow | undefined>;
   listCustomerAccounts(limit?: number): Promise<CustomerAccountRow[]>;
+  listOrganizationPaidBookings(organizationId: string, limit?: number): Promise<PaidRow[]>;
   createCustomerAccount(input: CreateCustomerAccountInput): Promise<CustomerAccountRow>;
   updateCustomerProfile(id: string, input: UpdateCustomerProfileInput): Promise<CustomerAccountRow | undefined>;
   updateCustomerPasswordHash(id: string, passwordHash: string): Promise<boolean>;

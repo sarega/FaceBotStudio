@@ -37,6 +37,20 @@ type CustomerOrder = {
   }>;
 };
 
+type CustomerPaidBooking = {
+  booking_id:string;booking_reference:string;customer_id:string;
+  event_id:string;event_name:string;event_slug:string;
+  customer_first_name:string;customer_last_name:string;customer_email:string;
+  attendee_count:number;state:string;payment_state:string;
+  total_minor:number;created_ms:number;due_ms:number;
+  claimed_transfer_ms:number|null;slip_uploaded_ms:number|null;
+};
+function paidBookingStatus(b:CustomerPaidBooking) {
+  return b.state==="confirmed"?"ยืนยันแล้ว":b.state==="verification_pending"?
+    "ส่งสลิป · รอตรวจ":b.state==="awaiting_payment"?"ยังไม่ชำระ":
+    b.state==="expired"?"หมดอายุ":b.state==="cancelled"?"ยกเลิก":"ต้องตรวจสอบ";
+}
+
 type CustomerRecord = {
   id: string;
   email: string;
@@ -53,6 +67,8 @@ type CustomerRecord = {
   paid_order_count: number;
   paid_amount: number;
   orders: CustomerOrder[];
+  booking_count:number;
+  paid_bookings:CustomerPaidBooking[];
 };
 
 type CustomerResponse = {
@@ -65,12 +81,17 @@ type CustomerResponse = {
     with_orders: number;
     paid_orders: number;
     paid_amount: number;
+    bookings:number;awaiting_payment:number;awaiting_review:number;
+    confirmed:number;exceptions:number;expired:number;cancelled:number;confirmed_minor:number;
   };
   customers: CustomerRecord[];
+  bookings:CustomerPaidBooking[];
 };
 
 type Props = {
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  focusCustomerId?:string;
+  onOpenBooking?:(booking:CustomerPaidBooking)=>void;
 };
 
 const money = (value: number) => new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(value || 0);
@@ -114,7 +135,7 @@ function deliveryTone(delivery: CustomerEmailDelivery | null): "green" | "amber"
   return "slate";
 }
 
-export function CustomerManagementScreen({ apiFetch }: Props) {
+export function CustomerManagementScreen({ apiFetch,focusCustomerId,onOpenBooking }: Props) {
   const [data, setData] = useState<CustomerResponse | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | CustomerRecord["status"]>("all");
@@ -122,6 +143,9 @@ export function CustomerManagementScreen({ apiFetch }: Props) {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
+  const [exporting,setExporting]=useState(false);
+  const [bookingQuery,setBookingQuery]=useState("");
+  const [bookingFilter,setBookingFilter]=useState("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -141,6 +165,18 @@ export function CustomerManagementScreen({ apiFetch }: Props) {
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(()=>{
+    if(!focusCustomerId || !data?.customers.some(c=>c.id===focusCustomerId))return;
+    setQuery("");setStatusFilter("all");setSelectedId(focusCustomerId);
+  },[focusCustomerId,data]);
+  const filteredBookings=useMemo(()=>{
+    const q=bookingQuery.trim().toLowerCase();
+    return (data?.bookings||[]).filter(booking=>
+      (bookingFilter==="all"||booking.state===bookingFilter) &&
+      (!q||[booking.event_name,booking.booking_reference,booking.customer_first_name,
+        booking.customer_last_name,booking.customer_email,booking.customer_id,booking.event_id]
+        .join(" ").toLowerCase().includes(q)));
+  },[data?.bookings,bookingQuery,bookingFilter]);
   const filteredCustomers = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return (data?.customers || []).filter((customer) => {
@@ -181,7 +217,25 @@ export function CustomerManagementScreen({ apiFetch }: Props) {
     }
   };
 
-  const summary = data?.summary || { total: 0, verified: 0, pending: 0, disabled: 0, with_orders: 0, paid_orders: 0, paid_amount: 0 };
+  async function exportBookings() {
+    if(exporting)return;
+    setExporting(true);
+    try {
+      const response=await apiFetch("/api/admin/customers/paid-bookings.csv");
+      if(!response.ok)throw new Error("ไม่สามารถส่งออกข้อมูลการจองได้");
+      const url=URL.createObjectURL(await response.blob());
+      const anchor=document.createElement("a");
+      anchor.href=url;anchor.download="meetrix-paid-bookings.csv";
+      document.body.appendChild(anchor);anchor.click();anchor.remove();
+      URL.revokeObjectURL(url);
+    }catch(error){setMessage(error instanceof Error?error.message:"Export failed");}
+    finally{setExporting(false);}
+  }
+  const summary = data?.summary || {
+    total:0,verified:0,pending:0,disabled:0,with_orders:0,paid_orders:0,paid_amount:0,
+    bookings:0,awaiting_payment:0,awaiting_review:0,confirmed:0,exceptions:0,
+    expired:0,cancelled:0,confirmed_minor:0,
+  };
 
   return (
     <div className="customer-management-screen space-y-4">
@@ -191,17 +245,26 @@ export function CustomerManagementScreen({ apiFetch }: Props) {
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">Customer accounts</h1>
           <p className="mt-1 text-sm text-slate-500">ดูบัญชีลูกค้า การยืนยันอีเมล และประวัติการซื้อจาก Meetrix</p>
         </div>
+        <button type="button" disabled={exporting} onClick={()=>void exportBookings()}
+          className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-500 disabled:opacity-50">
+          {exporting?"กำลังส่งออก…":"Export Bookings (Excel / CSV)"}
+        </button>
         <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-blue-300 hover:text-blue-700 disabled:opacity-50">
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {[
           { label: "Accounts", value: summary.total, helper: "เปิดบัญชีทั้งหมด", icon: Users, tone: "blue" as const },
-          { label: "Verified", value: summary.verified, helper: "ยืนยันอีเมลแล้ว", icon: CheckCircle2, tone: "green" as const },
-          { label: "Pending", value: summary.pending, helper: "รอยืนยันอีเมล", icon: Clock3, tone: "amber" as const },
-          { label: "Paid orders", value: summary.paid_orders, helper: money(summary.paid_amount), icon: ShoppingBag, tone: "blue" as const },
+          { label: "Email verified", value: summary.verified, helper: "ยืนยันอีเมลแล้ว", icon: CheckCircle2, tone: "green" as const },
+          { label: "Pending email", value: summary.pending, helper: "รอยืนยันอีเมล", icon: Clock3, tone: "amber" as const },
+          {label:"Bookings / จองแล้ว",value:summary.bookings,helper:"การจองทุก Event",icon:ShoppingBag,tone:"blue" as const},
+          {label:"รอชำระเงิน",value:summary.awaiting_payment,helper:"จองแล้ว ยังไม่ส่งสลิป",icon:Clock3,tone:"amber" as const},
+          {label:"ส่งสลิป · รอตรวจ",value:summary.awaiting_review,helper:"Admin ต้องตรวจสอบ",icon:Clock3,tone:"amber" as const},
+          {label:"ยืนยันแล้ว",value:summary.confirmed,helper:money(summary.confirmed_minor/100),icon:CheckCircle2,tone:"green" as const},
+          {label:"หมดอายุ / ยกเลิก",value:summary.expired+summary.cancelled,helper:"รายการที่ไม่สำเร็จ",icon:XCircle,tone:"rose" as const},
+          {label:"Ticket orders (อื่น ๆ)",value:summary.paid_orders,helper:"แยกจาก Paid Bookings",icon:ShoppingBag,tone:"blue" as const},
         ].map(({ label, value, helper, icon: Icon, tone }) => (
           <div key={label} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
             <div className="flex items-start justify-between gap-2"><div><p className="text-[11px] font-semibold text-slate-500">{label}</p><p className="mt-1 text-xl font-bold text-slate-950">{value}</p></div><span className={`flex h-8 w-8 items-center justify-center rounded-xl ${tone === "green" ? "bg-emerald-50 text-emerald-600" : "bg-blue-50 text-blue-600"}`}><Icon className="h-4 w-4" /></span></div>
@@ -209,6 +272,70 @@ export function CustomerManagementScreen({ apiFetch }: Props) {
           </div>
         ))}
       </div>
+
+      {data && <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 p-3">
+          <h2 className="mr-auto font-bold text-slate-900">
+            Bookings ทุก Event · {filteredBookings.length} รายการ
+          </h2>
+          <input value={bookingQuery} onChange={e=>setBookingQuery(e.target.value)}
+            aria-label="Search bookings by event or customer"
+            className="min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            placeholder="ค้นหาชื่องาน / ลูกค้า / เลขจอง"/>
+          <select value={bookingFilter} onChange={e=>setBookingFilter(e.target.value)}
+            aria-label="Filter booking status"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            <option value="all">ทุกสถานะ</option>
+            <option value="awaiting_payment">รอชำระเงิน</option>
+            <option value="verification_pending">ส่งสลิป · รอตรวจสอบ</option>
+            <option value="confirmed">ยืนยันแล้ว</option>
+            <option value="payment_exception">ต้องตรวจสอบเพิ่มเติม</option>
+            <option value="expired">หมดอายุ</option>
+            <option value="cancelled">ยกเลิก</option>
+          </select>
+        </div>
+        <div className="max-h-80 overflow-auto">
+          <table className="w-full min-w-[690px] border-collapse text-left text-xs">
+            <thead className="sticky top-0 bg-slate-100 text-slate-600">
+              <tr>
+                <th className="px-3 py-2">Event / งาน</th>
+                <th className="px-3 py-2">บัญชีลูกค้า</th>
+                <th className="px-3 py-2">Booking</th>
+                <th className="px-3 py-2">ยอด</th>
+                <th className="px-3 py-2">สถานะ</th>
+                <th className="px-3 py-2">วันที่ / เวลา</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredBookings.slice(0,300).map(booking=><tr key={booking.booking_id}>
+                <td className="px-3 py-2 font-medium text-slate-900">{booking.event_name}</td>
+                <td className="px-3 py-2">
+                  <button type="button" className="text-left text-blue-700 underline"
+                    onClick={()=>{setQuery("");setStatusFilter("all");setSelectedId(booking.customer_id);}}>
+                    {booking.customer_first_name} {booking.customer_last_name}
+                  </button>
+                  <span className="block text-slate-500">{booking.customer_email}</span>
+                </td>
+                <td className="px-3 py-2 text-slate-600">
+                  <span className="block font-medium">{booking.booking_reference}</span>
+                  <span>{booking.attendee_count} คน</span>
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 font-semibold">{money(booking.total_minor/100)}</td>
+                <td className="px-3 py-2 font-medium text-amber-800">{paidBookingStatus(booking)}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-slate-500">
+                  จอง {new Date(booking.created_ms).toLocaleString("th-TH")}
+                  {booking.claimed_transfer_ms!=null && <span className="block">โอน {new Date(booking.claimed_transfer_ms).toLocaleString("th-TH")}</span>}
+                  {booking.slip_uploaded_ms!=null && <span className="block">ส่งสลิป {new Date(booking.slip_uploaded_ms).toLocaleString("th-TH")}</span>}
+                </td>
+              </tr>)}
+            </tbody>
+          </table>
+          {filteredBookings.length===0 && <p className="p-4 text-sm text-slate-500">ไม่มีรายการจองตามเงื่อนไขนี้</p>}
+        </div>
+        {filteredBookings.length>300&&<p className="px-3 py-2 text-xs text-slate-500">
+          แสดง 300 รายการแรก · ใช้ Search หรือ Export Excel / CSV เพื่อดูรายการทั้งหมด
+        </p>}
+      </section>}
 
       <div className="customer-management-email-notice flex flex-wrap items-center gap-2 rounded-2xl border border-blue-200 bg-blue-50/70 px-3 py-2 text-xs text-blue-900">
         <Mail className="h-4 w-4 shrink-0 text-blue-600" />
@@ -233,7 +360,7 @@ export function CustomerManagementScreen({ apiFetch }: Props) {
                 return <button key={customer.id} type="button" onClick={() => setSelectedId(customer.id)} className={`grid w-full grid-cols-[minmax(0,1.4fr)_auto_auto] items-center gap-3 px-3 py-3 text-left transition-colors ${selected ? "customer-management-row-selected bg-blue-50/80" : "hover:bg-slate-50"}`}>
                   <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{customer.first_name} {customer.last_name}</p><p className="truncate text-xs text-slate-500">{customer.email}</p><p className="truncate text-[11px] text-slate-400">สมัคร {formatDate(customer.created_at)}</p></div>
                   <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${badgeClass(customer.status === "active" ? "green" : customer.status === "pending" ? "amber" : "rose")}`}>{statusLabel(customer.status)}</span>
-                  <div className="text-right"><p className="text-xs font-semibold text-slate-700">{customer.order_count} orders</p><p className={`text-[10px] ${delivery?.status === "sent" ? "text-emerald-600" : delivery?.status === "failed" ? "text-rose-600" : "text-slate-400"}`}>{delivery?.status || "no mail"}</p></div>
+                  <div className="text-right"><p className="text-xs font-semibold text-slate-700">{customer.booking_count} bookings</p><p className={`text-[10px] ${delivery?.status === "sent" ? "text-emerald-600" : delivery?.status === "failed" ? "text-rose-600" : "text-slate-400"}`}>{delivery?.status || "no mail"}</p></div>
                 </button>;
               })}
             </div>
@@ -245,7 +372,37 @@ export function CustomerManagementScreen({ apiFetch }: Props) {
               <div className="mt-4 grid grid-cols-2 gap-2 text-xs"><div className="rounded-xl bg-slate-50 p-2.5"><p className="text-slate-500">Phone</p><p className="mt-1 font-semibold text-slate-800">{selectedCustomer.phone || "—"}</p></div><div className="rounded-xl bg-slate-50 p-2.5"><p className="text-slate-500">Last login</p><p className="mt-1 font-semibold text-slate-800">{formatDate(selectedCustomer.last_login_at)}</p></div></div>
               <div className={`mt-3 rounded-xl border p-3 text-xs ${badgeClass(deliveryTone(selectedCustomer.email_delivery))}`}><div className="flex items-center justify-between gap-2"><p className="font-semibold">Verification email</p><span className="font-bold uppercase">{selectedCustomer.email_delivery?.status || "none"}</span></div><p className="mt-1">{deliveryLabel(selectedCustomer.email_delivery)}</p>{selectedCustomer.email_delivery?.sent_at && <p className="mt-1 text-[11px] opacity-75">Provider accepted at {formatDate(selectedCustomer.email_delivery.sent_at)}</p>}{selectedCustomer.email_delivery?.last_error && <p className="mt-1 break-words text-[11px]">{selectedCustomer.email_delivery.last_error}</p>}</div>
               {selectedCustomer.status === "pending" && <button type="button" onClick={() => void resendVerification(selectedCustomer)} disabled={busyId === selectedCustomer.id} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Mail className="h-4 w-4" />{busyId === selectedCustomer.id ? "Queueing…" : "Resend verification email"}</button>}
-              <div className="mt-5 flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Purchase history</p><p className="mt-1 text-sm font-semibold text-slate-900">{selectedCustomer.order_count} orders · {money(selectedCustomer.paid_amount)} paid</p></div><ShoppingBag className="h-5 w-5 text-slate-400" /></div>
+              <section className="mt-5 space-y-2">
+                <h3 className="font-bold text-slate-900">การจองสัมมนา · Event bookings ({selectedCustomer.booking_count})</h3>
+                {selectedCustomer.paid_bookings.length===0 ?
+                  <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">ยังไม่มี Booking จากบัญชีนี้</p> :
+                  selectedCustomer.paid_bookings.map((booking)=><div key={booking.booking_id}
+                    className="space-y-2 rounded-xl border border-slate-200 p-3 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-sm text-slate-900">{booking.event_name}</strong>
+                      <span className="rounded-full bg-amber-50 px-2 py-1 font-semibold text-amber-800">
+                        {paidBookingStatus(booking)}
+                      </span>
+                    </div>
+                    <p className="text-slate-600">
+                      {booking.attendee_count} คน · {money(booking.total_minor/100)} ·
+                      จองเมื่อ {new Date(booking.created_ms).toLocaleString("th-TH")}
+                    </p>
+                    <p className="break-all text-slate-500">Booking: {booking.booking_reference}</p>
+                    {onOpenBooking&&<button type="button"
+                      className="rounded-lg border border-blue-300 px-3 py-2 font-semibold text-blue-700"
+                      onClick={()=>onOpenBooking(booking)}>
+                      เปิดรายการจองใน Event / Review booking
+                    </button>}
+                    {booking.claimed_transfer_ms!=null&&<p className="text-slate-600">
+                      โอนเมื่อ {new Date(booking.claimed_transfer_ms).toLocaleString("th-TH")}
+                    </p>}
+                    {booking.slip_uploaded_ms!=null&&<p className="font-medium text-amber-700">
+                      ส่งสลิปเมื่อ {new Date(booking.slip_uploaded_ms).toLocaleString("th-TH")}
+                    </p>}
+                  </div>)}
+              </section>
+              <div className="mt-5 flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Ticket orders (separate system)</p><p className="mt-1 text-sm font-semibold text-slate-900">{selectedCustomer.order_count} ticket orders · {money(selectedCustomer.paid_amount)} paid</p></div><ShoppingBag className="h-5 w-5 text-slate-400" /></div>
               <div className="mt-3 space-y-2">{selectedCustomer.orders.length === 0 ? <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">ยังไม่มี order ที่ผูกกับบัญชีนี้</p> : selectedCustomer.orders.map((order) => <div key={order.id} className="rounded-xl border border-slate-200 p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{order.event_name}</p><p className="truncate text-xs text-slate-500">{order.performance_title} · {formatDate(order.created_at)}</p></div><span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${badgeClass(order.status === "paid" ? "green" : order.status === "payment_submitted" ? "amber" : order.status === "rejected" || order.status === "expired" ? "rose" : "slate")}`}>{order.status}</span></div><div className="mt-2 flex flex-wrap gap-1.5">{order.tickets.map((ticket) => <span key={ticket.id} className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] text-slate-700">{ticket.ticket_class} · {ticket.zone ? `${ticket.zone} ` : ""}{ticket.row_label}-{ticket.seat_label} · {money(ticket.price_amount)}</span>)}</div><div className="mt-2 text-right text-xs font-semibold text-slate-700">Total {money(order.total_amount)}</div></div>)}</div>
             </>}
           </aside>

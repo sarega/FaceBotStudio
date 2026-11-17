@@ -20145,12 +20145,20 @@ async function startServer() {
       const rawLimit = Array.isArray(req.query?.limit) ? req.query.limit[0] : req.query?.limit;
       const limit = Math.min(Math.max(Number.parseInt(String(rawLimit || "200"), 10) || 200, 1), 500);
       const organizationId = req.auth?.user.organization_id || "";
-      const [accounts, events, deliveries] = await Promise.all([
+      const [accounts, events, deliveries, allPaidBookings] = await Promise.all([
         appDb.listCustomerAccounts(limit),
         appDb.listEvents(organizationId),
         appDb.listNotificationDeliveries({ related_type: "customer_account", kind: "customer.email_verification", limit: Math.min(limit * 3, 1000) }),
+        appDb.listOrganizationPaidBookings(organizationId,10000),
       ]);
       const eventById = new Map(events.map((event) => [event.id, event]));
+      const paidBookings=allPaidBookings.filter((booking)=>eventById.has(String(booking.event_id)));
+      const bookingsByCustomer=new Map<string,typeof paidBookings>();
+      for(const booking of paidBookings) {
+        const id=String(booking.customer_id);
+        if(!bookingsByCustomer.has(id)) bookingsByCustomer.set(id,[]);
+        bookingsByCustomer.get(id)!.push(booking);
+      }
       const latestDeliveryByAccount = new Map<string, typeof deliveries[number]>();
       for (const delivery of deliveries) {
         if (delivery.related_id && !latestDeliveryByAccount.has(delivery.related_id)) {
@@ -20186,6 +20194,7 @@ async function startServer() {
               seat_label: ticket.seat_label || "",
             })),
           }));
+        const registrations=bookingsByCustomer.get(account.id)??[];
         const paidOrders = orders.filter((order) => order.status === "paid");
         const latestDelivery = latestDeliveryByAccount.get(account.id);
         return {
@@ -20201,6 +20210,8 @@ async function startServer() {
                 updated_at: latestDelivery.updated_at,
               }
             : null,
+          booking_count: registrations.length,
+          paid_bookings: registrations,
           order_count: orders.length,
           paid_order_count: paidOrders.length,
           paid_amount: paidOrders.reduce((sum, order) => sum + order.total_amount, 0),
@@ -20223,14 +20234,62 @@ async function startServer() {
           with_orders: customers.filter((customer) => customer.order_count > 0).length,
           paid_orders: customers.reduce((sum, customer) => sum + customer.paid_order_count, 0),
           paid_amount: customers.reduce((sum, customer) => sum + customer.paid_amount, 0),
+          bookings: paidBookings.length,
+          awaiting_payment: paidBookings.filter((booking)=>booking.state==="awaiting_payment").length,
+          awaiting_review: paidBookings.filter((booking)=>booking.state==="verification_pending").length,
+          confirmed: paidBookings.filter((booking)=>booking.state==="confirmed").length,
+          exceptions: paidBookings.filter((booking)=>booking.state==="payment_exception").length,
+          expired: paidBookings.filter((booking)=>booking.state==="expired").length,
+          cancelled: paidBookings.filter((booking)=>booking.state==="cancelled").length,
+          confirmed_minor: paidBookings.filter((booking)=>booking.state==="confirmed")
+            .reduce((sum,booking)=>sum+Number(booking.total_minor),0),
         },
         customers,
+        bookings:paidBookings,
       });
     } catch (error) {
       console.error("Failed to fetch customer management data:", error);
       return res.status(500).json({ error: "Failed to fetch customer management data" });
     }
   });
+
+  app.get("/api/admin/customers/paid-bookings.csv",
+    requireRoles(["owner","admin"]),async(req:AuthenticatedRequest,res:Response)=>{
+      try {
+        const organizationId=req.auth?.user.organization_id||"";
+        const bookings=await appDb.listOrganizationPaidBookings(organizationId,10000);
+        const safeCell=(value:unknown)=>{
+          const text=String(value??"");
+          // Spreadsheet applications may interpret cells starting with formulas.
+          return /^\s*[=+@-]/.test(text) ? "'"+text : text;
+        };
+        const rows=bookings.map((row)=>({
+          event:safeCell(row.event_name),event_id:safeCell(row.event_id),
+          booking_reference:safeCell(row.booking_reference),booking_id:safeCell(row.booking_id),
+          customer_name:safeCell([row.customer_first_name,row.customer_last_name].filter(Boolean).join(" ")),
+          customer_email:safeCell(row.customer_email),customer_phone:safeCell(row.customer_phone),
+          customer_id:safeCell(row.customer_id),
+          attendees:Number(row.attendee_count),
+          amount_thb:(Number(row.total_minor)/100).toFixed(2),
+          booking_status:safeCell(row.state),payment_status:safeCell(row.payment_state),
+          booked_at:new Date(Number(row.created_ms)).toISOString(),
+          payment_due_at:new Date(Number(row.due_ms)).toISOString(),
+          transferred_at:row.claimed_transfer_ms==null?"":new Date(Number(row.claimed_transfer_ms)).toISOString(),
+          slip_uploaded_at:row.slip_uploaded_ms==null?"":new Date(Number(row.slip_uploaded_ms)).toISOString(),
+        }));
+        const fields=["event","event_id","booking_reference","booking_id","customer_name",
+          "customer_email","customer_phone","customer_id","attendees","amount_thb",
+          "booking_status","payment_status","booked_at","payment_due_at",
+          "transferred_at","slip_uploaded_at"];
+        const csv=new Parser({fields}).parse(rows);
+        return res.set("Cache-Control","private, no-store")
+          .set("Content-Type","text/csv; charset=utf-8")
+          .attachment("meetrix-paid-bookings.csv").send("\ufeff"+csv);
+      }catch(error){
+        console.error("Customer bookings export failed",error);
+        return res.status(500).json({error:"bookings_export_failed"});
+      }
+    });
 
   app.post("/api/admin/customers/:id/resend-verification", requireRoles(["owner", "admin"]), manualOutboundActionRateLimit, async (req: AuthenticatedRequest, res: Response) => {
     try {

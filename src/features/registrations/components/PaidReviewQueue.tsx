@@ -6,6 +6,15 @@ type Review = {
   booking_id: string;
   attempt_id: string | null;
   booking_reference: string;
+  event_id: string;
+  event_name: string;
+  customer_id: string;
+  customer_first_name: string;
+  customer_last_name: string;
+  customer_email: string;
+  customer_phone: string;
+  booking_created_ms: number;
+  due_ms: number;
   version: number;
   total_minor: number;
   attendee_count: number;
@@ -160,7 +169,10 @@ function ReviewForm({ review, path, apiFetch, onUpdated }: {
   </div>;
 }
 
-export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFetch: ApiFetch }) {
+export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBookingReference }: {
+  eventId: string; apiFetch: ApiFetch; onOpenCustomer?:(customerId:string)=>void;
+  focusBookingReference?:string;
+}) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Review[]>();
   const [error, setError] = useState("");
@@ -170,6 +182,10 @@ export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFet
   const [summaryError, setSummaryError] = useState(false);
   const [next, setNext] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
+  useEffect(()=>{
+    if(!focusBookingReference)return;
+    setOpen(true);setReference(focusBookingReference);setOffset(0);
+  },[focusBookingReference,eventId]);
   const fetchRef = useRef(apiFetch);
   fetchRef.current = apiFetch;
   const prefix = `/api/events/${encodeURIComponent(eventId)}/paid-registration`;
@@ -206,7 +222,7 @@ export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFet
   }, [open, offset, prefix, reference, refresh]);
 
   return (
-    <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
+    <section id="paid-review-queue" className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
       <div className="flex items-center gap-4">
         <button type="button" className="font-semibold text-blue-700 underline" aria-expanded={open} onClick={() => setOpen(!open)}>ตรวจสลิป / Review payments</button>
         {open && <button type="button" className="underline" onClick={() => setRefresh((value) => value + 1)}>Refresh</button>}
@@ -247,13 +263,23 @@ export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFet
           return <details key={review.attempt_id??review.booking_id}
             className="rounded-xl border border-slate-200 bg-white p-3" open={undefined}>
             <summary className="cursor-pointer list-item space-y-1 text-sm">
+              <span className="block font-bold text-slate-900">
+                {review.customer_first_name} {review.customer_last_name}
+              </span>
+              <span className="block text-xs text-slate-700">{review.customer_email}</span>
+              <span className="inline-flex gap-2 text-xs">
+                <span className="text-blue-700">บัญชีลูกค้า: {review.customer_id}</span>
+              </span>
+              <span className="block text-xs text-slate-600">งาน: {review.event_name}</span>
               <span className="font-semibold text-slate-900">
                 {review.attendee_count} คน · ยอดจอง {money.format(review.total_minor/100)}
               </span>
               <span className="ml-2 rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
                 {review.attempt_id?"รอตรวจสลิป":"ยังไม่ส่งสลิป"}
               </span>
-              <span className="block break-all text-xs text-slate-500">เลขจอง {review.booking_reference}</span>
+              <span className="block break-all text-xs text-slate-500">
+                เลขจอง {review.booking_reference} · จองเมื่อ {new Date(review.booking_created_ms).toLocaleString("th-TH")}
+              </span>
             </summary>
             <div className="mt-3 space-y-3 border-t border-slate-200 pt-3">
               <div className="grid gap-3 md:grid-cols-2">
@@ -269,6 +295,15 @@ export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFet
                   {review.claimed_transfer_ms!=null && <p className="text-slate-600">
                     เวลาโอน: {new Date(review.claimed_transfer_ms).toLocaleString("th-TH")}
                   </p>}
+                  <p className="text-slate-700">ผู้จอง: <strong>{review.customer_first_name} {review.customer_last_name}</strong></p>
+                  <p className="break-all text-slate-700">บัญชีลูกค้า: {review.customer_email}</p>
+                  {onOpenCustomer&&<button type="button" className="rounded-lg border border-blue-300 px-3 py-2 text-sm font-semibold text-blue-700"
+                    onClick={()=>onOpenCustomer(review.customer_id)}>
+                    เปิดบัญชีลูกค้า / View customer account
+                  </button>}
+                  {review.customer_phone && <p className="text-slate-700">โทรศัพท์: {review.customer_phone}</p>}
+                  <p className="text-slate-700">งาน: {review.event_name}</p>
+                  <p className="text-slate-500">ลงทะเบียนเมื่อ: {new Date(review.booking_created_ms).toLocaleString("th-TH")}</p>
                   {review.receiver_name && <p className="text-slate-600">บัญชีรับเงิน: {review.receiver_name}</p>}
                   {review.claimed_reference && <p className="break-all text-slate-600">
                     เลขอ้างอิง: {review.claimed_reference}</p>}

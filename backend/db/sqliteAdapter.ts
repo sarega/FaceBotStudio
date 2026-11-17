@@ -2346,6 +2346,27 @@ export class SqliteAppDatabase implements AppDatabase {
     return mapCustomerAccountRow(row);
   }
 
+  async listOrganizationPaidBookings(organizationId: string, limit = 5000): Promise<PaidRow[]> {
+    const safeLimit=Math.min(Math.max(Math.trunc(limit)||5000,1),10000);
+    const rows=this.db.prepare(`SELECT b.id AS booking_id,b.reference AS booking_reference,b.event_id,b.customer_id,
+ e.name AS event_name,e.slug AS event_slug,c.first_name AS customer_first_name,
+ c.last_name AS customer_last_name,c.email AS customer_email,c.phone AS customer_phone,
+ b.state,b.payment_state,b.total_minor,b.created_ms,b.due_ms,
+ (SELECT COUNT(*) FROM paid_attendees a WHERE a.booking_id=b.id AND a.cancelled_ms IS NULL) AS attendee_count,
+ (SELECT MAX(p.claimed_transfer_ms) FROM paid_payment_attempts p
+  WHERE p.booking_id=b.id AND p.status IN ('proof_submitted','verified','exception')) AS claimed_transfer_ms,
+ (SELECT MAX(p.created_ms) FROM paid_payment_attempts p
+  WHERE p.booking_id=b.id AND p.status IN ('proof_submitted','verified','exception')) AS slip_uploaded_ms
+ FROM paid_bookings b JOIN events e ON e.id=b.event_id
+ JOIN customer_accounts c ON c.id=b.customer_id
+ WHERE b.organization_id=? AND e.organizer_id=?
+ ORDER BY b.created_ms DESC,b.id DESC LIMIT ?`).all(organizationId,organizationId,safeLimit) as PaidRow[];
+    return rows.map((row)=>({...row,total_minor:Number(row.total_minor),created_ms:Number(row.created_ms),
+      due_ms:Number(row.due_ms),attendee_count:Number(row.attendee_count),
+      claimed_transfer_ms:row.claimed_transfer_ms==null?null:Number(row.claimed_transfer_ms),
+      slip_uploaded_ms:row.slip_uploaded_ms==null?null:Number(row.slip_uploaded_ms)}));
+  }
+
   async listCustomerAccounts(limit = 200) {
     const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 200, 1), 1000);
     const rows = this.db.prepare(

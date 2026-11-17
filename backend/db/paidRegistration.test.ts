@@ -83,6 +83,18 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       pricing_version: 1, fields: [], categories: [{ id: "adult", label: "Adult", unit_minor: 25000, accommodation_discount_minor: 0 }],
     });
     const receipt = await db.createPaidBooking(command);
+    const orgBookings=await db.listOrganizationPaidBookings("org_default");
+    const orgEntry=orgBookings.find((booking)=>booking.booking_id===receipt.id);
+    assert.ok(orgEntry,"real paid bookings must appear in organizer-wide reporting");
+    assert.equal(orgEntry.event_name,"Paid workshop");
+    assert.equal(orgEntry.customer_email,"paid@example.com");
+    assert.equal(orgEntry.customer_id,customer.id);
+    assert.equal(orgEntry.attendee_count,2);
+    assert.equal(orgEntry.total_minor,50000);
+    assert.equal(orgEntry.state,"awaiting_payment");
+    assert.deepEqual(await db.listOrganizationPaidBookings("other_organizer"),[],
+      "organizer queries cannot read another organizer's bookings");
+
     fixture.prepare("UPDATE customer_accounts SET status='active',email_verified_at=CURRENT_TIMESTAMP WHERE id=?").run(customer.id);
     await db.createPaidMessengerLinkToken(event.id, customer.id, "hash-one");
     assert.equal(await second.exchangePaidMessengerLinkToken(event.id, "page", "sender", "hash-one"), true);

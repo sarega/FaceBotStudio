@@ -286,6 +286,43 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(externalQueueAfterUpload.status, 200);
     const externalReviews = (await externalQueueAfterUpload.json()).reviews;
     assert.equal(externalReviews[0].attempt_id, externalReceipt.attempt_id);
+    assert.equal(externalReviews[0].event_id,paidEvent.id);
+    assert.equal(externalReviews[0].event_name,paidEvent.name);
+    assert.equal(externalReviews[0].customer_email,"test-owner@example.com");
+    assert.equal(externalReviews[0].customer_first_name,"Test");
+    assert.equal(externalReviews[0].customer_last_name,"Customer");
+    assert.ok(externalReviews[0].booking_created_ms>0);
+    assert.equal(externalReviews[0].booking_reference,externalSlipBooking.reference);
+    const customerDashboard=await fetch(origin+"/api/admin/customers?limit=500",{
+      headers:staffCreateHeaders,
+    });
+    assert.equal(customerDashboard.status,200,await customerDashboard.clone().text());
+    const dashboardData=await customerDashboard.json();
+    assert.ok(dashboardData.summary.bookings>0);
+    assert.ok(dashboardData.summary.awaiting_review>0);
+    const dashboardBooking=dashboardData.customers.flatMap(
+      (row:{paid_bookings:Array<{booking_id:string;event_id:string;customer_id:string}>})=>
+        row.paid_bookings).find((row:{booking_id:string})=>row.booking_id===externalSlipBooking.id);
+    assert.ok(dashboardBooking);
+    assert.equal(dashboardBooking.event_id,paidEvent.id);
+    assert.equal(dashboardBooking.customer_id,externalReviews[0].customer_id);
+    const deniedExport=await fetch(origin+"/api/admin/customers/paid-bookings.csv");
+    assert.equal(deniedExport.status,401);
+    const exportResponse=await fetch(origin+"/api/admin/customers/paid-bookings.csv",{
+      headers:staffCreateHeaders,
+    });
+    assert.equal(exportResponse.status,200,await exportResponse.clone().text());
+    assert.match(exportResponse.headers.get("content-type")||"",/text\/csv/);
+    const csvBytes=new Uint8Array(await exportResponse.arrayBuffer());
+    assert.deepEqual([...csvBytes.slice(0,3)],[0xef,0xbb,0xbf]);
+    const exportedCsv=new TextDecoder().decode(csvBytes);
+    assert.ok(exportedCsv.includes("event_id"));
+    assert.ok(exportedCsv.includes("customer_email"));
+    assert.ok(exportedCsv.includes("booking_reference"));
+    assert.ok(exportedCsv.includes("slip_uploaded_at"));
+    assert.ok(exportedCsv.includes(externalSlipBooking.reference));
+    assert.ok(exportedCsv.includes("test-owner@example.com"));
+
     const reviewedProof = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id +
       "/proofs/" + externalReceipt.attempt_id, { headers: staffCreateHeaders });
     assert.equal(reviewedProof.status, 200);

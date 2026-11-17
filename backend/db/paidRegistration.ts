@@ -770,11 +770,16 @@ export function* checkInPaidCredential(eventId: string, credential: string, acto
 export function* listPaidReviewQueue(eventId: string, offset: number, reference?: string): PaidCommand<PaidRow[]> {
   const rows = yield query(
     `SELECT b.id AS booking_id,b.reference AS booking_reference,b.version,b.total_minor,b.payment_state,
+       b.event_id,b.customer_id,b.created_ms AS booking_created_ms,b.due_ms,
+       e.name AS event_name,c.first_name AS customer_first_name,c.last_name AS customer_last_name,
+       c.email AS customer_email,c.phone AS customer_phone,
        a.id AS attempt_id,a.status,a.claimed_minor,a.claimed_transfer_ms,a.claimed_reference,a.created_ms,
        a.observed_minor,a.reason,r.receiver_name,r.receiver_id,es.payment_mode,p.id AS proof_id,
        (SELECT COUNT(*) FROM paid_proofs other WHERE other.checksum=p.checksum AND other.attempt_id<>a.id) AS matching_proofs,
        (SELECT COUNT(*) FROM paid_attendees attendee WHERE attendee.booking_id=b.id AND attendee.cancelled_ms IS NULL) AS attendee_count
-     FROM paid_bookings b LEFT JOIN paid_payment_attempts a
+     FROM paid_bookings b JOIN events e ON e.id=b.event_id
+     JOIN customer_accounts c ON c.id=b.customer_id
+     LEFT JOIN paid_payment_attempts a
        ON a.booking_id=b.id AND a.event_id=b.event_id AND a.status IN ('proof_submitted','exception')
      LEFT JOIN paid_proofs p ON p.attempt_id=a.id LEFT JOIN paid_booking_receivers r ON r.booking_id=b.id
      JOIN paid_event_settings es ON es.event_id=b.event_id
@@ -791,7 +796,8 @@ export function* listPaidReviewQueue(eventId: string, offset: number, reference?
     attendee_count: Number(row.attendee_count), matching_proofs: Number(row.matching_proofs),
     claimed_minor: row.claimed_minor == null ? null : Number(row.claimed_minor),
     claimed_transfer_ms: row.claimed_transfer_ms == null ? null : Number(row.claimed_transfer_ms),
-    created_ms: Number(row.created_ms), observed_minor: row.observed_minor == null ? null : Number(row.observed_minor),
+    booking_created_ms: Number(row.booking_created_ms), due_ms: Number(row.due_ms),
+    created_ms: row.created_ms == null ? null : Number(row.created_ms), observed_minor: row.observed_minor == null ? null : Number(row.observed_minor),
   }));
 }
 

@@ -3146,6 +3146,8 @@ function resetEmailTemplateToDefault(settings: Settings, kind: EmailTemplateKind
 export default function App() {
   const initialWorkspaceSession = readWorkspaceSession();
   const [activeTab, setActiveTab] = useState<AppTab>(initialWorkspaceSession.activeTab);
+  const [customerFocusId,setCustomerFocusId]=useState("");
+  const [reviewFocus,setReviewFocus]=useState<{eventId:string;reference:string}|null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState("");
@@ -10921,7 +10923,9 @@ export default function App() {
                 <>
                   <PaidRegistrationSettings key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
                   <PaidCouponManager key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
-                  <PaidReviewQueue key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch} />
+                  <PaidReviewQueue key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
+                    focusBookingReference={reviewFocus?.eventId===selectedEventId?reviewFocus.reference:undefined}
+                    onOpenCustomer={(customerId)=>{setCustomerFocusId(customerId);setActiveTab("customers");}}/>
                 </>
               )}
               <RegistrationsScreen
@@ -10996,7 +11000,12 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <CustomerManagementScreen apiFetch={apiFetch} />
+              <CustomerManagementScreen apiFetch={apiFetch} focusCustomerId={customerFocusId}
+                onOpenBooking={(booking)=>{
+                  setReviewFocus({eventId:booking.event_id,reference:booking.booking_reference});
+                  setSelectedEventId(booking.event_id);
+                  setActiveTab("registrations");
+                }}/>
             </motion.div>
           )}
 

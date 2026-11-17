@@ -1,5 +1,5 @@
 import { listCoupons, upsertCoupon, deleteCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
-import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand } from "./paidRegistration";
+import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
@@ -1541,6 +1541,28 @@ export class PostgresAppDatabase implements AppDatabase {
       [String(normalizedEmail || "").trim()],
     );
     return mapCustomerAccountRow(result.rows[0]);
+  }
+
+  async listOrganizationPaidBookings(organizationId: string, limit = 5000): Promise<PaidRow[]> {
+    const safeLimit=Math.min(Math.max(Math.trunc(limit)||5000,1),10000);
+    const result=await this.pool.query<PaidRow>(`SELECT b.id AS booking_id,b.reference AS booking_reference,b.event_id,b.customer_id,
+ e.name AS event_name,e.slug AS event_slug,c.first_name AS customer_first_name,
+ c.last_name AS customer_last_name,c.email AS customer_email,c.phone AS customer_phone,
+ b.state,b.payment_state,b.total_minor,b.created_ms,b.due_ms,
+ (SELECT COUNT(*) FROM paid_attendees a WHERE a.booking_id=b.id AND a.cancelled_ms IS NULL) AS attendee_count,
+ (SELECT MAX(p.claimed_transfer_ms) FROM paid_payment_attempts p
+  WHERE p.booking_id=b.id AND p.status IN ('proof_submitted','verified','exception')) AS claimed_transfer_ms,
+ (SELECT MAX(p.created_ms) FROM paid_payment_attempts p
+  WHERE p.booking_id=b.id AND p.status IN ('proof_submitted','verified','exception')) AS slip_uploaded_ms
+ FROM paid_bookings b JOIN events e ON e.id=b.event_id
+ JOIN customer_accounts c ON c.id=b.customer_id
+ WHERE b.organization_id=$1 AND e.organizer_id=$2
+ ORDER BY b.created_ms DESC,b.id DESC LIMIT $3`,[organizationId,organizationId,safeLimit]);
+    const rows=result.rows;
+    return rows.map((row)=>({...row,total_minor:Number(row.total_minor),created_ms:Number(row.created_ms),
+      due_ms:Number(row.due_ms),attendee_count:Number(row.attendee_count),
+      claimed_transfer_ms:row.claimed_transfer_ms==null?null:Number(row.claimed_transfer_ms),
+      slip_uploaded_ms:row.slip_uploaded_ms==null?null:Number(row.slip_uploaded_ms)}));
   }
 
   async listCustomerAccounts(limit = 200) {

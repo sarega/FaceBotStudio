@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.0 - 2026-11-17
+
+- Correct misleading Customers metrics: prior Paid orders counted only the legacy direct-ticket order system and ignored actual paid-registration bookings. Show separate account/email counts, all-event Bookings, Awaiting Payment, Slip Uploaded / Awaiting Review, Confirmed, Expired/Cancelled, and legacy Ticket Orders.
+- Add searchable, status-filterable Bookings across Events table showing Event, Customer account, booking reference, number of attendees, amount, status, registration time, transfer time and slip upload time. Each booking remains separate from its attendee count.
+- Link individual accounts to their event bookings and enable bidirectional navigation between event review queue and the exact customer profile and event reference.
+- Include verified customer identity, email, phone, event name/id, booking reference/id, and booking timestamps on payment proof review list and detail; even unpaid bookings show their account owners.
+- Add Export Bookings (Excel/CSV): UTF-8 BOM CSV across organizer-owned Events with Event ID, Customer ID, booking ID/reference, name, email/phone, attendees, amounts, payment/booking status, booking/due/transfer/slip times. Neutralize CSV formula injection.
+- Use organization-scoped SQL in both SQLite and PostgreSQL to avoid mixing booking data across organizers. Report supports 10,000 newest bookings; the interactive table shows the first 300 filtered records.
+- Added DB and HTTP tests for customer attribution, organization isolation, CSV access/content, and verification-pending status. Responsive Customer UI checked at 390px and 1280px.
+
 ## 0.10.9 - 2026-11-17
 
 - Redesign the Customer Paid Booking payment page into four clear numbered steps: **1 Amount to pay**, **2 Scan payment QR / transfer to bank account**, **3 Upload payment slip**, and **4 Wait for organizer confirmation**.
