@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ChevronDown, Tag } from "lucide-react";
+import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 
 type Coupon = {
   code: string; kind: "percent" | "fixed" | "free"; value_minor: number;
@@ -99,14 +99,10 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
     }finally{setDeleting(null);}
   }
   const input="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900";
-  return <section className="rounded-xl border border-slate-200 bg-white p-4 text-slate-900 shadow-sm">
-    <button type="button" onClick={()=>setOpen(!open)} aria-expanded={open}
-      className="flex w-full items-center justify-between gap-3 text-left font-semibold">
-      <span className="flex items-center gap-2"><Tag className="h-5 w-5 text-blue-600"/>
-        Coupons & Promotions / คูปองและโปรโมชัน</span>
-      <ChevronDown className={"h-5 w-5 transition-transform "+(open?"rotate-180":"")}/>
-    </button>
-    {open && <div className="mt-4 space-y-4">
+  return <section className="registration-admin-section registration-admin-coupons">
+    <RegistrationSectionHeader tone="coupons" title="Coupons & Promotions"
+      subtitle="คูปอง · โปรโมชันและส่วนลด" open={open} onToggle={()=>setOpen(!open)} />
+    {open && <div className="registration-section-content space-y-4">
       <p className="text-sm text-slate-600">One coupon per booking. Discounts apply after accommodation adjustments.
         Expired unpaid bookings release their usage quota automatically.</p>
       {configuredEvent&&<div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">

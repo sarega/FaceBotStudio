@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.1 - 2026-11-17
+
+- Unify the three Paid Registration administrator panels (Registration Settings, Coupons & Promotions, Slip Review) using one reusable accessible header component: matching icon boxes, text size and weight, subtitle spacing, chevron toggle and focus treatment.
+- Assign distinct color identities: Registration Settings blue, Coupons purple, and Slip Review green. Provide paired light and dark theme palettes with accessible text/background contrast and consistent borders and padding.
+- Make collapsed sections genuinely compact and remove empty settings body space while closed. Reposition Slip Review Refresh as a small secondary header action available only when expanded.
+- Shorten bilingual headings to keep all three headers at the same 55px height on narrow screens and 59px on desktop. Responsive layout verified at 390px and 1280px in light/dark themes, with no horizontal overflow.
+
 ## 0.11.0 - 2026-11-17
 
 - Correct misleading Customers metrics: prior Paid orders counted only the legacy direct-ticket order system and ignored actual paid-registration bookings. Show separate account/email counts, all-event Bookings, Awaiting Payment, Slip Uploaded / Awaiting Review, Confirmed, Expired/Cancelled, and legacy Ticket Orders.

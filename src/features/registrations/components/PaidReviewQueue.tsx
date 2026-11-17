@@ -1,3 +1,4 @@
+import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidBookingOperations } from "./PaidBookingOperations";
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
@@ -222,12 +223,11 @@ export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBooking
   }, [open, offset, prefix, reference, refresh]);
 
   return (
-    <section id="paid-review-queue" className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
-      <div className="flex items-center gap-4">
-        <button type="button" className="font-semibold text-blue-700 underline" aria-expanded={open} onClick={() => setOpen(!open)}>ตรวจสลิป / Review payments</button>
-        {open && <button type="button" className="underline" onClick={() => setRefresh((value) => value + 1)}>Refresh</button>}
-      </div>
-      {open && <>
+    <section id="paid-review-queue" className="registration-admin-section registration-admin-review">
+      <RegistrationSectionHeader tone="review" title="Slip Review"
+        subtitle="ตรวจสลิป · ยืนยันการชำระเงิน" open={open} onToggle={()=>setOpen(!open)}
+        actions={<button type="button" className="registration-section-refresh" onClick={()=>setRefresh((value)=>value+1)}>Refresh</button>} />
+      {open && <div className="registration-section-content space-y-3">
         {summaryError && <p role="alert" className="text-red-700">Could not load the registration totals.</p>}
         {summary && <div className="flex flex-wrap gap-2 text-sm">
           <span className="rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-800">
@@ -334,7 +334,7 @@ export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBooking
           {offset > 0 && <button type="button" className="underline" onClick={() => setOffset(Math.max(0, offset - 20))}>Previous</button>}
           {next != null && <button type="button" className="underline" onClick={() => setOffset(next)}>Next</button>}
         </div>}
-      </>}
+      </div>}
     </section>
   );
 }

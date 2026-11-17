@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.1",
+    date: "2026-11-17",
+    title: "Unified Registration Settings, Coupons and Slip Review UI",
+    features: [
+      "All three sections now share one icon, typography, header and collapse layout",
+      "Blue Settings, purple Coupons and green Slip Review across light and dark themes",
+      "More compact, aligned section headers on laptops and mobile",
+    ],
+  },
+  {
     version: "0.11.0",
     date: "2026-11-17",
     title: "Customer booking dashboard and connected payment review",

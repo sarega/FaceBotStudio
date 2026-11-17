@@ -2174,3 +2174,161 @@ html.theme-dark .public-customer-signin { background: #60a5fa; color: #0f172a; }
 .public-customer-menu a:focus-visible,
 .public-customer-menu button:focus-visible,
 .public-customer-nav-link:focus-visible { outline: 3px solid #f59e0b; outline-offset: 2px; }
+
+
+/* Admin paid registration: one compact visual system, distinct section accents.
+   Color is supplementary to the consistently sized icon and text labels. */
+.registration-admin-section {
+  --registration-accent: #2563eb;
+  --registration-accent-soft: #eff6ff;
+  --registration-accent-border: #bfdbfe;
+  --registration-accent-ink: #1d4ed8;
+  overflow: hidden;
+  border: 1px solid var(--registration-accent-border);
+  border-radius: 14px;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 5%);
+  font-size: 14px;
+}
+.registration-admin-section.registration-admin-coupons {
+  --registration-accent: #7c3aed;
+  --registration-accent-soft: #f5f3ff;
+  --registration-accent-border: #ddd6fe;
+  --registration-accent-ink: #6d28d9;
+}
+.registration-admin-section.registration-admin-review {
+  --registration-accent: #059669;
+  --registration-accent-soft: #ecfdf5;
+  --registration-accent-border: #a7f3d0;
+  --registration-accent-ink: #047857;
+}
+.registration-section-heading {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px;
+  background: var(--registration-accent-soft);
+  border-left: 4px solid var(--registration-accent);
+  border-bottom: 1px solid var(--registration-accent-border);
+}
+.registration-section-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-height: 58px;
+  min-width: 0;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  padding: 8px 0;
+  text-align: left;
+  color: #0f172a;
+  cursor: pointer;
+}
+.registration-section-icon {
+  display: flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  border: 1px solid var(--registration-accent-border);
+  border-radius: 10px;
+  background: white;
+  color: var(--registration-accent-ink);
+}
+.registration-section-heading-label {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.registration-section-heading-title {
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.registration-section-heading-subtitle {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 400;
+}
+.registration-section-chevron {
+  flex: 0 0 18px;
+  color: var(--registration-accent-ink);
+  transition: transform .16s ease;
+}
+.registration-section-chevron.is-open { transform: rotate(180deg); }
+.registration-section-toggle:hover .registration-section-heading-title {
+  color: var(--registration-accent-ink);
+}
+.registration-section-toggle:focus-visible,
+.registration-section-actions button:focus-visible {
+  outline: 2px solid var(--registration-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.registration-section-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 8px 0;
+}
+.registration-section-refresh {
+  min-height: 34px;
+  border: 1px solid var(--registration-accent-border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  background: #ffffff;
+  color: var(--registration-accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.registration-section-content { padding: 14px; }
+.registration-admin-settings .registration-section-content { display: flex; flex-direction: column; gap: 12px; }
+.registration-admin-review .registration-section-content > :first-child { margin-top: 0; }
+
+html.theme-dark .registration-admin-section {
+  --registration-accent: #60a5fa;
+  --registration-accent-soft: #142642;
+  --registration-accent-border: #35588a;
+  --registration-accent-ink: #93c5fd;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-color: var(--registration-accent-border);
+}
+html.theme-dark .registration-admin-section.registration-admin-coupons {
+  --registration-accent: #a78bfa;
+  --registration-accent-soft: #271d42;
+  --registration-accent-border: #59407e;
+  --registration-accent-ink: #c4b5fd;
+}
+html.theme-dark .registration-admin-section.registration-admin-review {
+  --registration-accent: #34d399;
+  --registration-accent-soft: #12372d;
+  --registration-accent-border: #286c58;
+  --registration-accent-ink: #6ee7b7;
+}
+html.theme-dark .registration-section-toggle { color: #f1f5f9; }
+html.theme-dark .registration-section-icon,
+html.theme-dark .registration-section-refresh {
+  background: #1e293b;
+  color: var(--registration-accent-ink);
+  border-color: var(--registration-accent-border);
+}
+html.theme-dark .registration-section-heading-subtitle { color: #cbd5e1; }
+html.theme-dark .registration-section-chevron { color: var(--registration-accent-ink); }
+
+@media (max-width: 640px) {
+  .registration-section-heading { padding: 0 10px; gap: 6px; }
+  .registration-section-toggle { gap: 9px; min-height: 54px; }
+  .registration-section-icon { width: 32px; height: 32px; flex-basis: 32px; }
+  .registration-section-content { padding: 10px; }
+  .registration-section-heading-title { font-size: 13px; }
+  .registration-section-heading-subtitle { font-size: 11px; }
+}

@@ -1,3 +1,4 @@
+import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidPaymentDisplaySettings, type PaidPaymentDisplayHandle } from "./PaidPaymentDisplaySettings";
 import { paidSeminarFields, foodPreferencePresets, parsePaidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -348,9 +349,11 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
   }, [open, path]);
 
   return (
-    <section className="paid-admin-settings space-y-3 rounded-2xl border p-4 text-sm">
-      <button type="button" aria-expanded={open} className="font-semibold text-blue-700 underline" onClick={() => setOpen(!open)}>Paid registration settings</button>
-      {open && (error ? <p role="alert">Could not load paid registration settings.</p> :
+    <section className="paid-admin-settings registration-admin-section registration-admin-settings">
+      <RegistrationSectionHeader tone="settings" title="Registration Settings"
+        subtitle="ตั้งค่าลงทะเบียน · ราคาและการชำระเงิน" open={open} onToggle={() => setOpen(!open)} />
+      {open && <div className="registration-section-content">
+      {(error ? <p role="alert">Could not load paid registration settings.</p> :
         settings === undefined ? <p role="status">Loading settings…</p> :
           <SettingsForm key={settings?.version ?? 0} settings={settings} path={path} eventId={eventId} apiFetch={apiFetch}
             onSaved={(result) => { setSettings(result); setSaved(true); void loadReadiness(); }} />)}
@@ -423,6 +426,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
         {readinessError && <p role="alert" className="paid-admin-problem">{readinessError}</p>}
       </details>}
       {open && saved && <p role="status">Settings saved.</p>}
+      </div>}
     </section>
   );
 }
