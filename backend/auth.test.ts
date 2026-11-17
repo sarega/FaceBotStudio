@@ -6,6 +6,9 @@ import { isCustomerScopedCsrfPath } from "./auth";
 test("customer checkout orders use customer-scoped CSRF", () => {
   assert.equal(isCustomerScopedCsrfPath("/api/customer/orders"), true);
   assert.equal(isCustomerScopedCsrfPath("/api/public/events/workshop/paid-bookings"), true);
+  assert.equal(isCustomerScopedCsrfPath("/api/public/events/workshop/paid-registration/coupon-preview"), true);
+  assert.equal(isCustomerScopedCsrfPath("/api/public/events/workshop/paid-registration/coupon-preview/"), true);
+  assert.equal(isCustomerScopedCsrfPath("/api/events/workshop/paid-registration/coupons"), false);
   assert.equal(isCustomerScopedCsrfPath("/api/public/events/ai-innovation-summit-2026/orders"), true);
   assert.equal(isCustomerScopedCsrfPath("/api/public/events/ai-innovation-summit-2026/orders/"), true);
   assert.equal(isCustomerScopedCsrfPath("/api/public/events/ai-innovation-summit-2026/register"), false);

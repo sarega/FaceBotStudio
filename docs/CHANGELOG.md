@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.5 - 2026-11-17
+
+- Fix root cause of Coupon Apply CSRF rejection when an organizer tests the public customer checkout while signed in to Admin in the same browser. The coupon preview POST was missing from the customer-scoped CSRF route matcher, so it incorrectly expected the Admin CSRF cookie despite receiving the valid Customer CSRF token.
+- Explicitly classify `/api/public/events/:slug/paid-registration/coupon-preview` as a customer-scoped CSRF route (including an optional trailing slash). Preserve origin checks and strict customer token validation; do not relax CSRF security.
+- Regression-test dual Admin + Customer sessions: the correct Customer CSRF token is accepted, the Admin CSRF token is rejected, and the coupon preview returns the correct 100%-free total.
+- Add bilingual actionable CSRF failure messages for session/origin issues in the coupon form.
+
 ## 0.10.4 - 2026-11-17
 
 - Fix Event link in Coupons & Promotions. The previous implementation incorrectly used internal event.slug instead of the canonical public slug resolved from Event Settings event_public_slug, so following the coupon link could open a non-existent or unrelated public page.

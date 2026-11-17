@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.5",
+    date: "2026-11-17",
+    title: "Fix customer coupon CSRF when Admin is signed in",
+    features: [
+      "Coupon Apply now uses the Customer security token even if the same browser has an Admin session",
+      "Admin and customer security checks remain isolated and enforced",
+      "Coupon form explains any remaining CSRF session errors clearly",
+    ],
+  },
+  {
     version: "0.10.3",
     date: "2026-11-17",
     title: "Coupon eligibility diagnostics and event matching",

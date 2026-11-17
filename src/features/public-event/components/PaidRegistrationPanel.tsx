@@ -26,6 +26,8 @@ export function couponErrorMessage(code: string, locale: "th" | "en"): string {
     "Verified customer account required": ["กรุณายืนยันอีเมลในบัญชีก่อนใช้คูปอง", "Verify your account email before applying a coupon."],
     CUSTOMER_APP_DISABLED: ["ไม่สามารถตรวจคูปองได้ กรุณาตรวจว่าระบบลงทะเบียนเปิดอยู่", "Coupon service is unavailable for this event."],
     coupon_quote_failed: ["ระบบตรวจสอบคูปองขัดข้อง กรุณาลองใหม่หรือติดต่อผู้จัดงาน (coupon_quote_failed)", "Coupon verification failed on the server. Retry or contact the organizer (coupon_quote_failed)."],
+    "CSRF validation failed": ["ระบบไม่ยอมรับแหล่งที่มาของคำขอ กรุณารีเฟรชหน้าและลองใหม่ (CSRF)", "Request origin was rejected. Refresh the page and retry (CSRF)."],
+    "CSRF token validation failed": ["เซสชันความปลอดภัยไม่ตรงกัน กรุณารีเฟรชหน้าและลองใหม่ (CSRF)", "Security session mismatch. Refresh the page and retry (CSRF)."],
     "Request failed": ["ตรวจสอบคูปองไม่สำเร็จ กรุณาลองอีกครั้ง", "Could not verify the coupon. Please try again."],
   };
   const message=messages[code];
