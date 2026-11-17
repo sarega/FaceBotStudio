@@ -17201,6 +17201,9 @@ async function startServer() {
         return res.set("Cache-Control","private, no-store").json({subtotal_minor:subtotal,...preview});
       } catch(error) {
         if(error instanceof PaidBookingError) return res.status(422).json({error:error.code});
+        // Log only the route/event and the error, never customer contact, sessions,
+        // coupon code or proof data. This makes PostgreSQL failures diagnosable.
+        console.error("Paid coupon quote failed", {eventSlug:req.params.slug,error});
         return res.status(500).json({error:"coupon_quote_failed"});
       }
     });

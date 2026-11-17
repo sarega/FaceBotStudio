@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.2 - 2026-11-17
+
+- Replace the generic coupon verification failure in Public Event Checkout with actionable Thai/English explanations for disabled, expired, fully redeemed, stale pricing, unselected accommodation, expired customer session, and internal errors. Unexpected error codes are surfaced rather than silently hidden.
+- Normalize coupon codes before API submission, prevent old asynchronous coupon previews from overriding newer edits, and avoid accidentally reserving without applying a typed coupon.
+- Emit private server logs for unexpected coupon quote failures (no personal fields, credentials or coupon codes logged) to aid Railway production diagnostics.
+- Confirmed the Production public seminar catalog is available and requires authenticated customer sessions for private coupon quote calls. The exact user-specific rejection shown in a screenshot cannot be determined without the authenticated response/log.
+- Added automated bilingual coupon failure regression; existing booking, payment and coupon API tests pass.
+
 ## 0.10.1 - 2026-11-17
 
 - Fix Coupons & Promotions white screen when editing saved coupons: PostgreSQL BIGINT date fields are returned as numeric strings. Parse timestamps into numbers and safely handle invalid dates before formatting datetime-local controls.

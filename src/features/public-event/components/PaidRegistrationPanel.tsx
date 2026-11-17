@@ -8,6 +8,29 @@ type Booking = { id: string; event_id: string; reference: string; status: string
 
 const field = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900";
 const money = new Intl.NumberFormat("en-TH", { style: "currency", currency: "THB" });
+/** Convert API failures into actionable coupon feedback instead of a generic red warning. */
+export function couponErrorMessage(code: string, locale: "th" | "en"): string {
+  const messages: Record<string, [string, string]> = {
+    coupon_invalid: ["รูปแบบโค้ดไม่ถูกต้อง กรุณาตรวจตัวอักษร", "Invalid code format. Check the spelling."],
+    coupon_unavailable: ["ไม่พบโค้ดที่ใช้ได้กับงานนี้ หรือคูปองถูกปิด/หมดอายุ กรุณาตรวจโค้ดใน Promotions ของงานนี้", "This code is not active for this event. Check its code, dates and Active status in this event's Promotions."],
+    coupon_exhausted: ["คูปองใช้ครบจำนวนแล้ว หรือบัญชีนี้ใช้ครบสิทธิ์แล้ว", "Coupon limit reached, or this account has used its allocation."],
+    quote_stale: ["ราคาได้รับการปรับปรุง กรุณารีเฟรชหน้าแล้วใช้โค้ดอีกครั้ง", "Prices changed. Refresh this event page, then apply the code again."],
+    invalid_attendees: ["ประเภทผู้เข้าร่วมไม่ถูกต้อง กรุณารีเฟรชหน้าลงทะเบียน", "An attendee category is no longer valid. Refresh this page."],
+    invalid_seminar_answers: ["กรุณาเลือกความต้องการที่พักให้ครบก่อนใช้คูปอง", "Select accommodation Yes or No for each attendee before applying a coupon."],
+    invalid_total: ["ยังไม่มียอดชำระที่ใช้คูปองได้ กรุณาตรวจประเภทผู้เข้าร่วม", "There is no eligible amount to discount. Check your attendee categories."],
+    CUSTOMER_NOT_AUTHENTICATED: ["เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่ก่อนใช้คูปอง", "Your session expired. Sign in again to apply a coupon."],
+    "Verified customer account required": ["กรุณายืนยันอีเมลในบัญชีก่อนใช้คูปอง", "Verify your account email before applying a coupon."],
+    CUSTOMER_APP_DISABLED: ["ไม่สามารถตรวจคูปองได้ กรุณาตรวจว่าระบบลงทะเบียนเปิดอยู่", "Coupon service is unavailable for this event."],
+    coupon_quote_failed: ["ระบบตรวจสอบคูปองขัดข้อง กรุณาลองใหม่หรือติดต่อผู้จัดงาน (coupon_quote_failed)", "Coupon verification failed on the server. Retry or contact the organizer (coupon_quote_failed)."],
+    "Request failed": ["ตรวจสอบคูปองไม่สำเร็จ กรุณาลองอีกครั้ง", "Could not verify the coupon. Please try again."],
+  };
+  const message=messages[code];
+  if(message) return message[locale==="th"?0:1];
+  return (locale==="th"
+    ? "ตรวจสอบคูปองไม่สำเร็จ (รหัส: "+(code||"unknown")+") กรุณาติดต่อผู้จัดงาน"
+    : "Coupon verification failed (code: "+(code||"unknown")+"). Please contact the organizer.");
+}
+
 const errors: Record<string, string> = {
   CUSTOMER_NOT_AUTHENTICATED: "Sign in with your customer account to book.",
   "Verified customer account required": "Verify your customer email before booking.",
@@ -66,6 +89,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
   }|null>(null);
   const [couponError,setCouponError]=useState("");
   const [couponBusy,setCouponBusy]=useState(false);
+  const couponGeneration=useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [messengerCode, setMessengerCode] = useState("");
@@ -133,27 +157,24 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
 
   async function applyCouponPreview() {
     if(!catalog || couponBusy) return;
+    const generation=++couponGeneration.current;
     setCouponBusy(true);setCouponError("");
     try {
       const response=await customerApi<{
         code:string;subtotal_minor:number;discount_minor:number;total_minor:number;
       }>(prefix+"/paid-registration/coupon-preview",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({coupon_code:couponCode,pricing_version:catalog.pricing_version,attendees}),
+        body:JSON.stringify({coupon_code:couponCode.trim().toUpperCase(),pricing_version:catalog.pricing_version,attendees}),
       });
-      setCouponPreview(response);
+      if(generation===couponGeneration.current) setCouponPreview(response);
     } catch(e) {
+      if(generation!==couponGeneration.current) return;
       setCouponPreview(null);
-      const reason=e instanceof Error?e.message:"";
-      const messages:Record<string,string>={
-        coupon_unavailable:"โค้ดนี้ใช้ไม่ได้หรือหมดอายุ / Coupon unavailable",
-        coupon_exhausted:"คูปองครบจำนวนแล้ว / Coupon fully redeemed",
-        coupon_invalid:"รหัสคูปองไม่ถูกต้อง / Invalid coupon",
-      };
-      setCouponError(messages[reason]||"ไม่สามารถใช้คูปองได้ / Coupon could not be applied");
-    } finally {setCouponBusy(false);}
+      const reason=e instanceof Error?e.message:"Request failed";
+      setCouponError(couponErrorMessage(reason,locale));
+    } finally {if(generation===couponGeneration.current) setCouponBusy(false);}
   }
-  function invalidateCoupon() {setCouponPreview(null);setCouponError("");}
+  function invalidateCoupon() {couponGeneration.current++;setCouponBusy(false);setCouponPreview(null);setCouponError("");}
   function update(index: number, values: Partial<Attendee>) {
     invalidateCoupon();
     setAttendees((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...values } : row));

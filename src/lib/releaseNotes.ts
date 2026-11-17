@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.2",
+    date: "2026-11-17",
+    title: "Clear checkout coupon validation feedback",
+    features: [
+      "Coupon validation now explains expired, exhausted, inactive, stale-price and login failures",
+      "Typed coupon codes are normalized and previews cannot overwrite later selections",
+      "Unexpected server coupon errors are logged for production diagnosis",
+    ],
+  },
+  {
     version: "0.10.1",
     date: "2026-11-17",
     title: "Coupon management: edit, duplicate and safe delete",
