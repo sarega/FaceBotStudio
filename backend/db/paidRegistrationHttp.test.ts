@@ -146,6 +146,53 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const headers = (token: string) => ({
       Cookie: `fbs_customer_session=${token}; fbs_customer_csrf=fixture-csrf`, Origin: origin,
     });
+    // Customer recovery over HTTP must be scoped to the owner, and must
+    // produce a 24-hour renewed invoice without blocking later registrations.
+    assert.equal(Number(newExternalSettings?.hold_minutes), 1440);
+    const recoveryPrefix = origin + "/api/public/events/" + newExternalEvent.slug + "/paid-bookings";
+    const recoveryBody = JSON.stringify({ pricing_version: Number(newExternalSettings?.version),
+      contact: { name: "Returning attendee" },
+      attendees: [{ category_id: "general", first_name: "Return", last_name: "Guest" }] });
+    const recoveryCreate = await fetch(recoveryPrefix, {
+      method: "POST",
+      headers: { ...headers("test-owner"), "Content-Type": "application/json",
+        "x-csrf-token": "fixture-csrf", "Idempotency-Key": "return-1" },
+      body: recoveryBody,
+    });
+    assert.equal(recoveryCreate.status, 201, await recoveryCreate.clone().text());
+    const recoveryBooking = await recoveryCreate.json();
+    const recoveryPath = origin + "/api/customer/paid-bookings/" + newExternalEvent.id +
+      "/" + recoveryBooking.id;
+    const recoveryFixture = new Database(database);
+    try {
+      recoveryFixture.prepare("UPDATE paid_bookings SET created_ms=1,due_ms=2 WHERE id=?")
+        .run(recoveryBooking.id);
+    } finally {
+      recoveryFixture.close();
+    }
+    assert.equal((await fetch(recoveryPath, { headers: headers("test-owner") })
+      .then(r => r.json())).status, "expired");
+    assert.equal((await fetch(recoveryPath + "/reinstate", {
+      method: "POST", headers: { ...headers("test-other"), "x-csrf-token": "fixture-csrf" },
+    })).status, 404);
+    const recoveryRestored = await fetch(recoveryPath + "/reinstate", {
+      method: "POST", headers: { ...headers("test-owner"), "x-csrf-token": "fixture-csrf" },
+    });
+    assert.equal(recoveryRestored.status, 200, await recoveryRestored.clone().text());
+    const recoveryStatus = await recoveryRestored.json();
+    assert.equal(recoveryStatus.status, "awaiting_payment");
+    assert.ok(Date.parse(recoveryStatus.due_at) - Date.now() > 23 * 60 * 60_000);
+    assert.equal((await fetch(recoveryPath + "/reinstate", {
+      method: "POST", headers: { ...headers("test-owner"), "x-csrf-token": "fixture-csrf" },
+    })).status, 409);
+    const bookingMore = await fetch(recoveryPrefix, {
+      method: "POST",
+      headers: { ...headers("test-owner"), "Content-Type": "application/json",
+        "x-csrf-token": "fixture-csrf", "Idempotency-Key": "return-2" },
+      body: recoveryBody,
+    });
+    assert.equal(bookingMore.status, 201, await bookingMore.clone().text());
+    assert.notEqual((await bookingMore.json()).id, recoveryBooking.id);
     const externalPrefix = origin + "/api/events/" + paidEvent.id + "/paid-registration";
     const publishExternal = await fetch(externalPrefix + "/settings", {
       method: "PATCH", headers: staffCreateHeaders,
@@ -463,7 +510,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       if (attempt === 39) assert.fail("Missing reply to replayed confirmation");
       await delay(75);
     }
-    assert.equal((await db.listOwnedPaidBookings(ownerAccount!.account.id, 10, 0)).length, 5);
+    assert.equal((await db.listOwnedPaidBookings(ownerAccount!.account.id, 10, 0)).length, 7);
     const response = await fetch(`${eventPrefix}/summary`, { headers: staffHeaders });
     assert.equal(response.status, 200);
     const { summary } = await response.json();

@@ -349,6 +349,36 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
         receiverNamespace: "EXTERNAL_MANUAL", reference: "external-receipt-001" },
     }), /state_conflict/);
 
+    // Customer recovery: a 24-hour hold can be restored by its owner without
+    // duplicating attendees or charging twice. Other customers cannot reopen it.
+    const recoveryEvent = await db.createEvent({ name: "Recovery workshop", organizer_id: "org_default" });
+    await db.updateEvent(recoveryEvent.id, { status: "active" });
+    const recoverySettings = await db.savePaidSettings(recoveryEvent.id, {
+      ...settings, holdMinutes: 1440,
+      categories: settings.categories.map((category) => ({ ...category, quota: 3 })),
+    });
+    const recovering = await db.createPaidBooking({
+      ...command, eventId: recoveryEvent.id, key: "recovery", pricingVersion: Number(recoverySettings.version),
+    });
+    assert.ok(recovering.dueMs - Date.now() > 23 * 60 * 60_000);
+    fixture.prepare("UPDATE paid_bookings SET created_ms=1,due_ms=2 WHERE id=?").run(recovering.id);
+    assert.equal((await db.readOwnedPaidBooking(recoveryEvent.id, recovering.id, customer.id))?.state, "expired");
+    await assert.rejects(db.reinstateOwnedPaidBooking(recoveryEvent.id, recovering.id, "other-customer"), /booking_not_found/);
+    const reopened = await second.reinstateOwnedPaidBooking(recoveryEvent.id, recovering.id, customer.id);
+    assert.equal(reopened.status, "awaiting_payment");
+    assert.equal(reopened.payment_status, "unpaid");
+    assert.ok(Date.parse(reopened.due_at) - Date.now() > 23 * 60 * 60_000);
+    await assert.rejects(db.reinstateOwnedPaidBooking(recoveryEvent.id, recovering.id, customer.id), /state_conflict/);
+    const reopenedDetail = await db.readOwnedPaidBooking(recoveryEvent.id, recovering.id, customer.id);
+    assert.equal((reopenedDetail?.attendees as unknown[]).length, 2);
+    const additional = await db.createPaidBooking({
+      ...command, eventId: recoveryEvent.id, key: "extra-attendee",
+      pricingVersion: Number(recoverySettings.version), attendees: command.attendees.slice(0, 1),
+    });
+    assert.notEqual(additional.id, recovering.id);
+    assert.equal((await db.listOwnedPaidBookings(customer.id, 20, 0))
+      .filter(row => row.event_id === recoveryEvent.id).length, 2);
+
     const messengerEvent = await db.createEvent({ name: "Messenger workshop", organizer_id: "org_default" });
     await db.updateEvent(messengerEvent.id, { status: "active" });
     await db.savePaidSettings(messengerEvent.id, settings);

@@ -51,6 +51,7 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
   })) ?? [{ id: "general", label: "", price: "", quota: "" }]);
   const [seminar, setSeminar] = useState(settings?.fields ?? []);
   const [paymentMode, setPaymentMode] = useState(settings?.payment_mode === "external_manual" ? "external_manual" : "promptpay");
+  const [holdDuration, setHoldDuration] = useState(settings?.hold_minutes ?? 1440);
   const displayRef = useRef<PaidPaymentDisplayHandle>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -144,7 +145,11 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
         <h3 className="font-bold">3. จำนวนที่รับและราคา</h3>
         <div className="grid gap-3 sm:grid-cols-3">
           <label>Capacity<input className={field} name="capacity" type="number" min={1} step={1} required defaultValue={settings?.capacity} /></label>
-          <label>Hold duration (minutes)<input className={field} name="hold_minutes" type="number" min={1} step={1} required defaultValue={settings?.hold_minutes} /></label>
+          <label>Payment window (minutes)<input className={field} name="hold_minutes" type="number" min={1} max={43200}
+            step={1} required value={holdDuration} onChange={(event) => setHoldDuration(Number(event.target.value))} />
+            <button type="button" className="mt-2 rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-700"
+              onClick={() => setHoldDuration(1440)}>24 ชั่วโมง / 24 hours</button>
+          </label>
           <label>Payment cutoff (device timezone)<input className={field} name="cutoff" type="datetime-local" defaultValue={localDateInput(settings?.cutoff_ms ?? null)} /></label>
         </div>
         {categories.map((category) => <fieldset key={category.id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-3">

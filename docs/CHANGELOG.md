@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.7 - 2026-11-17
+
+- Fix Public Event Paid Registration dead-end: a cached previous booking no longer hides the new booking form, including when previous booking is expired, pending or confirmed.
+- My Bookings now offers customer-initiated reactivation of their own expired, unpaid booking; the server rechecks registration window, capacity, quotas and payment state, preserving the original attendees/reference.
+- Expired reactivation opens a new payment deadline according to the currently configured event hold duration. It never reopens verified, submitted-proof or non-expired bookings, and does not silently duplicate attendees.
+- Customers can separately book additional attendees from My Bookings by returning straight to the original Event; a new booking receives its own invoice and QR after approval.
+- New paid Events default to a 24-hour payment window. Existing Events have an explicit 24 hours (1440 minutes) shortcut in Paid Registration Settings; this must be saved to update the existing Event.
+- Added database and HTTP regression coverage for account ownership, 24-hour reactivation, capacity retention and repeat booking.
+
 ## 0.9.6 - 2026-11-17
 
 - Accept no-cost attendee categories in paid event settings (Price = 0) and store zero-price attendee records with normal names, capacity counting, and admission credentials.

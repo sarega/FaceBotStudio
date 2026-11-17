@@ -5,6 +5,7 @@ type Booking = {
   id: string;
   event_id: string;
   event_name: string;
+  event_slug: string;
   reference: string;
   status: string;
   total_due_minor: number;
@@ -146,6 +147,7 @@ export function CustomerPaidBookings() {
   const [selected, setSelected] = useState<Booking>();
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState("");
+  const [reactivating, setReactivating] = useState<string>();
   const paymentAnchorRef = useRef<HTMLDivElement>(null);
   const didScrollToInvoice = useRef(false);
   useEffect(() => {
@@ -176,6 +178,35 @@ export function CustomerPaidBookings() {
     return () => request.abort();
   }, [selected]);
 
+  async function reactivate(booking: Booking) {
+    if (reactivating) return;
+    setReactivating(booking.id);
+    setError("");
+    try {
+      const result = await customerApi<{ status: string; due_at: string }>(
+        "/api/customer/paid-bookings/" + encodeURIComponent(booking.event_id) + "/" +
+        encodeURIComponent(booking.id) + "/reinstate", { method: "POST" },
+      );
+      const updated = { ...booking, status: result.status, due_at: result.due_at };
+      setPage((previous) => previous && { ...previous,
+        bookings: previous.bookings.map((entry) => entry.id === booking.id ? updated : entry) });
+      setSelected(updated);
+      setDetail(undefined);
+      didScrollToInvoice.current = false;
+    } catch (failure) {
+      const code = failure instanceof Error ? failure.message : "";
+      setError(code === "capacity_exhausted"
+        ? "ที่นั่งเต็มแล้ว กรุณาติดต่อผู้จัดงาน / No capacity available for this booking."
+        : code === "registration_unavailable" || code === "hold_expired"
+          ? "ปิดรับลงทะเบียนแล้ว กรุณาติดต่อผู้จัดงาน / Registration window is closed."
+          : code === "state_conflict"
+            ? "สถานะเปลี่ยนไปแล้ว โปรดรีเฟรช / Booking state changed; please refresh."
+            : "เปิดรายการอีกครั้งไม่สำเร็จ / Could not reactivate this booking.");
+    } finally {
+      setReactivating(undefined);
+    }
+  }
+
   return (
     <section className="space-y-4 rounded-3xl border border-white/10 bg-slate-900/50 p-5 text-slate-200">
       <h2 className="font-semibold text-white">Paid registrations</h2>
@@ -194,6 +225,20 @@ export function CustomerPaidBookings() {
           <p className="break-all text-slate-400">{booking.reference}</p>
           <p>{booking.status.replaceAll("_", " ")} · {new Intl.NumberFormat(undefined, { style: "currency", currency: "THB" }).format(booking.total_due_minor / 100)}</p>
           {booking.status === "awaiting_payment" && <p>Pay by {new Date(booking.due_at).toLocaleString()}</p>}
+          {booking.status === "expired" && (
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-amber-200">หมดเวลาชำระเงิน / Payment hold expired</p>
+              <button type="button" disabled={!!reactivating}
+                className="inline-flex min-h-11 items-center rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
+                onClick={() => void reactivate(booking)}>
+                {reactivating === booking.id ? "กำลังเปิดรายการ… / Reopening…" : "เปิดรายการอีกครั้ง / Reactivate booking"}
+              </button>
+            </div>
+          )}
+          <a href={booking.event_slug ? "/events/" + encodeURIComponent(booking.event_slug) : "/events"}
+            className="inline-flex min-h-10 items-center text-blue-300 underline">
+            ลงทะเบียนเพิ่ม / Book more attendees
+          </a>
           <button type="button" aria-expanded={selected?.id === booking.id} className="text-blue-300 underline"
             onClick={() => { setError(""); setDetail(undefined); setSelected(selected?.id === booking.id ? undefined : booking); }}>
             {booking.status === "awaiting_payment" ? "ใบแจ้งชำระเงิน / Payment invoice" : "รายละเอียดการจอง / Booking details"}

@@ -95,8 +95,12 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
     const controller = new AbortController();
     const saved = localStorage.getItem(recoveryKey);
     if (saved && /^[\w-]+\/[\w-]+$/.test(saved)) {
-      void customerApi<Booking>(`/api/customer/paid-bookings/${saved}`, { signal: controller.signal })
-        .then(setBooking).catch(() => undefined);
+      void customerApi<Booking & { state?: string }>(`/api/customer/paid-bookings/${saved}`, { signal: controller.signal })
+        .then((value) => {
+          if (!controller.signal.aborted) setBooking({ ...value, status: value.state || value.status });
+        }).catch(() => {
+          if (!controller.signal.aborted) localStorage.removeItem(recoveryKey);
+        });
     }
     if (enabled) {
       void customerApi<Catalog>(`${prefix}/paid-registration`, { signal: controller.signal }).then((data) => {
@@ -203,22 +207,25 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
         ชำระเงินภายนอก · ผู้จัดงานยืนยันภายหลัง<br />
         Pay externally · Organizer confirms payment.
       </p>}
-      {booking ? (
-        <div role="status" className="space-y-2 text-sm text-slate-700">
-          <p className="font-semibold">{booking.status.replaceAll("_", " ")}</p>
-          <p className="break-all">Booking reference {booking.reference}</p>
-          {booking.status === "awaiting_payment" && <a className="paid-signup-primary inline-flex rounded-lg px-4 py-3 font-semibold"
-            href={"/app/orders?paid_booking=" + encodeURIComponent(booking.reference)}>
-            ชำระเงิน / Continue to payment
-          </a>}
-          <p>Total due {money.format(booking.total_due_minor / 100)}</p>
-          <a className="text-blue-700 underline" href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>Open booking in Orders</a>
+      {booking && (
+        <div role="status" className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">
+          <p className="font-semibold">การจองก่อนหน้า / Previous booking · {booking.status.replaceAll("_", " ")}</p>
+          <p className="break-all text-xs">Reference: {booking.reference}</p>
+          <p>{money.format(booking.total_due_minor / 100)}</p>
+          {booking.status === "expired" && <p>รายการเดิมหมดเวลาแล้ว สามารถเปิดรายการอีกครั้งหรือจองใหม่ได้ /
+            The previous hold expired. Reactivate or make a new booking.</p>}
           {booking.status === "awaiting_payment" && <p>Pay by {new Intl.DateTimeFormat(undefined, {
             dateStyle: "medium", timeStyle: "short", timeZone: timezone,
           }).format(new Date(booking.due_at))} ({timezone})</p>}
+          <a className="paid-signup-secondary inline-flex min-h-10 items-center rounded-lg px-3 py-2 font-semibold"
+            href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>
+            {booking.status === "expired" ? "เปิดรายการอีกครั้ง / Reactivate booking" : "ดูรายการเดิม / View booking"}
+          </a>
         </div>
-      ) : enabled && catalog && attendees.length > 0 ? (
+      )}
+      {enabled && catalog && attendees.length > 0 ? (
         <form id="public-registration-form" onSubmit={submit} className="scroll-mt-24 space-y-4">
+          <p className="text-sm font-semibold">ลงทะเบียนใหม่ / New booking · เพิ่มผู้เข้าร่วม / Add attendees</p>
           <fieldset disabled={busy} className="space-y-3">
             <label className="block text-sm font-medium">Primary contact name
               <input className={field} required maxLength={180} value={contact} onChange={(event) => setContact(event.target.value)} />

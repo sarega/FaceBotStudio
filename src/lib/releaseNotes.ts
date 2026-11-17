@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.7",
+    date: "2026-11-17",
+    title: "Expired booking recovery and repeat registration",
+    features: [
+      "Expired bookings can be reactivated by their owner in My Bookings",
+      "Previous bookings no longer block signing up additional attendees",
+      "New paid events use 24-hour payment windows, with a one-click 24-hour preset for existing events",
+    ],
+  },
+  {
     version: "0.9.6",
     date: "2026-11-17",
     title: "Free child attendees in family bookings",

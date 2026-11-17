@@ -1099,6 +1099,9 @@ export interface AppDatabase {
   readPaidCatalog(eventId: string): Promise<PaidCatalog | undefined>;
   listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference?: string): Promise<PaidRow[]>;
   readOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<PaidRow | undefined>;
+  reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<{
+    status: "awaiting_payment"; payment_status: "unpaid"; due_at: string; version: number;
+  }>;
   close(): Promise<void>;
   getSettingsMap(eventId?: string): Promise<Record<string, string>>;
   getSettingValue(key: string, eventId?: string): Promise<string | undefined>;

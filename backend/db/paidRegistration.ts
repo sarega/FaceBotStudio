@@ -226,6 +226,62 @@ export function* readPaidCatalog(eventId: string): PaidCommand<PaidCatalog | und
   };
 }
 
+/** Customer self-service recovery for an unpaid, expired hold. No new payment/QR is issued. */
+export function* reinstateOwnedPaidBooking(eventId: string, bookingId: string, customerId: string):
+  PaidCommand<{ status: "awaiting_payment"; payment_status: "unpaid"; due_at: string; version: number }> {
+  const [booking] = yield query(
+    "SELECT state,payment_state,due_ms,version FROM paid_bookings WHERE event_id=? AND id=? AND customer_id=?",
+    eventId, bookingId, customerId,
+  );
+  if (!booking) throw new PaidBookingError("booking_not_found");
+  const now = Date.now();
+  const expired = booking.state === "expired" ||
+    (booking.state === "awaiting_payment" && Number(booking.due_ms) <= now);
+  if (!expired || booking.payment_state !== "unpaid") throw new PaidBookingError("state_conflict");
+  if (!(yield* paidEnrollmentOpen(eventId, now))) throw new PaidBookingError("registration_unavailable");
+  const [settings] = yield query(
+    "SELECT capacity,hold_minutes,cutoff_ms,published FROM paid_event_settings WHERE event_id=?", eventId,
+  );
+  if (!settings || Number(settings.published) !== 1) throw new PaidBookingError("registration_unavailable");
+  const due = Math.min(now + Number(settings.hold_minutes) * 60_000,
+    settings.cutoff_ms == null ? Infinity : Number(settings.cutoff_ms));
+  if (!Number.isSafeInteger(due) || due <= now) throw new PaidBookingError("hold_expired");
+  const requested = yield query(
+    "SELECT category_id,COUNT(*) AS units FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL GROUP BY category_id",
+    bookingId,
+  );
+  const occupied = yield query(
+    "SELECT a.category_id,COUNT(*) AS units FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id " +
+    "WHERE a.event_id=? AND a.cancelled_ms IS NULL AND " +
+    "(b.state IN ('confirmed','verification_pending') OR (b.state='awaiting_payment' AND b.due_ms>?)) GROUP BY a.category_id",
+    eventId,now,
+  );
+  if (requested.reduce((n,row)=>n+Number(row.units),0)+
+      occupied.reduce((n,row)=>n+Number(row.units),0)>Number(settings.capacity)) {
+    throw new PaidBookingError("capacity_exhausted");
+  }
+  const existing=new Map(occupied.map((row)=>[String(row.category_id),Number(row.units)]));
+  for (const row of requested) {
+    const [category]=yield query("SELECT quota,enabled FROM paid_categories WHERE event_id=? AND id=?",
+      eventId,String(row.category_id));
+    if (!category || Number(category.enabled)!==1 ||
+        (category.quota!=null && (existing.get(String(row.category_id))||0)+Number(row.units)>Number(category.quota))) {
+      throw new PaidBookingError("capacity_exhausted");
+    }
+  }
+  // Conditional update prevents competing self-service requests from reviving the same hold twice.
+  const updated = yield query(
+    "UPDATE paid_bookings SET state='awaiting_payment',payment_state='unpaid',due_ms=?,updated_ms=?,version=version+1 " +
+    "WHERE event_id=? AND id=? AND customer_id=? AND payment_state='unpaid' " +
+    "AND (state='expired' OR (state='awaiting_payment' AND due_ms<=?)) RETURNING version",
+    due,now,eventId,bookingId,customerId,now,
+  );
+  if (!updated.length) throw new PaidBookingError("state_conflict");
+  yield audit(eventId,bookingId,customerId,"customer_reinstate","expired","awaiting_payment",now);
+  return {status:"awaiting_payment", payment_status:"unpaid", due_at:new Date(due).toISOString(),
+    version:Number(updated[0].version)};
+}
+
 export function* readOwnedPaidBooking(eventId: string, id: string, customerId: string): PaidCommand<PaidRow | undefined> {
   const [booking] = yield query(
     `SELECT b.id,b.reference,b.state,b.payment_state,b.currency,b.total_minor,b.due_ms,b.version,
@@ -313,7 +369,7 @@ export function* savePaidSettings(eventId: string, organizationId: string, input
 }
 
 export const OWNED_BOOKING_LIST_SQL = `
-  SELECT b.id,b.event_id,b.reference,e.name AS event_name,s.payment_mode,b.currency,b.total_minor AS total_due_minor,
+  SELECT b.id,b.event_id,b.reference,e.name AS event_name,e.slug AS event_slug,s.payment_mode,b.currency,b.total_minor AS total_due_minor,
     b.due_ms,CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS status,
     b.payment_state AS payment_status
   FROM paid_bookings b JOIN events e ON e.id=b.event_id JOIN paid_event_settings s ON s.event_id=b.event_id

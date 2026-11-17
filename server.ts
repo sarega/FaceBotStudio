@@ -16118,7 +16118,7 @@ async function startServer() {
         // External/manual events can open without receiver credentials; PromptPay stays draft.
         await appDb.savePaidSettings(event.id, {
           organizationId: organizerId, version: 0, capacity,
-          holdMinutes: 48 * 60, cutoffMs: null, paymentMode,
+          holdMinutes: 24 * 60, cutoffMs: null, paymentMode,
           published: paymentMode === "external_manual" && openNow && webPageEnabled &&
             paidPublicEnrollmentEnabled("external_manual"),
           categories: [{ id: "general", label: "General", unitMinor: Math.round(price * 100), quota: null }],
@@ -17446,6 +17446,24 @@ async function startServer() {
       return res.status(500).json({ error: "booking_unavailable" });
     }
   });
+
+  app.post("/api/customer/paid-bookings/:eventId/:id/reinstate",
+    publicRegistrationRateLimit, requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+      try {
+        const result = await appDb.reinstateOwnedPaidBooking(
+          req.params.eventId, req.params.id, req.customer!.account.id,
+        );
+        return res.set("Cache-Control", "private, no-store").json(result);
+      } catch (error) {
+        if (error instanceof PaidBookingError) {
+          const missing = error.code === "booking_not_found";
+          const unavailable = error.code === "registration_unavailable" || error.code === "hold_expired";
+          return res.status(missing ? 404 : unavailable ? 409 : 409).json({ error: error.code });
+        }
+        return res.status(500).json({ error: "booking_reinstate_failed" });
+      }
+    },
+  );
 
   app.get("/api/customer/paid-bookings/:eventId/:id/attendees/:attendeeId/credential",
     requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
