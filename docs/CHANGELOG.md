@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.8 - 2026-11-17
+
+- Compact the Event Workspace layout for one event, particularly on 13-inch laptop screens. Remove the unused Search / Filter / Sort / lifecycle counts when a single event is selected, while retaining New Event and Refresh controls.
+- Display that single event as a compact 64px selection row in place of the much taller event card. The compact Event Workspace is not a separately scrolling panel; multi-event lists retain their full controls and scrolling.
+- Reduce spacing, card padding and action button stacking in Event Information and Registration Rules; keep fields and navigation usable on narrow and desktop screens.
+- Browser-check responsive single-event layout at 390px, 1280px and 1440px: no horizontal overflow, no nested panel scroll, no runtime errors. New Event restores full creation/search/filter UI.
+
 ## 0.10.7 - 2026-11-17
 
 - Add configurable default answers to each customized Seminar question in Event Paid Registration Settings, including Accommodation needed (Yes/No). Defaults are populated as real editable answers for the first and every additional attendee.

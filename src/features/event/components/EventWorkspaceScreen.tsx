@@ -322,7 +322,7 @@ function SponsorEditorRow({ entry, index, uploading, onChange, onUploadFile, onR
         </ActionButton>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
           <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Sponsor Name</label>
           <input
@@ -592,13 +592,13 @@ export function EventWorkspaceScreen({
   };
 
   return (
-    <div className="space-y-4 overflow-x-hidden">
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start">
-        <div className={`min-w-0 space-y-4 xl:self-start ${eventWorkspacePanelCollapsed ? "xl:col-span-12" : "xl:col-span-7"}`}>
+    <div className="space-y-3 overflow-x-hidden">
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-12 xl:items-start">
+        <div className={`min-w-0 space-y-3 xl:self-start ${eventWorkspacePanelCollapsed ? "xl:col-span-12" : "xl:col-span-7"}`}>
           {eventWorkspaceView === "setup" ? (
             <>
-              <div className="surface-panel surface-panel-blue rounded-2xl p-4 sm:p-5">
-                <div className="mb-4 flex flex-col gap-3">
+              <div className="surface-panel surface-panel-blue rounded-2xl p-3 sm:p-4">
+                <div className="mb-3 flex flex-col gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="flex items-center gap-2 text-lg font-semibold">
@@ -628,13 +628,13 @@ export function EventWorkspaceScreen({
                       ]}
                     />
                   </div>
-                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                  <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-start">
                     <ActionButton
                       onClick={() => void saveEventDetails()}
                       disabled={saving}
                       tone="blue"
                       active
-                      className="w-full text-sm sm:w-auto sm:shrink-0"
+                      className="text-sm shrink-0"
                     >
                       {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                       Save Event Setup
@@ -644,7 +644,7 @@ export function EventWorkspaceScreen({
                       disabled={eventStatusToggle.disabled}
                       tone={eventStatusToggle.tone}
                       active={eventStatusToggle.nextStatus === "active"}
-                      className="w-full text-sm sm:w-auto sm:shrink-0"
+                      className="text-sm shrink-0"
                     >
                       {eventLoading
                         ? <RefreshCw className="h-4 w-4 animate-spin" />
@@ -658,7 +658,7 @@ export function EventWorkspaceScreen({
                       disabled={!selectedEvent || selectedEvent.effective_status !== "active" || eventLoading || saving}
                       tone={eventBotRunning ? "amber" : "emerald"}
                       active={!eventBotRunning}
-                      className="w-full text-sm sm:w-auto sm:shrink-0"
+                      className="text-sm shrink-0"
                     >
                       {eventBotRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                       {eventBotRunning ? "Pause Bot" : "Resume Bot"}
@@ -1006,7 +1006,7 @@ export function EventWorkspaceScreen({
                 </div>
               </div>
 
-              <div className="surface-panel surface-panel-emerald rounded-2xl p-4 sm:p-5">
+              <div className="surface-panel surface-panel-emerald rounded-2xl p-3 sm:p-4">
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1028,7 +1028,7 @@ export function EventWorkspaceScreen({
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   <div>
                     <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Max Capacity</label>
                     <input
@@ -1063,7 +1063,7 @@ export function EventWorkspaceScreen({
                     Auto-suggested to 17:00 on the day before the event so registration does not stay open into the event itself.
                   </span>
                 </div>
-                <div className="mt-4 border-t border-slate-200 pt-4">
+                <div className="mt-3 border-t border-slate-200 pt-3">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex items-start gap-2">
                       <div>

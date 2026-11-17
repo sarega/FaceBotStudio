@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.8",
+    date: "2026-11-17",
+    title: "Compact Event Workspace for small laptops",
+    features: [
+      "Hide unnecessary search/filter controls when only one event is available",
+      "Use a compact single-event row without an additional scrolling panel",
+      "Reduce Event Information and Registration Rules spacing on desktop and mobile",
+    ],
+  },
+  {
     version: "0.10.7",
     date: "2026-11-17",
     title: "Custom registration defaults and food choices",
