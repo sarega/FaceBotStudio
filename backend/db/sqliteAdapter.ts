@@ -1487,6 +1487,38 @@ export class SqliteAppDatabase implements AppDatabase {
         `);
       }
     }).immediate();
+    // SQLite cannot ALTER a CHECK constraint. Rebuild only these two tables
+    // once, preserving all rows and foreign keys for existing bookings.
+    const freeCategoryEnabled = (this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='paid_categories'",
+    ).get() as { sql: string }).sql.includes("unit_minor >= 0");
+    if (!freeCategoryEnabled) {
+      this.db.pragma("foreign_keys = OFF");
+      try {
+        this.db.transaction(() => {
+          for (const table of ["paid_categories", "paid_attendees"]) {
+            const schema = (this.db.prepare(
+              "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            ).get(table) as { sql: string }).sql;
+            const newName = table + "_free_migration";
+            const newSchema = schema.replace(
+              new RegExp("CREATE TABLE " + table), "CREATE TABLE " + newName,
+            ).replace("unit_minor > 0", "unit_minor >= 0");
+            if (!newSchema.includes("unit_minor >= 0")) throw new Error("Free attendee schema migration failed");
+            const columns = (this.db.pragma("table_info(" + table + ")") as { name: string }[])
+              .map((column) => column.name).join(",");
+            this.db.exec(newSchema);
+            this.db.exec("INSERT INTO " + newName + "(" + columns + ") SELECT " + columns + " FROM " + table);
+            this.db.exec("DROP TABLE " + table);
+            this.db.exec("ALTER TABLE " + newName + " RENAME TO " + table);
+          }
+          const broken = this.db.pragma("foreign_key_check") as unknown[];
+          if (broken.length) throw new Error("Free attendee migration violated foreign keys");
+        }).immediate();
+      } finally {
+        this.db.pragma("foreign_keys = ON");
+      }
+    }
     this.initialized = true;
   }
 

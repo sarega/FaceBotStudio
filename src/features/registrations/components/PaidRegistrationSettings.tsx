@@ -70,8 +70,8 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
         quota: quota ? Number(quota) : null,
       };
     });
-    if (parsedCategories.some(({ unit_minor }) => !Number.isSafeInteger(unit_minor) || unit_minor < 1)) {
-      setError("Enter a positive price with up to two decimal places for each category.");
+    if (parsedCategories.some(({ unit_minor }) => !Number.isSafeInteger(unit_minor) || unit_minor < 0)) {
+      setError("Enter a valid price (0 = free) with up to two decimal places for each category.");
       return;
     }
     setBusy(true);
@@ -150,7 +150,7 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
         {categories.map((category) => <fieldset key={category.id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-3">
           <legend className="px-1">Category · {category.id}</legend>
           <label>Label<input className={field} required maxLength={180} value={category.label} onChange={(event) => update(category.id, { label: event.target.value })} /></label>
-          <label>Price (THB)<input className={field} required inputMode="decimal" value={category.price} onChange={(event) => update(category.id, { price: event.target.value })} /></label>
+          <label>Price (THB, 0 = Free)<input className={field} required inputMode="decimal" value={category.price} onChange={(event) => update(category.id, { price: event.target.value })} /></label>
           <label>Quota (optional)<input className={field} type="number" min={1} step={1} value={category.quota} onChange={(event) => update(category.id, { quota: event.target.value })} /></label>
           {categories.length > 1 && <button type="button" className="justify-self-start text-blue-700 underline"
             onClick={() => setCategories((current) => current.filter((item) => item.id !== category.id))}>Remove category</button>}

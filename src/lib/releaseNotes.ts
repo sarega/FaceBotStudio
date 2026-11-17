@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.6",
+    date: "2026-11-17",
+    title: "Free child attendees in family bookings",
+    features: [
+      "Registration categories now accept a zero price for free children",
+      "Free and paid attendees share one booking and each receive an admission QR",
+      "Public forms display Free clearly and keep charging only for paid attendees",
+    ],
+  },
+  {
     version: "0.9.5",
     date: "2026-11-17",
     title: "Payment slip compression and retention",

@@ -114,6 +114,10 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy || !catalog) return;
+    if (attendees.every((row) => (catalog.categories.find((c) => c.id === row.category_id)?.unit_minor ?? 0) === 0)) {
+      setError("รายการนี้ไม่มีค่าชำระ กรุณาลงทะเบียนพร้อมผู้ที่มีค่าสัมมนา / Add a paying attendee to this booking.");
+      return;
+    }
     setBusy(true);
     setError("");
     const request = JSON.stringify({ pricing_version: catalog.pricing_version, contact: { name: contact }, answers, attendees });
@@ -226,7 +230,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
                 <legend className="px-1 text-sm font-semibold">Attendee {index + 1}</legend>
                 <label className="block text-sm">Category
                   <select className={field} value={row.category_id} onChange={(event) => update(index, { category_id: event.target.value })}>
-                    {catalog.categories.map((category) => <option key={category.id} value={category.id}>{category.label} · {money.format(category.unit_minor / 100)}</option>)}
+                    {catalog.categories.map((category) => <option key={category.id} value={category.id}>{category.label} · {category.unit_minor === 0 ? "ฟรี / Free" : money.format(category.unit_minor / 100)}</option>)}
                   </select>
                 </label>
                 <label className="block text-sm">First name

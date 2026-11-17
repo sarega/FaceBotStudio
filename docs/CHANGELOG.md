@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.6 - 2026-11-17
+
+- Accept no-cost attendee categories in paid event settings (Price = 0) and store zero-price attendee records with normal names, capacity counting, and admission credentials.
+- Add PostgreSQL schema migration and idempotent SQLite schema update preserving existing category/attendee rows.
+- Public registration labels zero-price categories "ฟรี / Free"; mixed paying adult and free child bookings calculate their total correctly and issue admission QR for every attendee once approved.
+- A booking with no paying attendee is not yet supported in the paid payment workflow; explain this before Reserve instead of a confusing server failure.
+- Tested mixed booking with two adults and one free child, including payment approval and three issued credentials.
+
 ## 0.9.5 - 2026-11-17
 
 - Optimize paid registration proof images before encryption/storage. PNG screenshots use lossless WebP where smaller; JPEG/WebP photos use high-quality JPEG, with 1600px max dimensions. Preserve the original whenever re-encoding would make it bigger.
