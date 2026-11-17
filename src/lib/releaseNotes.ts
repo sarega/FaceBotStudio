@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.0",
+    date: "2026-11-17",
+    title: "Coupons & Promotions",
+    features: [
+      "Event administrators can manage percentage, fixed amount and complimentary coupon codes",
+      "Checkout previews the discount while the server enforces final prices and limits",
+      "Expired holds release coupon quotas and 100% free bookings receive admission tickets",
+    ],
+  },
+  {
     version: "0.9.9",
     date: "2026-11-17",
     title: "Conditional accommodation discounts for paid seminars",
