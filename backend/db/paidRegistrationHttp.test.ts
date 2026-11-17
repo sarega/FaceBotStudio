@@ -561,6 +561,61 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const unpublishedProbe=await fetch(origin+"/api/events/"+slugProbe.id+
       "/paid-registration/coupons",{headers:staffCreateHeaders});
     assert.equal((await unpublishedProbe.json()).public_page_enabled,false);
+    // Coupon lookup should validate the actual code independently from the
+    // Accommodation answer. Preview uses current base price until answered;
+    // final booking submission still requires every configured required answer.
+    const pricingEvent=await db.createEvent({name:"Coupon with accommodation",organizer_id:"org_default"});
+    await db.updateEvent(pricingEvent.id,{status:"active"});
+    await db.upsertSettings({
+      event_public_page_enabled:"1",event_public_slug:"coupon-accommodation-test",
+    },pricingEvent.id);
+    const pricingConfig=await db.savePaidSettings(pricingEvent.id,{
+      organizationId:"org_default",version:0,capacity:20,holdMinutes:1440,cutoffMs:null,
+      published:true,paymentMode:"external_manual",
+      categories:[{id:"adult",label:"Adult",unitMinor:340000,
+        accommodationDiscountMinor:80000,quota:null}],
+      fields:[{key:"accommodation",scope:"attendee",required:true}],
+    });
+    await db.savePaidCoupon(pricingEvent.id,{
+      code:"YOGISUPPORT",kind:"percent",value_minor:10000,max_uses:10,
+      per_customer_limit:5,starts_ms:null,ends_ms:null,enabled:true,
+    });
+    const pricingUrl=origin+"/api/public/events/coupon-accommodation-test";
+    const pricingBody={
+      pricing_version:Number(pricingConfig.version),coupon_code:"YOGISUPPORT",
+      attendees:[{category_id:"adult",first_name:"First",last_name:"Person"}],
+    };
+    const pricingRequest=async(body:object)=>fetch(pricingUrl+"/paid-registration/coupon-preview",{
+      method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
+        "x-csrf-token":"fixture-csrf"},body:JSON.stringify(body),
+    });
+    const basePreview=await pricingRequest(pricingBody);
+    assert.equal(basePreview.status,200,await basePreview.clone().text());
+    const baseQuote=await basePreview.json();
+    assert.equal(baseQuote.provisional,true);
+    assert.equal(baseQuote.subtotal_minor,340000);
+    assert.equal(baseQuote.discount_minor,340000);
+    assert.equal(baseQuote.total_minor,0);
+    const reducedPreview=await pricingRequest({...pricingBody,
+      attendees:[{category_id:"adult",answers:{accommodation:"no"}}]});
+    assert.equal(reducedPreview.status,200,await reducedPreview.clone().text());
+    const reducedQuote=await reducedPreview.json();
+    assert.equal(reducedQuote.provisional,false);
+    assert.equal(reducedQuote.subtotal_minor,260000);
+    assert.equal(reducedQuote.discount_minor,260000);
+    const wrongFormat=await pricingRequest({...pricingBody,coupon_code:"?"});
+    assert.equal(wrongFormat.status,422);
+    assert.equal((await wrongFormat.json()).error,"coupon_invalid");
+    const unknownCode=await pricingRequest({...pricingBody,coupon_code:"NOTAREALCODE"});
+    assert.equal(unknownCode.status,422);
+    assert.equal((await unknownCode.json()).error,"coupon_not_found");
+    const incompleteBooking=await fetch(pricingUrl+"/paid-bookings",{
+      method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
+        "x-csrf-token":"fixture-csrf","Idempotency-Key":"coupon-accommodation-incomplete"},
+      body:JSON.stringify({...pricingBody,contact:{name:"First Person"}}),
+    });
+    assert.notEqual(incompleteBooking.status,201,
+      "A provisional coupon preview must not bypass required booking answers");
     const couponAdminPath=origin+"/api/events/"+newExternalEvent.id+"/paid-registration/coupons";
     const couponDraft={code:"TEMPDELETE",kind:"fixed",value_minor:500,
       max_uses:1,per_customer_limit:1,starts_ms:null,ends_ms:null,enabled:true};

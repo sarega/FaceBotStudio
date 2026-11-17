@@ -1,3 +1,4 @@
+import { isValidCouponCode } from "./backend/db/paidCoupons";
 import sharp from "sharp";
 import { paidProofEncryptionConfigured } from "./backend/paidProofEncryption";
 import { parsePaidSeminarFields } from "./backend/paidSeminarFields";
@@ -17195,25 +17196,35 @@ async function startServer() {
         const catalog=await appDb.readPaidCatalog(match.event.id);
         if(!catalog) return res.status(404).json({error:"registration_unavailable"});
         const body=readObjectBody(req);
+        // Check the *code* first: a missing required seminar answer is not
+        // evidence that an otherwise valid coupon has an invalid format.
+        if (typeof body.coupon_code !== "string" || !isValidCouponCode(body.coupon_code))
+          return res.status(422).json({error:"coupon_invalid"});
         if(catalog.pricing_version!==body.pricing_version || !Array.isArray(body.attendees) ||
            body.attendees.length<1 || body.attendees.length>100)
           return res.status(409).json({error:"quote_stale"});
         let subtotal=0;
+        let priceProvisional=false;
         for(const attendee of body.attendees) {
           if(!attendee || typeof attendee!=="object") return res.status(400).json({error:"invalid_attendees"});
           const entry=attendee as {category_id?:string;answers?:{accommodation?:string}};
           const category=catalog.categories.find(c=>c.id===entry.category_id);
           if(!category) return res.status(400).json({error:"invalid_attendees"});
           const answer=entry.answers?.accommodation;
+          // Preview the same base price currently shown by the form if the
+          // attendee has not answered Accommodation yet. Only final booking
+          // submission enforces its required answers.
           if(category.accommodation_discount_minor>0 && !["yes","no"].includes(String(answer)))
-            return res.status(400).json({error:"invalid_seminar_answers"});
+            priceProvisional=true;
           subtotal+=category.unit_minor-(answer==="no"?category.accommodation_discount_minor:0);
         }
         if(!Number.isSafeInteger(subtotal)||subtotal<=0)
           return res.status(400).json({error:"invalid_total"});
         const preview=await appDb.quotePaidCoupon(match.event.id,req.customer!.account.id,
           String(body.coupon_code||""),subtotal);
-        return res.set("Cache-Control","private, no-store").json({subtotal_minor:subtotal,...preview});
+        return res.set("Cache-Control","private, no-store").json({
+          subtotal_minor:subtotal,...preview,provisional:priceProvisional,
+        });
       } catch(error) {
         if(error instanceof PaidBookingError) return res.status(422).json({error:error.code});
         // Log only the route/event and the error, never customer contact, sessions,

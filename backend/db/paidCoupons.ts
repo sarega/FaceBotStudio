@@ -8,6 +8,9 @@ export type CouponInput = {
   per_customer_limit: number | null; starts_ms: number | null; ends_ms: number | null; enabled: boolean;
 };
 const codePattern = /^[A-Z0-9][A-Z0-9_-]{2,31}$/;
+export function isValidCouponCode(code: string): boolean {
+  return codePattern.test(normalizeCouponCode(code));
+}
 export function normalizeCouponCode(code: string) { return code.trim().toUpperCase(); }
 export function validateCoupon(input: CouponInput): CouponInput {
   const code = normalizeCouponCode(input.code);

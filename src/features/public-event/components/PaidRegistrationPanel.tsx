@@ -11,7 +11,7 @@ const money = new Intl.NumberFormat("en-TH", { style: "currency", currency: "THB
 /** Convert API failures into actionable coupon feedback instead of a generic red warning. */
 export function couponErrorMessage(code: string, locale: "th" | "en"): string {
   const messages: Record<string, [string, string]> = {
-    coupon_invalid: ["รูปแบบโค้ดไม่ถูกต้อง กรุณาตรวจตัวอักษร", "Invalid code format. Check the spelling."],
+    coupon_invalid: ["รหัสคูปองต้องมี 3–32 ตัว ใช้ A–Z, 0–9, - หรือ _ เท่านั้น", "Coupon code must be 3–32 characters, using A–Z, 0–9, hyphen or underscore."],
     coupon_unavailable: ["ไม่พบโค้ดที่ใช้ได้กับงานนี้ หรือคูปองถูกปิด/หมดอายุ กรุณาตรวจโค้ดใน Promotions ของงานนี้", "This code is not active for this event. Check its code, dates and Active status in this event's Promotions."],
     coupon_not_found: ["ไม่พบคูปองนี้ใน Event ที่กำลังลงทะเบียน กรุณาตรวจว่าเลือก Event เดียวกันในหน้า Admin", "Coupon not found for this event. Check that it was created under this same event in Admin."],
     coupon_disabled: ["คูปองนี้ถูกปิด Active ในหน้า Admin", "This coupon is disabled in Admin."],
@@ -91,7 +91,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
   const [booking, setBooking] = useState<Booking>();
   const [couponCode,setCouponCode]=useState("");
   const [couponPreview,setCouponPreview]=useState<{
-    code:string; subtotal_minor:number; discount_minor:number; total_minor:number;
+    code:string; subtotal_minor:number; discount_minor:number; total_minor:number; provisional?:boolean;
   }|null>(null);
   const [couponError,setCouponError]=useState("");
   const [couponBusy,setCouponBusy]=useState(false);
@@ -167,7 +167,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
     setCouponBusy(true);setCouponError("");
     try {
       const response=await customerApi<{
-        code:string;subtotal_minor:number;discount_minor:number;total_minor:number;
+        code:string;subtotal_minor:number;discount_minor:number;total_minor:number;provisional?:boolean;
       }>(prefix+"/paid-registration/coupon-preview",{
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({coupon_code:couponCode.trim().toUpperCase(),pricing_version:catalog.pricing_version,attendees}),
@@ -349,6 +349,11 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
               {couponPreview&&<p role="status" className="text-emerald-700">
                 {couponPreview.code} — {locale==="th"?"ลด":"Discount"}
                 {" "+money.format(couponPreview.discount_minor/100)}
+              </p>}
+              {couponPreview?.provisional&&<p className="text-xs text-amber-700">
+                {locale==="th"
+                  ? "ยอดนี้คำนวณจากราคาเต็ม กรุณาเลือกที่พักก่อนยืนยันการจองเพื่อสรุปยอดจริง"
+                  : "Preview uses the current base price. Choose accommodation before booking to finalize the amount."}
               </p>}
               <div className="flex items-center justify-between">
                 <span>{locale==="th"?"ยอดก่อนคูปอง":"Subtotal"}</span><span>{money.format(total/100)}</span>

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.6 - 2026-11-17
+
+- Correct Coupon Apply error ordering: verify coupon code syntax independently instead of conflating a blank accommodation answer with coupon validity. YOGISUPPORT is a valid code under the shared normalization and formatting rules.
+- Coupon Preview now uses the current displayed category/base amount when Accommodation has not been selected, and discounts the live adjusted price after a Yes/No choice. Preview marks an unanswered accommodation-based amount as provisional and explains that final selection is required before reservation.
+- Final booking still requires configured mandatory seminar answers and independently recalculates all prices and coupon eligibility; customers cannot bypass accommodation requirements by applying a coupon early.
+- Return precise coupon_invalid only for actual malformed code input, and distinct coupon_not_found for valid codes that are not registered to the selected event.
+- Add HTTP regression with YOGISUPPORT and an accommodation-dependent category, verifying full/reduced quote, format-vs-not-found errors, and required final booking validation.
+
 ## 0.10.5 - 2026-11-17
 
 - Fix root cause of Coupon Apply CSRF rejection when an organizer tests the public customer checkout while signed in to Admin in the same browser. The coupon preview POST was missing from the customer-scoped CSRF route matcher, so it incorrectly expected the Admin CSRF cookie despite receiving the valid Customer CSRF token.
