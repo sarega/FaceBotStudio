@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.2 - 2026-11-17
+
+- Resolve the disconnected Event administration reporting: original registrations data and paid booking attendees are separate durable sources. Show all named attendees in the original Registrations screen without inserting duplicates into the legacy registrations table.
+- Add organizer-scoped paid attendee roster API, one row per person, with the booking reference, purchasing customer, category, payment/booking status and check-in state. One booking for four people displays four attendee rows.
+- Event Stats now include confirmed paid attendees and active seat holds alongside the original attendee totals, showing the correct Paid Registration seat capacity and separate counts of bookings awaiting payment, pending slip review and confirmed.
+- Event Workspace Registration Rules also show paid seat occupancy and distinguish the legacy editable capacity from Paid Registration capacity. Refresh the Registrations roster and stats on payment review changes.
+- Existing Event registrations Excel/CSV export combines paid and legacy attendee rows. Preserve original export columns; add Event/Booking/Customer identities, source, category, status, food, accommodation, arrival/departure, room preference, transport, notes and check-in information.
+- Customer management gains all-Events attendee CSV with one row for each person, including both free and paid Event registrations; the existing booking-level CSV remains separately available. Restrict exports by organizer and reject oversized datasets instead of silent truncation.
+- Decode saved seminar answers in the correct normalized array format so hotel Food and Accommodation preferences are actually included in exported data.
+- Add database and HTTP tests for attendee-level grouping, account attribution, organizer isolation, and one-Event/all-Events CSV; verify responsive UI at 390px and 1280px. Remaining cross-product legacy-only reporting is documented for follow-up.
+
 ## 0.11.1 - 2026-11-17
 
 - Unify the three Paid Registration administrator panels (Registration Settings, Coupons & Promotions, Slip Review) using one reusable accessible header component: matching icon boxes, text size and weight, subtitle spacing, chevron toggle and focus treatment.

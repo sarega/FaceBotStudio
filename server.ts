@@ -6056,6 +6056,60 @@ function buildRegistrationExportFilename(eventName: string) {
   return `registrations-${slug || "data"}.csv`;
 }
 
+/** Hotel/organizer roster: one row per PERSON, whether via free registration
+ * or paid booking. Keep existing CSV column names for compatibility.
+ * Event and booking IDs, payment and seminar answers provide traceability.
+ */
+function buildUnifiedAttendeesCsvWithBom(eventName:string,legacy:RegistrationRow[],
+  paid:Array<Record<string,unknown>>) {
+  const safe=(v:unknown)=>{
+    const text=String(v??"");
+    return /^\s*[=+@-]/.test(text)?"'"+text:text;
+  };
+  const columns=[...REGISTRATION_EXPORT_FIELDS,"source","event_name","booking_reference",
+    "booking_id","customer_id","customer_name","customer_email","category",
+    "booking_status","payment_status","food_preference","accommodation_needed",
+    "arrival_date","departure_date","room_preference","transport_preference","notes",
+    "attendee_ordinal","booking_total_thb","checked_in_at"];
+  const rows:Array<Record<string,string>>=[];
+  for(const reg of legacy) {
+    const row:Record<string,string>={};
+    for(const field of REGISTRATION_EXPORT_FIELDS)row[field]=safe(reg[field]);
+    row.source="legacy_registration";
+    row.event_name=safe((reg as RegistrationRow & {event_name?:string}).event_name||eventName);
+    rows.push(row);
+  }
+  for(const attendee of paid) {
+    const answers=(attendee.answers??{}) as Record<string,unknown>;
+    const bookingAnswers=(attendee.booking_answers??{}) as Record<string,unknown>;
+    const getAnswer=(name:string)=>safe(answers[name]??bookingAnswers[name]??"");
+    const row:Record<string,string>={
+      id:safe(attendee.attendee_id),event_id:safe(attendee.event_id),
+      first_name:safe(attendee.first_name),last_name:safe(attendee.last_name),
+      email:safe(attendee.attendee_email||attendee.customer_email),
+      phone:safe(attendee.attendee_phone||attendee.customer_phone),
+      timestamp:new Date(Number(attendee.booked_ms)).toISOString(),
+      status:safe(attendee.booking_state),
+      source:"paid_booking",event_name:safe(attendee.event_name||eventName),
+      booking_reference:safe(attendee.booking_reference),booking_id:safe(attendee.booking_id),
+      customer_id:safe(attendee.customer_id),
+      customer_name:safe([attendee.customer_first_name,attendee.customer_last_name].filter(Boolean).join(" ")),
+      customer_email:safe(attendee.customer_email),category:safe(attendee.category_label),
+      booking_status:safe(attendee.booking_state),payment_status:safe(attendee.payment_state),
+      food_preference:getAnswer("food"),accommodation_needed:getAnswer("accommodation"),
+      arrival_date:getAnswer("arrival"),departure_date:getAnswer("departure"),
+      room_preference:getAnswer("room_preference"),
+      transport_preference:getAnswer("transport"),notes:getAnswer("notes"),
+      attendee_ordinal:safe(attendee.ordinal),
+      booking_total_thb:(Number(attendee.booking_total_minor)/100).toFixed(2),
+      checked_in_at:attendee.checked_in_ms==null?"":new Date(Number(attendee.checked_in_ms)).toISOString(),
+    };
+    rows.push(row);
+  }
+  const csv=new Parser({fields:columns}).parse(rows);
+  return "\uFEFF"+csv;
+}
+
 function buildRegistrationsCsvWithBom(rows: RegistrationRow[]) {
   const normalizedRows = rows.map((row) => ({
     id: String(row.id || ""),
@@ -17639,6 +17693,27 @@ async function startServer() {
     }
   });
 
+  // Canonical event roster for paid registrations. One row per attendee;
+  // the original free-registration rows remain in the legacy table.
+  app.get("/api/events/:eventId/paid-registration/attendees",
+    requireRoles(["owner","admin","operator"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
+      try {
+        const eventId=req.eventScope!.eventId;
+        const org=req.auth!.user.organization_id;
+        const [attendees,summary]=await Promise.all([
+          appDb.listPaidAttendeeRoster(eventId,org),
+          appDb.readPaidEventSummary(eventId,org),
+        ]);
+        return res.set("Cache-Control","private, no-store")
+          .json({attendees,summary:summary??null});
+      }catch(error){
+        if(error instanceof PaidBookingError) return res.status(404).json({error:"event_not_found"});
+        console.error("Paid roster unavailable",error);
+        return res.status(500).json({error:"paid_roster_unavailable"});
+      }
+    },
+  );
+
   app.get("/api/events/:eventId/paid-registration/summary",
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       try {
@@ -19595,13 +19670,21 @@ async function startServer() {
     async (req: AuthenticatedRequest, res) => {
     try {
       const eventId = getRequestedEventId(req);
-      const rows = await appDb.exportRegistrations(eventId);
-      const eventName = (await appDb.getSettingValue("event_name", eventId)) || "event";
+      const organizationId=req.auth!.user.organization_id;
+      const [rows,paid,paidSummary,event] = await Promise.all([
+        appDb.exportRegistrations(eventId),
+        appDb.listPaidAttendeeRoster(eventId,organizationId),
+        appDb.readPaidEventSummary(eventId,organizationId),
+        appDb.getEventById(eventId),
+      ]);
+      const eventName = (await appDb.getSettingValue("event_name", eventId)) || event?.name || "event";
       const filename = buildRegistrationExportFilename(eventName);
-      const csvWithBOM = buildRegistrationsCsvWithBom(rows);
+      const csvWithBOM = buildUnifiedAttendeesCsvWithBom(eventName,rows,paid);
       await recordSecurityEvent(req, "registration.export_downloaded", {
         event_id: eventId,
-        rows: rows.length,
+        rows: rows.length+paid.length,
+        legacy_rows:rows.length,paid_attendee_rows:paid.length,
+        paid_booking_count:paidSummary?.bookings??0,
         filename,
       });
 
@@ -20252,6 +20335,40 @@ async function startServer() {
       return res.status(500).json({ error: "Failed to fetch customer management data" });
     }
   });
+
+  // A single Excel roster across many Events, one row per named person.
+  // Booking exports remain available separately and have a different granularity.
+  app.get("/api/admin/customers/attendee-roster.csv",
+    requireRoles(["owner","admin"]),async(req:AuthenticatedRequest,res:Response)=>{
+      try {
+        const org=req.auth!.user.organization_id;
+        const events=await appDb.listEvents(org);
+        if(events.length>250)return res.status(409).json({error:"too_many_events_to_export_safely"});
+        const attendees:Array<Record<string,unknown>>=[];
+        const legacyRows:Array<RegistrationRow & {event_name?:string}>=[];
+        for(const event of events) {
+          const [persons,legacy]=await Promise.all([
+            appDb.listPaidAttendeeRoster(event.id,org,10000),
+            appDb.exportRegistrations(event.id),
+          ]);
+          if(persons.length===10000||legacy.length>=10000)
+            return res.status(409).json({error:"too_many_attendees_to_export_safely"});
+          attendees.push(...persons.map(person=>({...person,event_name:event.name})));
+          legacyRows.push(...legacy.map(person=>({...person,event_name:event.name})));
+        }
+        const csv=buildUnifiedAttendeesCsvWithBom("All events",legacyRows,attendees);
+        await recordSecurityEvent(req,"registration.export_downloaded",{
+          report:"all_event_attendees",events:events.length,
+          attendees:attendees.length+legacyRows.length,
+        });
+        return res.set("Cache-Control","private, no-store")
+          .set("Content-Type","text/csv; charset=utf-8")
+          .attachment("meetrix-all-events-attendee-roster.csv").send(csv);
+      }catch(error){
+        console.error("All-events attendee export unavailable",error);
+        return res.status(500).json({error:"attendee_export_unavailable"});
+      }
+    });
 
   app.get("/api/admin/customers/paid-bookings.csv",
     requireRoles(["owner","admin"]),async(req:AuthenticatedRequest,res:Response)=>{

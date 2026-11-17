@@ -217,15 +217,15 @@ export function CustomerManagementScreen({ apiFetch,focusCustomerId,onOpenBookin
     }
   };
 
-  async function exportBookings() {
+  async function exportCsv(path:string,filename:string) {
     if(exporting)return;
     setExporting(true);
     try {
-      const response=await apiFetch("/api/admin/customers/paid-bookings.csv");
-      if(!response.ok)throw new Error("ไม่สามารถส่งออกข้อมูลการจองได้");
+      const response=await apiFetch(path);
+      if(!response.ok)throw new Error("ไม่สามารถส่งออกไฟล์ได้ โปรดตรวจสอบสิทธิ์และจำนวนรายการ");
       const url=URL.createObjectURL(await response.blob());
       const anchor=document.createElement("a");
-      anchor.href=url;anchor.download="meetrix-paid-bookings.csv";
+      anchor.href=url;anchor.download=filename;
       document.body.appendChild(anchor);anchor.click();anchor.remove();
       URL.revokeObjectURL(url);
     }catch(error){setMessage(error instanceof Error?error.message:"Export failed");}
@@ -245,10 +245,18 @@ export function CustomerManagementScreen({ apiFetch,focusCustomerId,onOpenBookin
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">Customer accounts</h1>
           <p className="mt-1 text-sm text-slate-500">ดูบัญชีลูกค้า การยืนยันอีเมล และประวัติการซื้อจาก Meetrix</p>
         </div>
-        <button type="button" disabled={exporting} onClick={()=>void exportBookings()}
-          className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-500 disabled:opacity-50">
-          {exporting?"กำลังส่งออก…":"Export Bookings (Excel / CSV)"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" disabled={exporting}
+            onClick={()=>void exportCsv("/api/admin/customers/attendee-roster.csv","meetrix-all-events-attendee-roster.csv")}
+            className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50">
+            {exporting?"กำลังส่งออก…":"Export ผู้เข้าร่วมทุกคน (ทุก Event)"}
+          </button>
+          <button type="button" disabled={exporting}
+            onClick={()=>void exportCsv("/api/admin/customers/paid-bookings.csv","meetrix-paid-bookings.csv")}
+            className="rounded-xl border border-blue-300 bg-white px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+            Export Bookings (แยกตามการจอง)
+          </button>
+        </div>
         <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-blue-300 hover:text-blue-700 disabled:opacity-50">
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
         </button>

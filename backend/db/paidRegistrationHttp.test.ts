@@ -553,6 +553,59 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const { summary } = await response.json();
     assert.equal(summary.bookings, 3);
     assert.equal(summary.attendees, 5);
+    const attendeeRosterResponse=await fetch(eventPrefix+"/attendees",{headers:staffHeaders});
+    assert.equal(attendeeRosterResponse.status,200);
+    const attendeeRoster=await attendeeRosterResponse.json();
+    assert.equal(attendeeRoster.attendees.length,5);
+    const legacyRosterEvent=await db.createEvent({
+      name:"Free Legacy Registration Event",organizer_id:"org_default",
+    });
+    const legacyFixture=new Database(database);
+    legacyFixture.prepare("INSERT INTO registrations (id,event_id,first_name,last_name) VALUES (?,?,?,?)")
+      .run("REG-LEGACY-EXPORT",legacyRosterEvent.id,"Legacy","Guest");
+    legacyFixture.close();
+    const globalRoster=await fetch(origin+"/api/admin/customers/attendee-roster.csv",
+      {headers:staffHeaders});
+    assert.equal(globalRoster.status,200,await globalRoster.clone().text());
+    const globalCsv=await globalRoster.text();
+    assert.match(globalCsv,/booking_reference/);
+    assert.match(globalCsv,/event_name/);
+    assert.match(globalCsv,/customer_email/);
+    assert.match(globalCsv,/food_preference/);
+    assert.match(globalCsv,/Free Legacy Registration Event/);
+    assert.match(globalCsv,/Legacy/);
+    assert.match(globalCsv,/Guest/);
+    assert.match(globalCsv,/legacy_registration/);
+    assert.match(globalCsv,/paid_booking/);
+    for(const person of attendeeRoster.attendees){
+      assert.ok(globalCsv.includes(person.first_name));
+      assert.ok(globalCsv.includes(person.last_name));
+    }
+    const unauthorizedGlobal=await fetch(origin+"/api/admin/customers/attendee-roster.csv");
+    assert.equal(unauthorizedGlobal.status,401);
+
+    assert.equal(attendeeRoster.summary.attendees,5);
+    assert.equal(attendeeRoster.attendees.filter((person:{booking_id:string})=>
+      person.booking_id===booking.id).length,2);
+    assert.equal(attendeeRoster.attendees[0].customer_email,"test-owner@example.com");
+    const deniedRoster=await fetch(eventPrefix+"/attendees");
+    assert.equal(deniedRoster.status,401);
+    const excelExport=await fetch(origin+"/api/registrations/export?event_id="+event.id,
+      {headers:staffHeaders});
+    assert.equal(excelExport.status,200);
+    const excelBytes=new Uint8Array(await excelExport.arrayBuffer());
+    assert.deepEqual([...excelBytes.slice(0,3)],[0xef,0xbb,0xbf]);
+    const excelCsv=new TextDecoder().decode(excelBytes);
+    assert.match(excelCsv,/booking_reference/);
+    assert.match(excelCsv,/customer_email/);
+    assert.match(excelCsv,/food_preference/);
+    assert.match(excelCsv,/accommodation_needed/);
+    assert.match(excelCsv,/paid_booking/);
+    for(const person of attendeeRoster.attendees){
+      assert.ok(excelCsv.includes(person.first_name));
+      assert.ok(excelCsv.includes(person.last_name));
+    }
+
     assert.equal(summary.confirmed_bookings, 2);
     assert.equal(summary.confirmed_attendees, 3);
     assert.equal(summary.checked_in_attendees, 1);

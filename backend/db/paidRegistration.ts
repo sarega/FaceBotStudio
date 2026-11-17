@@ -1055,6 +1055,54 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   return receipt;
 }
 
+/** Read-only view: one row per person, not per booking.
+ * Never duplicate paid attendees into legacy registrations storage.
+ */
+export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<PaidRow[]> {
+  const safeLimit=Math.min(Math.max(Math.trunc(limit)||10000,1),10000);
+  const rows=yield query(
+    `SELECT a.id AS attendee_id,a.booking_id,a.event_id,a.ordinal,a.first_name,a.last_name,
+       a.category_id,a.category_label,a.unit_minor,a.contact_json AS attendee_contact_json,
+       a.checked_in_ms,a.cancelled_ms,
+       b.reference AS booking_reference,b.customer_id,b.contact_json AS booking_contact_json,
+       b.state AS booking_state,b.payment_state,b.created_ms AS booked_ms,b.due_ms,
+       b.total_minor AS booking_total_minor,c.first_name AS customer_first_name,
+       c.last_name AS customer_last_name,c.email AS customer_email,c.phone AS customer_phone
+     FROM paid_attendees a
+     JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
+     JOIN customer_accounts c ON c.id=b.customer_id
+     WHERE a.event_id=?
+     ORDER BY b.created_ms DESC,b.id,a.ordinal LIMIT ?`,eventId,safeLimit,
+  );
+  const now=Date.now();
+  return rows.map(({attendee_contact_json,booking_contact_json,...row})=>{
+    const contact=JSON.parse(String(attendee_contact_json||"{}")) as Record<string,unknown>;
+    const bookingContact=JSON.parse(String(booking_contact_json||"{}")) as Record<string,unknown>;
+    // The booking engine persists normalized answers as an ARRAY of
+    // {key,label,value}, not as the input form's key-value object.
+    const answerMap=(value:unknown):Record<string,string>=>{
+      if(Array.isArray(value))return Object.fromEntries(value.filter(item=>
+        item && typeof item.key==="string" && typeof item.value==="string")
+        .map(item=>[item.key,item.value]));
+      if(value && typeof value==="object")return Object.fromEntries(
+        Object.entries(value).filter((entry)=>typeof entry[1]==="string"));
+      return {};
+    };
+    const answers=answerMap(contact.answers);
+    const bookingAnswers=answerMap(bookingContact.answers);
+    const expired=row.booking_state==="awaiting_payment" && Number(row.due_ms)<=now;
+    const state=row.cancelled_ms!=null?"cancelled":expired?"expired":String(row.booking_state);
+    return {...row,booking_state:state,
+      ordinal:Number(row.ordinal),unit_minor:Number(row.unit_minor),
+      booked_ms:Number(row.booked_ms),due_ms:Number(row.due_ms),
+      booking_total_minor:Number(row.booking_total_minor),
+      checked_in_ms:row.checked_in_ms==null?null:Number(row.checked_in_ms),
+      cancelled_ms:row.cancelled_ms==null?null:Number(row.cancelled_ms),
+      attendee_email:String(contact.email||""),attendee_phone:String(contact.phone||""),
+      answers,booking_answers:bookingAnswers};
+  });
+}
+
 export function* readPaidEventSummary(eventId: string): PaidCommand<PaidRow | undefined> {
   const [summary] = yield query(
     `WITH occupancy AS (

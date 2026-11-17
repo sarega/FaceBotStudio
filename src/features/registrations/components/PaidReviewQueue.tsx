@@ -326,7 +326,8 @@ export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBooking
                 </div>
               </div>
               <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch}
-                onUpdated={()=>{setOffset(0);setRefresh(v=>v+1);}}/>
+                onUpdated={()=>{setOffset(0);setRefresh(v=>v+1);
+                  window.dispatchEvent(new Event("meetrix:paid-booking-updated"));}}/>
             </div>
           </details>;
         })}

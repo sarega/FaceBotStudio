@@ -83,6 +83,14 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       pricing_version: 1, fields: [], categories: [{ id: "adult", label: "Adult", unit_minor: 25000, accommodation_discount_minor: 0 }],
     });
     const receipt = await db.createPaidBooking(command);
+    const paidRoster=await db.listPaidAttendeeRoster(event.id,"org_default");
+    assert.equal(paidRoster.length,2,"paid roster must contain one row for each person in one booking");
+    assert.deepEqual(paidRoster.map(p=>p.first_name).sort(),["One","Two"]);
+    assert.equal(paidRoster[0].booking_id,receipt.id);
+    assert.equal(paidRoster[0].booking_reference,receipt.reference);
+    assert.equal(paidRoster[0].customer_email,"paid@example.com");
+    assert.equal(paidRoster[0].booking_state,"awaiting_payment");
+    await assert.rejects(db.listPaidAttendeeRoster(event.id,"some_other_organizer"),/event_not_found/);
     const orgBookings=await db.listOrganizationPaidBookings("org_default");
     const orgEntry=orgBookings.find((booking)=>booking.booking_id===receipt.id);
     assert.ok(orgEntry,"real paid bookings must appear in organizer-wide reporting");
@@ -501,6 +509,9 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
         answers:{accommodation:"yes",food:"Vegetarian"}}]};
     const defaultBooking=await db.createPaidBooking(defaultsCommand);
     assert.equal(defaultBooking.totalMinor,340000);
+    const seminarRoster=await db.listPaidAttendeeRoster(defaultsEvent.id,"org_default");
+    assert.equal(seminarRoster.length,1);
+    assert.deepEqual(seminarRoster[0].answers,{accommodation:"yes",food:"Vegetarian"});
     const noHotel=await db.createPaidBooking({...defaultsCommand,key:"declines-room",
       attendees:[{...defaultsCommand.attendees[0],
         answers:{accommodation:"no",food:"Non-vegetarian"}}]});

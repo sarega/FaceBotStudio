@@ -1,5 +1,5 @@
 import { listCoupons, upsertCoupon, deleteCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
-import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
+import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
@@ -771,6 +771,13 @@ export class PostgresAppDatabase implements AppDatabase {
     return this.runPaidCommand(input.eventId, (ownerId) => {
       if (ownerId !== input.organizationId) throw new PaidBookingError("event_not_found");
       return managePaidBooking(input);
+    });
+  }
+
+  async listPaidAttendeeRoster(eventId: string, organizationId: string, limit=10000) {
+    return this.runPaidCommand(eventId,(ownerId)=>{
+      if(ownerId!==organizationId) throw new PaidBookingError("event_not_found");
+      return listPaidAttendeeRoster(eventId,limit);
     });
   }
 

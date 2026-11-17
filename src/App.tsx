@@ -10526,6 +10526,7 @@ export default function App() {
           <AnimatePresence mode="wait">
           {activeTab === "event" && (
             <EventWorkspaceScreen
+              apiFetch={apiFetch}
               eventWorkspaceView={eventWorkspaceView}
               selectedEvent={selectedEvent}
               getEventStatusTone={getEventStatusTone}
@@ -10929,6 +10930,7 @@ export default function App() {
                 </>
               )}
               <RegistrationsScreen
+                apiFetch={apiFetch}
                 language={language}
                 filteredRegistrations={filteredRegistrations}
                 registrationAvailability={registrationAvailability}

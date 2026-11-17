@@ -2,6 +2,7 @@ import { EventDescriptionContent } from "../../../components/EventDescriptionCon
 import type { CSSProperties } from "react";
 import {
   useState,
+  useEffect,
   type ComponentProps,
   type Dispatch,
   type ReactNode,
@@ -163,6 +164,7 @@ type EventWorkspaceScreenProps = {
   eventMapEmbedUrl: string;
   registrationCapacity: RegistrationCapacityInfo;
   activeAttendeeCount: number;
+  apiFetch?: (input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
   handleNavigateToTab: (tabId: string) => void;
   emailReadinessLabel: string;
   emailStatus: AdminEmailStatusResponse | null;
@@ -475,6 +477,7 @@ export function EventWorkspaceScreen({
   eventMapEmbedUrl,
   registrationCapacity,
   activeAttendeeCount,
+  apiFetch,
   handleNavigateToTab,
   emailReadinessLabel,
   emailStatus,
@@ -519,6 +522,24 @@ export function EventWorkspaceScreen({
   eventWorkspacePanelCollapsed,
   onToggleEventWorkspacePanelCollapsed,
 }: EventWorkspaceScreenProps) {
+  const [paidSeats,setPaidSeats]=useState<{eventId:string;capacity:number;occupied:number}|null>(null);
+  useEffect(()=>{
+    if(!apiFetch || !selectedEventId)return;
+    const controller=new AbortController();
+    apiFetch("/api/events/"+encodeURIComponent(selectedEventId)+"/paid-registration/summary",
+      {signal:controller.signal}).then(async response=>{
+      if(!response.ok)throw new Error("No paid summary");
+      return response.json();
+    }).then(data=>{
+      if(controller.signal.aborted)return;
+      const summary=data.summary;
+      setPaidSeats(summary ? {eventId:selectedEventId,
+        capacity:Number(summary.capacity),
+        occupied:Number(summary.confirmed_attendees)+Number(summary.held_attendees)} : null);
+    }).catch(()=>{if(!controller.signal.aborted)setPaidSeats(null);});
+    return ()=>controller.abort();
+  },[apiFetch,selectedEventId]);
+  const currentPaidSeats=paidSeats?.eventId===selectedEventId?paidSeats:null;
   const [mobileWorkspaceBrowserOpen, setMobileWorkspaceBrowserOpen] = useState(false);
   const [publicMediaUploadKey, setPublicMediaUploadKey] = useState("");
   const [publicSetupPanel, setPublicSetupPanel] = useState<PublicSetupPanel>("essentials");
@@ -1022,7 +1043,10 @@ export function EventWorkspaceScreen({
                       className="mt-1"
                       items={[
                         <>Window {timingInfo.registrationLabel}</>,
-                        registrationCapacity.limit === null ? "Unlimited capacity" : `Capacity ${activeAttendeeCount}/${registrationCapacity.limit}`,
+                        currentPaidSeats ?
+                          "Paid capacity "+String(activeAttendeeCount+currentPaidSeats.occupied)+"/"+String(currentPaidSeats.capacity) :
+                          registrationCapacity.limit === null ? "Unlimited capacity" :
+                            "Legacy capacity "+String(activeAttendeeCount)+"/"+String(registrationCapacity.limit),
                         settings.reg_unique_name !== "0" ? "Duplicate guard on" : "Duplicate guard off",
                       ]}
                     />
@@ -1030,7 +1054,13 @@ export function EventWorkspaceScreen({
                 </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   <div>
-                    <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Max Capacity</label>
+                    <label className="mb-1 block text-xs font-bold uppercase text-slate-500">
+                      {currentPaidSeats?"Legacy Max Capacity":"Max Capacity"}
+                    </label>
+                    {currentPaidSeats&&<p className="mb-2 text-xs text-amber-700">
+                      Paid Registration: {activeAttendeeCount+currentPaidSeats.occupied}/{currentPaidSeats.capacity} seats.
+                      Paid seat capacity is configured under Registration Settings, not this legacy field.
+                    </p>}
                     <input
                       type="number"
                       value={settings.reg_limit}

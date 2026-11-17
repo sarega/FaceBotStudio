@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.2",
+    date: "2026-11-17",
+    title: "Unified Event attendees, booking capacity and hotel roster export",
+    features: [
+      "Event Registrations and Stats now include paid booking attendees alongside legacy registrations",
+      "Group bookings display every person individually with customer and booking identity",
+      "Excel and CSV exports support all named attendees and seminar choices across Events",
+    ],
+  },
+  {
     version: "0.11.1",
     date: "2026-11-17",
     title: "Unified Registration Settings, Coupons and Slip Review UI",

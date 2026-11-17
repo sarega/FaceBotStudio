@@ -1,3 +1,6 @@
+import { useEffect, useMemo, useState } from "react";
+import { PaidAttendeeRoster } from "./PaidAttendeeRoster";
+import type { PaidRosterPerson,PaidRosterSummary } from "./paidRosterTypes";
 import type { ReactNode } from "react";
 import {
   Activity,
@@ -120,6 +123,7 @@ type RegistrationsScreenProps = {
   statusUpdateLoading: boolean;
   statusUpdateMessage: string;
   language: AppLanguage;
+  apiFetch?: (input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 };
 
 export function RegistrationsScreen({
@@ -170,7 +174,58 @@ export function RegistrationsScreen({
   statusUpdateLoading,
   statusUpdateMessage,
   language,
+  apiFetch,
 }: RegistrationsScreenProps) {
+  const [paidPeople,setPaidPeople]=useState<PaidRosterPerson[]>([]);
+  const [paidSummary,setPaidSummary]=useState<PaidRosterSummary|null>(null);
+  const [paidError,setPaidError]=useState("");
+  const [paidRevision,setPaidRevision]=useState(0);
+  useEffect(()=>{
+    const update=()=>setPaidRevision(n=>n+1);
+    window.addEventListener("meetrix:paid-booking-updated",update);
+    return ()=>window.removeEventListener("meetrix:paid-booking-updated",update);
+  },[]);
+  useEffect(()=>{
+    if(!apiFetch||!selectedEventId)return;
+    let mounted=true;
+    const controller=new AbortController();
+    apiFetch("/api/events/"+encodeURIComponent(selectedEventId)+"/paid-registration/attendees",
+      {signal:controller.signal}).then(async res=>{
+      if(!res.ok)throw new Error("Could not load paid attendees");
+      return res.json();
+    }).then(result=>{
+      if(mounted){setPaidPeople(result.attendees??[]);setPaidSummary(result.summary??null);setPaidError("");}
+    }).catch(()=>{
+      if(mounted){setPaidPeople([]);setPaidSummary(null);setPaidError("ไม่สามารถโหลดรายชื่อ Paid Booking ได้");}
+    });
+    return ()=>{mounted=false;controller.abort();};
+  },[apiFetch,selectedEventId,paidRevision]);
+  const filteredPaid=useMemo(()=>{
+    const search=registrationListQuery.trim().toLowerCase();
+    return paidPeople.filter(person=>(!search||
+      [person.first_name,person.last_name,person.booking_reference,
+        person.customer_first_name,person.customer_last_name,person.customer_email]
+        .join(" ").toLowerCase().includes(search)) &&
+      (registrationStatusFilter==="all" ||
+       registrationStatusFilter==="checked-in" && person.checked_in_ms!=null ||
+       registrationStatusFilter==="cancelled" && ["expired","cancelled"].includes(person.booking_state) ||
+       registrationStatusFilter==="registered" && person.checked_in_ms==null &&
+         ["confirmed","awaiting_payment","verification_pending"].includes(person.booking_state)));
+  },[paidPeople,registrationListQuery,registrationStatusFilter]);
+  const paidReserved=paidSummary?Number(paidSummary.confirmed_attendees)+Number(paidSummary.held_attendees):0;
+  const shownOccupied=activeAttendeeCount+paidReserved;
+  const shownCapacity=paidSummary?Number(paidSummary.capacity):registrationCapacity.limit;
+  const shownRemaining=shownCapacity==null?null:Math.max(0,shownCapacity-shownOccupied);
+  const shownPercent=shownCapacity==null?0:Math.min(100,Math.round(shownOccupied/shownCapacity*100));
+  const shownTotal=registrationsCount+(paidSummary?Number(paidSummary.attendees):0);
+  const shownChecked=checkedInCount+(paidSummary?Number(paidSummary.checked_in_attendees):0);
+  const shownRegistered=registeredCount+(paidSummary?
+    Number(paidSummary.confirmed_attendees)+Number(paidSummary.held_attendees)-Number(paidSummary.checked_in_attendees):0);
+  const shownCancelled=cancelledCount+paidPeople.filter(person=>
+    ["expired","cancelled"].includes(person.booking_state)).length;
+  const shownCheckinRate=shownChecked+shownRegistered>0?
+    Math.round(100*shownChecked/(shownChecked+shownRegistered)):0;
+
   const t = (key: string, fallback: string) => translate(language, `registrations.${key}`, fallback);
   const statusLabel = (status: string) => t(`status.${status}`, status);
   const formatDate = (value: string) => new Date(value).toLocaleString(language === "th" ? "th-TH" : "en-US");
@@ -230,16 +285,15 @@ export function RegistrationsScreen({
               <StatusLine
                 className="mt-0.5"
                 items={[
-                  `${filteredRegistrations.length} ${t("results", "results")}`,
+                  String(filteredRegistrations.length+filteredPaid.length)+" "+t("results", "results"),
                   registrationAvailability.label,
                 ]}
               />
               <p className="text-xs text-slate-500">
-                {registrationCapacity.limit === null
-                  ? `${activeAttendeeCount} ${t("activeAttendees", "active attendees")}. ${t("searchProgressive", "Search fast, then progressively load more rows when this event gets large.")}`
-                  : registrationCapacity.remaining === 0
-                  ? `${t("capacityFull", "Capacity is full.")} ${activeAttendeeCount} ${t("of", "of")} ${registrationCapacity.limit} ${t("seatsOccupied", "seats are occupied, so new registrations are blocked.")}`
-                  : `${activeAttendeeCount} ${t("of", "of")} ${registrationCapacity.limit} ${t("seatsFilled", "seats filled.")} ${registrationCapacity.remaining} ${t("seatsRemaining", "seats remaining before registration closes for capacity.")}`}
+                {paidSummary
+                  ? String(shownOccupied)+"/"+String(shownCapacity)+" ที่นั่งจอง/ยืนยันแล้ว · "+
+                    String(shownRemaining)+" คงเหลือ (รวม Paid Booking)"
+                  : String(activeAttendeeCount)+" ผู้เข้าร่วมจากระบบ Event เดิม"}
               </p>
             </div>
             <InlineActionsMenu label={t("actions", "Actions")} tone="neutral">
@@ -248,7 +302,7 @@ export function RegistrationsScreen({
                 tone="neutral"
               >
                 <Download className="h-3.5 w-3.5" />
-                <span className="font-medium">{t("exportCsv", "Export CSV")}</span>
+                <span className="font-medium">Export ทุกคน (Excel / CSV)</span>
               </MenuActionLink>
             </InlineActionsMenu>
           </div>
@@ -297,12 +351,18 @@ export function RegistrationsScreen({
               </span>
             </div>
           )}
-          <div className="max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden">
+          {paidError && <p role="alert" className="p-3 text-xs text-red-700">
+            {paidError} · โปรดตรวจสอบก่อน Export รายชื่อ
+          </p>}
+          <PaidAttendeeRoster people={filteredPaid} total={paidPeople.length}
+            onRefresh={()=>setPaidRevision(n=>n+1)}/>
+          <div className={paidPeople.length>0 && registrationsCount===0 ?
+            "hidden" : "max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden"}>
             {filteredRegistrations.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
                 {deferredRegistrationListQuery || registrationStatusFilter !== "all"
                   ? t("noMatch", "No attendees match this filter.")
-                  : t("noRegistrations", "No registrations yet.")}
+                  : paidPeople.length>0?"ไม่มีรายชื่อจากระบบเดิม (Legacy)":t("noRegistrations", "No registrations yet.")}
               </div>
             ) : (
               visibleRegistrations.map((registration) => (
@@ -365,7 +425,8 @@ export function RegistrationsScreen({
               ))
             )}
           </div>
-          <div className="hidden max-h-[38rem] overflow-auto md:block">
+          <div className={paidPeople.length>0 && registrationsCount===0 ?
+            "hidden" : "hidden max-h-[38rem] overflow-auto md:block"}>
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                 <tr>
@@ -395,7 +456,7 @@ export function RegistrationsScreen({
                     <td colSpan={8} className="px-4 py-10 text-center text-slate-400 italic">
                       {deferredRegistrationListQuery || registrationStatusFilter !== "all"
                         ? t("noMatch", "No attendees match this filter.")
-                        : t("noRegistrations", "No registrations yet.")}
+                        : paidPeople.length>0?"ไม่มีรายชื่อจากระบบเดิม (Legacy)":t("noRegistrations", "No registrations yet.")}
                     </td>
                   </tr>
                 ) : (
@@ -470,7 +531,8 @@ export function RegistrationsScreen({
               </tbody>
             </table>
           </div>
-          <div className="flex flex-col gap-2 border-t border-slate-100 px-3 py-2.5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+          <div className={paidPeople.length>0 && registrationsCount===0 ? "hidden" :
+            "flex flex-col gap-2 border-t border-slate-100 px-3 py-2.5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-4"}>
             <p>
               {t("showing", "Showing")} {visibleRegistrations.length} {t("of", "of")} {filteredRegistrations.length} {t("attendees", "attendees")}
             </p>
@@ -576,36 +638,41 @@ export function RegistrationsScreen({
             </div>
             <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
           </div>
+          {paidSummary&&<div className="mb-3 grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="rounded-lg bg-amber-50 p-2"><strong className="block text-lg">{paidSummary.awaiting_payment_bookings}</strong>Booking รอชำระ</div>
+            <div className="rounded-lg bg-violet-50 p-2"><strong className="block text-lg">{paidSummary.pending_review_bookings}</strong>Booking รอตรวจสลิป</div>
+            <div className="rounded-lg bg-emerald-50 p-2"><strong className="block text-lg">{paidSummary.confirmed_bookings}</strong>Booking ยืนยันแล้ว</div>
+          </div>}
           <div className="space-y-2.5">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("seatCapacity", "Seat Capacity")}</p>
                   <p className="mt-1 text-2xl font-bold text-slate-900">
-                    {registrationCapacity.limit === null ? activeAttendeeCount : `${activeAttendeeCount}/${registrationCapacity.limit}`}
+                    {shownCapacity === null ? shownOccupied : String(shownOccupied)+"/"+String(shownCapacity)}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
-                    {registrationCapacity.limit === null
+                    {shownCapacity === null
                       ? t("noCapacityLimit", "No hard capacity limit is configured for this event.")
-                      : registrationCapacity.remaining === 0
+                      : shownRemaining === 0
                       ? t("noSeatsRemaining", "No seats remaining. Registration now stops at capacity.")
-                      : `${registrationCapacity.remaining} ${t("seatsAutoClose", "seats remain before registration auto-closes for capacity.")}`}
+                      : `${shownRemaining} ${t("seatsAutoClose", "seats remain before registration auto-closes for capacity.")}`}
                   </p>
                 </div>
-                {registrationCapacity.limit !== null && (
+                {shownCapacity !== null && (
                   <div className="text-right">
                     <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("filled", "Filled")}</p>
-                    <p className="mt-1 text-lg font-bold text-slate-900">{registrationCapacity.fillPercent}%</p>
+                    <p className="mt-1 text-lg font-bold text-slate-900">{shownPercent}%</p>
                   </div>
                 )}
               </div>
-              {registrationCapacity.limit !== null && (
+              {shownCapacity !== null && (
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
                   <div
                     className={`h-full rounded-full transition-[width] ${
-                      registrationCapacity.isFull ? "bg-rose-500" : "bg-blue-600"
+                      shownRemaining === 0 ? "bg-rose-500" : "bg-blue-600"
                     }`}
-                    style={{ width: `${registrationCapacity.fillPercent}%` }}
+                    style={{ width: `${shownPercent}%` }}
                   />
                 </div>
               )}
@@ -617,40 +684,40 @@ export function RegistrationsScreen({
                 className={statsCardClass("all", "border-slate-200 bg-white")}
                 onClick={() => onRegistrationStatusFilterChange("all")}
                 aria-pressed={registrationStatusFilter === "all"}
-                aria-label={`${t("total", "Total")}: ${registrationsCount}`}
+                aria-label={`${t("total", "Total")}: ${shownTotal}`}
               >
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("total", "Total")}</p>
-                <p className="mt-1 text-base font-bold text-slate-900">{registrationsCount}</p>
+                <p className="mt-1 text-base font-bold text-slate-900">{shownTotal}</p>
               </button>
               <button
                 type="button"
                 className={statsCardClass("registered", "border-blue-100 bg-blue-50")}
                 onClick={() => onRegistrationStatusFilterChange("registered")}
                 aria-pressed={registrationStatusFilter === "registered"}
-                aria-label={`${t("registered", "Registered")}: ${registeredCount}`}
+                aria-label={`${t("registered", "Registered")}: ${shownRegistered}`}
               >
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">{t("registered", "Registered")}</p>
-                <p className="mt-1 text-base font-bold text-blue-700">{registeredCount}</p>
+                <p className="mt-1 text-base font-bold text-blue-700">{shownRegistered}</p>
               </button>
               <button
                 type="button"
                 className={statsCardClass("checked-in", "border-emerald-100 bg-emerald-50")}
                 onClick={() => onRegistrationStatusFilterChange("checked-in")}
                 aria-pressed={registrationStatusFilter === "checked-in"}
-                aria-label={`${t("checked", "Checked")}: ${checkedInCount}`}
+                aria-label={`${t("checked", "Checked")}: ${shownChecked}`}
               >
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-600">{t("checked", "Checked")}</p>
-                <p className="mt-1 text-base font-bold text-emerald-700">{checkedInCount}</p>
+                <p className="mt-1 text-base font-bold text-emerald-700">{shownChecked}</p>
               </button>
               <button
                 type="button"
                 className={statsCardClass("cancelled", "border-rose-100 bg-rose-50")}
                 onClick={() => onRegistrationStatusFilterChange("cancelled")}
                 aria-pressed={registrationStatusFilter === "cancelled"}
-                aria-label={`${t("cancelled", "Cancelled")}: ${cancelledCount}`}
+                aria-label={`${t("cancelled", "Cancelled")}: ${shownCancelled}`}
               >
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-rose-600">{t("cancelled", "Cancelled")}</p>
-                <p className="mt-1 text-base font-bold text-rose-700">{cancelledCount}</p>
+                <p className="mt-1 text-base font-bold text-rose-700">{shownCancelled}</p>
               </button>
             </div>
 
@@ -659,7 +726,7 @@ export function RegistrationsScreen({
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{t("checkInRate", "Check-in Rate")}</p>
                 <p className="mt-1 text-xs text-slate-500">{registrationAvailability.helper}</p>
               </div>
-              <p className="text-lg font-bold text-violet-700">{checkInRate}%</p>
+              <p className="text-lg font-bold text-violet-700">{paidSummary?shownCheckinRate:checkInRate}%</p>
             </div>
           </div>
         </div>
@@ -667,7 +734,7 @@ export function RegistrationsScreen({
         <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h3 className="text-base font-semibold">{t("selectedTicket", "Selected Ticket")}</h3>
+              <h3 className="text-base font-semibold">{selectedRegistration?t("selectedTicket", "Selected Ticket"):"Legacy Ticket Preview"}</h3>
               <p className="text-xs text-slate-500">{t("selectedTicketHint", "Click a registration row to preview, download, and edit status.")}</p>
             </div>
             {selectedRegistration && (
@@ -679,7 +746,7 @@ export function RegistrationsScreen({
 
           {!selectedRegistration ? (
             <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
-              {t("noAttendeeSelected", "No attendee selected yet.")}
+              {paidPeople.length>0?"Paid Booking tickets are issued after approval in Slip Review.":t("noAttendeeSelected", "No attendee selected yet.")}
             </div>
           ) : (
             <div className="space-y-3">

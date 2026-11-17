@@ -1086,6 +1086,7 @@ export interface AppDatabase {
   readPaidMessengerStatus(eventId: string, pageId: string, senderId: string, reference: string): Promise<PaidMessengerStatus | undefined>;
   readPaidMessengerCustomer(eventId: string, pageId: string, senderId: string): Promise<string | undefined>;
   readPaidEventSummary(eventId: string, organizationId: string): Promise<PaidRow | undefined>;
+  listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number): Promise<PaidRow[]>;
   readPaidAdminBooking(eventId: string, organizationId: string, reference: string): Promise<PaidRow | undefined>;
   managePaidBooking(input: PaidAdminAction): Promise<{ status: string; payment_status: string; version: number; due_at: string }>;
   listPaidReviewQueue(eventId: string, organizationId: string, offset: number, reference?: string): Promise<PaidRow[]>;
