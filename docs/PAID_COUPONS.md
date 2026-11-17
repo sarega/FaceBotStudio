@@ -8,7 +8,9 @@ In the selected Event, open **Registrations > Coupons & Promotions**. Coupons be
 - **Fixed amount**: THB discount against the eligible subtotal, capped at the subtotal.
 - **100% Free**: the entire booking total becomes THB 0.
 - Set **Maximum uses** and **Uses per account** as needed. Blank = unlimited.
-- Edit/disable rules from the coupon list. Rule edits do not recalculate booked invoices.
+- Select **Edit** to change a coupon's discount, dates, quota or Active state without changing its code. Rule edits do not recalculate booked invoices.
+- Select **Duplicate** to copy the rules into a new coupon. Enter a new code and click Create.
+- Select **Delete** and confirm to permanently delete an unused coupon. A coupon with **any booking history** cannot be deleted, even if those bookings expired. To stop using a coupon with history, edit it and uncheck **Active**; the original booking audit trail remains intact.
 - A single booking accepts at most one coupon.
 
 ## Customer journey

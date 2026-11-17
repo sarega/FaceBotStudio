@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.1",
+    date: "2026-11-17",
+    title: "Coupon management: edit, duplicate and safe delete",
+    features: [
+      "Fixed white screen caused by PostgreSQL timestamp formatting in coupon editing",
+      "Separate Edit, Duplicate and Delete actions with clearer confirmation",
+      "Used coupons can be disabled while their booking history remains intact",
+    ],
+  },
+  {
     version: "0.10.0",
     date: "2026-11-17",
     title: "Coupons & Promotions",

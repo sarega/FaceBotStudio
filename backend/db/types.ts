@@ -1071,6 +1071,7 @@ export interface AppDatabase {
   ping(): Promise<void>;
   listPaidCoupons(eventId: string): Promise<PaidRow[]>;
   savePaidCoupon(eventId: string, input: CouponInput): Promise<PaidRow>;
+  deletePaidCoupon(eventId: string, code: string): Promise<boolean>;
   quotePaidCoupon(eventId: string, customerId: string, code: string,
     subtotal: number): Promise<{ code: string; kind: string; discount_minor: number; total_minor: number }>;
   createPaidBooking(input: PaidBookingInput): Promise<PaidBookingReceipt>;

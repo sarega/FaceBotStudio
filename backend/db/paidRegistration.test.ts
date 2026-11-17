@@ -481,6 +481,10 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
        starts_ms:null,ends_ms:null,enabled:true},
     ];
     for (const rule of couponRules) await db.savePaidCoupon(couponEvent.id,rule);
+    await db.savePaidCoupon(couponEvent.id,{...couponRules[0],code:"UNUSED"});
+    assert.equal(await db.deletePaidCoupon(couponEvent.id,"unused"),true);
+    assert.equal(await db.deletePaidCoupon(couponEvent.id,"unused"),false);
+    await db.savePaidCoupon(couponEvent.id,{...couponRules[0],max_uses:2});
     assert.equal((await db.listPaidCoupons(couponEvent.id)).length,3);
     const couponQuote=await db.quotePaidCoupon(couponEvent.id,customer.id,"special20",340000);
     assert.equal(couponQuote.discount_minor,68000);
@@ -490,6 +494,7 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     const twenty=await db.createPaidBooking({...couponInput,key:"coupon-20",couponCode:"SPECIAL20"});
     assert.equal(twenty.totalMinor,272000);
     assert.equal(twenty.discountMinor,68000);
+    await assert.rejects(db.deletePaidCoupon(couponEvent.id,"SPECIAL20"),/coupon_has_history/);
     assert.equal(((await db.readOwnedPaidBooking(couponEvent.id,twenty.id,customer.id))?.coupon as { code: string } | undefined)?.code,"SPECIAL20");
     assert.deepEqual(await db.createPaidBooking({...couponInput,key:"coupon-20",couponCode:"SPECIAL20"}),twenty);
     const fixed=await db.createPaidBooking({...couponInput,key:"coupon-fixed",couponCode:"THB100"});

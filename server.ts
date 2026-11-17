@@ -17157,6 +17157,20 @@ async function startServer() {
         return res.status(500).json({error:"coupon_save_failed"});
       }
     });
+  app.delete("/api/events/:eventId/paid-registration/coupons/:code",
+    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
+      try {
+        const removed=await appDb.deletePaidCoupon(req.eventScope!.eventId,req.params.code);
+        if(!removed) return res.status(404).json({error:"coupon_not_found"});
+        await recordAudit(req,"paid_registration.coupon_deleted","event",req.eventScope!.eventId,
+          {code:req.params.code.toUpperCase()});
+        return res.set("Cache-Control","private, no-store").json({deleted:true});
+      } catch(error) {
+        if(error instanceof PaidBookingError)
+          return res.status(error.code==="coupon_has_history"?409:400).json({error:error.code});
+        return res.status(500).json({error:"coupon_delete_failed"});
+      }
+    });
   app.post("/api/public/events/:slug/paid-registration/coupon-preview",
     publicRegistrationRateLimit,requireVerifiedCustomer,async(req:AuthenticatedRequest,res)=>{
       try {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1 - 2026-11-17
+
+- Fix Coupons & Promotions white screen when editing saved coupons: PostgreSQL BIGINT date fields are returned as numeric strings. Parse timestamps into numbers and safely handle invalid dates before formatting datetime-local controls.
+- Replace ambiguous clickable coupon cards with explicit **Edit**, **Duplicate**, and **Delete** actions. Editing preserves the existing immutable code; Duplicate clones its settings into a new unsaved coupon that requires a new code.
+- Support permanent deletion of unused coupons through a scoped, authenticated DELETE API and database method; require a confirmation in the UI.
+- Prevent deletion when the coupon has any historical booking redemption, including expired holds. The UI explains to disable Active instead to retain financial audit history.
+- Add database and HTTP regression tests for unused-coupon removal, repeated removal, unauthorized deletion, historical deletion block and disabling coupons.
+- Verify Edit, Duplicate and Delete in Chrome at 390px/mobile and 1366px/desktop with PostgreSQL-shaped string timestamps and no runtime errors.
+
 ## 0.10.0 - 2026-11-17
 
 - Introduce Event-scoped Coupons & Promotions under Registrations, with editable, enable/disable rules and use counts. Support percentage, fixed THB, and complimentary (100% free) codes, optional active dates, overall quota and per-customer quota.

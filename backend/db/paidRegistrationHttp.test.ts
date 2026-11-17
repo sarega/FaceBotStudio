@@ -540,6 +540,18 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     // Coupons API: admin-only management, customer quote, one-use complimentary
     // booking, credentials, and no payment proof required.
     const couponAdminPath=origin+"/api/events/"+newExternalEvent.id+"/paid-registration/coupons";
+    const couponDraft={code:"TEMPDELETE",kind:"fixed",value_minor:500,
+      max_uses:1,per_customer_limit:1,starts_ms:null,ends_ms:null,enabled:true};
+    assert.equal((await fetch(couponAdminPath,{method:"PUT",headers:staffCreateHeaders,
+      body:JSON.stringify(couponDraft)})).status,200);
+    assert.equal((await fetch(couponAdminPath+"/TEMPDELETE",{method:"DELETE",
+      headers:headers("test-owner")})).status,403);
+    const deletedDraft=await fetch(couponAdminPath+"/TEMPDELETE",{method:"DELETE",
+      headers:staffCreateHeaders});
+    assert.equal(deletedDraft.status,200,await deletedDraft.clone().text());
+    assert.equal((await deletedDraft.json()).deleted,true);
+    assert.equal((await fetch(couponAdminPath+"/TEMPDELETE",{method:"DELETE",
+      headers:staffCreateHeaders})).status,404);
     const couponRule={code:"TESTFREE",kind:"free",value_minor:0,max_uses:1,
       per_customer_limit:1,starts_ms:null,ends_ms:null,enabled:true};
     const forbidden=await fetch(couponAdminPath,{headers:headers("test-owner")});
@@ -594,6 +606,14 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await overLimit.json()).error,"coupon_exhausted");
     const afterCoupon=await fetch(couponAdminPath,{headers:staffCreateHeaders});
     assert.equal((await afterCoupon.json()).coupons[0].uses,1);
+    const historicalDelete=await fetch(couponAdminPath+"/TESTFREE",{method:"DELETE",
+      headers:staffCreateHeaders});
+    assert.equal(historicalDelete.status,409);
+    assert.equal((await historicalDelete.json()).error,"coupon_has_history");
+    const disabled=await fetch(couponAdminPath,{method:"PUT",headers:staffCreateHeaders,
+      body:JSON.stringify({...couponRule,enabled:false})});
+    assert.equal(disabled.status,200);
+    assert.equal((await disabled.json()).coupon.enabled,0);
     await db.updateEvent(event.id, { status: "cancelled" });
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 404);

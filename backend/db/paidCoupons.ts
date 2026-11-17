@@ -49,6 +49,16 @@ export function* upsertCoupon(eventId: string, input: CouponInput): PaidCommand<
   const [result] = yield q("SELECT * FROM paid_coupons WHERE event_id=? AND code=?",eventId,c.code);
   return result;
 }
+/** Only unused coupons may be deleted; redemptions are a permanent financial audit trail. */
+export function* deleteCoupon(eventId: string, codeRaw: string): PaidCommand<boolean> {
+  const code = normalizeCouponCode(codeRaw);
+  if (!codePattern.test(code)) throw new PaidBookingError("coupon_invalid");
+  const [history] = yield q("SELECT COUNT(*) AS count FROM paid_coupon_redemptions WHERE event_id=? AND code=?",
+    eventId, code);
+  if (Number(history.count) > 0) throw new PaidBookingError("coupon_has_history");
+  const removed = yield q("DELETE FROM paid_coupons WHERE event_id=? AND code=? RETURNING code",eventId,code);
+  return removed.length > 0;
+}
 export function* applyCoupon(eventId: string,customerId: string,codeRaw: string,subtotal: number):
   PaidCommand<{code:string;kind:CouponKind;discount_minor:number;total_minor:number}> {
   const code = normalizeCouponCode(codeRaw);
