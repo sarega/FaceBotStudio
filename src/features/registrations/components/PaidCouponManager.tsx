@@ -5,6 +5,7 @@ type Coupon = {
   code: string; kind: "percent" | "fixed" | "free"; value_minor: number;
   max_uses: number | null; per_customer_limit: number | null;
   starts_ms: number | null; ends_ms: number | null; enabled: number; uses: number;
+  availability?: "active" | "disabled" | "scheduled" | "expired" | "exhausted"; server_now_ms?:number;
 };
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 const money = new Intl.NumberFormat("th-TH", {style:"currency",currency:"THB"});
@@ -24,6 +25,7 @@ function blank(): Coupon {
 export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:ApiFetch}) {
   const [open,setOpen]=useState(false);
   const [coupons,setCoupons]=useState<Coupon[]>([]);
+  const [configuredEvent,setConfiguredEvent]=useState<{id:string;slug:string}|null>(null);
   const [editing,setEditing]=useState<Coupon>(blank);
   const [editingCode,setEditingCode]=useState<string|null>(null);
   const [deleting,setDeleting]=useState<string|null>(null);
@@ -36,7 +38,10 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
       const response=await apiFetch(path);
       const payload=await response.json();
       if(!response.ok) throw new Error(payload.error||"Could not load coupons");
-      setCoupons(payload.coupons||[]);setError("");
+      setCoupons(payload.coupons||[]);
+      setConfiguredEvent(payload.event_id&&payload.event_slug?
+        {id:payload.event_id,slug:payload.event_slug}:null);
+      setError("");
     } catch(e) {setError(e instanceof Error?e.message:"Coupons unavailable");}
   }
   useEffect(()=>{if(open) void load();},[open,eventId]);
@@ -102,6 +107,12 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
     {open && <div className="mt-4 space-y-4">
       <p className="text-sm text-slate-600">One coupon per booking. Discounts apply after accommodation adjustments.
         Expired unpaid bookings release their usage quota automatically.</p>
+      {configuredEvent&&<p className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+        คูปองชุดนี้ใช้กับ Event:
+        <a className="ml-1 font-semibold underline" href={"/events/"+encodeURIComponent(configuredEvent.slug)}
+          target="_blank" rel="noopener noreferrer">{configuredEvent.slug}</a>
+        <span className="ml-2 font-mono text-[10px] opacity-70">{configuredEvent.id}</span>
+      </p>}
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {coupons.map(c=><div key={c.code} className={"space-y-2 rounded-lg border p-3 text-sm " +
           (editingCode===c.code?"border-blue-500 bg-blue-50":"border-slate-200")}>
@@ -111,7 +122,18 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
               c.kind==="percent"?(Number(c.value_minor)/100)+"%":money.format(Number(c.value_minor)/100)}</span>
           </div>
           <p className="text-xs text-slate-600">{Number(c.uses)} / {c.max_uses??"∞"} uses
-            · {Number(c.enabled)===1?"Active":"Disabled"}</p>
+            · {c.availability === "active" ? "Ready to use" :
+              c.availability === "scheduled" ? "Not started" :
+              c.availability === "expired" ? "Expired" :
+              c.availability === "exhausted" ? "Fully used" :
+              c.availability === "disabled" ? "Disabled" :
+              Number(c.enabled)===1 ? "Active" : "Disabled"}</p>
+          {c.availability === "scheduled" && <p className="text-xs text-amber-700">
+            Starts {new Date(Number(c.starts_ms)).toLocaleString("th-TH",{timeZone:"Asia/Bangkok"})} Bangkok
+          </p>}
+          {c.availability === "expired" && <p className="text-xs text-red-700">
+            Ended {new Date(Number(c.ends_ms)).toLocaleString("th-TH",{timeZone:"Asia/Bangkok"})} Bangkok
+          </p>}
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={()=>edit(c)} className="rounded-md border border-blue-300 px-2.5 py-2 font-semibold text-blue-700">
               Edit

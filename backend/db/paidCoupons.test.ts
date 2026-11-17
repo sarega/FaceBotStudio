@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { couponDiscount, normalizeCouponCode, validateCoupon } from "./paidCoupons";
+import { couponAvailabilityStatus, applyCoupon, couponDiscount, normalizeCouponCode, validateCoupon } from "./paidCoupons";
 
 test("coupon math uses exact integer minor units and caps fixed/free discounts", () => {
   assert.equal(couponDiscount("percent", 2000, 340000), 68000);
@@ -19,4 +19,17 @@ test("coupon configuration normalizes names and rejects invalid rules", () => {
   assert.throws(()=>validateCoupon({...base,code:"??"}),/invalid_coupon/);
   assert.throws(()=>validateCoupon({...base,max_uses:0}),/invalid_coupon/);
   assert.throws(()=>validateCoupon({...base,starts_ms:200,ends_ms:100}),/invalid_coupon/);
+});
+
+test("server distinguishes coupon not found, disabled, future, expired and active", () => {
+  const now=1794900000000;
+  assert.equal(couponAvailabilityStatus({enabled:1},now),"active");
+  assert.equal(couponAvailabilityStatus({enabled:"1",starts_ms:String(now-1000),ends_ms:String(now+1000)},now),"active");
+  assert.equal(couponAvailabilityStatus({enabled:0},now),"disabled");
+  assert.equal(couponAvailabilityStatus({enabled:1,starts_ms:now+1000},now),"scheduled");
+  assert.equal(couponAvailabilityStatus({enabled:1,ends_ms:now},now),"expired");
+  assert.equal(couponAvailabilityStatus({enabled:1,max_uses:10,uses:10},now),"exhausted");
+  const missing=applyCoupon("event","customer","EXAMPLE",10000);
+  missing.next();
+  assert.throws(()=>missing.next([]),/coupon_not_found/);
 });

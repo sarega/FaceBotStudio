@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.3 - 2026-11-17
+
+- Diagnose why an apparently enabled coupon is rejected in Public Event Checkout: split the former coupon_unavailable error into coupon_not_found (event/code mismatch), coupon_disabled, coupon_not_started, and coupon_expired.
+- Make saved coupon eligibility visible in Admin, calculated from the server clock with Active / Scheduled / Expired / Disabled / Fully Used states. Preserve quota accounting across event bookings and help distinguish active status from date/limit eligibility.
+- Show the coupon-owning Event ID and a direct link to the matching public Event in the Admin Coupons section, making mistaken event selection visible.
+- Harden activation state parsing for PostgreSQL numeric/string representations.
+- Add database and HTTP regression coverage for exact event binding and distinct coupon rejection reasons.
+- Production customer-specific coupon rejection could not be confirmed without the signed-in browser response; the new diagnostic status and returned error code enable precise follow-up.
+
 ## 0.10.2 - 2026-11-17
 
 - Replace the generic coupon verification failure in Public Event Checkout with actionable Thai/English explanations for disabled, expired, fully redeemed, stale pricing, unselected accommodation, expired customer session, and internal errors. Unexpected error codes are surfaced rather than silently hidden.

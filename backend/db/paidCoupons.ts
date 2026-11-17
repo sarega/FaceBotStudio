@@ -29,12 +29,26 @@ export function couponDiscount(kind: CouponKind, value: number, subtotal: number
   return kind === "free" ? subtotal : kind === "percent" ? Number((BigInt(subtotal) * BigInt(value)) / 10000n) :
     Math.min(subtotal, value);
 }
+export function couponAvailabilityStatus(row: {
+  enabled?: number | string; starts_ms?: number | string | null;
+  ends_ms?: number | string | null; uses?: number | string;
+  max_uses?: number | string | null;
+}, now = Date.now()): "active" | "disabled" | "scheduled" | "expired" | "exhausted" {
+  if (Number(row.enabled) !== 1) return "disabled";
+  if (row.starts_ms != null && Number(row.starts_ms) > now) return "scheduled";
+  if (row.ends_ms != null && Number(row.ends_ms) <= now) return "expired";
+  if (row.max_uses != null && row.uses != null && Number(row.uses) >= Number(row.max_uses)) return "exhausted";
+  return "active";
+}
+
 export function* listCoupons(eventId: string): PaidCommand<PaidRow[]> {
-  return yield q(`SELECT c.*, (SELECT COUNT(*) FROM paid_coupon_redemptions r
+  const rows = yield q(`SELECT c.*, (SELECT COUNT(*) FROM paid_coupon_redemptions r
     JOIN paid_bookings b ON b.id=r.booking_id WHERE r.event_id=c.event_id AND r.code=c.code
     AND (b.state IN ('confirmed','verification_pending') OR
     (b.state='awaiting_payment' AND b.due_ms>?))) AS uses
     FROM paid_coupons c WHERE c.event_id=? ORDER BY c.created_ms DESC`, Date.now(), eventId);
+  const now = Date.now();
+  return rows.map((row) => ({...row, availability: couponAvailabilityStatus(row,now), server_now_ms:now}));
 }
 export function* upsertCoupon(eventId: string, input: CouponInput): PaidCommand<PaidRow> {
   const c = validateCoupon(input);
@@ -65,8 +79,11 @@ export function* applyCoupon(eventId: string,customerId: string,codeRaw: string,
   if (!codePattern.test(code)) throw new PaidBookingError("coupon_invalid");
   const [c] = yield q("SELECT * FROM paid_coupons WHERE event_id=? AND code=?",eventId,code);
   const now = Date.now();
-  if (!c || c.enabled !== 1 || (c.starts_ms != null && Number(c.starts_ms)>now) ||
-    (c.ends_ms != null && Number(c.ends_ms)<=now)) throw new PaidBookingError("coupon_unavailable");
+  if (!c) throw new PaidBookingError("coupon_not_found");
+  const availability = couponAvailabilityStatus(c,now);
+  if (availability === "disabled") throw new PaidBookingError("coupon_disabled");
+  if (availability === "scheduled") throw new PaidBookingError("coupon_not_started");
+  if (availability === "expired") throw new PaidBookingError("coupon_expired");
   const [used] = yield q(`SELECT COUNT(*) AS total,
     COALESCE(SUM(CASE WHEN r.customer_id=? THEN 1 ELSE 0 END),0) AS personal
     FROM paid_coupon_redemptions r JOIN paid_bookings b ON b.id=r.booking_id

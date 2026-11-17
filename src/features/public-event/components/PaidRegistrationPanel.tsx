@@ -13,6 +13,10 @@ export function couponErrorMessage(code: string, locale: "th" | "en"): string {
   const messages: Record<string, [string, string]> = {
     coupon_invalid: ["รูปแบบโค้ดไม่ถูกต้อง กรุณาตรวจตัวอักษร", "Invalid code format. Check the spelling."],
     coupon_unavailable: ["ไม่พบโค้ดที่ใช้ได้กับงานนี้ หรือคูปองถูกปิด/หมดอายุ กรุณาตรวจโค้ดใน Promotions ของงานนี้", "This code is not active for this event. Check its code, dates and Active status in this event's Promotions."],
+    coupon_not_found: ["ไม่พบคูปองนี้ใน Event ที่กำลังลงทะเบียน กรุณาตรวจว่าเลือก Event เดียวกันในหน้า Admin", "Coupon not found for this event. Check that it was created under this same event in Admin."],
+    coupon_disabled: ["คูปองนี้ถูกปิด Active ในหน้า Admin", "This coupon is disabled in Admin."],
+    coupon_not_started: ["คูปองยังไม่ถึงเวลาเริ่มใช้งาน กรุณาตรวจ Start date ในหน้า Admin", "Coupon has not started yet. Check its Start date in Admin."],
+    coupon_expired: ["คูปองหมดอายุแล้ว กรุณาตรวจ End date ในหน้า Admin", "Coupon expired. Check its End date in Admin."],
     coupon_exhausted: ["คูปองใช้ครบจำนวนแล้ว หรือบัญชีนี้ใช้ครบสิทธิ์แล้ว", "Coupon limit reached, or this account has used its allocation."],
     quote_stale: ["ราคาได้รับการปรับปรุง กรุณารีเฟรชหน้าแล้วใช้โค้ดอีกครั้ง", "Prices changed. Refresh this event page, then apply the code again."],
     invalid_attendees: ["ประเภทผู้เข้าร่วมไม่ถูกต้อง กรุณารีเฟรชหน้าลงทะเบียน", "An attendee category is no longer valid. Refresh this page."],

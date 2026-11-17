@@ -17133,8 +17133,12 @@ async function startServer() {
 
   app.get("/api/events/:eventId/paid-registration/coupons",
     requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
-      try { return res.set("Cache-Control","private, no-store")
-        .json({coupons:await appDb.listPaidCoupons(req.eventScope!.eventId)}); }
+      try {
+        const event=await appDb.getEventById(req.eventScope!.eventId);
+        return res.set("Cache-Control","private, no-store")
+          .json({event_id:req.eventScope!.eventId,event_slug:event?.slug??null,
+            coupons:await appDb.listPaidCoupons(req.eventScope!.eventId)});
+      }
       catch {return res.status(500).json({error:"coupon_list_failed"});}
     });
   app.put("/api/events/:eventId/paid-registration/coupons",

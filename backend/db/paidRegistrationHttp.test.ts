@@ -561,7 +561,11 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(couponSaved.status,200,await couponSaved.clone().text());
     const couponsResponse=await fetch(couponAdminPath,{headers:staffCreateHeaders});
     assert.equal(couponsResponse.status,200);
-    assert.equal((await couponsResponse.json()).coupons[0].code,"TESTFREE");
+    const couponInfo=await couponsResponse.json();
+    assert.equal(couponInfo.coupons[0].code,"TESTFREE");
+    assert.equal(couponInfo.event_id,newExternalEvent.id);
+    assert.equal(couponInfo.event_slug,newExternalEvent.slug);
+    assert.equal(couponInfo.coupons[0].availability,"active");
     const couponPage=origin+"/api/public/events/"+newExternalEvent.slug;
     const couponPayload={pricing_version:Number(newExternalSettings?.version),
       coupon_code:"testfree",
@@ -575,6 +579,13 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(quote.subtotal_minor,65000);
     assert.equal(quote.discount_minor,65000);
     assert.equal(quote.total_minor,0);
+    const noSuchCoupon=await fetch(couponPage+"/paid-registration/coupon-preview",{
+      method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
+        "x-csrf-token":"fixture-csrf"},
+      body:JSON.stringify({...couponPayload,coupon_code:"DOESNOTEXIST"}),
+    });
+    assert.equal(noSuchCoupon.status,422);
+    assert.equal((await noSuchCoupon.json()).error,"coupon_not_found");
     const freeBookingResponse=await fetch(couponPage+"/paid-bookings",{
       method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
         "x-csrf-token":"fixture-csrf","Idempotency-Key":"coupon-free-http"},
@@ -614,6 +625,12 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       body:JSON.stringify({...couponRule,enabled:false})});
     assert.equal(disabled.status,200);
     assert.equal((await disabled.json()).coupon.enabled,0);
+    const disabledQuote=await fetch(couponPage+"/paid-registration/coupon-preview",{
+      method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
+        "x-csrf-token":"fixture-csrf"},body:JSON.stringify(couponPayload),
+    });
+    assert.equal(disabledQuote.status,422);
+    assert.equal((await disabledQuote.json()).error,"coupon_disabled");
     await db.updateEvent(event.id, { status: "cancelled" });
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 404);
