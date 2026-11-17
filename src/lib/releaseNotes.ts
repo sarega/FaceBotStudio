@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.8",
+    date: "2026-11-17",
+    title: "Cleaner public event and attendee booking experience",
+    features: [
+      "Compact expandable booking status, without repeating the signed-in profile",
+      "Public event language switch (TH / EN) and smaller, more consistent typography",
+      "Single-page scrolling layout with no sticky booking sidebar",
+    ],
+  },
+  {
     version: "0.9.7",
     date: "2026-11-17",
     title: "Expired booking recovery and repeat registration",

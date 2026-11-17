@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.8 - 2026-11-17
+
+- Simplified the paid Public Event registration sidebar. Signed-in attendee identity is represented by the header avatar only; guest sign-in remains compact and email verification is still prompted when needed.
+- Previous paid bookings appear as short, expandable status strips (amber for payment required or expired, green for cleared/confirmed). The booking reference, amount, deadline and account recovery link are available inside the disclosure.
+- Added an attendee TH/EN toggle in the public Event header with local preference persistence. Localized the public header, account menu, main event metadata, paid registration form and configured seminar field labels. Event organizer-authored content is not machine-translated.
+- Reduced global Public Event small-text inflation, condensed spacing in the payment panel, removed the redundant paid registration status tile/hero action and eliminated the sticky long booking sidebar.
+- Simplified event header scrolling: only the compact attendee navbar is sticky. The branding bar participates in normal page flow, avoiding layout-height changes while scrolling.
+- Kept the sanitizer/editor HTML layout CSS unchanged to preserve parity; validated its browser/server HTML rendering tests.
+- Verified Public Event with the published seminar payload and mocked customer booking at 390px and 1366px widths: no page overflow, language switching and persistence, no duplicate signed-in card, collapsed pending booking, and no nested sticky sidebar.
+
 ## 0.9.7 - 2026-11-17
 
 - Fix Public Event Paid Registration dead-end: a cached previous booking no longer hides the new booking form, including when previous booking is expired, pending or confirmed.

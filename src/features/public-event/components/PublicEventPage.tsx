@@ -105,14 +105,14 @@ function isRecoveredPublicRegistrationResult(
   );
 }
 
-function AboutSection({ description }: { description: string }) {
+function AboutSection({ description, locale }: { description: string; locale: "th" | "en" }) {
   if (!description) return null;
 
   return (
     <section className="py-3">
       <div className="flex items-center gap-2">
         <Eye className="h-4 w-4 text-blue-600" />
-        <h2 className="text-base font-semibold text-slate-900 sm:text-lg">About This Event</h2>
+        <h2 className="text-base font-semibold text-slate-900 sm:text-lg">{locale === "th" ? "รายละเอียดงาน" : "About this event"}</h2>
       </div>
       <div className="mt-2"><EventDescriptionContent description={description} /></div>
     </section>
@@ -310,7 +310,16 @@ export function PublicEventPage({
   onChatInputKeyDown,
   themeControl,
 }: PublicEventPageProps) {
-  const [headerCondensed, setHeaderCondensed] = useState(false);
+  const [locale, setLocale] = useState<"th" | "en">(() =>
+    window.localStorage.getItem("meetrix-public-locale") === "en" ? "en" : "th");
+  function changeLocale(next: "th" | "en") {
+    setLocale(next);
+    window.localStorage.setItem("meetrix-public-locale", next);
+    document.documentElement.lang = next;
+  }
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
   const publicEventName = page?.event.name || "Event";
   const publicLocationLabel = page?.location.compact || "Venue details will be announced soon";
   const publicSummary = page?.event.summary || "";
@@ -350,7 +359,7 @@ export function PublicEventPage({
         : "Ticket checkout is being configured.";
     }
     if (paidRegistration) return page?.event.paid_registration_enabled
-      ? "Book a ticket, follow the payment instructions, and upload your slip for review."
+      ? (locale === "th" ? "จองและชำระเงิน จากนั้นส่งสลิปเพื่อรอยืนยัน" : "Book, pay, then upload your slip for review.")
       : "Paid registration is currently unavailable.";
     if (externalTicketing) return "Tickets are available through our ticketing partner.";
     switch (page?.event.registration_availability) {
@@ -373,7 +382,7 @@ export function PublicEventPage({
         .map((section) => {
           switch (section.id) {
             case "about":
-              return <AboutSection key="about" description={page.event.description} />;
+              return <AboutSection key="about" description={page.event.description} locale={locale} />;
             case "countdown":
               return <CountdownSection key="countdown" countdown={page.countdown} />;
             case "organizer":
@@ -398,31 +407,6 @@ export function PublicEventPage({
         .filter(Boolean)
     : [];
 
-  useEffect(() => {
-    let frameId = 0;
-
-    const updateHeaderState = () => {
-      frameId = 0;
-      const nextCondensed = window.scrollY > 40;
-      setHeaderCondensed((current) => (current === nextCondensed ? current : nextCondensed));
-    };
-
-    const handleScroll = () => {
-      if (frameId !== 0) return;
-      frameId = window.requestAnimationFrame(updateHeaderState);
-    };
-
-    updateHeaderState();
-    window.addEventListener("scroll", handleScroll, { passive: true });
-
-    return () => {
-      window.removeEventListener("scroll", handleScroll);
-      if (frameId !== 0) {
-        window.cancelAnimationFrame(frameId);
-      }
-    };
-  }, []);
-
   const publicThemeStyle = page
     ? ({ "--public-theme": page.appearance.theme_color } as CSSProperties)
     : undefined;
@@ -433,60 +417,23 @@ export function PublicEventPage({
         <nav className="public-customer-nav relative z-50 border-b" aria-label="Attendee navigation">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-1 px-3 py-1 sm:gap-3 sm:px-6 lg:px-8">
             <a href="/events" className="public-customer-nav-link text-xs font-semibold sm:text-sm">
-              ← <span className="sm:hidden">งานทั้งหมด</span><span className="hidden sm:inline">งานทั้งหมด / All events</span>
+              ← {locale === "th" ? "งานทั้งหมด" : "All events"}
             </a>
             <div className="flex min-w-0 items-center gap-1 sm:gap-3">
+              <div role="group" aria-label="Language / ภาษา" className="public-locale-switch inline-flex shrink-0 rounded-lg border p-0.5">
+                <button type="button" aria-pressed={locale === "th"} onClick={() => changeLocale("th")}
+                  className={locale === "th" ? "active" : ""}>TH</button>
+                <button type="button" aria-pressed={locale === "en"} onClick={() => changeLocale("en")}
+                  className={locale === "en" ? "active" : ""}>EN</button>
+              </div>
               {themeControl}
-              <PublicCustomerMenu compact />
+              <PublicCustomerMenu compact locale={locale} />
             </div>
           </div>
         </nav>
-        <AnimatePresence initial={false}>
-          {page && !headerCondensed && (
-            <motion.div
-              key="platform-brand-pane"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="hidden overflow-hidden sm:block"
-            >
-              <PlatformBrandPane brand={page.brand} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence initial={false}>
-          {page && headerCondensed && (
-            <motion.div
-              key="event-header-bar"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-              className="overflow-hidden"
-            >
-              <div className="public-page-event-header border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/90">
-                <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2 sm:px-6 lg:px-8">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{publicEventName}</p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    <StatusBadge tone={eventStatusTone}>
-                      {eventStatusLabel}
-                    </StatusBadge>
-                    <StatusBadge tone={availabilityTone}>
-                      {availabilityLabel}
-                    </StatusBadge>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </header>
 
-      {page && <div className="sm:hidden"><PlatformBrandPane brand={page.brand} /></div>}
+      {page && <div className="hidden sm:block"><PlatformBrandPane brand={page.brand} /></div>}
       <main className="mx-auto max-w-6xl px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-5">
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center">
@@ -535,10 +482,10 @@ export function PublicEventPage({
               <div className="surface-panel min-w-0 space-y-3 rounded-2xl p-3 sm:p-4">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <StatusBadge tone={eventStatusTone}>
-                    {eventStatusLabel}
+                    {locale === "th" && eventStatusLabel.toLowerCase() === "live" ? "กำลังเปิด" : eventStatusLabel}
                   </StatusBadge>
                   <StatusBadge tone={availabilityTone}>
-                    {availabilityLabel}
+                    {locale === "th" && availabilityLabel.toLowerCase() === "open" ? "เปิดรับ" : availabilityLabel}
                   </StatusBadge>
                 </div>
 
@@ -555,12 +502,12 @@ export function PublicEventPage({
 
                 <div className="grid grid-cols-2 gap-2">
                   <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Date & Time</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{locale === "th" ? "วันและเวลา" : "Date & Time"}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">{page.event.date_label}</p>
                     <p className="mt-1 text-xs text-slate-500">{page.event.timezone}</p>
                   </div>
                   <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Location</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{locale === "th" ? "สถานที่" : "Location"}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">
                       {page.location.title || publicLocationLabel}
                     </p>
@@ -570,9 +517,10 @@ export function PublicEventPage({
                   </div>
                 </div>
 
+                {!paidRegistration && (
                 <div className={`grid gap-2.5 ${customerTicketing || page.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
                   <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{customerTicketing ? "Ticket sales" : "Registration"}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{customerTicketing ? (locale === "th" ? "จำหน่ายบัตร" : "Ticket sales") : (locale === "th" ? "การลงทะเบียน" : "Registration")}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">{availabilityHelper}</p>
                   </div>
                   {customerTicketing ? (
@@ -606,8 +554,9 @@ export function PublicEventPage({
                   )}
                 </div>
 
+                )}
                 <div className="flex flex-wrap items-center gap-2">
-                  {customerTicketing && !customerCheckoutEnabled ? (
+                  {paidRegistration ? null : customerTicketing && !customerCheckoutEnabled ? (
                     <span aria-disabled="true" className="public-checkout-unavailable inline-flex cursor-not-allowed items-center justify-center rounded-full px-4.5 py-2.5 text-sm font-semibold">
                       Checkout unavailable
                     </span>
@@ -618,7 +567,7 @@ export function PublicEventPage({
                       rel={externalTicketing ? "noopener noreferrer" : undefined}
                       className="public-page-control inline-flex items-center justify-center rounded-full bg-blue-600 px-4.5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                     >
-                      {paidRegistration ? "Paid registration" : customerTicketing ? "Choose performance" : page.event.cta_label}
+                      {paidRegistration ? (locale === "th" ? "ลงทะเบียน" : "Register") : customerTicketing ? "Choose performance" : page.event.cta_label}
                     </a>
                   )}
                   {page.location.map_url && (
@@ -636,14 +585,15 @@ export function PublicEventPage({
               </div>
             </section>
 
-            <section className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,21.5rem)]">
+            <section className="mt-3 grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,21.5rem)]">
               <div className="order-2 min-w-0 divide-y divide-slate-200 xl:order-1">
                 {mainColumnSections}
               </div>
 
-              <aside id={customerTicketing ? "public-ticketing" : "public-registration"} className="order-1 space-y-4 xl:order-2 xl:sticky xl:top-5 xl:self-start">
+              <aside id={customerTicketing ? "public-ticketing" : "public-registration"} className="order-1 min-w-0 space-y-3 xl:order-2 xl:self-start">
                 {paidRegistration ? (
-                  <PaidRegistrationPanel key={page.event.slug} slug={page.event.slug} eventId={page.event.id} enabled={Boolean(page.event.paid_registration_enabled)} timezone={page.event.timezone} />
+                  <PaidRegistrationPanel key={page.event.slug} slug={page.event.slug} eventId={page.event.id}
+                    enabled={Boolean(page.event.paid_registration_enabled)} timezone={page.event.timezone} locale={locale} />
                 ) : customerTicketing ? (
                   <TicketSalesCard event={page.event} />
                 ) : externalTicketing ? (

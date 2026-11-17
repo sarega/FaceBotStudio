@@ -239,14 +239,67 @@ html.theme-dark .event-description-content figcaption { color: rgb(148 163 184);
   line-height: 1.65;
 }
 
+/* Keep intended utility sizes: the old global 16px/1.7 override inflated every
+   caption, button and form label, particularly in the booking sidebar. */
 .public-event-themed .text-sm {
-  font-size: 1rem !important;
-  line-height: 1.7 !important;
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
-
 .public-event-themed .text-xs {
-  font-size: 0.875rem !important;
-  line-height: 1.55 !important;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.public-locale-switch {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+.public-locale-switch button {
+  min-width: 2rem;
+  padding: 0.32rem 0.42rem;
+  border-radius: 0.35rem;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #475569;
+}
+.public-locale-switch button.active {
+  background: #fff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px #0f172a20;
+}
+.public-locale-switch button:focus-visible,
+.public-booking-notice summary:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+html.theme-dark .public-locale-switch {
+  background: #1e293b;
+  border-color: #475569;
+}
+html.theme-dark .public-locale-switch button { color: #cbd5e1; }
+html.theme-dark .public-locale-switch button.active {
+  background: #334155;
+  color: #fff;
+}
+.public-event-themed .public-booking-warning {
+  background: #fffbeb;
+  border-color: #fbbf24;
+  color: #92400e;
+}
+.public-event-themed .public-booking-neutral {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+}
+html.theme-dark .public-event-themed .public-booking-warning {
+  background: #422006;
+  border-color: #b45309;
+  color: #fde68a;
+}
+html.theme-dark .public-event-themed .public-booking-neutral {
+  background: #052e16;
+  border-color: #166534;
+  color: #bbf7d0;
 }
 
 .public-event-themed .bg-blue-600 {

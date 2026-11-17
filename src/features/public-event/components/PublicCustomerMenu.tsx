@@ -3,7 +3,9 @@ import { CalendarDays, ChevronDown, LogOut, Ticket, UserRound } from "lucide-rea
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
 
 /** Customer-only navigation. Never mixes staff/admin and attendee authentication. */
-export function PublicCustomerMenu({ compact = false }: { compact?: boolean }) {
+export function PublicCustomerMenu({ compact = false, locale = "th" }: {
+  compact?: boolean; locale?: "th" | "en";
+}) {
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -83,8 +85,8 @@ export function PublicCustomerMenu({ compact = false }: { compact?: boolean }) {
         <span className="block h-10 w-24 animate-pulse rounded-full bg-slate-200/50" aria-label="Checking account" />
       ) : !account ? (
         <div className="flex items-center gap-2">
-          <a href="/account/register" className="public-customer-guest-link rounded-lg px-2 py-2 text-xs font-semibold sm:text-sm">สมัคร<span className={compact ? "hidden sm:inline" : undefined}> / Register</span></a>
-          <a href="/account/login" className="public-customer-signin rounded-lg px-3 py-2 text-xs font-semibold sm:text-sm">เข้าสู่ระบบ<span className={compact ? "hidden sm:inline" : undefined}> / Sign in</span></a>
+          <a href="/account/register" className="public-customer-guest-link rounded-lg px-2 py-2 text-xs font-semibold sm:text-sm">{locale === "th" ? "สมัคร" : "Register"}</a>
+          <a href="/account/login" className="public-customer-signin rounded-lg px-3 py-2 text-xs font-semibold sm:text-sm">{locale === "th" ? "เข้าสู่ระบบ" : "Sign in"}</a>
         </div>
       ) : (
         <>
@@ -104,19 +106,19 @@ export function PublicCustomerMenu({ compact = false }: { compact?: boolean }) {
                 <p className="truncate text-xs opacity-75">{account.email}</p>
               </div>
               <a role="menuitem" href="/account" className="public-customer-item flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm">
-                <UserRound className="h-4 w-4" /> โปรไฟล์ / Profile
+                <UserRound className="h-4 w-4" /> {locale === "th" ? "โปรไฟล์" : "Profile"}
               </a>
               <a role="menuitem" href="/app/orders" className="public-customer-item flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm">
-                <Ticket className="h-4 w-4" /> การจอง / My Bookings
+                <Ticket className="h-4 w-4" /> {locale === "th" ? "การจองของฉัน" : "My Bookings"}
               </a>
               <a role="menuitem" href="/events" className="public-customer-item flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm">
-                <CalendarDays className="h-4 w-4" /> ดูงาน / Browse Events
+                <CalendarDays className="h-4 w-4" /> {locale === "th" ? "ดูงานทั้งหมด" : "Browse Events"}
               </a>
               <div className="my-1 border-t border-current/10" />
               <button type="button" role="menuitem" disabled={signingOut}
                 onClick={() => void signOut()}
                 className="public-customer-item flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm disabled:opacity-50">
-                <LogOut className="h-4 w-4" /> ออกจากระบบ / Sign out
+                <LogOut className="h-4 w-4" /> {locale === "th" ? "ออกจากระบบ" : "Sign out"}
               </button>
             </div>
           )}

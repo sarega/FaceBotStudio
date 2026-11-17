@@ -17,17 +17,25 @@ const errors: Record<string, string> = {
   CUSTOMER_APP_DISABLED: "Registration is currently unavailable.",
 };
 
-function SeminarInputs({ fields, values, onChange }: {
-  fields: PaidSeminarField[]; values?: Record<string, string>; onChange: (key: string, value: string) => void;
+function SeminarInputs({ fields, values, onChange, locale }: {
+  fields: PaidSeminarField[]; values?: Record<string, string>; locale: "th" | "en";
+  onChange: (key: string, value: string) => void;
 }) {
+  const thaiLabels: Record<string, string> = {
+    arrival: "วันเดินทางมา", departure: "วันเดินทางกลับ", accommodation: "ต้องการที่พัก",
+    room_preference: "ความต้องการห้องพัก", transport: "การเดินทาง", food: "อาหาร",
+    notes: "หมายเหตุเพิ่มเติม",
+  };
   return fields.map(({ key, required }) => {
     const definition = paidSeminarFields[key];
     const value = values?.[key] ?? "";
     return <label key={key} className="block text-sm">
-      {definition.label}{required ? " *" : ""}
+      {locale === "th" ? thaiLabels[key] : definition.label}{required ? " *" : ""}
       {definition.type === "boolean" ? (
         <select className={field} required={required} value={value} onChange={(event) => onChange(key, event.target.value)}>
-          <option value="">Select</option><option value="yes">Yes</option><option value="no">No</option>
+          <option value="">{locale === "th" ? "เลือก" : "Select"}</option>
+          <option value="yes">{locale === "th" ? "ใช่" : "Yes"}</option>
+          <option value="no">{locale === "th" ? "ไม่" : "No"}</option>
         </select>
       ) : definition.type === "date" ? (
         <input className={field} type="date" required={required} value={value} onChange={(event) => onChange(key, event.target.value)} />
@@ -38,7 +46,9 @@ function SeminarInputs({ fields, values, onChange }: {
   });
 }
 
-export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { slug: string; eventId: string; enabled: boolean; timezone: string }) {
+export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale = "th" }: {
+  slug: string; eventId: string; enabled: boolean; timezone: string; locale?: "th" | "en";
+}) {
   const [catalog, setCatalog] = useState<Catalog>();
   const [customerAccount, setCustomerAccount] = useState<CustomerAccount | null>(null);
   const [accountLoading, setAccountLoading] = useState(true);
@@ -162,98 +172,90 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
 
   const total = attendees.reduce((sum, row) => sum + (catalog?.categories.find(({ id }) => id === row.category_id)?.unit_minor ?? 0), 0);
   return (
-    <div className="surface-panel space-y-3 rounded-2xl p-3 sm:p-4">
-      <h2 className="text-lg font-semibold">ลงทะเบียน / Registration</h2>
-      <section className="paid-signup-card space-y-2 rounded-xl p-3" aria-label="Account access">
-        {accountLoading ? (
-          <p className="paid-signup-hint text-sm" role="status">กำลังตรวจสอบบัญชี / Checking account…</p>
-        ) : customerAccount ? (
-          <>
-            <p className="paid-signup-hint text-sm">
-              <strong>เข้าสู่ระบบแล้ว / Signed in</strong>
-              <span className="mt-1 block break-words">{customerAccount.first_name} {customerAccount.last_name}</span>
-              <span className="block break-all text-xs">{customerAccount.email}</span>
-            </p>
-            {!customerAccount.email_verified_at && (
-              <p className="paid-signup-note rounded-lg p-2 text-sm">
-                กรุณายืนยันอีเมลก่อนจอง / Verify your email before booking.
-              </p>
-            )}
-            <a className="paid-signup-primary inline-flex min-h-11 items-center justify-center rounded-lg px-4 py-2.5 text-center text-sm font-semibold"
-               href="#public-registration-form">
-              ลงทะเบียนเข้างาน / Book places
-            </a>
-          </>
-        ) : (
-          <>
-            <p className="paid-signup-hint text-sm">
-              สมัครบัญชีและยืนยันอีเมลก่อนจอง<br />
-              Create an account and verify your email.
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <a className="paid-signup-primary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
-                 href="/account/register" target="_blank" rel="noopener noreferrer">
-                สมัครบัญชี / Register
-              </a>
-              <a className="paid-signup-secondary inline-flex min-h-11 items-center justify-center rounded-lg px-3 py-2.5 text-center text-sm font-semibold"
-                 href="/account/login" target="_blank" rel="noopener noreferrer">
-                เข้าสู่ระบบ / Sign in
-              </a>
-            </div>
-          </>
-        )}
-      </section>
-      {catalog?.payment_mode === "external_manual" && <p role="status" className="paid-signup-note rounded-lg p-3 text-sm">
-        ชำระเงินภายนอก · ผู้จัดงานยืนยันภายหลัง<br />
-        Pay externally · Organizer confirms payment.
-      </p>}
-      {booking && (
-        <div role="status" className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">
-          <p className="font-semibold">การจองก่อนหน้า / Previous booking · {booking.status.replaceAll("_", " ")}</p>
-          <p className="break-all text-xs">Reference: {booking.reference}</p>
-          <p>{money.format(booking.total_due_minor / 100)}</p>
-          {booking.status === "expired" && <p>รายการเดิมหมดเวลาแล้ว สามารถเปิดรายการอีกครั้งหรือจองใหม่ได้ /
-            The previous hold expired. Reactivate or make a new booking.</p>}
-          {booking.status === "awaiting_payment" && <p>Pay by {new Intl.DateTimeFormat(undefined, {
-            dateStyle: "medium", timeStyle: "short", timeZone: timezone,
-          }).format(new Date(booking.due_at))} ({timezone})</p>}
-          <a className="paid-signup-secondary inline-flex min-h-10 items-center rounded-lg px-3 py-2 font-semibold"
-            href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>
-            {booking.status === "expired" ? "เปิดรายการอีกครั้ง / Reactivate booking" : "ดูรายการเดิม / View booking"}
-          </a>
+    <div className="surface-panel space-y-2.5 rounded-2xl p-3 sm:p-3.5">
+      <h2 className="text-base font-semibold">{locale === "th" ? "ลงทะเบียน" : "Registration"}</h2>
+      {!accountLoading && !customerAccount && (
+        <div className="paid-signup-card flex flex-wrap items-center gap-2 rounded-lg p-2 text-xs">
+          <span>{locale === "th" ? "เข้าสู่ระบบเพื่อจอง" : "Sign in to book"}</span>
+          <a className="paid-signup-primary rounded-md px-3 py-1.5 font-semibold" href="/account/login">
+            {locale === "th" ? "เข้าสู่ระบบ" : "Sign in"}</a>
+          <a className="paid-signup-secondary rounded-md px-3 py-1.5 font-semibold" href="/account/register">
+            {locale === "th" ? "สมัคร" : "Register"}</a>
         </div>
+      )}
+      {customerAccount && !customerAccount.email_verified_at && (
+        <p role="alert" className="paid-signup-note rounded-lg p-2 text-xs">
+          {locale === "th" ? "กรุณายืนยันอีเมลก่อนจอง" : "Verify your email before booking."}
+        </p>
+      )}
+      {booking && (
+        <details className={"public-booking-notice rounded-xl border px-3 py-2.5 text-xs " +
+          (booking.status === "awaiting_payment" || booking.status === "expired"
+            ? "public-booking-warning" : "public-booking-neutral")}>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-semibold">
+            <span className="flex min-w-0 items-center gap-2">
+              <span aria-hidden="true" className={"h-2 w-2 shrink-0 rounded-full " +
+                (booking.status === "awaiting_payment" || booking.status === "expired" ? "bg-amber-500" : "bg-emerald-500")} />
+              <span>{booking.status === "awaiting_payment"
+                ? (locale === "th" ? "มีรายการรอชำระเงิน" : "Payment pending")
+                : booking.status === "expired"
+                  ? (locale === "th" ? "รายการเดิมหมดเวลา" : "Previous booking expired")
+                  : booking.status === "verification_pending"
+                    ? (locale === "th" ? "รอตรวจสลิป" : "Slip under review")
+                    : booking.status === "confirmed"
+                      ? (locale === "th" ? "ยืนยันแล้ว" : "Confirmed")
+                      : booking.status.replaceAll("_", " ")}</span>
+            </span>
+            <span className="shrink-0 text-xs font-normal">{locale === "th" ? "รายละเอียด ▾" : "Details ▾"}</span>
+          </summary>
+          <div className="mt-2 space-y-2 border-t border-current/15 pt-2">
+            <p className="break-all opacity-75">{booking.reference}</p>
+            <p className="font-semibold">{money.format(booking.total_due_minor / 100)}</p>
+            {booking.status === "awaiting_payment" && <p>
+              {locale === "th" ? "ชำระก่อน" : "Pay by"} {new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", {
+                dateStyle: "medium", timeStyle: "short", timeZone: timezone,
+              }).format(new Date(booking.due_at))}
+            </p>}
+            <a className="paid-signup-secondary inline-flex min-h-10 items-center rounded-lg px-3 py-2 font-semibold"
+              href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>
+              {booking.status === "expired"
+                ? (locale === "th" ? "เปิดรายการอีกครั้ง" : "Reactivate booking")
+                : (locale === "th" ? "ดูการจอง" : "View booking")}
+            </a>
+          </div>
+        </details>
       )}
       {enabled && catalog && attendees.length > 0 ? (
         <form id="public-registration-form" onSubmit={submit} className="scroll-mt-24 space-y-4">
-          <p className="text-sm font-semibold">ลงทะเบียนใหม่ / New booking · เพิ่มผู้เข้าร่วม / Add attendees</p>
+          <p className="text-xs font-semibold opacity-75">{locale === "th" ? "จองใหม่ / เพิ่มผู้เข้าร่วม" : "New booking / Add attendees"}</p>
           <fieldset disabled={busy} className="space-y-3">
-            <label className="block text-sm font-medium">Primary contact name
+            <label className="block text-sm font-medium">{locale === "th" ? "ชื่อผู้ติดต่อ" : "Primary contact name"}
               <input className={field} required maxLength={180} value={contact} onChange={(event) => setContact(event.target.value)} />
             </label>
-            <SeminarInputs fields={catalog.fields.filter(({ scope }) => scope === "booking")} values={answers}
+            <SeminarInputs fields={catalog.fields.filter(({ scope }) => scope === "booking")} values={answers} locale={locale}
               onChange={(key, value) => setAnswers((current) => ({ ...current, [key]: value }))} />
             {attendees.map((row, index) => (
               <fieldset key={index} className="space-y-2 rounded-xl border border-slate-200 p-3">
-                <legend className="px-1 text-sm font-semibold">Attendee {index + 1}</legend>
-                <label className="block text-sm">Category
+                <legend className="px-1 text-sm font-semibold">{locale === "th" ? "ผู้เข้าร่วม" : "Attendee"} {index + 1}</legend>
+                <label className="block text-sm">{locale === "th" ? "ประเภท" : "Category"}
                   <select className={field} value={row.category_id} onChange={(event) => update(index, { category_id: event.target.value })}>
                     {catalog.categories.map((category) => <option key={category.id} value={category.id}>{category.label} · {category.unit_minor === 0 ? "ฟรี / Free" : money.format(category.unit_minor / 100)}</option>)}
                   </select>
                 </label>
-                <label className="block text-sm">First name
+                <label className="block text-sm">{locale === "th" ? "ชื่อ" : "First name"}
                   <input className={field} required maxLength={180} value={row.first_name} onChange={(event) => update(index, { first_name: event.target.value })} />
                 </label>
-                <label className="block text-sm">Last name
+                <label className="block text-sm">{locale === "th" ? "นามสกุล" : "Last name"}
                   <input className={field} required maxLength={180} value={row.last_name} onChange={(event) => update(index, { last_name: event.target.value })} />
                 </label>
-                <SeminarInputs fields={catalog.fields.filter(({ scope }) => scope === "attendee")} values={row.answers}
+                <SeminarInputs fields={catalog.fields.filter(({ scope }) => scope === "attendee")} values={row.answers} locale={locale}
                   onChange={(key, value) => update(index, { answers: { ...row.answers, [key]: value } })} />
-                {attendees.length > 1 && <button type="button" onClick={() => setAttendees((rows) => rows.filter((_, rowIndex) => rowIndex !== index))} className="text-sm text-blue-700 underline">Remove attendee</button>}
+                {attendees.length > 1 && <button type="button" onClick={() => setAttendees((rows) => rows.filter((_, rowIndex) => rowIndex !== index))} className="text-sm text-blue-700 underline">{locale === "th" ? "ลบผู้เข้าร่วม" : "Remove attendee"}</button>}
               </fieldset>
             ))}
-            {attendees.length < 100 && <button type="button" onClick={() => setAttendees((rows) => [...rows, { category_id: catalog.categories[0].id, first_name: "", last_name: "" }])} className="text-sm text-blue-700 underline">Add attendee</button>}
-            <p className="font-semibold">Total due {money.format(total / 100)}</p>
-            <button className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white" type="submit">{busy ? "Reserving…" : "Reserve places"}</button>
+            {attendees.length < 100 && <button type="button" onClick={() => setAttendees((rows) => [...rows, { category_id: catalog.categories[0].id, first_name: "", last_name: "" }])} className="text-sm text-blue-700 underline">{locale === "th" ? "+ เพิ่มผู้เข้าร่วม" : "+ Add attendee"}</button>}
+            <p className="font-semibold">{locale === "th" ? "ยอดชำระ" : "Total due"} {money.format(total / 100)}</p>
+            <button className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white" type="submit">{busy ? (locale === "th" ? "กำลังจอง…" : "Reserving…") : (locale === "th" ? "ยืนยันการจอง" : "Reserve places")}</button>
           </fieldset>
 
         </form>
