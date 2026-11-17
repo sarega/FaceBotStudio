@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.7 - 2026-11-17
+
+- Add configurable default answers to each customized Seminar question in Event Paid Registration Settings, including Accommodation needed (Yes/No). Defaults are populated as real editable answers for the first and every additional attendee.
+- Food Preference now supports either original free-text entry or a dropdown of 2–20 unique Admin-defined choices; switching to dropdown supplies Vegetarian and Non-vegetarian as editable starter options.
+- Admin can optionally choose a default Food option. The Public Event form uses those choices and defaults for the selected booking/attendee scope.
+- Server validates and persists configured options/defaults within existing paid_event_forms JSON (no schema migration); it rejects food answers outside the configured dropdown choices while retaining backward compatibility for Events with the old free-text field.
+- Add validation before settings save and regression tests for defaults, custom food lists, persisted catalogs, attendee responses, and accommodation discount calculations.
+- This change does not alter previously submitted booking answer snapshots or force any default on existing Events.
+
 ## 0.10.6 - 2026-11-17
 
 - Correct Coupon Apply error ordering: verify coupon code syntax independently instead of conflating a blank accommodation answer with coupon validity. YOGISUPPORT is a valid code under the shared normalization and formatting rules.

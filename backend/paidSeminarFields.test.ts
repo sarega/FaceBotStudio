@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { foodPreferencePresets, normalizePaidSeminarAnswers, parsePaidSeminarFields,
+  seminarDefaultAnswers } from "./paidSeminarFields";
+
+test("seminar form saves and restores accommodation default and selectable food options", () => {
+  const fields=parsePaidSeminarFields([
+    {key:"accommodation",scope:"attendee",required:true,defaultValue:"yes"},
+    {key:"food",scope:"attendee",required:true,defaultValue:"Vegetarian",options:[...foodPreferencePresets]},
+    {key:"arrival",scope:"booking",required:false,defaultValue:"2026-12-05"},
+  ]);
+  assert.ok(fields);
+  assert.deepEqual(seminarDefaultAnswers(fields,"attendee"),{
+    accommodation:"yes",food:"Vegetarian",
+  });
+  assert.deepEqual(seminarDefaultAnswers(fields,"booking"),{arrival:"2026-12-05"});
+  assert.deepEqual(parsePaidSeminarFields(JSON.parse(JSON.stringify(fields))),fields);
+  const accepted=normalizePaidSeminarAnswers(fields,"attendee",seminarDefaultAnswers(fields,"attendee"));
+  assert.deepEqual(accepted?.map(({key,value})=>[key,value]),[
+    ["accommodation","yes"],["food","Vegetarian"],
+  ]);
+  assert.ok(normalizePaidSeminarAnswers(fields,"attendee",{food:"Non-vegetarian",accommodation:"no"}));
+  assert.equal(normalizePaidSeminarAnswers(fields,"attendee",{food:"Other",accommodation:"yes"}),undefined);
+});
+
+test("custom food choices, free text, and historical field definitions remain compatible", () => {
+  const custom=parsePaidSeminarFields([
+    {key:"food",scope:"booking",required:false,options:["Vegan","Halal","Regular"],defaultValue:"Halal"},
+  ]);
+  assert.ok(custom);
+  assert.equal(normalizePaidSeminarAnswers(custom,"booking",{food:"Vegetarian"}),undefined);
+  assert.ok(normalizePaidSeminarAnswers(custom,"booking",{food:"Halal"}));
+  const legacy=parsePaidSeminarFields([{key:"food",scope:"attendee",required:false}]);
+  assert.deepEqual(legacy,[{key:"food",scope:"attendee",required:false}]);
+  assert.ok(legacy && normalizePaidSeminarAnswers(legacy,"attendee",{food:"I do not eat onion"}));
+});
+
+test("invalid seminar default configurations are rejected before saving",()=>{
+  const base={key:"accommodation",scope:"attendee",required:true};
+  assert.equal(parsePaidSeminarFields([{...base,defaultValue:"sometimes"}]),undefined);
+  assert.equal(parsePaidSeminarFields([{
+    key:"food",scope:"attendee",required:true,options:["Veg","Veg"],
+  }]),undefined);
+  assert.equal(parsePaidSeminarFields([{
+    key:"food",scope:"attendee",required:true,options:["Veg","Non-veg"],defaultValue:"Halal",
+  }]),undefined);
+  assert.equal(parsePaidSeminarFields([{
+    key:"notes",scope:"booking",required:false,options:["One","Two"],
+  }]),undefined);
+});

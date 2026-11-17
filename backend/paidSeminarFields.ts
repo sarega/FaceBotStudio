@@ -9,7 +9,16 @@ export const paidSeminarFields = {
 } as const;
 
 export type PaidSeminarKey = keyof typeof paidSeminarFields;
-export type PaidSeminarField = { key: PaidSeminarKey; scope: "booking" | "attendee"; required: boolean };
+export type PaidSeminarField = {
+  key: PaidSeminarKey; scope: "booking" | "attendee"; required: boolean;
+  /** Optional chosen answer for new registrations; historical answers remain unchanged. */
+  defaultValue?: string;
+  /** Optional select choices. Food may be configured as free text or select. */
+  options?: string[];
+};
+
+export const foodPreferencePresets = ["Vegetarian", "Non-vegetarian"] as const;
+
 export type PaidSeminarAnswer = { key: PaidSeminarKey; label: string; value: string };
 
 export function parsePaidSeminarFields(value: unknown): PaidSeminarField[] | undefined {
@@ -19,8 +28,32 @@ export function parsePaidSeminarFields(value: unknown): PaidSeminarField[] | und
   for (const row of value) {
     if (!row || typeof row.key !== "string" || !Object.hasOwn(paidSeminarFields, row.key) || keys.has(row.key) ||
         (row.scope !== "booking" && row.scope !== "attendee") || typeof row.required !== "boolean") return;
+    const definition = paidSeminarFields[row.key as PaidSeminarKey];
+    if (row.defaultValue !== undefined &&
+        (typeof row.defaultValue !== "string" || row.defaultValue.length > 500)) return;
+    const defaultValue = typeof row.defaultValue === "string" ? row.defaultValue.trim() : "";
+    let options: string[] | undefined;
+    if (row.options !== undefined) {
+      if (row.key !== "food" || !Array.isArray(row.options) ||
+          row.options.length < 2 || row.options.length > 20 ||
+          row.options.some((choice: unknown) => typeof choice !== "string" ||
+            choice.trim().length < 1 || choice.trim().length > 80)) return;
+      options = row.options.map((choice: string) => choice.trim());
+      if (new Set(options.map((choice) => choice.toLowerCase())).size !== options.length) return;
+    }
+    if (definition.type === "boolean" && defaultValue &&
+        !["yes", "no"].includes(defaultValue)) return;
+    if (definition.type === "date" && defaultValue) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(defaultValue)) return;
+      const date = new Date(defaultValue);
+      if (!Number.isFinite(date.getTime()) ||
+          date.toISOString().slice(0, 10) !== defaultValue) return;
+    }
+    if (row.key === "food" && options && defaultValue && !options.includes(defaultValue)) return;
     keys.add(row.key);
-    result.push({ key: row.key, scope: row.scope, required: row.required });
+    result.push({key:row.key,scope:row.scope,required:row.required,
+      ...(defaultValue ? {defaultValue} : {}),
+      ...(options ? {options} : {})});
   }
   return result;
 }
@@ -42,7 +75,8 @@ export function normalizePaidSeminarAnswers(
       continue;
     }
     const definition = paidSeminarFields[field.key];
-    if (text.length > 500 || (definition.type === "boolean" && text !== "yes" && text !== "no")) return;
+    if (text.length > 500 || (definition.type === "boolean" && text !== "yes" && text !== "no") ||
+        (field.key === "food" && field.options && !field.options.includes(text))) return;
     if (definition.type === "date") {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return;
       const date = new Date(text);
@@ -51,4 +85,12 @@ export function normalizePaidSeminarAnswers(
     answers.push({ key: field.key, label: definition.label, value: text });
   }
   return answers;
+}
+
+
+/** Used at form load and for new attendees. Defaults are real submitted values. */
+export function seminarDefaultAnswers(fields: PaidSeminarField[], scope: PaidSeminarField["scope"]):
+  Record<string, string> {
+  return Object.fromEntries(fields.filter((field) => field.scope === scope && field.defaultValue)
+    .map((field) => [field.key, field.defaultValue!]));
 }

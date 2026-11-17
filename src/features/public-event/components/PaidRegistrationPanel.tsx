@@ -1,4 +1,4 @@
-import { paidSeminarFields, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
+import { paidSeminarFields, seminarDefaultAnswers, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
 
@@ -62,6 +62,7 @@ function SeminarInputs({ fields, values, onChange, locale }: {
   return fields.map(({ key, required }) => {
     const definition = paidSeminarFields[key];
     const value = values?.[key] ?? "";
+    const configured = fields.find((field) => field.key === key);
     return <label key={key} className="block text-sm">
       {locale === "th" ? thaiLabels[key] : definition.label}{required ? " *" : ""}
       {definition.type === "boolean" ? (
@@ -69,6 +70,12 @@ function SeminarInputs({ fields, values, onChange, locale }: {
           <option value="">{locale === "th" ? "เลือก" : "Select"}</option>
           <option value="yes">{locale === "th" ? "ใช่" : "Yes"}</option>
           <option value="no">{locale === "th" ? "ไม่" : "No"}</option>
+        </select>
+      ) : key === "food" && configured?.options ? (
+        <select className={field} required={required} value={value}
+          onChange={(event) => onChange(key,event.target.value)}>
+          <option value="">{locale === "th" ? "เลือก" : "Select"}</option>
+          {configured.options.map((option) => <option key={option} value={option}>{option}</option>)}
         </select>
       ) : definition.type === "date" ? (
         <input className={field} type="date" required={required} value={value} onChange={(event) => onChange(key, event.target.value)} />
@@ -155,7 +162,11 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
     if (enabled) {
       void customerApi<Catalog>(`${prefix}/paid-registration`, { signal: controller.signal }).then((data) => {
         setCatalog(data);
-        if (data.categories[0]) setAttendees([{ category_id: data.categories[0].id, first_name: "", last_name: "" }]);
+        setAnswers(seminarDefaultAnswers(data.fields,"booking"));
+        if (data.categories[0]) setAttendees([{
+          category_id: data.categories[0].id, first_name: "", last_name: "",
+          answers:seminarDefaultAnswers(data.fields,"attendee"),
+        }]);
       }).catch(() => { if (!controller.signal.aborted) setError("Registration is currently unavailable."); });
     }
     return () => controller.abort();
@@ -334,7 +345,10 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
                 {attendees.length > 1 && <button type="button" onClick={() => {invalidateCoupon();setAttendees((rows) => rows.filter((_, rowIndex) => rowIndex !== index));}} className="text-sm text-blue-700 underline">{locale === "th" ? "ลบผู้เข้าร่วม" : "Remove attendee"}</button>}
               </fieldset>
             ))}
-            {attendees.length < 100 && <button type="button" onClick={() => {invalidateCoupon();setAttendees((rows) => [...rows, { category_id: catalog.categories[0].id, first_name: "", last_name: "" }]);}} className="text-sm text-blue-700 underline">{locale === "th" ? "+ เพิ่มผู้เข้าร่วม" : "+ Add attendee"}</button>}
+            {attendees.length < 100 && <button type="button" onClick={() => {invalidateCoupon();setAttendees((rows) => [...rows, {
+              category_id: catalog.categories[0].id, first_name: "", last_name: "",
+              answers:seminarDefaultAnswers(catalog.fields,"attendee"),
+            }]);}} className="text-sm text-blue-700 underline">{locale === "th" ? "+ เพิ่มผู้เข้าร่วม" : "+ Add attendee"}</button>}
             <div className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">
               <label htmlFor="public-coupon-code" className="font-semibold">{locale==="th"?"โค้ดส่วนลด":"Coupon / Discount code"}</label>
               <div className="flex gap-2">

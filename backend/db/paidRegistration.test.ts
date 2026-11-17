@@ -466,6 +466,37 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       attendees: priceInput.attendees.map((attendee) => ({ ...attendee, answers: {} })),
     }), /invalid_seminar_answers/);
 
+    const defaultsEvent = await db.createEvent({name:"Seminar selection defaults",organizer_id:"org_default"});
+    await db.updateEvent(defaultsEvent.id,{status:"active"});
+    await db.savePaidSettings(defaultsEvent.id,{
+      ...settings,capacity:10,categories:[{id:"adult",label:"Adult",unitMinor:340000,
+        accommodationDiscountMinor:80000,quota:null}],
+      fields:[
+        {key:"accommodation",scope:"attendee",required:true,defaultValue:"yes"},
+        {key:"food",scope:"attendee",required:true,options:["Vegetarian","Non-vegetarian"],
+          defaultValue:"Vegetarian"},
+      ],
+    });
+    const defaultsCatalog=await db.readPaidCatalog(defaultsEvent.id);
+    assert.deepEqual(defaultsCatalog?.fields,[
+      {key:"accommodation",scope:"attendee",required:true,defaultValue:"yes"},
+      {key:"food",scope:"attendee",required:true,defaultValue:"Vegetarian",
+        options:["Vegetarian","Non-vegetarian"]},
+    ]);
+    assert.deepEqual((await db.readPaidSettings(defaultsEvent.id))?.fields,defaultsCatalog?.fields);
+    const defaultsCommand={...command,eventId:defaultsEvent.id,key:"selected-defaults",
+      attendees:[{categoryId:"adult",firstName:"Default",lastName:"Choice",
+        answers:{accommodation:"yes",food:"Vegetarian"}}]};
+    const defaultBooking=await db.createPaidBooking(defaultsCommand);
+    assert.equal(defaultBooking.totalMinor,340000);
+    const noHotel=await db.createPaidBooking({...defaultsCommand,key:"declines-room",
+      attendees:[{...defaultsCommand.attendees[0],
+        answers:{accommodation:"no",food:"Non-vegetarian"}}]});
+    assert.equal(noHotel.totalMinor,260000);
+    await assert.rejects(db.createPaidBooking({...defaultsCommand,key:"invalid-food",
+      attendees:[{...defaultsCommand.attendees[0],answers:{accommodation:"yes",food:"Other"}}]}),
+      /invalid_seminar_answers/);
+
     const couponEvent = await db.createEvent({ name: "Coupon test", organizer_id: "org_default" });
     await db.updateEvent(couponEvent.id, { status: "active" });
     await db.savePaidSettings(couponEvent.id, {

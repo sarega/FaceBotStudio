@@ -1,5 +1,5 @@
 import { PaidPaymentDisplaySettings, type PaidPaymentDisplayHandle } from "./PaidPaymentDisplaySettings";
-import { paidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
+import { paidSeminarFields, foodPreferencePresets, parsePaidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 type Category = { id: string; label: string; price: string; discount: string; quota: string };
@@ -86,6 +86,11 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
       setError("Enable 'Accommodation needed' → 'For each attendee' and 'Require' when using discounts.");
       return;
     }
+    const normalizedSeminar = parsePaidSeminarFields(seminar);
+    if (!normalizedSeminar) {
+      setError("Check Seminar questions: food choices need 2–20 unique names, and the default must match one of those choices.");
+      return;
+    }
     setBusy(true);
     try {
       if (paymentMode === "external_manual" && !(await displayRef.current?.save())) {
@@ -97,7 +102,7 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
         body: JSON.stringify({
           version: settings?.version ?? 0, capacity: Number(data.get("capacity")),
           hold_minutes: Number(data.get("hold_minutes")), cutoff_ms: cutoff ? new Date(cutoff).getTime() : null,
-          published: publish, payment_mode: paymentMode, categories: parsedCategories, fields: seminar,
+          published: publish, payment_mode: paymentMode, categories: parsedCategories, fields: normalizedSeminar,
         }),
       });
       const result = await response.json();
@@ -127,6 +132,10 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
     } finally {
       setBusy(false);
     }
+  }
+  function updateSeminar(key: PaidSeminarKey, patch: Partial<PaidSeminarField>) {
+    setSeminar((current) => current.map((item) =>
+      item.key === key ? {...item,...patch} : item));
   }
   function update(id: string, patch: Partial<Category>) {
     setCategories((current) => current.map((category) => category.id === id ? { ...category, ...patch } : category));
@@ -176,7 +185,8 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
                 if (Number(amount) > 0) {
                   setSeminar((current) => [
                     ...current.filter((item) => item.key !== "accommodation"),
-                    { key: "accommodation", scope: "attendee", required: true },
+                    { ...(current.find((item) => item.key === "accommodation") ?? {}),
+                      key: "accommodation", scope: "attendee", required: true },
                   ]);
                 }
               }} />
@@ -203,19 +213,58 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
                   const scope = event.target.value;
                   setSeminar((current) => {
                     const rest = current.filter((item) => item.key !== key);
-                    return scope === "booking" || scope === "attendee" ? [...rest, { key, scope, required: configured?.required ?? false }] : rest;
+                    return scope === "booking" || scope === "attendee"
+                      ? [...rest, { ...configured, key, scope, required: configured?.required ?? false }] : rest;
                   });
                 }}>
                   <option value="">Hidden</option><option value="booking">Once per booking</option><option value="attendee">For each attendee</option>
                 </select>
               </label>
-              {configured && <label className="flex gap-2 pb-2">
-                <input type="checkbox" checked={configured.required} onChange={(event) => {
-                  const required = event.target.checked;
-                  setSeminar((current) => current.map((item) => item.key === key ? { ...item, required } : item));
-                }} />
-                Require {paidSeminarFields[key].label.toLowerCase()}
-              </label>}
+              {configured && <div className="space-y-2 rounded-lg bg-slate-50 p-2">
+                <label className="flex gap-2">
+                  <input type="checkbox" checked={configured.required} onChange={(event) =>
+                    updateSeminar(key,{required:event.target.checked})} />
+                  Require {paidSeminarFields[key].label.toLowerCase()}
+                </label>
+                {key === "food" && <div className="space-y-2">
+                  <label className="block text-xs font-medium">Answer format
+                    <select className={field} value={configured.options ? "select" : "text"}
+                      onChange={(event) => updateSeminar("food",event.target.value==="select"
+                        ? {options:[...foodPreferencePresets],defaultValue:undefined}
+                        : {options:undefined,defaultValue:undefined})}>
+                      <option value="text">Free text</option>
+                      <option value="select">Dropdown choices</option>
+                    </select>
+                  </label>
+                  {configured.options && <label className="block text-xs font-medium">
+                    Choices (one per line, 2–20 unique values)
+                    <textarea className={field} rows={3} value={configured.options.join("\n")}
+                      onChange={(event) => updateSeminar("food",{
+                        options:event.target.value.split("\n"),
+                        defaultValue:undefined,
+                      })}/>
+                  </label>}
+                </div>}
+                {paidSeminarFields[key].type === "boolean" || (key === "food" && configured.options) ?
+                  <label className="block text-xs font-medium">Default answer
+                    <select className={field} value={configured.defaultValue ?? ""}
+                      onChange={(event) => updateSeminar(key,
+                        {defaultValue:event.target.value||undefined})}>
+                      <option value="">No default — customer chooses</option>
+                      {(paidSeminarFields[key].type==="boolean"
+                        ? [{value:"yes",label:"Yes"},{value:"no",label:"No"}]
+                        : (configured.options??[]).filter(Boolean).map((option) =>
+                          ({value:option,label:option}))).map((option) =>
+                        <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  : <label className="block text-xs font-medium">Default answer (optional)
+                    <input className={field} type={paidSeminarFields[key].type === "date" ? "date" : "text"}
+                      maxLength={500} value={configured.defaultValue ?? ""}
+                      placeholder="Leave blank for no default"
+                      onChange={(event) => updateSeminar(key,{defaultValue:event.target.value||undefined})}/>
+                  </label>}
+              </div>}
             </div>;
           })}
         </fieldset>
