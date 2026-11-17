@@ -297,9 +297,9 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const approvedExternalSlip = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/review", {
       method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "external-slip-review" },
       body: JSON.stringify({ decision: "approve", attempt_id: externalReceipt.attempt_id,
-        version: externalReceipt.version, reason: "Verified transfer in organizer bank account",
+        version: externalReceipt.version, reason: "Verified transfer against bank records",
         observed: { amount_minor: 250000, currency: "THB",
-          paid_at: new Date().toISOString(), reference: "external-bank-verified-9021",
+          paid_at: new Date().toISOString(), reference: "SLIP-"+externalReceipt.attempt_id,
           receiver_id: "EXTERNAL_MANUAL" } }),
     });
     assert.equal(approvedExternalSlip.status, 200, await approvedExternalSlip.clone().text());

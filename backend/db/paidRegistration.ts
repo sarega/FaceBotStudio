@@ -782,7 +782,8 @@ export function* listPaidReviewQueue(eventId: string, offset: number, reference?
        AND ((b.state='verification_pending' AND a.id IS NOT NULL)
          OR (b.state='awaiting_payment' AND b.due_ms>?
            AND (es.payment_mode='external_manual' OR ?)))
-     ORDER BY COALESCE(a.created_ms,b.created_ms),b.id LIMIT 21 OFFSET ?`,
+     ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 ELSE 1 END,
+       COALESCE(a.created_ms,b.created_ms),b.id LIMIT 21 OFFSET ?`,
     eventId, ...(reference ? [reference] : []), Date.now(), reference ? 1 : 0, offset,
   );
   return rows.map(({ receiver_id, ...row }) => ({

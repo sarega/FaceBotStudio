@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.9",
+    date: "2026-11-17",
+    title: "Four-step payment and simplified admin slip approval",
+    features: [
+      "Customers see 1 Pay amount, 2 Bank/QR, 3 Upload slip, 4 Wait for approval",
+      "Admin sees the uploaded slip beside the amount and can approve without retyping routine fields",
+      "Review queue prioritizes slips ready for approval and keeps advanced tools collapsed",
+    ],
+  },
+  {
     version: "0.10.8",
     date: "2026-11-17",
     title: "Compact Event Workspace for small laptops",

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { CheckCircle2, UploadCloud } from "lucide-react";
 import { customerApi } from "./CustomerAccountScreen";
 
 type Booking = {
@@ -14,11 +15,25 @@ type Booking = {
 type Detail = { status: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
   coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
+const baht = (minor:number) => new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"}).format(minor/100);
+function Step({n,title,children,emphasis=false}:{n:number;title:string;children:ReactNode;emphasis?:boolean}) {
+  return <section className={"rounded-xl border p-3 sm:p-4 "+(emphasis?
+    "border-blue-400/50 bg-blue-500/10":"border-white/15 bg-slate-800/50")}>
+    <h4 className="mb-3 flex items-center gap-2.5 font-bold text-white">
+      <span className={"flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base "+
+        (emphasis?"bg-blue-500":"bg-slate-600")}>{n}</span>
+      {title}
+    </h4>
+    <div className="sm:pl-10">{children}</div>
+  </section>;
+}
+
 
 function PaidProofForm({ path, version, totalMinor, paymentMode, onSubmitted }: {
   path: string; version: number; totalMinor: number; paymentMode: "promptpay" | "external_manual"; onSubmitted: () => void;
 }) {
   const [file, setFile] = useState<File>();
+  const fileId=useId();
   const [amount, setAmount] = useState((totalMinor / 100).toFixed(2));
   const [paidAt, setPaidAt] = useState("");
   const [reference, setReference] = useState("");
@@ -77,25 +92,46 @@ function PaidProofForm({ path, version, totalMinor, paymentMode, onSubmitted }: 
 
   const input = "mt-1 block w-full rounded-lg border border-white/20 bg-slate-950 px-3 py-2 text-white";
   return (
-    <form onSubmit={submit} className="space-y-3 rounded-xl border border-white/10 p-3">
-      {paymentMode === "promptpay" && <img src={`${path}/payment-qr`} alt="PromptPay payment QR for this booking" className="h-40 w-40 rounded-lg bg-white p-2" />}
-      <p className="text-slate-300">โอนเงินแล้วแนบสลิป / Transfer the full amount, then upload your payment slip.</p>
-      <fieldset disabled={busy} className="space-y-3">
-        <label className="block">จำนวนเงินที่โอน / Amount (THB)
-          <input className={input} inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required />
-        </label>
-        <label className="block">วันเวลาโอน / Transfer date and time
-          <input className={input} type="datetime-local" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} required />
-        </label>
-        <label className="block">เลขอ้างอิงธนาคาร (ถ้ามี) / Bank reference (optional)
-          <input className={input} maxLength={255} value={reference} onChange={(event) => setReference(event.target.value)} />
-        </label>
-        <label className="block">สลิปชำระเงิน / Payment slip
-          <input className={input} type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setFile(event.target.files?.[0])} required />
-        </label>
-        <button type="submit" className="rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white">{busy ? "กำลังส่ง… / Submitting…" : "ส่งสลิป / Submit payment slip"}</button>
-      </fieldset>
-      {error && <p role="alert" className="text-rose-300">{error}</p>}
+    <form onSubmit={submit} className="space-y-3">
+      {paymentMode==="promptpay" && <p className="text-xs text-slate-300">ตรวจสอบ QR ในขั้นตอนที่ 2 ก่อนโอน</p>}
+      <label htmlFor={fileId} className="flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-blue-400 bg-blue-500/10 px-4 py-3 text-center font-semibold text-blue-100 hover:bg-blue-500/20">
+        <UploadCloud className="h-7 w-7"/>
+        <span>{file ? file.name : "เลือกภาพสลิป / Choose payment slip"}</span>
+        <span className="text-xs font-normal text-slate-300">รูปภาพ JPG / PNG / WebP ไม่เกิน 4 MB</span>
+        <input id={fileId} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp"
+          disabled={busy} onChange={(event) => {
+            const chosen=event.target.files?.[0];
+            setFile(chosen);setError("");
+            if(chosen&&!paidAt){
+              const now=new Date();
+              setPaidAt(new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,16));
+            }
+          }}/>
+      </label>
+      <details className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">
+        <summary className="cursor-pointer">แก้ไขยอดหรือเวลาโอน (ถ้าจำเป็น)</summary>
+        <fieldset disabled={busy} className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label>ยอดที่โอน (บาท)
+            <input className={input} inputMode="decimal" value={amount}
+              onChange={(event) => setAmount(event.target.value)}/>
+          </label>
+          <label>วันเวลาโอน
+            <input className={input} type="datetime-local" value={paidAt}
+              onChange={(event) => setPaidAt(event.target.value)}/>
+          </label>
+          <label className="sm:col-span-2">เลขอ้างอิงธนาคาร (ถ้ามี)
+            <input className={input} value={reference} maxLength={255}
+              onChange={(event) => setReference(event.target.value)}/>
+          </label>
+        </fieldset>
+      </details>
+      <button type="submit" disabled={busy||!file}
+        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-3 text-base font-bold text-white hover:bg-blue-400 disabled:cursor-not-allowed disabled:bg-slate-600">
+        <UploadCloud className="h-5 w-5"/>
+        {busy?"กำลังส่งสลิป…":"ส่งสลิปให้ผู้จัดงาน / Submit slip"}
+      </button>
+      {!file && <p className="text-center text-xs text-slate-400">เลือกภาพสลิปก่อนกดส่ง</p>}
+      {error && <p role="alert" className="rounded-lg bg-rose-950/60 p-3 text-rose-200">{error}</p>}
     </form>
   );
 }
@@ -120,8 +156,7 @@ function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; 
       Payment details are incomplete. Contact the organizer before transferring.
     </p>;
   }
-  return <div className="space-y-2 rounded-lg border border-white/20 p-3 text-sm">
-    <strong>ชำระเงิน / Bank transfer details</strong>
+  return <div className="space-y-2 text-sm">
     {!!details.bank_name && <p>ธนาคาร / Bank: {details.bank_name}</p>}
     {!!details.account_name && <p>ชื่อบัญชี / Recipient: <strong>{details.account_name}</strong></p>}
     {!!details.account_number && <p>เลขบัญชี / Account: <span className="font-mono font-semibold">{details.account_number}</span></p>}
@@ -135,7 +170,7 @@ function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; 
       <p className="text-xs">ใช้มือถือเครื่องเดียว: บันทึก QR แล้วนำเข้าแอปธนาคาร / Same phone: save the QR, then import it in your banking app.</p>
       <p className="text-xs">ตรวจชื่อผู้รับและยอดเงินก่อนโอน / Verify the recipient and amount.</p>
     </div>}
-    <p className="text-xs text-slate-300">บัตรเข้างานจะออกหลังผู้จัดงานยืนยันยอดเงินจริง / Admission QR follows payment verification.</p>
+
   </div>;
 }
 export function CustomerPaidBookings() {
@@ -212,7 +247,7 @@ export function CustomerPaidBookings() {
 
   return (
     <section className="space-y-4 rounded-3xl border border-white/10 bg-slate-900/50 p-5 text-slate-200">
-      <h2 className="font-semibold text-white">Paid registrations</h2>
+      <h2 className="text-lg font-bold text-white">การจองและชำระเงิน / My bookings</h2>
       {reference && <button type="button" className="text-sm text-blue-300 underline" onClick={() => {
         setReference("");
         didScrollToInvoice.current = false;
@@ -225,9 +260,11 @@ export function CustomerPaidBookings() {
       {page?.bookings.map((booking) => (
         <article key={booking.id} className="space-y-2 border-t border-white/10 pt-3 text-sm">
           <h3 className="font-semibold">{booking.event_name}</h3>
-          <p className="break-all text-slate-400">{booking.reference}</p>
-          <p>{booking.status.replaceAll("_", " ")} · {new Intl.NumberFormat(undefined, { style: "currency", currency: "THB" }).format(booking.total_due_minor / 100)}</p>
-          {booking.status === "awaiting_payment" && <p>Pay by {new Date(booking.due_at).toLocaleString()}</p>}
+          <p className="font-semibold">{baht(booking.total_due_minor)} · {
+            booking.status==="awaiting_payment"?"ยังไม่ชำระเงิน":
+            booking.status==="verification_pending"?"ส่งสลิปแล้ว รอตรวจสอบ":
+            booking.status==="confirmed"?"ยืนยันแล้ว":"หมดเวลาชำระเงิน"
+          }</p>
           {booking.status === "expired" && (
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-amber-200">หมดเวลาชำระเงิน / Payment hold expired</p>
@@ -244,10 +281,49 @@ export function CustomerPaidBookings() {
           </a>
           <button type="button" aria-expanded={selected?.id === booking.id} className="text-blue-300 underline"
             onClick={() => { setError(""); setDetail(undefined); setSelected(selected?.id === booking.id ? undefined : booking); }}>
-            {booking.status === "awaiting_payment" ? "ใบแจ้งชำระเงิน / Payment invoice" : "รายละเอียดการจอง / Booking details"}
+            {booking.status === "awaiting_payment" ? "ชำระเงินและส่งสลิป / Pay now" : "ดูรายละเอียด / Details"}
           </button>
           {selected?.id === booking.id && detail && (
             <div ref={paymentAnchorRef} className="scroll-mt-4 space-y-3" aria-label="Payment and booking details">
+            {detail.status==="confirmed" && booking.total_due_minor===0 &&
+              <p role="status" className="rounded-lg bg-emerald-900/40 p-3 text-emerald-200">
+                คูปองฟรี: ยืนยันแล้ว ไม่ต้องโอนเงิน / Complimentary booking confirmed. No payment required.
+              </p>}
+            {detail.status === "awaiting_payment" && <div className="space-y-3">
+              <Step n={1} title="ยอดที่ต้องชำระ / Amount to pay">
+                <p className="text-3xl font-extrabold text-white">{baht(booking.total_due_minor)}</p>
+                <p className="mt-1 text-xs text-slate-300">ชำระภายใน {new Date(booking.due_at).toLocaleString("th-TH")}</p>
+              </Step>
+              <Step n={2} title="สแกน QR หรือโอนเข้าบัญชี / Pay">
+                {detail.payment_mode === "external_manual"
+                  ? <ExternalPaymentInstructions eventId={booking.event_id} bookingId={booking.id}/>
+                  : <div className="space-y-3">
+                      <img src={"/api/customer/paid-bookings/"+encodeURIComponent(booking.event_id)+"/"+
+                        encodeURIComponent(booking.id)+"/payment-qr"} alt="Payment QR code"
+                        className="h-auto w-56 max-w-full rounded-xl bg-white p-3"/>
+                      <p className="text-slate-300">สแกน QR แล้วตรวจชื่อบัญชีและยอดชำระก่อนโอน</p>
+                    </div>}
+              </Step>
+              <Step n={3} title="อัปโหลดสลิปหลังโอน / Upload slip" emphasis>
+                <PaidProofForm key={booking.id} path={"/api/customer/paid-bookings/" + encodeURIComponent(booking.event_id) + "/" + encodeURIComponent(booking.id)}
+                  paymentMode={detail.payment_mode} version={detail.version} totalMinor={booking.total_due_minor} onSubmitted={() => {
+                    const updated = { ...booking, status: "verification_pending" };
+                    setDetail(undefined);setSelected(updated);
+                    setPage((current) => current && { ...current, bookings: current.bookings.map((row) => row.id === booking.id ? updated : row) });
+                  }}/>
+              </Step>
+              <Step n={4} title="รอผู้จัดงานยืนยัน / Confirmation">
+                <p className="text-sm text-slate-300">หลังส่งสลิป ผู้จัดงานจะตรวจสอบเงินและยืนยันการลงทะเบียน จากนั้นจึงได้รับบัตรเข้างาน</p>
+              </Step>
+            </div>}
+            {detail.status === "verification_pending" && <div role="status"
+              className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-900/30 p-4 font-semibold text-emerald-200">
+              <CheckCircle2 className="h-6 w-6"/> ส่งสลิปสำเร็จแล้ว รอผู้จัดงานยืนยัน / Slip received
+            </div>}
+
+            <details className="rounded-lg border border-white/10 p-3 text-sm">
+              <summary className="cursor-pointer font-medium text-slate-300">ผู้เข้าร่วมและรายละเอียดการจอง</summary>
+              <div className="mt-3 space-y-3">
             <ul className="space-y-1">{detail.attendees.map((attendee) => (
               <li key={attendee.id}>
                 {attendee.first_name} {attendee.last_name} · {attendee.category_label} ·
@@ -278,22 +354,8 @@ export function CustomerPaidBookings() {
                 <span>{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
                   .format(booking.total_due_minor/100)}</span></div>
             </div>}
-            {detail.status==="confirmed" && booking.total_due_minor===0 &&
-              <p role="status" className="rounded-lg bg-emerald-900/40 p-3 text-emerald-200">
-                คูปองฟรี: ยืนยันแล้ว ไม่ต้องโอนเงิน / Complimentary booking confirmed. No payment required.
-              </p>}
-            {detail.status === "awaiting_payment" && <>
-              <p className="font-semibold">ใบแจ้งชำระเงิน / Payment invoice · {new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"}).format(booking.total_due_minor / 100)}</p>
-              {detail.payment_mode === "external_manual" && <ExternalPaymentInstructions eventId={booking.event_id} bookingId={booking.id} />}
-              <PaidProofForm key={booking.id} path={"/api/customer/paid-bookings/" + encodeURIComponent(booking.event_id) + "/" + encodeURIComponent(booking.id)}
-                paymentMode={detail.payment_mode} version={detail.version} totalMinor={booking.total_due_minor} onSubmitted={() => {
-                  const updated = { ...booking, status: "verification_pending" };
-                  setDetail(undefined);
-                  setSelected(updated);
-                  setPage((current) => current && { ...current, bookings: current.bookings.map((row) => row.id === booking.id ? updated : row) });
-                }} />
-            </>}
-            {detail.status === "verification_pending" && <p role="status">รับสลิปแล้ว รอการตรวจสอบ / Slip received. Awaiting verification.</p>}
+              </div>
+            </details>
             </div>
           )}
         </article>

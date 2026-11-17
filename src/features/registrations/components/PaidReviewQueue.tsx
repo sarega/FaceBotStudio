@@ -1,5 +1,6 @@
 import { PaidBookingOperations } from "./PaidBookingOperations";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 
 type Review = {
   booking_id: string;
@@ -22,89 +23,141 @@ type Review = {
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 const money = new Intl.NumberFormat(undefined, { style: "currency", currency: "THB" });
-const summaryLabels = {
-  bookings: "Bookings", attendees: "Attendees", confirmed_bookings: "Confirmed bookings",
-  confirmed_attendees: "Confirmed attendees", checked_in_attendees: "Checked in",
-  held_attendees: "Places held", available_attendees: "Places available",
-  awaiting_payment_bookings: "Awaiting payment", pending_review_bookings: "Pending review", expired_bookings: "Expired",
-  accepted_minor: "Verified total", unsettled_due_minor: "Unsettled booking total",
-};
 const inputClass = "mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2";
 
-function ReviewForm({ review, path, apiFetch, onUpdated }: { review: Review; path: string; apiFetch: ApiFetch; onUpdated: () => void }) {
-  const [decision, setDecision] = useState("approve");
+function ReviewForm({ review, path, apiFetch, onUpdated }: {
+  review: Review; path: string; apiFetch: ApiFetch; onUpdated: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const command = useRef<{ body: string; key: string } | undefined>(undefined);
+  const [bankReference, setBankReference] = useState(
+    review.claimed_reference || (review.attempt_id ? "SLIP-" + review.attempt_id : ""),
+  );
+  const [rejectReason, setRejectReason] = useState("");
+  const [showReject, setShowReject] = useState(false);
+  const [showException, setShowException] = useState(false);
+  const [observedAmount,setObservedAmount]=useState((review.claimed_minor ?? review.total_minor)/100);
+  const [observedTime,setObservedTime]=useState(() => {
+    const epoch=review.claimed_transfer_ms ?? Date.now();
+    const date=new Date(epoch);
+    return new Date(epoch-date.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  });
+  const [receiver,setReceiver]=useState("");
+  const command=useRef<{body:string;key:string}|undefined>(undefined);
+  const canApprove=!!review.attempt_id && !!review.proof_id &&
+    review.claimed_minor===review.total_minor && review.matching_proofs===0 &&
+    (review.payment_mode==="external_manual" || !!receiver.trim());
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (busy) return;
+  async function submit(decision:"approve"|"reject"|"flag") {
+    if(busy)return;
     setError("");
-    const data = new FormData(event.currentTarget);
-    let observed;
-    if (decision === "approve") {
-      const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(data.get("amount") || "").trim());
-      const amount = match ? Number(match[1]) * 100 + Number((match[2] ?? "").padEnd(2, "0")) : 0;
-      const paidAt = new Date(String(data.get("paid_at")));
-      if (!Number.isSafeInteger(amount) || amount <= 0 || !Number.isFinite(paidAt.getTime())) {
-        setError("Enter the amount and time shown by the bank.");
-        return;
-      }
-      observed = { amount_minor: amount, currency: "THB", paid_at: paidAt.toISOString(), reference: data.get("reference"),
-        receiver_id: review.payment_mode === "external_manual" ? "EXTERNAL_MANUAL" : data.get("receiver") };
+    if(decision==="approve" && !bankReference.trim()) {
+      setError("กรุณากรอกเลขอ้างอิงธนาคารจากสลิป เพื่อป้องกันการใช้สลิปซ้ำ");return;
     }
-    const body = JSON.stringify({ decision, attempt_id: review.attempt_id, version: review.version, reason: data.get("reason"), observed });
-    if (command.current?.body !== body) command.current = { body, key: crypto.randomUUID() };
+    const amountMinor=Math.round(observedAmount*100);
+    const paidAt=new Date(observedTime);
+    if(decision==="approve"&&(!Number.isSafeInteger(amountMinor)||amountMinor<1||
+      !Number.isFinite(paidAt.getTime()))) {
+      setError("กรุณาตรวจยอดและเวลาโอน");return;
+    }
+    const reason=decision==="approve"?"Verified transfer against bank records":
+      rejectReason.trim()||"Proof rejected by organizer";
+    const body=JSON.stringify({decision,attempt_id:review.attempt_id,version:review.version,reason,
+      observed:decision==="approve"?{
+        amount_minor:amountMinor,currency:"THB",paid_at:paidAt.toISOString(),
+        reference:bankReference.trim(),receiver_id:review.payment_mode==="external_manual" ?
+          "EXTERNAL_MANUAL":receiver.trim(),
+      }:undefined,
+    });
+    if(command.current?.body!==body)command.current={body,key:crypto.randomUUID()};
     setBusy(true);
     try {
-      const response = await apiFetch(`${path}/review`, {
-        method: "POST", body, headers: { "Content-Type": "application/json", "Idempotency-Key": command.current.key },
+      const response=await apiFetch(path+"/review",{
+        method:"POST",body,headers:{"Content-Type":"application/json","Idempotency-Key":command.current.key},
       });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const descriptions: Record<string, string> = {
-          duplicate_reference_or_proof: "This reference or image has already been used. Flag the attempt for investigation.",
-          receiver_mismatch: "The receiving account does not match the account recorded for this booking.",
-          version_conflict: "Another reviewer updated this booking. Refresh the queue.",
+      const result=await response.json().catch(()=>({}));
+      if(!response.ok) {
+        const messages:Record<string,string>={
+          duplicate_reference_or_proof:"พบสลิปหรือเลขอ้างอิงซ้ำ กรุณาตรวจสอบก่อนอนุมัติ",
+          receiver_mismatch:"บัญชีปลายทางไม่ตรงกับบัญชีรับเงินของรายการนี้",
+          transfer_outside_hold:"เวลาโอนไม่อยู่ในช่วงเวลาที่จอง กรุณาตรวจสอบ",
+          version_conflict:"รายการถูกแก้ไขแล้ว กรุณา Refresh",
         };
-        setError(descriptions[result.error] || "Could not save the review. Retry or refresh the queue.");
+        setError(messages[result.error]||"บันทึกผลไม่ได้: "+(result.error||"โปรดลองใหม่"));
         return;
       }
       onUpdated();
     } catch {
-      setError("Could not reach the server. Retry with the same details.");
-    } finally {
-      setBusy(false);
-    }
+      setError("ติดต่อ Server ไม่สำเร็จ กรุณาลองใหม่");
+    } finally {setBusy(false);}
   }
 
-  return (
-    <form onSubmit={submit} className="space-y-3">
-      <fieldset disabled={busy} className="grid gap-3 sm:grid-cols-2">
-        <label>Decision<select className={inputClass} value={decision} onChange={(event) => setDecision(event.target.value)}>
-          <option value="approve">Record bank verification</option>
-          {review.attempt_id && <><option value="reject">Reject proof</option><option value="flag">Flag for investigation</option></>}
-        </select></label>
-        <label>Review reason<input className={inputClass} name="reason" required maxLength={1000} /></label>
-        {decision === "approve" && <>
-          <p className="sm:col-span-2">{review.payment_mode === "external_manual"
-            ? "Record only payment you have independently verified outside FaceBotStudio. This approves the entire booking and issues attendee QR codes."
-            : "Use the posted transfer in your bank records to complete these fields."}</p>
-          <label>Amount received (THB)<input className={inputClass} name="amount" inputMode="decimal" required /></label>
-          <label>Transfer time (your device’s timezone)<input className={inputClass} name="paid_at" type="datetime-local" step={1} required /></label>
-          <label>{review.payment_mode === "external_manual" ? "Unique external payment / receipt reference" : "Bank transaction reference"}
-            <input className={inputClass} name="reference" required maxLength={255} /></label>
-          {review.payment_mode !== "external_manual" &&
-            <label>Receiver identifier<input className={inputClass} name="receiver" inputMode="numeric" maxLength={32} required /></label>}
-        </>}
-        <button type="submit" className="justify-self-start rounded-lg bg-blue-600 px-3 py-2 font-semibold text-white">
-          {busy ? "Saving…" : "Save review"}
+  return <div className="space-y-3">
+    {review.attempt_id && <div className="space-y-3">
+      {review.claimed_minor!==review.total_minor && <p className="rounded-lg bg-amber-50 p-3 font-semibold text-amber-900">
+        ยอดในสลิปไม่ตรงกับยอดจอง — กรุณาตรวจสอบก่อนอนุมัติ
+      </p>}
+      {review.matching_proofs>0 && <p className="rounded-lg bg-rose-50 p-3 font-semibold text-rose-800">
+        พบภาพสลิปซ้ำกับรายการอื่น — ไม่ควรอนุมัติโดยไม่ตรวจสอบ
+      </p>}
+      <p className="text-xs font-medium text-slate-600">
+        กดอนุมัติเมื่อท่านตรวจสอบเงินเข้าบัญชีธนาคารแล้วเท่านั้น
+      </p>
+      <details className="rounded-lg border border-slate-200 p-3">
+        <summary className="cursor-pointer text-slate-600">แก้ไขยอดและเวลาโอน (เฉพาะกรณีข้อมูลผิด)</summary>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label>ยอดที่รับจริง (บาท)
+            <input className={inputClass} inputMode="decimal" type="number" min="0.01"
+              value={observedAmount} onChange={e=>setObservedAmount(Number(e.target.value))}/>
+          </label>
+          <label>วันเวลาโอน
+            <input className={inputClass} type="datetime-local" value={observedTime}
+              onChange={e=>setObservedTime(e.target.value)}/>
+          </label>
+          <label className="sm:col-span-2">เลขอ้างอิงสลิปหรือธนาคาร
+            <input className={inputClass} value={bankReference} maxLength={255}
+              onChange={e=>setBankReference(e.target.value)}/>
+          </label>
+          {review.payment_mode!=="external_manual" && <label>บัญชีผู้รับ
+            <input className={inputClass} value={receiver} onChange={e=>setReceiver(e.target.value)}/>
+          </label>}
+        </div>
+      </details>
+      <button type="button" onClick={()=>void submit("approve")}
+        disabled={!canApprove||busy}
+        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-base font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-400">
+        <CheckCircle2 className="h-5 w-5"/> {busy?"กำลังดำเนินการ…":"ยืนยันเงินเข้าและอนุมัติ / Approve"}
+      </button>
+      {!canApprove && <p className="text-xs text-amber-800">
+        ยังไม่สามารถอนุมัติได้ เพราะยอดไม่ตรง มีหลักฐานซ้ำ หรือไม่มีสลิป กรุณาตรวจสอบก่อน
+      </p>}
+      <div className="flex flex-wrap gap-3 text-sm">
+        <button type="button" onClick={()=>{setShowReject(v=>!v);setShowException(false);}}
+          className="inline-flex items-center gap-1 font-semibold text-rose-700 underline">
+          <XCircle className="h-4 w-4"/> ปฏิเสธสลิป / Reject
         </button>
-      </fieldset>
-      {error && <p role="alert" className="text-red-700">{error}</p>}
-    </form>
-  );
+        <button type="button" onClick={()=>{setShowException(v=>!v);setShowReject(false);}}
+          className="inline-flex items-center gap-1 text-amber-800 underline">
+          <AlertTriangle className="h-4 w-4"/> ส่งตรวจสอบเพิ่มเติม
+        </button>
+      </div>
+      {(showReject||showException)&&<div className="space-y-2 rounded-lg bg-slate-50 p-3">
+        <label className="block">หมายเหตุให้ผู้ดูแล (ถ้ามี)
+          <input className={inputClass} maxLength={1000} value={rejectReason}
+            onChange={e=>setRejectReason(e.target.value)} placeholder="เหตุผลการปฏิเสธ"/>
+        </label>
+        <button type="button" disabled={busy}
+          onClick={()=>void submit(showReject?"reject":"flag")}
+          className="min-h-10 rounded-lg bg-slate-800 px-4 py-2 font-semibold text-white">
+          ยืนยัน{showReject?"ปฏิเสธ":"ส่งตรวจสอบ"}
+        </button>
+      </div>}
+    </div>}
+    {!review.attempt_id && <p className="text-sm text-amber-800">
+      ลูกค้ายังไม่ได้ส่งสลิป — ยังไม่มีหลักฐานให้อนุมัติ
+    </p>}
+    {error&&<p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
+  </div>;
 }
 
 export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFetch: ApiFetch }) {
@@ -159,16 +212,23 @@ export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFet
         {open && <button type="button" className="underline" onClick={() => setRefresh((value) => value + 1)}>Refresh</button>}
       </div>
       {open && <>
-        <PaidBookingOperations eventId={eventId} apiFetch={apiFetch} onChange={() => setRefresh((value) => value + 1)} />
         {summaryError && <p role="alert" className="text-red-700">Could not load the registration totals.</p>}
-        {summary && <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-          {Object.entries(summaryLabels).map(([key, label]) => (
-            <div key={key} className="rounded-lg bg-slate-50 p-2">
-              <dt className="text-slate-600">{label}</dt>
-              <dd className="font-semibold">{key.endsWith("_minor") ? money.format(Number(summary[key]) / 100) : summary[key]}</dd>
-            </div>
-          ))}
-        </dl>}
+        {summary && <div className="flex flex-wrap gap-2 text-sm">
+          <span className="rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-800">
+            รอตรวจสลิป {summary.pending_review_bookings ?? 0} รายการ
+          </span>
+          <span className="rounded-lg bg-emerald-50 px-3 py-2 font-semibold text-emerald-800">
+            ยืนยันแล้ว {summary.confirmed_bookings ?? 0} รายการ
+          </span>
+          <span className="rounded-lg bg-slate-100 px-3 py-2 text-slate-700">
+            ผู้เข้าร่วม {summary.attendees ?? 0} คน
+          </span>
+        </div>}
+        <details className="rounded-lg border border-slate-200 p-3">
+          <summary className="cursor-pointer text-slate-600">เครื่องมือจัดการ Booking เพิ่มเติม</summary>
+          <PaidBookingOperations eventId={eventId} apiFetch={apiFetch}
+            onChange={() => setRefresh((value) => value + 1)}/>
+        </details>
         <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => {
           event.preventDefault();
           setReference(String(new FormData(event.currentTarget).get("reference") || "").trim());
@@ -182,20 +242,58 @@ export function PaidReviewQueue({ eventId, apiFetch }: { eventId: string; apiFet
         {!rows && !error && <p role="status">Loading reviews…</p>}
         {rows?.length === 0 && <p>{reference ? "No payable or pending booking found for this reference." : "No payment proofs awaiting review."}</p>}
         {rows?.map((review) => {
-          const path = `${prefix}/bookings/${encodeURIComponent(review.booking_id)}`;
-          return (
-            <details key={review.attempt_id ?? review.booking_id} className="space-y-3 border-t border-slate-200 pt-3">
-              <summary className="cursor-pointer break-all">{review.booking_reference} · {review.attendee_count} attendees · {money.format(review.total_minor / 100)}</summary>
-              {review.claimed_minor != null && review.claimed_transfer_ms != null
-                ? <p>Claimed {money.format(review.claimed_minor / 100)} · {new Date(review.claimed_transfer_ms).toLocaleString()} {review.claimed_reference ? `· ${review.claimed_reference}` : ""}</p>
-                : <p>{review.attempt_id ? "Recorded from bank records." : "Awaiting payment."}</p>}
-              <p>Receiver {review.receiver_name} · ending {review.receiver_last_four}</p>
-              {!!review.matching_proofs && <p className="font-semibold text-amber-800">This image matches another submitted proof.</p>}
-              {review.reason && <p>Previous review · {review.reason}</p>}
-              {review.proof_id && review.attempt_id && <a href={`${path}/proofs/${encodeURIComponent(review.attempt_id)}`} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">Open payment proof</a>}
-              <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch} onUpdated={() => { setOffset(0); setRefresh((value) => value + 1); }} />
-            </details>
-          );
+          const path=prefix+"/bookings/"+encodeURIComponent(review.booking_id);
+          const proofUrl=review.attempt_id ? path+"/proofs/"+encodeURIComponent(review.attempt_id) : "";
+          return <details key={review.attempt_id??review.booking_id}
+            className="rounded-xl border border-slate-200 bg-white p-3" open={undefined}>
+            <summary className="cursor-pointer list-item space-y-1 text-sm">
+              <span className="font-semibold text-slate-900">
+                {review.attendee_count} คน · ยอดจอง {money.format(review.total_minor/100)}
+              </span>
+              <span className="ml-2 rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
+                {review.attempt_id?"รอตรวจสลิป":"ยังไม่ส่งสลิป"}
+              </span>
+              <span className="block break-all text-xs text-slate-500">เลขจอง {review.booking_reference}</span>
+            </summary>
+            <div className="mt-3 space-y-3 border-t border-slate-200 pt-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="font-semibold">ยอดที่ต้องชำระ
+                    <span className="ml-2 text-lg text-slate-900">{money.format(review.total_minor/100)}</span>
+                  </p>
+                  {review.claimed_minor!=null && <p>ยอดที่ลูกค้าแจ้ง:
+                    <strong className={review.claimed_minor===review.total_minor?"ml-2 text-emerald-700":"ml-2 text-rose-700"}>
+                      {money.format(review.claimed_minor/100)}
+                    </strong>
+                  </p>}
+                  {review.claimed_transfer_ms!=null && <p className="text-slate-600">
+                    เวลาโอน: {new Date(review.claimed_transfer_ms).toLocaleString("th-TH")}
+                  </p>}
+                  {review.receiver_name && <p className="text-slate-600">บัญชีรับเงิน: {review.receiver_name}</p>}
+                  {review.claimed_reference && <p className="break-all text-slate-600">
+                    เลขอ้างอิง: {review.claimed_reference}</p>}
+                </div>
+                <div>
+                  {proofUrl && review.proof_id ? <>
+                    <p className="mb-2 font-semibold">ภาพสลิปที่ลูกค้าส่ง</p>
+                    <a href={proofUrl} target="_blank" rel="noopener noreferrer"
+                      aria-label="เปิดภาพสลิปขนาดเต็ม">
+                      <img src={proofUrl} alt="Payment slip submitted by customer"
+                        loading="lazy" className="max-h-80 w-full rounded-lg border border-slate-200 bg-white object-contain"/>
+                    </a>
+                    <a href={proofUrl} target="_blank" rel="noopener noreferrer"
+                      className="mt-2 inline-block text-sm font-semibold text-blue-700 underline">
+                      เปิดภาพสลิปขนาดเต็ม
+                    </a>
+                  </> : <p className="rounded-lg bg-amber-50 p-3 text-amber-800">
+                    ยังไม่มีสลิปที่ลูกค้าอัปโหลด
+                  </p>}
+                </div>
+              </div>
+              <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch}
+                onUpdated={()=>{setOffset(0);setRefresh(v=>v+1);}}/>
+            </div>
+          </details>;
         })}
         {rows && <div className="flex gap-4">
           {offset > 0 && <button type="button" className="underline" onClick={() => setOffset(Math.max(0, offset - 20))}>Previous</button>}

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.9 - 2026-11-17
+
+- Redesign the Customer Paid Booking payment page into four clear numbered steps: **1 Amount to pay**, **2 Scan payment QR / transfer to bank account**, **3 Upload payment slip**, and **4 Wait for organizer confirmation**.
+- Make payment slip selection and submission prominent. The booked amount is pre-filled, and a provisional current transfer time is initialized when the slip is selected; the customer can correct either under an expandable advanced section. Move technical attendee/coupon details into a disclosure.
+- Redesign Admin payment review as an inline bank-transfer comparison: attendees and amount, customer's reported amount/time, and a secure inline slip image with a link to enlarge. Make **Confirm funds received & Approve** the primary explicit action; rejection and detailed adjustments are secondary.
+- Use the booking amount and submitted transfer time automatically; no recurring amount, time or review reason typing for routine external/manual payments. A per-proof audit reference is supplied when the customer did not provide a bank transaction ID, while independent bank verification remains the administrator's responsibility.
+- Disable the routine approval action for submissions with missing proof, mismatched amount or known duplicate proof. Preserve server-side version/idempotency checks, immutable audit trail, duplicate detection, actual approval state transition, ticket issuance and confirmation email queue.
+- Prioritize bookings with uploaded proof ahead of bookings still awaiting uploads in the Admin review queue. Keep the broader booking operations and statistics accessible but outside the main review flow.
+- Browser-tested Admin review and customer four-step payment flow at 390px and 1280px with no horizontal overflow or JavaScript errors; backend approval test covers the streamlined review payload.
+
 ## 0.10.8 - 2026-11-17
 
 - Compact the Event Workspace layout for one event, particularly on 13-inch laptop screens. Remove the unused Search / Filter / Sort / lifecycle counts when a single event is selected, while retaining New Event and Refresh controls.
