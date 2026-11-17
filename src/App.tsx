@@ -1,5 +1,6 @@
 import { AttendeeThemeSelect, type ThemeMode } from "./components/AttendeeThemeSelect";
 import { PaidRegistrationSettings } from "./features/registrations/components/PaidRegistrationSettings";
+import { PaidCouponManager } from "./features/registrations/components/PaidCouponManager";
 import { PaidReviewQueue } from "./features/registrations/components/PaidReviewQueue";
 import { lazy, Suspense, useDeferredValue, useState, useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
@@ -10919,6 +10920,7 @@ export default function App() {
               {selectedEventId && (role === "owner" || role === "admin") && (
                 <>
                   <PaidRegistrationSettings key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
+                  <PaidCouponManager key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
                   <PaidReviewQueue key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch} />
                 </>
               )}

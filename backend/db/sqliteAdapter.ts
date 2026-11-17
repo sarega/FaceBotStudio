@@ -1,3 +1,4 @@
+import { listCoupons, upsertCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
 import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
@@ -1479,6 +1480,7 @@ export class SqliteAppDatabase implements AppDatabase {
         if (name === "050_paid_external_payment.sql" && (this.db.pragma("table_info(paid_event_settings)") as { name: string }[]).some((column) => column.name === "payment_mode")) continue;
         this.db.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
       }
+      this.db.exec(readFileSync(new URL("./migrations/054_paid_coupons.sql", import.meta.url), "utf8").split("-- Complimentary bookings")[0]);
       for (const table of ["registrations", "event_performances"]) {
         this.db.exec(`
           CREATE TRIGGER IF NOT EXISTS trg_paid_${table}_legacy_guard BEFORE INSERT ON ${table}
@@ -1523,6 +1525,34 @@ export class SqliteAppDatabase implements AppDatabase {
       .some((column) => column.name === "accommodation_discount_minor")) {
       this.db.exec("ALTER TABLE paid_categories ADD COLUMN accommodation_discount_minor INTEGER NOT NULL DEFAULT 0 CHECK (accommodation_discount_minor >= 0 AND accommodation_discount_minor <= unit_minor)");
     }
+    // SQLite has no DROP CHECK; rebuild paid_bookings once to permit zero-value
+    // complimentary coupon bookings. Existing rows and indexes are preserved.
+    const bookingsSchema = (this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='paid_bookings'",
+    ).get() as {sql:string}).sql;
+    if (bookingsSchema.includes("total_minor BETWEEN 1 AND")) {
+      const indexes = this.db.prepare(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='paid_bookings' AND sql IS NOT NULL",
+      ).all() as {sql:string}[];
+      this.db.pragma("foreign_keys=OFF");
+      try {
+        this.db.transaction(() => {
+          const changed = bookingsSchema.replace("CREATE TABLE paid_bookings",
+            "CREATE TABLE paid_bookings_coupon_tmp").replace("total_minor BETWEEN 1 AND",
+            "total_minor BETWEEN 0 AND");
+          if (changed === bookingsSchema) throw new Error("Coupon migration schema mismatch");
+          this.db.exec(changed);
+          const columns = (this.db.pragma("table_info(paid_bookings)") as {name:string}[])
+            .map((col) => col.name).join(",");
+          this.db.exec("INSERT INTO paid_bookings_coupon_tmp ("+columns+") SELECT "+columns+" FROM paid_bookings");
+          this.db.exec("DROP TABLE paid_bookings");
+          this.db.exec("ALTER TABLE paid_bookings_coupon_tmp RENAME TO paid_bookings");
+          for (const index of indexes) this.db.exec(index.sql);
+          if ((this.db.pragma("foreign_key_check") as unknown[]).length)
+            throw new Error("Coupon migration foreign key check failed");
+        }).immediate();
+      } finally { this.db.pragma("foreign_keys=ON"); }
+    }
     this.initialized = true;
   }
 
@@ -1541,6 +1571,18 @@ export class SqliteAppDatabase implements AppDatabase {
       }
       return step.value;
     }).immediate();
+  }
+
+  async listPaidCoupons(eventId: string) {
+    return this.runPaidCommand(eventId, () => listCoupons(eventId));
+  }
+
+  async savePaidCoupon(eventId: string, input: CouponInput) {
+    return this.runPaidCommand(eventId, () => upsertCoupon(eventId,input));
+  }
+
+  async quotePaidCoupon(eventId: string, customerId: string, code: string, subtotal: number) {
+    return this.runPaidCommand(eventId, () => applyCoupon(eventId,customerId,code,subtotal));
   }
 
   async createPaidBooking(input: PaidBookingInput) {

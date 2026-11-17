@@ -11,7 +11,8 @@ type Booking = {
   total_due_minor: number;
   due_at: string;
 };
-type Detail = { status: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual"; attendees: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
+type Detail = { status: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
+  coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 
 function PaidProofForm({ path, version, totalMinor, paymentMode, onSubmitted }: {
@@ -195,7 +196,9 @@ export function CustomerPaidBookings() {
       didScrollToInvoice.current = false;
     } catch (failure) {
       const code = failure instanceof Error ? failure.message : "";
-      setError(code === "capacity_exhausted"
+      setError(code === "coupon_exhausted" || code === "coupon_unavailable"
+        ? "คูปองของรายการเดิมไม่สามารถใช้ได้แล้ว กรุณาทำรายการใหม่ / Original coupon unavailable. Create a new booking."
+        : code === "capacity_exhausted"
         ? "ที่นั่งเต็มแล้ว กรุณาติดต่อผู้จัดงาน / No capacity available for this booking."
         : code === "registration_unavailable" || code === "hold_expired"
           ? "ปิดรับลงทะเบียนแล้ว กรุณาติดต่อผู้จัดงาน / Registration window is closed."
@@ -263,6 +266,22 @@ export function CustomerPaidBookings() {
                 )}
               </li>
             ))}</ul>
+            {detail.coupon && <div className="space-y-1 rounded-lg border border-emerald-500/30 p-3 text-sm">
+              <p className="font-semibold text-emerald-300">Coupon: {detail.coupon.code}</p>
+              <div className="flex justify-between"><span>Subtotal</span>
+                <span>{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
+                  .format(detail.coupon.subtotal_minor/100)}</span></div>
+              <div className="flex justify-between text-emerald-300"><span>Discount</span>
+                <span>−{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
+                  .format(detail.coupon.discount_minor/100)}</span></div>
+              <div className="flex justify-between font-semibold"><span>Total due</span>
+                <span>{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
+                  .format(booking.total_due_minor/100)}</span></div>
+            </div>}
+            {detail.status==="confirmed" && booking.total_due_minor===0 &&
+              <p role="status" className="rounded-lg bg-emerald-900/40 p-3 text-emerald-200">
+                คูปองฟรี: ยืนยันแล้ว ไม่ต้องโอนเงิน / Complimentary booking confirmed. No payment required.
+              </p>}
             {detail.status === "awaiting_payment" && <>
               <p className="font-semibold">ใบแจ้งชำระเงิน / Payment invoice · {new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"}).format(booking.total_due_minor / 100)}</p>
               {detail.payment_mode === "external_manual" && <ExternalPaymentInstructions eventId={booking.event_id} bookingId={booking.id} />}

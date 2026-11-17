@@ -12,6 +12,10 @@ const errors: Record<string, string> = {
   CUSTOMER_NOT_AUTHENTICATED: "Sign in with your customer account to book.",
   "Verified customer account required": "Verify your customer email before booking.",
   capacity_exhausted: "There is not enough capacity for this group.",
+  coupon_unavailable: "Coupon unavailable or expired. Please choose another code.",
+  coupon_exhausted: "Coupon redemption limit reached.",
+  coupon_invalid: "Invalid coupon code.",
+
   quote_stale: "The registration form has changed. Refresh the page before booking.",
   invalid_seminar_answers: "Check the seminar answers and complete the required fields.",
   CUSTOMER_APP_DISABLED: "Registration is currently unavailable.",
@@ -56,6 +60,12 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [booking, setBooking] = useState<Booking>();
+  const [couponCode,setCouponCode]=useState("");
+  const [couponPreview,setCouponPreview]=useState<{
+    code:string; subtotal_minor:number; discount_minor:number; total_minor:number;
+  }|null>(null);
+  const [couponError,setCouponError]=useState("");
+  const [couponBusy,setCouponBusy]=useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [messengerCode, setMessengerCode] = useState("");
@@ -121,24 +131,49 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
     return () => controller.abort();
   }, [enabled, prefix, recoveryKey]);
 
+  async function applyCouponPreview() {
+    if(!catalog || couponBusy) return;
+    setCouponBusy(true);setCouponError("");
+    try {
+      const response=await customerApi<{
+        code:string;subtotal_minor:number;discount_minor:number;total_minor:number;
+      }>(prefix+"/paid-registration/coupon-preview",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({coupon_code:couponCode,pricing_version:catalog.pricing_version,attendees}),
+      });
+      setCouponPreview(response);
+    } catch(e) {
+      setCouponPreview(null);
+      const reason=e instanceof Error?e.message:"";
+      const messages:Record<string,string>={
+        coupon_unavailable:"โค้ดนี้ใช้ไม่ได้หรือหมดอายุ / Coupon unavailable",
+        coupon_exhausted:"คูปองครบจำนวนแล้ว / Coupon fully redeemed",
+        coupon_invalid:"รหัสคูปองไม่ถูกต้อง / Invalid coupon",
+      };
+      setCouponError(messages[reason]||"ไม่สามารถใช้คูปองได้ / Coupon could not be applied");
+    } finally {setCouponBusy(false);}
+  }
+  function invalidateCoupon() {setCouponPreview(null);setCouponError("");}
   function update(index: number, values: Partial<Attendee>) {
+    invalidateCoupon();
     setAttendees((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...values } : row));
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy || !catalog) return;
-    if (attendees.every((row) => {
-      const category = catalog.categories.find((c) => c.id === row.category_id);
-      return (category?.unit_minor ?? 0) -
-        (row.answers?.accommodation === "no" ? category?.accommodation_discount_minor ?? 0 : 0) === 0;
-    })) {
+    if (couponCode.trim() && !couponPreview) {
+      setCouponError(locale === "th" ? "กรุณากดใช้โค้ดก่อนยืนยันการจอง" : "Click Apply to validate your coupon.");
+      return;
+    }
+    if (total===0 && !couponPreview) {
       setError("รายการนี้ไม่มีค่าชำระ กรุณาลงทะเบียนพร้อมผู้ที่มีค่าสัมมนา / Add a paying attendee to this booking.");
       return;
     }
     setBusy(true);
     setError("");
-    const request = JSON.stringify({ pricing_version: catalog.pricing_version, contact: { name: contact }, answers, attendees });
+    const request = JSON.stringify({ pricing_version: catalog.pricing_version, contact: { name: contact }, answers,
+      attendees, coupon_code:couponPreview?.code });
     if (command.current?.request !== request) command.current = { request, key: crypto.randomUUID() };
     try {
       const result = await customerApi<Booking>(`${prefix}/paid-bookings`, {
@@ -269,11 +304,40 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
                       </span>
                     )}
                   </p>}
-                {attendees.length > 1 && <button type="button" onClick={() => setAttendees((rows) => rows.filter((_, rowIndex) => rowIndex !== index))} className="text-sm text-blue-700 underline">{locale === "th" ? "ลบผู้เข้าร่วม" : "Remove attendee"}</button>}
+                {attendees.length > 1 && <button type="button" onClick={() => {invalidateCoupon();setAttendees((rows) => rows.filter((_, rowIndex) => rowIndex !== index));}} className="text-sm text-blue-700 underline">{locale === "th" ? "ลบผู้เข้าร่วม" : "Remove attendee"}</button>}
               </fieldset>
             ))}
-            {attendees.length < 100 && <button type="button" onClick={() => setAttendees((rows) => [...rows, { category_id: catalog.categories[0].id, first_name: "", last_name: "" }])} className="text-sm text-blue-700 underline">{locale === "th" ? "+ เพิ่มผู้เข้าร่วม" : "+ Add attendee"}</button>}
-            <p className="font-semibold">{locale === "th" ? "ยอดชำระ" : "Total due"} {money.format(total / 100)}</p>
+            {attendees.length < 100 && <button type="button" onClick={() => {invalidateCoupon();setAttendees((rows) => [...rows, { category_id: catalog.categories[0].id, first_name: "", last_name: "" }]);}} className="text-sm text-blue-700 underline">{locale === "th" ? "+ เพิ่มผู้เข้าร่วม" : "+ Add attendee"}</button>}
+            <div className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">
+              <label htmlFor="public-coupon-code" className="font-semibold">{locale==="th"?"โค้ดส่วนลด":"Coupon / Discount code"}</label>
+              <div className="flex gap-2">
+                <input id="public-coupon-code" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2"
+                  value={couponCode} onChange={e=>{setCouponCode(e.target.value);invalidateCoupon();}}
+                  placeholder="SPECIAL20" maxLength={32} autoCapitalize="characters"/>
+                <button type="button" disabled={couponBusy||!couponCode.trim()}
+                  className="min-h-10 rounded-lg border border-blue-400 px-4 py-2 font-semibold text-blue-700 disabled:opacity-50"
+                  onClick={()=>void applyCouponPreview()}>{couponBusy?"…":locale==="th"?"ใช้โค้ด":"Apply"}</button>
+              </div>
+              {couponError&&<p role="alert" className="text-red-700">{couponError}</p>}
+              {couponPreview&&<p role="status" className="text-emerald-700">
+                {couponPreview.code} — {locale==="th"?"ลด":"Discount"}
+                {" "+money.format(couponPreview.discount_minor/100)}
+              </p>}
+              <div className="flex items-center justify-between">
+                <span>{locale==="th"?"ยอดก่อนคูปอง":"Subtotal"}</span><span>{money.format(total/100)}</span>
+              </div>
+              {couponPreview&&<div className="flex items-center justify-between text-emerald-700">
+                <span>{locale==="th"?"ส่วนลด":"Coupon discount"}</span>
+                <span>−{money.format(couponPreview.discount_minor/100)}</span>
+              </div>}
+              <div className="flex items-center justify-between border-t pt-2 font-bold">
+                <span>{locale==="th"?"ยอดชำระ":"Total due"}</span>
+                <span>{money.format((couponPreview?.total_minor??total)/100)}</span>
+              </div>
+              {couponPreview?.total_minor===0&&<p className="text-emerald-700">
+                {locale==="th"?"คูปองฟรี: ไม่ต้องชำระเงิน จะได้รับบัตรทันที":"Free coupon: no payment needed, tickets issued immediately"}
+              </p>}
+            </div>
             <button className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white" type="submit">{busy ? (locale === "th" ? "กำลังจอง…" : "Reserving…") : (locale === "th" ? "ยืนยันการจอง" : "Reserve places")}</button>
           </fieldset>
 

@@ -537,6 +537,63 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await (await refundRequest()).json()).payment_status, "refunded");
     const afterRefund = await fetch(`${eventPrefix}/bookings/by-reference/${manualBooking.reference}`, { headers: staffHeaders });
     assert.equal((await afterRefund.json()).booking.refunds.length, 1);
+    // Coupons API: admin-only management, customer quote, one-use complimentary
+    // booking, credentials, and no payment proof required.
+    const couponAdminPath=origin+"/api/events/"+newExternalEvent.id+"/paid-registration/coupons";
+    const couponRule={code:"TESTFREE",kind:"free",value_minor:0,max_uses:1,
+      per_customer_limit:1,starts_ms:null,ends_ms:null,enabled:true};
+    const forbidden=await fetch(couponAdminPath,{headers:headers("test-owner")});
+    assert.equal(forbidden.status,401);
+    const couponSaved=await fetch(couponAdminPath,{method:"PUT",headers:staffCreateHeaders,
+      body:JSON.stringify(couponRule)});
+    assert.equal(couponSaved.status,200,await couponSaved.clone().text());
+    const couponsResponse=await fetch(couponAdminPath,{headers:staffCreateHeaders});
+    assert.equal(couponsResponse.status,200);
+    assert.equal((await couponsResponse.json()).coupons[0].code,"TESTFREE");
+    const couponPage=origin+"/api/public/events/"+newExternalEvent.slug;
+    const couponPayload={pricing_version:Number(newExternalSettings?.version),
+      coupon_code:"testfree",
+      attendees:[{category_id:"general",first_name:"Coupon",last_name:"Guest"}]};
+    const preview=await fetch(couponPage+"/paid-registration/coupon-preview",{
+      method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
+        "x-csrf-token":"fixture-csrf"},body:JSON.stringify(couponPayload),
+    });
+    assert.equal(preview.status,200,await preview.clone().text());
+    const quote=await preview.json();
+    assert.equal(quote.subtotal_minor,65000);
+    assert.equal(quote.discount_minor,65000);
+    assert.equal(quote.total_minor,0);
+    const freeBookingResponse=await fetch(couponPage+"/paid-bookings",{
+      method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
+        "x-csrf-token":"fixture-csrf","Idempotency-Key":"coupon-free-http"},
+      body:JSON.stringify({...couponPayload,contact:{name:"Coupon Test"}}),
+    });
+    assert.equal(freeBookingResponse.status,201,await freeBookingResponse.clone().text());
+    const freeBooking=await freeBookingResponse.json();
+    assert.equal(freeBooking.total_due_minor,0);
+    assert.equal(freeBooking.status,"confirmed");
+    const ownerFreeUrl=origin+"/api/customer/paid-bookings/"+newExternalEvent.id+"/"+freeBooking.id;
+    const ownerFree=await fetch(ownerFreeUrl,{headers:headers("test-owner")});
+    assert.equal(ownerFree.status,200);
+    const freeDetails=await ownerFree.json();
+    assert.equal(freeDetails.payment_state,"verified");
+    assert.equal(freeDetails.coupon.code,"TESTFREE");
+    assert.equal(freeDetails.coupon.discount_minor,65000);
+    const ticket=await fetch(ownerFreeUrl+"/attendees/"+freeDetails.attendees[0].id+
+      "/credential",{headers:headers("test-owner")});
+    assert.equal(ticket.status,200);
+    const freeEmailQueue=await db.listNotificationDeliveries({
+      related_type:"paid_booking",related_id:freeBooking.id});
+    assert.ok(freeEmailQueue.some(row=>row.kind==="paid_booking.confirmed"));
+    const overLimit=await fetch(couponPage+"/paid-bookings",{
+      method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
+        "x-csrf-token":"fixture-csrf","Idempotency-Key":"coupon-free-http-2"},
+      body:JSON.stringify({...couponPayload,contact:{name:"Coupon Test"}}),
+    });
+    assert.equal(overLimit.status,409,await overLimit.clone().text());
+    assert.equal((await overLimit.json()).error,"coupon_exhausted");
+    const afterCoupon=await fetch(couponAdminPath,{headers:staffCreateHeaders});
+    assert.equal((await afterCoupon.json()).coupons[0].uses,1);
     await db.updateEvent(event.id, { status: "cancelled" });
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 404);

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0 - 2026-11-17
+
+- Introduce Event-scoped Coupons & Promotions under Registrations, with editable, enable/disable rules and use counts. Support percentage, fixed THB, and complimentary (100% free) codes, optional active dates, overall quota and per-customer quota.
+- Checkout includes Apply Coupon preview with a backend quote based on actual category/accommodation selections. Recompute and validate authoritatively inside the atomic paid-booking transaction; allow at most one coupon per booking, prevent silently ignoring un-applied codes.
+- Persist immutable coupon subtotal and applied discount snapshots on each booking and display breakdown in My Bookings. Previously placed bookings keep their original financial amounts when an admin changes a rule.
+- A zero-THB coupon booking is immediately confirmed and verified with attendee admission QR credentials and a bilingual complimentary confirmation email; no bank transfer or slip upload.
+- Reserve coupon usage for live unpaid holds as well as verified bookings; automatically release quota for expired/cancelled holds. Reinstating an expired coupon booking re-checks promotion dates, enabled state, and quota.
+- Add Postgres migration 054 and idempotent SQLite table migration supporting zero-THB booking totals, preserving historical data.
+- Add end-to-end HTTP and database tests for admin authorization, preview, percent/fixed/free discounts, use limits, expiry reclaims, idempotency, zero-total credentials and email queue.
+- Validate mobile coupon checkout at 320px, 390px and desktop 1366px.
+
 ## 0.9.9 - 2026-11-17
 
 - Added a configurable no-accommodation discount to each paid registration category (adult, child, etc.), with backward-compatible 0 THB default.

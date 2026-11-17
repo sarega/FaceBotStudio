@@ -466,6 +466,54 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       attendees: priceInput.attendees.map((attendee) => ({ ...attendee, answers: {} })),
     }), /invalid_seminar_answers/);
 
+    const couponEvent = await db.createEvent({ name: "Coupon test", organizer_id: "org_default" });
+    await db.updateEvent(couponEvent.id, { status: "active" });
+    await db.savePaidSettings(couponEvent.id, {
+      ...settings, capacity: 12, categories: [{id:"adult",label:"Adult",unitMinor:340000,quota:null}],
+      paymentMode:"external_manual",
+    });
+    const couponRules = [
+      {code:"SPECIAL20",kind:"percent" as const,value_minor:2000,max_uses:2,per_customer_limit:2,
+       starts_ms:null,ends_ms:null,enabled:true},
+      {code:"THB100",kind:"fixed" as const,value_minor:10000,max_uses:null,per_customer_limit:null,
+       starts_ms:null,ends_ms:null,enabled:true},
+      {code:"FREE100",kind:"free" as const,value_minor:0,max_uses:1,per_customer_limit:1,
+       starts_ms:null,ends_ms:null,enabled:true},
+    ];
+    for (const rule of couponRules) await db.savePaidCoupon(couponEvent.id,rule);
+    assert.equal((await db.listPaidCoupons(couponEvent.id)).length,3);
+    const couponQuote=await db.quotePaidCoupon(couponEvent.id,customer.id,"special20",340000);
+    assert.equal(couponQuote.discount_minor,68000);
+    assert.equal(couponQuote.total_minor,272000);
+    const couponInput = {...command,eventId:couponEvent.id,receiver:undefined,
+      attendees:[{categoryId:"adult",firstName:"Coupon",lastName:"Guest"}]};
+    const twenty=await db.createPaidBooking({...couponInput,key:"coupon-20",couponCode:"SPECIAL20"});
+    assert.equal(twenty.totalMinor,272000);
+    assert.equal(twenty.discountMinor,68000);
+    assert.equal(((await db.readOwnedPaidBooking(couponEvent.id,twenty.id,customer.id))?.coupon as { code: string } | undefined)?.code,"SPECIAL20");
+    assert.deepEqual(await db.createPaidBooking({...couponInput,key:"coupon-20",couponCode:"SPECIAL20"}),twenty);
+    const fixed=await db.createPaidBooking({...couponInput,key:"coupon-fixed",couponCode:"THB100"});
+    assert.equal(fixed.totalMinor,330000);
+    const free=await db.createPaidBooking({...couponInput,key:"coupon-free",couponCode:"FREE100"});
+    assert.equal(free.totalMinor,0);
+    assert.equal(free.state,"confirmed");
+    const zeroBooking=fixture.prepare("SELECT total_minor,payment_state FROM paid_bookings WHERE id=?")
+      .get(free.id) as {total_minor:number;payment_state:string};
+    assert.deepEqual(zeroBooking,{total_minor:0,payment_state:"verified"});
+    assert.equal(fixture.prepare("SELECT COUNT(*) FROM paid_credentials WHERE booking_id=?").pluck().get(free.id),1);
+    assert.ok((await db.listNotificationDeliveries({related_type:"paid_booking",related_id:free.id}))
+      .some(entry=>entry.kind==="paid_booking.confirmed"));
+    await assert.rejects(db.createPaidBooking({...couponInput,key:"coupon-free-again",couponCode:"FREE100"}),
+      /coupon_exhausted/);
+    await db.createPaidBooking({...couponInput,key:"coupon-20-second",couponCode:"SPECIAL20"});
+    await assert.rejects(db.createPaidBooking({...couponInput,key:"coupon-20-third",couponCode:"SPECIAL20"}),
+      /coupon_exhausted/);
+    fixture.prepare("UPDATE paid_bookings SET state='expired',created_ms=1,due_ms=2 WHERE id=?").run(twenty.id);
+    const released=await db.createPaidBooking({...couponInput,key:"coupon-20-released",couponCode:"SPECIAL20"});
+    assert.equal(released.totalMinor,272000);
+    assert.equal((await db.listPaidCoupons(couponEvent.id)).find(c=>c.code==="SPECIAL20")?.uses,2);
+    await assert.rejects(db.reinstateOwnedPaidBooking(couponEvent.id,twenty.id,customer.id),
+      /coupon_exhausted/);
     assert.deepEqual(fixture.prepare("SELECT action FROM paid_audit_events WHERE booking_id=? ORDER BY occurred_ms").all(receipt.id), [
       { action: "create" }, { action: "expire" },
     ]);

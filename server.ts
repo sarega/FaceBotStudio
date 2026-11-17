@@ -12733,9 +12733,13 @@ async function sendCurrentNotificationDelivery(delivery: NotificationDeliveryRow
       recipient: account.email,
       payload_json: JSON.stringify({
         subject,
-        text: "ยืนยันการชำระเงินและลงทะเบียนแล้ว ดู QR เข้างานของแต่ละคน: " + link +
-          "\nPayment confirmed. View each attendee's admission QR: " + link,
-        html: "<p>ยืนยันการชำระเงินและลงทะเบียนแล้ว</p><p>Payment confirmed. Your registration is approved.</p>" +
+        text: (Number(booking.total_minor) === 0
+          ? "ยืนยันการลงทะเบียนด้วยคูปองฟรีแล้ว ไม่มีค่าชำระ\nComplimentary registration confirmed. No payment is required. "
+          : "ยืนยันการชำระเงินและลงทะเบียนแล้ว\nPayment confirmed. ") +
+          "ดู QR เข้างานของแต่ละคน / View admission tickets: " + link,
+        html: (Number(booking.total_minor) === 0
+          ? "<p>ยืนยันการลงทะเบียนด้วยคูปองฟรีแล้ว ไม่ต้องชำระเงิน / Complimentary registration confirmed. No payment required.</p>"
+          : "<p>ยืนยันการชำระเงินและลงทะเบียนแล้ว / Payment confirmed. Registration approved.</p>") +
           '<p><a href="' + safeLink + '">ดูบัตรเข้างาน / View admission QR tickets</a></p>',
       }),
     });
@@ -17126,6 +17130,67 @@ async function startServer() {
 
   const paidSettingsPath = "/api/events/:eventId/paid-registration/settings";
   const paidSettingsScope = requireEventScope({ paramKey: "eventId", queryKey: null, bodyKey: null, allowDefault: false, allowCheckinAccess: false });
+
+  app.get("/api/events/:eventId/paid-registration/coupons",
+    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
+      try { return res.set("Cache-Control","private, no-store")
+        .json({coupons:await appDb.listPaidCoupons(req.eventScope!.eventId)}); }
+      catch {return res.status(500).json({error:"coupon_list_failed"});}
+    });
+  app.put("/api/events/:eventId/paid-registration/coupons",
+    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
+      const body=readObjectBody(req);
+      try {
+        const saved=await appDb.savePaidCoupon(req.eventScope!.eventId,{
+          code:String(body.code||""),kind:body.kind as "percent"|"fixed"|"free",
+          value_minor:Number(body.value_minor),max_uses:body.max_uses==null?null:Number(body.max_uses),
+          per_customer_limit:body.per_customer_limit==null?null:Number(body.per_customer_limit),
+          starts_ms:body.starts_ms==null?null:Number(body.starts_ms),
+          ends_ms:body.ends_ms==null?null:Number(body.ends_ms),
+          enabled:body.enabled===true,
+        });
+        await recordAudit(req,"paid_registration.coupon_updated","event",req.eventScope!.eventId,
+          {code:saved.code,kind:saved.kind,enabled:saved.enabled});
+        return res.set("Cache-Control","private, no-store").json({coupon:saved});
+      } catch(error) {
+        if(error instanceof PaidBookingError) return res.status(400).json({error:error.code});
+        return res.status(500).json({error:"coupon_save_failed"});
+      }
+    });
+  app.post("/api/public/events/:slug/paid-registration/coupon-preview",
+    publicRegistrationRateLimit,requireVerifiedCustomer,async(req:AuthenticatedRequest,res)=>{
+      try {
+        const match=await resolvePublicEventBySlug(req.params.slug);
+        if(!match || !isTruthySetting(match.settings.event_public_page_enabled??"0"))
+          return res.status(404).json({error:"registration_unavailable"});
+        const catalog=await appDb.readPaidCatalog(match.event.id);
+        if(!catalog) return res.status(404).json({error:"registration_unavailable"});
+        const body=readObjectBody(req);
+        if(catalog.pricing_version!==body.pricing_version || !Array.isArray(body.attendees) ||
+           body.attendees.length<1 || body.attendees.length>100)
+          return res.status(409).json({error:"quote_stale"});
+        let subtotal=0;
+        for(const attendee of body.attendees) {
+          if(!attendee || typeof attendee!=="object") return res.status(400).json({error:"invalid_attendees"});
+          const entry=attendee as {category_id?:string;answers?:{accommodation?:string}};
+          const category=catalog.categories.find(c=>c.id===entry.category_id);
+          if(!category) return res.status(400).json({error:"invalid_attendees"});
+          const answer=entry.answers?.accommodation;
+          if(category.accommodation_discount_minor>0 && !["yes","no"].includes(String(answer)))
+            return res.status(400).json({error:"invalid_seminar_answers"});
+          subtotal+=category.unit_minor-(answer==="no"?category.accommodation_discount_minor:0);
+        }
+        if(!Number.isSafeInteger(subtotal)||subtotal<=0)
+          return res.status(400).json({error:"invalid_total"});
+        const preview=await appDb.quotePaidCoupon(match.event.id,req.customer!.account.id,
+          String(body.coupon_code||""),subtotal);
+        return res.set("Cache-Control","private, no-store").json({subtotal_minor:subtotal,...preview});
+      } catch(error) {
+        if(error instanceof PaidBookingError) return res.status(422).json({error:error.code});
+        return res.status(500).json({error:"coupon_quote_failed"});
+      }
+    });
+
   app.get(paidSettingsPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
     try {
       return res.json({ settings: await appDb.readPaidSettings(req.eventScope!.eventId) ?? null });
@@ -17394,10 +17459,12 @@ async function startServer() {
       const booking = await appDb.createPaidBooking({
         eventId: match.event.id, customerId: req.customer!.account.id, key, pricingVersion: Number(body.pricing_version),
         contact: { name, ...contactDetails }, attendees, answers: body.answers, receiver,
+        couponCode: typeof body.coupon_code === "string" ? body.coupon_code : undefined,
       });
       return res.status(201).json({
         id: booking.id, event_id: match.event.id, reference: booking.reference, status: booking.state, payment_status: "unpaid",
         currency: booking.currency, total_due_minor: booking.totalMinor, due_at: new Date(booking.dueMs).toISOString(), version: booking.version,
+        subtotal_minor:booking.subtotalMinor,discount_minor:booking.discountMinor,coupon_code:booking.couponCode,
       });
     } catch (error) {
       if (error instanceof PaidBookingError) {

@@ -1,3 +1,4 @@
+import type { CouponInput } from "./paidCoupons";
 import type { PaidAdminAction } from "./paidRegistration";
 import type { PaidMessengerDraftInput, PaidMessengerConfirmInput, PaidMessengerQuote, PaidMessengerStatus, PaidReviewInput, PaidReviewReceipt, PaidProofInput, PaidProofReceipt, PaidBookingInput, PaidBookingReceipt, PaidCatalog, PaidRow, PaidSettingsInput } from "./paidRegistration";
 export type MessageType = "incoming" | "outgoing";
@@ -1068,6 +1069,10 @@ export interface AppDatabase {
   driver: "postgres" | "sqlite";
   initialize(): Promise<void>;
   ping(): Promise<void>;
+  listPaidCoupons(eventId: string): Promise<PaidRow[]>;
+  savePaidCoupon(eventId: string, input: CouponInput): Promise<PaidRow>;
+  quotePaidCoupon(eventId: string, customerId: string, code: string,
+    subtotal: number): Promise<{ code: string; kind: string; discount_minor: number; total_minor: number }>;
   createPaidBooking(input: PaidBookingInput): Promise<PaidBookingReceipt>;
   readPaidCredential(eventId: string, bookingId: string, attendeeId: string, customerId: string): Promise<string | undefined>;
   checkInPaidCredential(eventId: string, credential: string, actor: string, organizationId?: string): Promise<PaidRow | undefined>;

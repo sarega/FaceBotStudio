@@ -1,3 +1,4 @@
+import { listCoupons, upsertCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
 import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand } from "./paidRegistration";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
@@ -694,6 +695,18 @@ export class PostgresAppDatabase implements AppDatabase {
     } finally {
       client.release();
     }
+  }
+
+  async listPaidCoupons(eventId: string) {
+    return this.runPaidCommand(eventId, () => listCoupons(eventId));
+  }
+
+  async savePaidCoupon(eventId: string, input: CouponInput) {
+    return this.runPaidCommand(eventId, () => upsertCoupon(eventId,input));
+  }
+
+  async quotePaidCoupon(eventId: string, customerId: string, code: string, subtotal: number) {
+    return this.runPaidCommand(eventId, () => applyCoupon(eventId,customerId,code,subtotal));
   }
 
   async createPaidBooking(input: PaidBookingInput) {

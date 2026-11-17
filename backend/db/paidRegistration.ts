@@ -1,3 +1,4 @@
+import { applyCoupon, recordCouponRedemption } from "./paidCoupons";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { decryptPaidProof, encryptPaidProof, paidProofEncryptionConfigured } from "../paidProofEncryption";
 import { normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
@@ -15,17 +16,21 @@ export interface PaidBookingInput {
   receiver?: { id: string; name: string; profileVersion: number };
   contact: { name: string; email?: string; phone?: string };
   answers?: unknown;
+  couponCode?: string;
   attendees: { categoryId: string; firstName: string; lastName: string; email?: string; phone?: string; answers?: unknown }[];
 }
 
 export interface PaidBookingReceipt {
   id: string;
   reference: string;
-  state: "awaiting_payment";
+  state: "awaiting_payment" | "confirmed";
   currency: "THB";
   totalMinor: number;
   dueMs: number;
   version: number;
+  subtotalMinor?: number;
+  discountMinor?: number;
+  couponCode?: string | null;
 }
 
 export class PaidBookingError extends Error {
@@ -75,6 +80,7 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
       attendees.map(({ categoryId, firstName, lastName, email, phone, answers }) => [categoryId, firstName, lastName, email, phone, canonical(answers)])]
     : [pricingVersion, [contact.name, contact.email, contact.phone],
       attendees.map(({ categoryId, firstName, lastName, email, phone }) => [categoryId, firstName, lastName, email, phone])];
+  if (input.couponCode) digestData.push(input.couponCode.trim().toUpperCase());
   const digest = createHash("sha256").update(JSON.stringify(digestData)).digest("hex");
   const [replay] = yield query(
     "SELECT digest,result_json FROM paid_command_keys WHERE principal=? AND event_id=? AND operation='create' AND command_key=?",
@@ -145,17 +151,25 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
     return { ...attendee, label: String(category.label), unitMinor, baseMinor, appliedDiscountMinor: accommodationChoice === "no" ? discountMinor : 0, answers };
   });
   if (!Number.isSafeInteger(totalMinor) || totalMinor < 1) throw new PaidBookingError("invalid_total");
-
+  const subtotalMinor = totalMinor;
+  const applied = input.couponCode ? yield* applyCoupon(eventId,customerId,input.couponCode,subtotalMinor) : null;
+  if (applied) totalMinor = applied.total_minor;
+  const complimentary = totalMinor === 0;
   const id = randomUUID();
   const reference = randomUUID();
-  const receipt: PaidBookingReceipt = { id, reference, state: "awaiting_payment", currency: "THB", totalMinor, dueMs, version: 1 };
+  const receipt: PaidBookingReceipt = { id, reference, state: complimentary ? "confirmed" : "awaiting_payment", currency: "THB", totalMinor, dueMs, version: 1, subtotalMinor, discountMinor: applied?.discount_minor ?? 0, couponCode: applied?.code ?? null };
   yield query(
     `INSERT INTO paid_bookings
-      (id,reference,event_id,organization_id,customer_id,contact_json,pricing_version,state,total_minor,due_ms,created_ms,updated_ms)
-      VALUES (?,?,?,?,?,?,?,'awaiting_payment',?,?,?,?)`,
-    id, reference, eventId, organizationId, customerId, JSON.stringify({ ...contact, answers: bookingAnswers }), pricingVersion, totalMinor, dueMs, now, now,
+      (id,reference,event_id,organization_id,customer_id,contact_json,pricing_version,state,payment_state,total_minor,due_ms,created_ms,updated_ms)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    id, reference, eventId, organizationId, customerId,
+    JSON.stringify({ ...contact, answers: bookingAnswers, coupon: applied ?
+      { code: applied.code, subtotal_minor: subtotalMinor, discount_minor: applied.discount_minor } : null }),
+    pricingVersion, complimentary ? "confirmed" : "awaiting_payment",
+    complimentary ? "verified" : "unpaid", totalMinor, dueMs, now, now,
   );
-  if (settings.payment_mode !== "external_manual" && receiver) {
+  if (applied) yield* recordCouponRedemption(eventId,applied.code,id,customerId,subtotalMinor,applied.discount_minor);
+  if (!complimentary && settings.payment_mode !== "external_manual" && receiver) {
     yield query(
       "INSERT INTO paid_booking_receivers (booking_id,receiver_id,receiver_name,profile_version) VALUES (?,?,?,?)",
       id, receiver.id, receiver.name, receiver.profileVersion,
@@ -170,7 +184,15 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
       attendee.firstName, attendee.lastName, JSON.stringify({ email: attendee.email, phone: attendee.phone, answers: attendee.answers, pricing: { base_minor: attendee.baseMinor, accommodation_discount_minor: attendee.appliedDiscountMinor } }),
     );
   }
-  yield audit(eventId, id, customerId, "create", null, "awaiting_payment", now);
+  if (complimentary) {
+    for (const attendeeId of (yield query("SELECT id FROM paid_attendees WHERE booking_id=?", id))) {
+      yield query("INSERT INTO paid_credentials (id,event_id,booking_id,attendee_id,issued_ms) VALUES (?,?,?,?,?)",
+        randomUUID(),eventId,id,String(attendeeId.id),now);
+    }
+    yield query("INSERT INTO notification_deliveries (id,channel,kind,recipient,related_type,related_id,payload_json,idempotency_key) VALUES (?,'email','paid_booking.confirmed',?,'paid_booking',?,?,?) ON CONFLICT(idempotency_key) DO NOTHING",
+      randomUUID(),customerId,id,JSON.stringify({eventId,customerId}),"paid_booking.confirmed:"+id+":email");
+  }
+  yield audit(eventId, id, customerId, "create", null, complimentary ? "confirmed" : "awaiting_payment", now);
   yield query(
     "INSERT INTO paid_command_keys (principal,event_id,operation,command_key,digest,booking_id,result_json,created_ms) VALUES (?,?,'create',?,?,?,?,?)",
     customerId, eventId, key, digest, id, JSON.stringify(receipt), now,
@@ -280,6 +302,32 @@ export function* reinstateOwnedPaidBooking(eventId: string, bookingId: string, c
       throw new PaidBookingError("capacity_exhausted");
     }
   }
+  // A restored unpaid booking reclaims its original coupon slot only if the
+  // promotion is still enabled, valid, and has quota remaining.
+  const [originalCoupon] = yield query(
+    "SELECT code FROM paid_coupon_redemptions WHERE event_id=? AND booking_id=?",
+    eventId,bookingId,
+  );
+  if (originalCoupon) {
+    const [rule] = yield query(
+      "SELECT enabled,max_uses,per_customer_limit,starts_ms,ends_ms FROM paid_coupons WHERE event_id=? AND code=?",
+      eventId,String(originalCoupon.code),
+    );
+    if (!rule || Number(rule.enabled)!==1 ||
+      (rule.starts_ms!=null && Number(rule.starts_ms)>now) ||
+      (rule.ends_ms!=null && Number(rule.ends_ms)<=now))
+      throw new PaidBookingError("coupon_unavailable");
+    const [usage] = yield query(
+      "SELECT COUNT(*) AS uses,COALESCE(SUM(CASE WHEN r.customer_id=? THEN 1 ELSE 0 END),0) AS personal " +
+      "FROM paid_coupon_redemptions r JOIN paid_bookings b ON b.id=r.booking_id " +
+      "WHERE r.event_id=? AND r.code=? AND (b.state IN ('confirmed','verification_pending') OR " +
+      "(b.state='awaiting_payment' AND b.due_ms>?))",
+      customerId,eventId,String(originalCoupon.code),now,
+    );
+    if ((rule.max_uses!=null && Number(usage.uses)>=Number(rule.max_uses)) ||
+        (rule.per_customer_limit!=null && Number(usage.personal)>=Number(rule.per_customer_limit)))
+      throw new PaidBookingError("coupon_exhausted");
+  }
   // Conditional update prevents competing self-service requests from reviving the same hold twice.
   const updated = yield query(
     "UPDATE paid_bookings SET state='awaiting_payment',payment_state='unpaid',due_ms=?,updated_ms=?,version=version+1 " +
@@ -296,7 +344,7 @@ export function* reinstateOwnedPaidBooking(eventId: string, bookingId: string, c
 export function* readOwnedPaidBooking(eventId: string, id: string, customerId: string): PaidCommand<PaidRow | undefined> {
   const [booking] = yield query(
     `SELECT b.id,b.reference,b.state,b.payment_state,b.currency,b.total_minor,b.due_ms,b.version,
-      s.payment_mode FROM paid_bookings b JOIN paid_event_settings s ON s.event_id=b.event_id
+      s.payment_mode,b.contact_json FROM paid_bookings b JOIN paid_event_settings s ON s.event_id=b.event_id
      WHERE b.event_id=? AND b.id=? AND b.customer_id=?`, eventId, id, customerId,
   );
   if (!booking) return undefined;
@@ -307,6 +355,7 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
   const dueMs = Number(booking.due_ms);
   return {
     ...booking, total_minor: Number(booking.total_minor), due_ms: dueMs,
+    coupon: JSON.parse(String(booking.contact_json ?? "{}")).coupon ?? null,
     state: booking.state === "awaiting_payment" && dueMs <= Date.now() ? "expired" : booking.state,
     attendees: attendees.map(({ contact_json, ...attendee }) => {
       const info = JSON.parse(String(contact_json || "{}"));
