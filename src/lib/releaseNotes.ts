@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.3",
+    date: "2026-11-17",
+    title: "Coupon eligibility diagnostics and event matching",
+    features: [
+      "Checkout distinguishes missing, disabled, not-yet-started, expired and exhausted coupons",
+      "Admin coupon cards show live eligibility based on the server clock",
+      "Coupon management links to the specific Public Event for accurate event matching",
+    ],
+  },
+  {
     version: "0.10.2",
     date: "2026-11-17",
     title: "Clear checkout coupon validation feedback",
