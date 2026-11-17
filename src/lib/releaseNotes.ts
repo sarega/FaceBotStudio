@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.0",
+    date: "2026-11-17",
+    title: "Customer booking dashboard and connected payment review",
+    features: [
+      "Customer dashboard shows actual paid bookings with accurate payment and review counts",
+      "Proof review identifies each Event, customer account, and booking with direct navigation",
+      "Cross-event booking search and Excel-compatible CSV export with payment timestamps",
+    ],
+  },
+  {
     version: "0.10.9",
     date: "2026-11-17",
     title: "Four-step payment and simplified admin slip approval",
