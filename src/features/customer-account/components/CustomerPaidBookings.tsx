@@ -11,7 +11,7 @@ type Booking = {
   total_due_minor: number;
   due_at: string;
 };
-type Detail = { status: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual"; attendees: { id: string; first_name: string; last_name: string; category_label: string }[] };
+type Detail = { status: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual"; attendees: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 
 function PaidProofForm({ path, version, totalMinor, paymentMode, onSubmitted }: {
@@ -247,7 +247,14 @@ export function CustomerPaidBookings() {
             <div ref={paymentAnchorRef} className="scroll-mt-4 space-y-3" aria-label="Payment and booking details">
             <ul className="space-y-1">{detail.attendees.map((attendee) => (
               <li key={attendee.id}>
-                {attendee.first_name} {attendee.last_name} · {attendee.category_label}
+                {attendee.first_name} {attendee.last_name} · {attendee.category_label} ·
+                {" "}{new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(attendee.unit_minor / 100)}
+                {!!attendee.accommodation_discount_minor && (
+                  <span className="ml-2 text-emerald-300">
+                    (No accommodation: −{new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" })
+                      .format(attendee.accommodation_discount_minor / 100)})
+                  </span>
+                )}
                 {detail.status === "confirmed" && (
                   <a className="ml-2 text-blue-300 underline" target="_blank" rel="noopener noreferrer"
                     href={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/attendees/${encodeURIComponent(attendee.id)}/credential`}>

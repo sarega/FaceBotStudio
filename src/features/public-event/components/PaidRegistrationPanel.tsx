@@ -2,7 +2,7 @@ import { paidSeminarFields, type PaidSeminarField } from "../../../../backend/pa
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
 
-type Catalog = { payment_mode?: "promptpay" | "external_manual"; pricing_version: number; fields: PaidSeminarField[]; categories: { id: string; label: string; unit_minor: number }[] };
+type Catalog = { payment_mode?: "promptpay" | "external_manual"; pricing_version: number; fields: PaidSeminarField[]; categories: { id: string; label: string; unit_minor: number; accommodation_discount_minor?: number }[] };
 type Attendee = { category_id: string; first_name: string; last_name: string; answers?: Record<string, string> };
 type Booking = { id: string; event_id: string; reference: string; status: string; total_due_minor: number; due_at: string };
 
@@ -128,7 +128,11 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy || !catalog) return;
-    if (attendees.every((row) => (catalog.categories.find((c) => c.id === row.category_id)?.unit_minor ?? 0) === 0)) {
+    if (attendees.every((row) => {
+      const category = catalog.categories.find((c) => c.id === row.category_id);
+      return (category?.unit_minor ?? 0) -
+        (row.answers?.accommodation === "no" ? category?.accommodation_discount_minor ?? 0 : 0) === 0;
+    })) {
       setError("รายการนี้ไม่มีค่าชำระ กรุณาลงทะเบียนพร้อมผู้ที่มีค่าสัมมนา / Add a paying attendee to this booking.");
       return;
     }
@@ -170,7 +174,13 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
     }
   }
 
-  const total = attendees.reduce((sum, row) => sum + (catalog?.categories.find(({ id }) => id === row.category_id)?.unit_minor ?? 0), 0);
+  const attendeePrice = (row: Attendee) => {
+    const category = catalog?.categories.find(({ id }) => id === row.category_id);
+    if (!category) return 0;
+    return category.unit_minor -
+      (row.answers?.accommodation === "no" ? category.accommodation_discount_minor ?? 0 : 0);
+  };
+  const total = attendees.reduce((sum, row) => sum + attendeePrice(row), 0);
   return (
     <div className="surface-panel space-y-2.5 rounded-2xl p-3 sm:p-3.5">
       <h2 className="text-base font-semibold">{locale === "th" ? "ลงทะเบียน" : "Registration"}</h2>
@@ -250,6 +260,15 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
                 </label>
                 <SeminarInputs fields={catalog.fields.filter(({ scope }) => scope === "attendee")} values={row.answers} locale={locale}
                   onChange={(key, value) => update(index, { answers: { ...row.answers, [key]: value } })} />
+                {(catalog.categories.find((category) => category.id === row.category_id)?.accommodation_discount_minor ?? 0) > 0 &&
+                  <p className="rounded-md bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-900">
+                    {locale === "th" ? "ราคาสุทธิ" : "Attendee price"}: {money.format(attendeePrice(row) / 100)}
+                    {row.answers?.accommodation === "no" && (
+                      <span className="ml-2 text-xs font-normal">
+                        {locale === "th" ? "หักค่าที่พักแล้ว" : "Accommodation deducted"}
+                      </span>
+                    )}
+                  </p>}
                 {attendees.length > 1 && <button type="button" onClick={() => setAttendees((rows) => rows.filter((_, rowIndex) => rowIndex !== index))} className="text-sm text-blue-700 underline">{locale === "th" ? "ลบผู้เข้าร่วม" : "Remove attendee"}</button>}
               </fieldset>
             ))}

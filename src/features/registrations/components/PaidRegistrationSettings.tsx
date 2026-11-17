@@ -2,7 +2,7 @@ import { PaidPaymentDisplaySettings, type PaidPaymentDisplayHandle } from "./Pai
 import { paidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-type Category = { id: string; label: string; price: string; quota: string };
+type Category = { id: string; label: string; price: string; discount: string; quota: string };
 type Settings = {
   version: number;
   capacity: number;
@@ -11,7 +11,7 @@ type Settings = {
   published: 0 | 1;
   payment_mode: "promptpay" | "external_manual";
   fields: PaidSeminarField[];
-  categories: { id: string; label: string; unit_minor: number; quota: number | null }[];
+  categories: { id: string; label: string; unit_minor: number; accommodation_discount_minor?: number; quota: number | null }[];
 };
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type Readiness = {
@@ -47,8 +47,9 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
 }) {
   const [categories, setCategories] = useState<Category[]>(settings?.categories.map((category) => ({
     id: category.id, label: category.label, price: (category.unit_minor / 100).toFixed(2),
+    discount: ((category.accommodation_discount_minor ?? 0) / 100).toFixed(2),
     quota: category.quota == null ? "" : String(category.quota),
-  })) ?? [{ id: "general", label: "", price: "", quota: "" }]);
+  })) ?? [{ id: "general", label: "", price: "", discount: "0", quota: "" }]);
   const [seminar, setSeminar] = useState(settings?.fields ?? []);
   const [paymentMode, setPaymentMode] = useState(settings?.payment_mode === "external_manual" ? "external_manual" : "promptpay");
   const [holdDuration, setHoldDuration] = useState(settings?.hold_minutes ?? 1440);
@@ -64,15 +65,25 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
       ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement).value === "publish";
     const data = new FormData(event.currentTarget);
     const cutoff = String(data.get("cutoff") || "");
-    const parsedCategories = categories.map(({ id, label, price, quota }) => {
+    const parsedCategories = categories.map(({ id, label, price, discount, quota }) => {
       const amount = /^(\d+)(?:\.(\d{1,2}))?$/.exec(price.trim());
+      const deduction = /^(\d+)(?:\.(\d{1,2}))?$/.exec(discount.trim());
       return {
         id, label, unit_minor: amount ? Number(amount[1]) * 100 + Number((amount[2] ?? "").padEnd(2, "0")) : 0,
+        accommodation_discount_minor: deduction ? Number(deduction[1]) * 100 + Number((deduction[2] ?? "").padEnd(2, "0")) : -1,
         quota: quota ? Number(quota) : null,
       };
     });
-    if (parsedCategories.some(({ unit_minor }) => !Number.isSafeInteger(unit_minor) || unit_minor < 0)) {
-      setError("Enter a valid price (0 = free) with up to two decimal places for each category.");
+    if (parsedCategories.some(({ unit_minor, accommodation_discount_minor }) =>
+      !Number.isSafeInteger(unit_minor) || unit_minor < 0 ||
+      !Number.isSafeInteger(accommodation_discount_minor) || accommodation_discount_minor < 0 ||
+      accommodation_discount_minor > unit_minor)) {
+      setError("The no-accommodation discount must be between 0 and the category price.");
+      return;
+    }
+    if (parsedCategories.some((category) => category.accommodation_discount_minor > 0) &&
+        !seminar.some((field) => field.key === "accommodation" && field.scope === "attendee" && field.required)) {
+      setError("Enable 'Accommodation needed' → 'For each attendee' and 'Require' when using discounts.");
       return;
     }
     setBusy(true);
@@ -97,6 +108,7 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
           capacity_in_use: "The new capacity or category quota is below current occupancy.",
           paid_enrollment_disabled: "Public paid registration is disabled for this deployment.",
           payment_profile_unavailable: "Activate a PromptPay receiver for this event’s organizer before publishing.",
+          invalid_pricing_config: "Set Accommodation needed → For each attendee + Required to enable these discounts.",
         };
         const missing = Array.isArray(result.missing)
           ? result.missing.filter((key: unknown) => typeof key === "string").join(", ") : "";
@@ -152,16 +164,35 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
           </label>
           <label>Payment cutoff (device timezone)<input className={field} name="cutoff" type="datetime-local" defaultValue={localDateInput(settings?.cutoff_ms ?? null)} /></label>
         </div>
-        {categories.map((category) => <fieldset key={category.id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-3">
+        {categories.map((category) => <fieldset key={category.id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-2">
           <legend className="px-1">Category · {category.id}</legend>
           <label>Label<input className={field} required maxLength={180} value={category.label} onChange={(event) => update(category.id, { label: event.target.value })} /></label>
           <label>Price (THB, 0 = Free)<input className={field} required inputMode="decimal" value={category.price} onChange={(event) => update(category.id, { price: event.target.value })} /></label>
+          <label>Discount if no accommodation (THB)
+            <input className={field} required inputMode="decimal" value={category.discount}
+              onChange={(event) => {
+                const amount = event.target.value;
+                update(category.id, { discount: amount });
+                if (Number(amount) > 0) {
+                  setSeminar((current) => [
+                    ...current.filter((item) => item.key !== "accommodation"),
+                    { key: "accommodation", scope: "attendee", required: true },
+                  ]);
+                }
+              }} />
+            <span className="block text-xs text-slate-500">Deducted per attendee who selects No. Enter 0 to disable.</span>
+          </label>
           <label>Quota (optional)<input className={field} type="number" min={1} step={1} value={category.quota} onChange={(event) => update(category.id, { quota: event.target.value })} /></label>
           {categories.length > 1 && <button type="button" className="justify-self-start text-blue-700 underline"
             onClick={() => setCategories((current) => current.filter((item) => item.id !== category.id))}>Remove category</button>}
         </fieldset>)}
         {categories.length < 100 && <button type="button" className="text-blue-700 underline"
-          onClick={() => setCategories((current) => [...current, { id: crypto.randomUUID(), label: "", price: "", quota: "" }])}>Add category</button>}
+          onClick={() => setCategories((current) => [...current, { id: crypto.randomUUID(), label: "", price: "", discount: "0", quota: "" }])}>Add category</button>}
+        <p className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+          Pricing option: configure a no-accommodation discount for each category, then set
+          Accommodation needed to <strong>Required / For each attendee</strong> below (automatically enabled when you enter a discount). The invoice amount
+          will be calculated from each attendee's answer.
+        </p>
         <fieldset className="space-y-2 rounded-lg border border-slate-200 p-3">
           <legend className="px-1">Seminar questions</legend>
           {(Object.keys(paidSeminarFields) as PaidSeminarKey[]).map((key) => {

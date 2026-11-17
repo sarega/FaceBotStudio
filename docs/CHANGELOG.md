@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.9 - 2026-11-17
+
+- Added a configurable no-accommodation discount to each paid registration category (adult, child, etc.), with backward-compatible 0 THB default.
+- Admin Paid Registration Settings can enter a THB deduction for customers choosing No for accommodation. An event using the discount must enable Accommodation needed at For each attendee, allowing different choices within one family booking.
+- The public form shows the per-attendee adjusted amount and updates the total immediately; the server independently validates the configured rule, attendee answers and final amount before creating the invoice.
+- Persist a per-attendee pricing snapshot with the full price and applied discount, show net attendee price and accommodation deduction in My Bookings; prior bookings remain unchanged when Admin updates pricing.
+- Added PostgreSQL migration 053 and idempotent SQLite column migration preserving existing data.
+- Added regression tests for adult/child mixed selections, server-side discount calculation, saved attendee prices, missing answers, and invalid discount rules.
+
 ## 0.9.8 - 2026-11-17
 
 - Simplified the paid Public Event registration sidebar. Signed-in attendee identity is represented by the header avatar only; guest sign-in remains compact and email verification is still prompted when needed.

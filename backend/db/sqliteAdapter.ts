@@ -1519,6 +1519,10 @@ export class SqliteAppDatabase implements AppDatabase {
         this.db.pragma("foreign_keys = ON");
       }
     }
+    if (!(this.db.pragma("table_info(paid_categories)") as { name: string }[])
+      .some((column) => column.name === "accommodation_discount_minor")) {
+      this.db.exec("ALTER TABLE paid_categories ADD COLUMN accommodation_discount_minor INTEGER NOT NULL DEFAULT 0 CHECK (accommodation_discount_minor >= 0 AND accommodation_discount_minor <= unit_minor)");
+    }
     this.initialized = true;
   }
 

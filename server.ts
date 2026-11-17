@@ -17280,11 +17280,17 @@ async function startServer() {
         if (!category || typeof category.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(category.id) ||
             ids.has(category.id) || typeof category.label !== "string" || !category.label.trim() ||
             category.label.length > 180 || !integer(category.unit_minor, 0) ||
+            !integer(category.accommodation_discount_minor ?? 0, 0, category.unit_minor) ||
             (category.quota != null && !integer(category.quota, 1, capacity))) {
           return res.status(400).json({ error: "invalid_paid_category" });
         }
         ids.add(category.id);
-        parsed.push({ id: category.id, label: category.label.trim(), unitMinor: category.unit_minor, quota: category.quota ?? null });
+        parsed.push({ id: category.id, label: category.label.trim(), unitMinor: category.unit_minor, accommodationDiscountMinor: category.accommodation_discount_minor ?? 0, quota: category.quota ?? null });
+      }
+      if (parsed.some((category) => category.accommodationDiscountMinor > 0) &&
+          !fields?.some((field) => field.key === "accommodation" && field.scope === "attendee" && field.required)) {
+        return res.status(400).json({ error: "invalid_pricing_config",
+          message: "Set Accommodation needed to Required / For each attendee for category-based discounts." });
       }
       if (published && !paidPublicEnrollmentEnabled(paymentMode)) {
         // Return only environment *names* and booleans, never secret values.

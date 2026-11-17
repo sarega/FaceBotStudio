@@ -80,7 +80,7 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       ],
     };
     assert.deepEqual(await db.readPaidCatalog(event.id), {
-      pricing_version: 1, fields: [], categories: [{ id: "adult", label: "Adult", unit_minor: 25000 }],
+      pricing_version: 1, fields: [], categories: [{ id: "adult", label: "Adult", unit_minor: 25000, accommodation_discount_minor: 0 }],
     });
     const receipt = await db.createPaidBooking(command);
     fixture.prepare("UPDATE customer_accounts SET status='active',email_verified_at=CURRENT_TIMESTAMP WHERE id=?").run(customer.id);
@@ -424,6 +424,48 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.deepEqual(await second.createPaidBooking(withAnswers), seminarBooking);
     const stored = fixture.prepare("SELECT contact_json FROM paid_bookings WHERE id=?").pluck().get(seminarBooking.id);
     assert.deepEqual(JSON.parse(String(stored)).answers, [{ key: "arrival", label: "Arrival date", value: "2026-11-18" }]);
+    // Accommodation discounts are configured per category and calculated per attendee.
+    // The server, not the browser, sets the final prices in booking and invoice.
+    const discountEvent = await db.createEvent({ name: "Accommodation pricing", organizer_id: "org_default" });
+    await db.updateEvent(discountEvent.id, { status: "active" });
+    const discountCategories = [
+      { id: "adult", label: "Adult", unitMinor: 340000, accommodationDiscountMinor: 80000, quota: null },
+      { id: "child", label: "Child", unitMinor: 170000, accommodationDiscountMinor: 40000, quota: null },
+    ];
+    await assert.rejects(db.savePaidSettings(discountEvent.id, {
+      ...settings, categories: discountCategories,
+      fields: [{ key: "accommodation", scope: "booking", required: true }],
+    }), /invalid_pricing_config/);
+    await assert.rejects(db.savePaidSettings(discountEvent.id, {
+      ...settings, categories: [{ ...discountCategories[0], accommodationDiscountMinor: 400000 }],
+      fields: [{ key: "accommodation", scope: "attendee", required: true }],
+    }), /invalid_accommodation_discount/);
+    const discountSettings = await db.savePaidSettings(discountEvent.id, {
+      ...settings, capacity: 6, categories: discountCategories,
+      fields: [{ key: "accommodation", scope: "attendee", required: true }],
+    });
+    assert.equal((discountSettings.categories as unknown[]).length, 2);
+    assert.equal((discountSettings.categories as { id: string; accommodation_discount_minor: number }[])
+      .find((category) => category.id === "adult")?.accommodation_discount_minor, 80000);
+    const discountCatalog = await db.readPaidCatalog(discountEvent.id);
+    assert.equal(discountCatalog?.categories.find((category) => category.id === "child")?.accommodation_discount_minor, 40000);
+    const priceInput = {
+      ...command, eventId: discountEvent.id, key: "discount-booking",
+      attendees: [
+        { categoryId: "adult", firstName: "Adult", lastName: "Without", answers: { accommodation: "no" } },
+        { categoryId: "child", firstName: "Child", lastName: "With", answers: { accommodation: "yes" } },
+      ],
+    };
+    const discounted = await db.createPaidBooking(priceInput);
+    assert.equal(discounted.totalMinor, 260000 + 170000);
+    const priceDetails = await db.readOwnedPaidBooking(discountEvent.id, discounted.id, customer.id);
+    assert.deepEqual((priceDetails?.attendees as { unit_minor: number }[]).map((a) => a.unit_minor),
+      [260000, 170000]);
+    await assert.rejects(db.createPaidBooking({
+      ...priceInput, key: "missing-choice",
+      attendees: priceInput.attendees.map((attendee) => ({ ...attendee, answers: {} })),
+    }), /invalid_seminar_answers/);
+
     assert.deepEqual(fixture.prepare("SELECT action FROM paid_audit_events WHERE booking_id=? ORDER BY occurred_ms").all(receipt.id), [
       { action: "create" }, { action: "expire" },
     ]);

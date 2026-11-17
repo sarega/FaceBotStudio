@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.9",
+    date: "2026-11-17",
+    title: "Conditional accommodation discounts for paid seminars",
+    features: [
+      "Set a per-category discount when attendees decline accommodation",
+      "Instant attendee and booking total updates, with secure server-side price calculation",
+      "Show applied accommodation discounts on the customer invoice",
+    ],
+  },
+  {
     version: "0.9.8",
     date: "2026-11-17",
     title: "Cleaner public event and attendee booking experience",

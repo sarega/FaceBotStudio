@@ -107,7 +107,7 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
   if (!Number.isSafeInteger(dueMs) || dueMs <= now) throw new PaidBookingError("registration_unavailable");
 
   const categories = yield query(
-    `SELECT c.id,c.label,c.unit_minor,c.quota,c.enabled,COALESCE(occupied.units,0) AS occupied
+    `SELECT c.id,c.label,c.unit_minor,c.accommodation_discount_minor,c.quota,c.enabled,COALESCE(occupied.units,0) AS occupied
      FROM paid_categories c LEFT JOIN (
        SELECT a.category_id,COUNT(*) AS units FROM paid_attendees a
        JOIN paid_bookings b ON b.id=a.booking_id
@@ -130,11 +130,19 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
     if (category.quota != null && Number(category.occupied) + units > Number(category.quota)) {
       throw new PaidBookingError("capacity_exhausted");
     }
-    const unitMinor = Number(category.unit_minor);
-    totalMinor += unitMinor;
     const answers = normalizePaidSeminarAnswers(fields, "attendee", attendee.answers);
     if (!answers) throw new PaidBookingError("invalid_seminar_answers");
-    return { ...attendee, label: String(category.label), unitMinor, answers };
+    const baseMinor = Number(category.unit_minor);
+    const discountMinor = Number(category.accommodation_discount_minor);
+    const accommodationEnabled = fields.some((field) => field.key === "accommodation" && field.scope === "attendee");
+    if (discountMinor > 0 && !accommodationEnabled) throw new PaidBookingError("invalid_pricing_config");
+    const accommodationChoice = answers.find((answer) => answer.key === "accommodation")?.value;
+    if (discountMinor > 0 && accommodationChoice !== "yes" && accommodationChoice !== "no") {
+      throw new PaidBookingError("invalid_seminar_answers");
+    }
+    const unitMinor = baseMinor - (accommodationChoice === "no" ? discountMinor : 0);
+    totalMinor += unitMinor;
+    return { ...attendee, label: String(category.label), unitMinor, baseMinor, appliedDiscountMinor: accommodationChoice === "no" ? discountMinor : 0, answers };
   });
   if (!Number.isSafeInteger(totalMinor) || totalMinor < 1) throw new PaidBookingError("invalid_total");
 
@@ -159,7 +167,7 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
         (id,event_id,booking_id,ordinal,category_id,category_label,unit_minor,first_name,last_name,contact_json)
         VALUES (?,?,?,?,?,?,?,?,?,?)`,
       randomUUID(), eventId, id, index + 1, attendee.categoryId, attendee.label, attendee.unitMinor,
-      attendee.firstName, attendee.lastName, JSON.stringify({ email: attendee.email, phone: attendee.phone, answers: attendee.answers }),
+      attendee.firstName, attendee.lastName, JSON.stringify({ email: attendee.email, phone: attendee.phone, answers: attendee.answers, pricing: { base_minor: attendee.baseMinor, accommodation_discount_minor: attendee.appliedDiscountMinor } }),
     );
   }
   yield audit(eventId, id, customerId, "create", null, "awaiting_payment", now);
@@ -210,19 +218,22 @@ function* readPaidSeminarForm(eventId: string): PaidCommand<PaidSeminarField[]> 
 export interface PaidCatalog {
   fields: PaidSeminarField[];
   pricing_version: number;
-  categories: { id: string; label: string; unit_minor: number }[];
+  categories: { id: string; label: string; unit_minor: number; accommodation_discount_minor: number }[];
 }
 
 export function* readPaidCatalog(eventId: string): PaidCommand<PaidCatalog | undefined> {
   const [settings] = yield query("SELECT version FROM paid_event_settings WHERE event_id=? AND published=1", eventId);
   if (!settings || !(yield* paidEnrollmentOpen(eventId, Date.now()))) return undefined;
   const categories = yield query(
-    "SELECT id,label,unit_minor FROM paid_categories WHERE event_id=? AND enabled=1 ORDER BY label,id", eventId,
+    "SELECT id,label,unit_minor,accommodation_discount_minor FROM paid_categories WHERE event_id=? AND enabled=1 ORDER BY label,id", eventId,
   );
   return {
     pricing_version: Number(settings.version),
     fields: yield* readPaidSeminarForm(eventId),
-    categories: categories.map(({ id, label, unit_minor }) => ({ id: String(id), label: String(label), unit_minor: Number(unit_minor) })),
+    categories: categories.map(({ id, label, unit_minor, accommodation_discount_minor }) => ({
+      id: String(id), label: String(label), unit_minor: Number(unit_minor),
+      accommodation_discount_minor: Number(accommodation_discount_minor),
+    })),
   };
 }
 
@@ -290,14 +301,21 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
   );
   if (!booking) return undefined;
   const attendees = yield query(
-    `SELECT id,category_id,category_label,unit_minor,first_name,last_name
+    `SELECT id,category_id,category_label,unit_minor,first_name,last_name,contact_json
      FROM paid_attendees WHERE event_id=? AND booking_id=? AND cancelled_ms IS NULL ORDER BY ordinal`, eventId, id,
   );
   const dueMs = Number(booking.due_ms);
   return {
     ...booking, total_minor: Number(booking.total_minor), due_ms: dueMs,
     state: booking.state === "awaiting_payment" && dueMs <= Date.now() ? "expired" : booking.state,
-    attendees,
+    attendees: attendees.map(({ contact_json, ...attendee }) => {
+      const info = JSON.parse(String(contact_json || "{}"));
+      const pricing = info?.pricing && typeof info.pricing === "object" ? info.pricing : null;
+      return { ...attendee,
+        base_minor: Number(pricing?.base_minor ?? attendee.unit_minor),
+        accommodation_discount_minor: Number(pricing?.accommodation_discount_minor ?? 0),
+      };
+    }),
   };
 }
 
@@ -309,14 +327,14 @@ export interface PaidSettingsInput {
   cutoffMs: number | null;
   published: boolean;
   paymentMode?: "promptpay" | "external_manual";
-  categories: { id: string; label: string; unitMinor: number; quota: number | null }[];
+  categories: { id: string; label: string; unitMinor: number; accommodationDiscountMinor?: number; quota: number | null }[];
   fields?: PaidSeminarField[];
 }
 
 export function* readPaidSettings(eventId: string): PaidCommand<PaidRow | undefined> {
   const [settings] = yield query("SELECT * FROM paid_event_settings WHERE event_id=?", eventId);
   if (!settings) return undefined;
-  const categories = yield query("SELECT id,label,unit_minor,quota FROM paid_categories WHERE event_id=? AND enabled=1 ORDER BY id", eventId);
+  const categories = yield query("SELECT id,label,unit_minor,accommodation_discount_minor,quota FROM paid_categories WHERE event_id=? AND enabled=1 ORDER BY id", eventId);
   return { ...settings, cutoff_ms: settings.cutoff_ms == null ? null : Number(settings.cutoff_ms), categories, fields: yield* readPaidSeminarForm(eventId) };
 }
 
@@ -342,6 +360,17 @@ export function* savePaidSettings(eventId: string, organizationId: string, input
         const category = input.categories.find(({ id }) => id === row.category_id);
         return !category || (category.quota != null && category.quota < Number(row.units));
       })) throw new PaidBookingError("capacity_in_use");
+  if (input.categories.some((category) =>
+      !Number.isSafeInteger(category.accommodationDiscountMinor ?? 0) ||
+      (category.accommodationDiscountMinor ?? 0) < 0 ||
+      (category.accommodationDiscountMinor ?? 0) > category.unitMinor)) {
+    throw new PaidBookingError("invalid_accommodation_discount");
+  }
+  if (input.categories.some((category) => (category.accommodationDiscountMinor ?? 0) > 0) &&
+      !(input.fields ?? (yield* readPaidSeminarForm(eventId))).some(
+        (field) => field.key === "accommodation" && field.scope === "attendee" && field.required)) {
+    throw new PaidBookingError("invalid_pricing_config");
+  }
   const version = input.version + 1;
   yield query(
     `INSERT INTO paid_event_settings (event_id,capacity,hold_minutes,cutoff_ms,version,published,payment_mode) VALUES (?,?,?,?,?,?,?)
@@ -352,9 +381,10 @@ export function* savePaidSettings(eventId: string, organizationId: string, input
   yield query("UPDATE paid_categories SET enabled=0 WHERE event_id=?", eventId);
   for (const category of input.categories) {
     yield query(
-      `INSERT INTO paid_categories (event_id,id,label,unit_minor,quota) VALUES (?,?,?,?,?)
-       ON CONFLICT(event_id,id) DO UPDATE SET label=excluded.label,unit_minor=excluded.unit_minor,quota=excluded.quota,enabled=1`,
-      eventId, category.id, category.label, category.unitMinor, category.quota,
+      `INSERT INTO paid_categories (event_id,id,label,unit_minor,accommodation_discount_minor,quota) VALUES (?,?,?,?,?,?)
+       ON CONFLICT(event_id,id) DO UPDATE SET label=excluded.label,unit_minor=excluded.unit_minor,
+         accommodation_discount_minor=excluded.accommodation_discount_minor,quota=excluded.quota,enabled=1`,
+      eventId, category.id, category.label, category.unitMinor, category.accommodationDiscountMinor ?? 0, category.quota,
     );
   }
   if (input.fields !== undefined) {
