@@ -1086,6 +1086,7 @@ export interface AppDatabase {
   reviewPaidProof(input: PaidReviewInput): Promise<PaidReviewReceipt>;
   readPaidProof(eventId: string, bookingId: string, attemptId: string, organizationId: string): Promise<{ mime: string; content: Buffer } | undefined>;
   submitPaidProof(input: PaidProofInput): Promise<PaidProofReceipt>;
+  purgeExpiredPaidProofImages(cutoffMs: number, limit: number): Promise<number>;
   expirePaidBookings(eventId: string): Promise<number>;
   getPaidPaymentDisplay(eventId: string): Promise<{ bank_name: string; account_name: string; account_number: string; qr_png_base64: string }>;
   savePaidPaymentDisplay(eventId: string, organizationId: string, input: {

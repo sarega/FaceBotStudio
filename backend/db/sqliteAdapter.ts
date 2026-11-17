@@ -1599,6 +1599,21 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.runPaidCommand(input.eventId, () => submitPaidProof(input));
   }
 
+  async purgeExpiredPaidProofImages(cutoffMs: number, limit: number): Promise<number> {
+    if (!Number.isSafeInteger(cutoffMs) || cutoffMs < 1 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("invalid_retention_sweep");
+    return this.db.prepare(`UPDATE paid_proofs SET content=NULL,deleted_ms=?
+      WHERE id IN (
+        SELECT p.id FROM paid_proofs p
+        JOIN paid_payment_attempts a ON a.id=p.attempt_id
+        JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
+        WHERE p.content IS NOT NULL AND p.deleted_ms IS NULL
+          AND p.created_ms < ? AND b.updated_ms < ?
+          AND b.state IN ('confirmed','expired','cancelled')
+        ORDER BY p.created_ms LIMIT ?
+      )`).run(Date.now(), cutoffMs, cutoffMs, limit).changes;
+  }
+
   async expirePaidBookings(eventId: string) {
     return this.runPaidCommand(eventId, () => expirePaidBookings(eventId));
   }

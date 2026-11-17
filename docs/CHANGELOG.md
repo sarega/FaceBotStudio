@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.5 - 2026-11-17
+
+- Optimize paid registration proof images before encryption/storage. PNG screenshots use lossless WebP where smaller; JPEG/WebP photos use high-quality JPEG, with 1600px max dimensions. Preserve the original whenever re-encoding would make it bigger.
+- Add encrypted payment proof image retention sweeps to the embedded worker: 180 days by default after both proof submission and the booking's last update, only for confirmed/expired/cancelled bookings. Never purge pending review, payment-exception or active booking proofs.
+- Configuration: PAID_PROOF_RETENTION_DAYS accepts 30–3650; missing or invalid values default to 180.
+- Each hourly worker run clears up to 1000 proof images in small batches, setting paid_proofs.content to NULL and deleted_ms to the purge time. Keep payment attempts, image checksums, booking history and audit records.
+- Add image optimization tests and finished-vs-pending proof expiration tests; HTTP proof assertions now compare decoded image pixels.
+
 ## 0.9.4 - 2026-11-17
 
 - Linked attendee Customer Area and account editor with clear in-app navigation: Events, My Account, and My Bookings remain one click away.

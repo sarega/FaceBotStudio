@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.5",
+    date: "2026-11-17",
+    title: "Payment slip compression and retention",
+    features: [
+      "Payment slip images are compressed before secure storage",
+      "Old proof images expire automatically after 180 days for finalized bookings",
+      "Payment audit trails and pending-verification slips remain intact",
+    ],
+  },
+  {
     version: "0.9.4",
     date: "2026-11-17",
     title: "Customer navigation without browser back",

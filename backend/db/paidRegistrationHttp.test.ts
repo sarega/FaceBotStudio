@@ -242,7 +242,11 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const reviewedProof = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id +
       "/proofs/" + externalReceipt.attempt_id, { headers: staffCreateHeaders });
     assert.equal(reviewedProof.status, 200);
-    assert.deepEqual(Buffer.from(await reviewedProof.arrayBuffer()), qrFixture);
+    // Evidence may be recompressed losslessly; compare decoded image pixels.
+    assert.deepEqual(
+      await sharp(Buffer.from(await reviewedProof.arrayBuffer())).ensureAlpha().raw().toBuffer(),
+      await sharp(qrFixture).ensureAlpha().raw().toBuffer(),
+    );
     const approvedExternalSlip = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/review", {
       method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "external-slip-review" },
       body: JSON.stringify({ decision: "approve", attempt_id: externalReceipt.attempt_id,
@@ -337,7 +341,10 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const downloaded = await fetch(staffUrl, { headers: staffHeaders });
     assert.equal(downloaded.status, 200, await downloaded.clone().text());
     assert.equal(downloaded.headers.get("cache-control"), "private, no-store");
-    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), image);
+    assert.deepEqual(
+      await sharp(Buffer.from(await downloaded.arrayBuffer())).ensureAlpha().raw().toBuffer(),
+      await sharp(image).ensureAlpha().raw().toBuffer(),
+    );
     const eventPrefix = `${origin}/api/events/${event.id}/paid-registration`;
     const readinessResponse = await fetch(eventPrefix + "/readiness", { headers: staffHeaders });
     assert.equal(readinessResponse.status, 200);

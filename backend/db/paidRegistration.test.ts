@@ -157,8 +157,27 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal(underpaid.payment_status, "underpaid");
     assert.equal(countCredentials(), 0);
     const approval = { ...review, key: "exact", version: 3, observed: { ...review.observed, amountMinor: 50000 } };
+    // Retention must never delete a pending-review slip, even if both
+    // timestamps are old enough to qualify for an otherwise finished booking.
+    fixture.prepare("UPDATE paid_proofs SET created_ms=1 WHERE attempt_id=?").run(submitted.attempt_id);
+    fixture.prepare("UPDATE paid_bookings SET updated_ms=1 WHERE id=?").run(active.id);
+    assert.equal(await db.purgeExpiredPaidProofImages(Date.now() - 180 * 86_400_000, 200), 0);
+    assert.ok(await db.readPaidProof(event.id, String(active.id), submitted.attempt_id, "org_default"));
     const confirmed = await db.reviewPaidProof(approval);
     assert.equal(confirmed.status, "confirmed");
+    // Simulate 181-day-old completed booking and uploaded evidence.
+    fixture.prepare("UPDATE paid_proofs SET created_ms=1 WHERE attempt_id=?").run(submitted.attempt_id);
+    fixture.prepare("UPDATE paid_bookings SET updated_ms=1 WHERE id=?").run(active.id);
+    const checksumBefore = fixture.prepare("SELECT checksum FROM paid_proofs WHERE attempt_id=?")
+      .pluck().get(submitted.attempt_id);
+    assert.equal(await db.purgeExpiredPaidProofImages(Date.now() - 180 * 86_400_000, 200), 1);
+    assert.equal(await db.purgeExpiredPaidProofImages(Date.now() - 180 * 86_400_000, 200), 0);
+    const agedProof = fixture.prepare("SELECT content,deleted_ms,checksum FROM paid_proofs WHERE attempt_id=?")
+      .get(submitted.attempt_id) as { content: Buffer | null; deleted_ms: number; checksum: string };
+    assert.equal(agedProof.content, null);
+    assert.ok(agedProof.deleted_ms > 0);
+    assert.equal(agedProof.checksum, checksumBefore);
+    assert.equal(await db.readPaidProof(event.id, String(active.id), submitted.attempt_id, "org_default"), undefined);
     assert.deepEqual(await db.listPaidReviewQueue(event.id, "org_default", 0), []);
     assert.deepEqual(await second.reviewPaidProof(approval), confirmed);
     await assert.rejects(second.reviewPaidProof({ ...approval, key: "again" }), /state_conflict/);

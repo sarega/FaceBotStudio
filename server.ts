@@ -2,7 +2,7 @@ import sharp from "sharp";
 import { paidProofEncryptionConfigured } from "./backend/paidProofEncryption";
 import { parsePaidSeminarFields } from "./backend/paidSeminarFields";
 import { parsePaidMessengerCommand, paidMessengerStatusText } from "./backend/paidMessenger";
-import { detectPaidProofImage } from "./backend/paidProofImage";
+import { detectPaidProofImage, optimizePaidProofImage } from "./backend/paidProofImage";
 import { PaidBookingError } from "./backend/db/paidRegistration";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Server as HttpServer } from "node:http";
@@ -14550,6 +14550,29 @@ async function startServer() {
     const paidExpiryTimer = setInterval(sweepPaidHolds, 30_000);
     registerShutdownHandle({ close: async () => { clearInterval(paidExpiryTimer); await expiryRun; } });
     sweepPaidHolds();
+    // Remove encrypted image bytes only after bookings are finalized.
+    // Keep checksums, audit and transaction data; never remove pending-review images.
+    const configuredDays = Number(process.env.PAID_PROOF_RETENTION_DAYS ?? "180");
+    const proofRetentionDays = Number.isSafeInteger(configuredDays) &&
+      configuredDays >= 30 && configuredDays <= 3650 ? configuredDays : 180;
+    let proofPurgeRun: Promise<void> | undefined;
+    const sweepOldProofs = () => {
+      if (proofPurgeRun) return;
+      proofPurgeRun = (async () => {
+        const cutoff = Date.now() - proofRetentionDays * 86_400_000;
+        let removed = 0;
+        for (let batch = 0; batch < 5; batch++) {
+          const count = await appDb.purgeExpiredPaidProofImages(cutoff, 200);
+          removed += count;
+          if (count < 200) break;
+        }
+        if (removed) console.info("[retention] Purged " + removed + " paid proof images; payment records retained");
+      })().catch((error) => console.error("Paid proof retention sweep failed", error))
+        .finally(() => { proofPurgeRun = undefined; });
+    };
+    const proofPurgeTimer = setInterval(sweepOldProofs, 60 * 60_000);
+    registerShutdownHandle({ close: async () => { clearInterval(proofPurgeTimer); await proofPurgeRun; } });
+    sweepOldProofs();
     registerShutdownHandle(await startEmbeddedFacebookWorker(processFacebookInboundJob, { enabled: true }));
     registerShutdownHandle(await startEmbeddedInstagramWorker(processInstagramInboundJob, { enabled: true }));
     registerShutdownHandle(await startEmbeddedLineWorker(processLineInboundJob, { enabled: true }));
@@ -17613,10 +17636,12 @@ async function startServer() {
       if (!paidProofEncryptionConfigured()) return res.status(503).json({ error: "proof_storage_unavailable" });
       const mime = bytes && await detectPaidProofImage(bytes);
       if (!bytes || !mime || mime !== req.get("x-proof-mime")) return res.status(415).json({ error: "invalid_proof_image" });
+      const optimized = await optimizePaidProofImage(bytes, mime);
       try {
         const result = await appDb.submitPaidProof({
           eventId: req.params.eventId, bookingId: req.params.id, customerId: req.customer!.account.id,
-          key, version, method, claimedMinor, claimedTransferMs, reference, mime, content: bytes,
+          key, version, method, claimedMinor, claimedTransferMs, reference,
+          mime: optimized.mime, content: optimized.content,
         });
         return res.status(202).set("Cache-Control", "private, no-store").json(result);
       } catch (error) {
