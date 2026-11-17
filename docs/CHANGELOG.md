@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.3 - 2026-11-17
+
+- Improve low-contrast text and mismatched backgrounds in the dark-mode Registrations admin sections, especially Coupons & Promotions, Slip Review, Paid Attendee roster, and Booking/Event Stats.
+- Introduce scope-specific, paired foreground/background colors for editable coupons, input controls, payment-review cards, review status counts, attendee table headers and alternating rows. Preserve the light-theme appearance.
+- Remove conflicting generic Tailwind background classes where the global dark-theme !important palette was overriding registration-specific colors. Use component-owned class names for reliable dark rendering.
+- Raise tiny captions to 12px, increase muted text contrast, and improve field/keyboard focus visibility without reducing primary action or body text size.
+- Verify actual computed background colors in Chrome at 390px and 1280px, dark/light, with no horizontal page overflow or JavaScript errors.
+
 ## 0.11.2 - 2026-11-17
 
 - Resolve the disconnected Event administration reporting: original registrations data and paid booking attendees are separate durable sources. Show all named attendees in the original Registrations screen without inserting duplicates into the legacy registrations table.

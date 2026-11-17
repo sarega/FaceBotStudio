@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.3",
+    date: "2026-11-17",
+    title: "Clearer dark-mode registration management",
+    features: [
+      "Improved readability in Coupons, Slip Review, attendee roster and booking status cards",
+      "Consistent form, label and status contrast in both light and dark themes",
+      "Improved compact table text and verified mobile/desktop rendering",
+    ],
+  },
+  {
     version: "0.11.2",
     date: "2026-11-17",
     title: "Unified Event attendees, booking capacity and hotel roster export",

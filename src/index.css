@@ -2332,3 +2332,192 @@ html.theme-dark .registration-section-chevron { color: var(--registration-accent
   .registration-section-heading-title { font-size: 13px; }
   .registration-section-heading-subtitle { font-size: 11px; }
 }
+
+
+/* 0.11.3 — Paid-registration admin contrast system.
+   Keep color pairs local to these workflows; never override the whole dashboard. */
+.registration-admin-section .registration-section-content {
+  line-height: 1.5;
+}
+.registration-admin-section .registration-section-content :is(input, select) {
+  min-height: 34px;
+}
+.registration-admin-section .registration-section-content .text-\[10px\],
+.registration-admin-section .registration-section-content .text-\[11px\] {
+  font-size: 12px;
+}
+.registration-admin-section .registration-section-heading-subtitle {
+  font-size: 12px;
+}
+.registration-admin-section .registration-section-content :is(input, select, textarea):focus-visible,
+.paid-attendee-roster button:focus-visible,
+.registration-dashboard-stats button:focus-visible {
+  outline: 2px solid var(--registration-accent, #2563eb);
+  outline-offset: 2px;
+}
+html.theme-dark .registration-admin-section {
+  background: #131e31;
+  color: #edf3fb;
+}
+html.theme-dark .registration-admin-section .registration-section-content {
+  color: #e2e8f0;
+}
+html.theme-dark .registration-admin-section .registration-section-content .text-slate-400,
+html.theme-dark .registration-admin-section .registration-section-content .text-slate-500 {
+  color: #b9c8dc !important;
+}
+html.theme-dark .registration-admin-section .registration-section-content :is(.text-slate-600, .text-slate-700) {
+  color: #d4e0ee !important;
+}
+html.theme-dark .registration-admin-section .registration-section-content :is(.text-slate-900, .text-slate-800) {
+  color: #f5f8ff !important;
+}
+html.theme-dark .registration-admin-section .registration-section-content :is(input:not([type=checkbox]), select, textarea) {
+  background: #111e31 !important;
+  color: #f8fafc !important;
+  border-color: #586b84 !important;
+  color-scheme: dark;
+}
+html.theme-dark .registration-admin-section .registration-section-content :is(input, select, textarea)::placeholder {
+  color: #a9b9cc !important;
+  opacity: 1;
+}
+html.theme-dark .registration-admin-section .registration-section-content :is(input:disabled, select:disabled, button:disabled) {
+  opacity: .7;
+}
+html.theme-dark .registration-admin-section .registration-section-content :is(.bg-white, .bg-slate-50) {
+  background-color: #18263b !important;
+}
+html.theme-dark .registration-admin-section .registration-section-content .bg-slate-100 {
+  background-color: #25354b !important;
+}
+html.theme-dark .registration-admin-section .registration-section-content :is(.border-slate-200, .border-slate-300) {
+  border-color: #465a72 !important;
+}
+html.theme-dark .registration-admin-coupons .paid-coupon-grid > div {
+  background: #1b293f;
+  border-color: #58647b;
+  color: #f1f5f9;
+}
+html.theme-dark .registration-admin-coupons .paid-coupon-grid > div.bg-blue-50 {
+  background: #292548 !important;
+  border-color: #b19bff !important;
+}
+html.theme-dark .registration-admin-coupons .paid-coupon-form {
+  background: #1a2740 !important;
+  color: #edf3fb;
+  border: 1px solid #455573;
+}
+html.theme-dark .registration-admin-coupons .registration-section-content > .bg-blue-50 {
+  background: #172b4b !important;
+  color: #dbeafe !important;
+  border-color: #4f7bc4 !important;
+}
+html.theme-dark .registration-admin-coupons .registration-section-content > .bg-blue-50 a {
+  color: #bfdbfe;
+}
+html.theme-dark .registration-admin-review .paid-review-item {
+  background: #192a3e !important;
+  border-color: #44627b !important;
+  color: #f1f5f9;
+}
+html.theme-dark .registration-admin-review .paid-review-item summary {
+  color: #f1f5f9;
+}
+html.theme-dark .registration-admin-review .registration-section-content > .flex.flex-wrap .bg-amber-50 {
+  color: #fde68a !important;
+}
+html.theme-dark .registration-admin-review .registration-section-content > .flex.flex-wrap .bg-emerald-50 {
+  color: #a7f3d0 !important;
+}
+html.theme-dark .registration-admin-review .registration-section-content > .flex.flex-wrap .bg-slate-100 {
+  background-color: #27394f !important;
+  color: #e2e8f0 !important;
+}
+
+/* Attendee roster is nested in the legacy card, not a registration-admin-section. */
+html.theme-dark .paid-attendee-roster {
+  background: #102c2b !important;
+  border-color: #27695c !important;
+  color: #e2e8f0;
+}
+html.theme-dark .paid-attendee-roster h3 {
+  color: #bbf7d0 !important;
+}
+html.theme-dark .paid-attendee-roster button {
+  color: #a7f3d0 !important;
+}
+html.theme-dark .paid-attendee-roster > p {
+  color: #cbd5e1 !important;
+  font-size: 12px;
+}
+html.theme-dark .paid-attendee-roster > div.overflow-auto,
+html.theme-dark .paid-attendee-roster > div.max-h-\[30rem\] {
+  background: #17263b !important;
+  border-color: #3d7469 !important;
+}
+html.theme-dark .paid-attendee-roster thead {
+  background-color: #214b47 !important;
+  color: #ecfdf5 !important;
+}
+html.theme-dark .paid-attendee-roster tbody tr {
+  border-color: #345267;
+}
+html.theme-dark .paid-attendee-roster tbody tr:nth-child(even) {
+  background: #1c3146;
+}
+html.theme-dark .paid-attendee-roster :is(td, td.font-semibold) {
+  color: #f1f5f9 !important;
+  font-size: 12px;
+  line-height: 1.5;
+}
+html.theme-dark .paid-attendee-roster td .text-slate-500 {
+  color: #b9c8dc !important;
+}
+html.theme-dark .paid-attendee-roster .text-emerald-700 {
+  color: #a7f3d0 !important;
+}
+html.theme-dark .registration-dashboard-stats :is(.text-slate-500, .text-slate-400) {
+  color: #b9c8dc !important;
+}
+html.theme-dark .registration-dashboard-stats :is(.text-slate-600, .text-slate-700) {
+  color: #d4e0ee !important;
+}
+html.theme-dark .registration-dashboard-stats > .grid.grid-cols-3 > div,
+html.theme-dark .registration-dashboard-stats > .mb-3.grid > div {
+  color: #f8fafc !important;
+  border: 1px solid #435974;
+}
+html.theme-dark .registration-dashboard-stats > .mb-3.grid > div:nth-child(1) {
+  background-color: #493315 !important;
+}
+html.theme-dark .registration-dashboard-stats > .mb-3.grid > div:nth-child(2) {
+  background-color: #30234b !important;
+}
+html.theme-dark .registration-dashboard-stats > .mb-3.grid > div:nth-child(3) {
+  background-color: #16483e !important;
+}
+
+
+/* Component-owned fills avoid the dashboard-wide !important utility palette. */
+.paid-attendee-roster { background: #ecfdf5; color: #0f172a; }
+.paid-attendee-roster > div.overflow-auto { background: #fff; }
+.paid-attendee-roster thead { background: #d1fae5; color: #064e3b; }
+.paid-review-item { background: #fff; color: #0f172a; }
+.paid-coupon-form { background: #f8fafc; }
+.paid-coupon-selected { background: #eff6ff; }
+.registration-booking-stat { border: 1px solid transparent; }
+.registration-booking-stat-unpaid { background: #fffbeb; color: #78350f; }
+.registration-booking-stat-review { background: #f5f3ff; color: #5b21b6; }
+.registration-booking-stat-confirmed { background: #ecfdf5; color: #065f46; }
+
+html.theme-dark .paid-attendee-roster { background: #102c2b; color: #e2e8f0; }
+html.theme-dark .paid-attendee-roster > div.overflow-auto { background: #17263b; }
+html.theme-dark .paid-attendee-roster thead { background: #214b47; color: #ecfdf5; }
+html.theme-dark .registration-admin-review .paid-review-item { background: #192a3e; color: #f1f5f9; }
+html.theme-dark .registration-admin-coupons .paid-coupon-form { background: #1a2740; }
+html.theme-dark .registration-admin-coupons .paid-coupon-selected { background: #292548; border-color: #b19bff; }
+html.theme-dark .registration-booking-stat { color: #f8fafc; border-color: #435974; }
+html.theme-dark .registration-booking-stat-unpaid { background: #493315; }
+html.theme-dark .registration-booking-stat-review { background: #30234b; }
+html.theme-dark .registration-booking-stat-confirmed { background: #16483e; }

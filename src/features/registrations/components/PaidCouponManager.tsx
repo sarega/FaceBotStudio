@@ -120,9 +120,9 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
             Public Event page is disabled. Enable its public page in Event Settings before sharing a registration link.
           </p>}
       </div>}
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="paid-coupon-grid grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {coupons.map(c=><div key={c.code} className={"space-y-2 rounded-lg border p-3 text-sm " +
-          (editingCode===c.code?"border-blue-500 bg-blue-50":"border-slate-200")}>
+          (editingCode===c.code?"paid-coupon-selected border-blue-500":"border-slate-200")}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-bold break-all">{c.code}</span>
             <span className="text-slate-600">{c.kind==="free"?"FREE":
@@ -162,7 +162,7 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
       {editingCode&&<p className="text-sm font-semibold text-blue-700">
         Editing / กำลังแก้ไข: {editingCode}
       </p>}
-      <form onSubmit={save} className="grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
+      <form onSubmit={save} className="paid-coupon-form grid gap-3 rounded-xl p-3 sm:grid-cols-2">
         <label className="text-sm font-medium">Coupon code
           <input className={input} required maxLength={32} pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,31}"
             readOnly={editingCode!==null} aria-readonly={editingCode!==null}

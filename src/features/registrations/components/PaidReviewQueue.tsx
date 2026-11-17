@@ -261,7 +261,7 @@ export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBooking
           const path=prefix+"/bookings/"+encodeURIComponent(review.booking_id);
           const proofUrl=review.attempt_id ? path+"/proofs/"+encodeURIComponent(review.attempt_id) : "";
           return <details key={review.attempt_id??review.booking_id}
-            className="rounded-xl border border-slate-200 bg-white p-3" open={undefined}>
+            className="paid-review-item rounded-xl border border-slate-200 p-3" open={undefined}>
             <summary className="cursor-pointer list-item space-y-1 text-sm">
               <span className="block font-bold text-slate-900">
                 {review.customer_first_name} {review.customer_last_name}

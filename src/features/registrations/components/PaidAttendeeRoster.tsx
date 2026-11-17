@@ -7,7 +7,7 @@ type Props = {
 };
 export function PaidAttendeeRoster({people,total,onRefresh}:Props) {
   if(!total)return null;
-  return <section className="border-b border-emerald-200 bg-emerald-50/40 p-3">
+  return <section className="paid-attendee-roster border-b border-emerald-200 p-3">
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-sm font-bold text-emerald-900">
         Paid Registration · {total} คน (แสดง {people.length})
@@ -15,9 +15,9 @@ export function PaidAttendeeRoster({people,total,onRefresh}:Props) {
       <button type="button" onClick={onRefresh}
         className="text-xs font-semibold text-emerald-700 underline">Refresh</button>
     </div>
-    <div className="max-h-[30rem] overflow-auto rounded-lg border border-emerald-200 bg-white">
+    <div className="max-h-[30rem] overflow-auto rounded-lg border border-emerald-200">
       <table className="w-full min-w-[600px] text-left text-xs">
-        <thead className="sticky top-0 bg-emerald-100 text-emerald-950"><tr>
+        <thead className="sticky top-0 text-emerald-950"><tr>
           <th className="px-3 py-2">ผู้เข้าร่วม</th><th className="px-3 py-2">ประเภท</th>
           <th className="px-3 py-2">ผู้จอง</th><th className="px-3 py-2">Booking</th>
           <th className="px-3 py-2">สถานะ</th>

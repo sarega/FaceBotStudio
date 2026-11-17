@@ -627,7 +627,7 @@ export function RegistrationsScreen({
       </div>
 
       <div className="space-y-4">
-        <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
+        <div className="registration-dashboard-stats bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -639,9 +639,9 @@ export function RegistrationsScreen({
             <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
           </div>
           {paidSummary&&<div className="mb-3 grid grid-cols-3 gap-2 text-center text-xs">
-            <div className="rounded-lg bg-amber-50 p-2"><strong className="block text-lg">{paidSummary.awaiting_payment_bookings}</strong>Booking รอชำระ</div>
-            <div className="rounded-lg bg-violet-50 p-2"><strong className="block text-lg">{paidSummary.pending_review_bookings}</strong>Booking รอตรวจสลิป</div>
-            <div className="rounded-lg bg-emerald-50 p-2"><strong className="block text-lg">{paidSummary.confirmed_bookings}</strong>Booking ยืนยันแล้ว</div>
+            <div className="registration-booking-stat registration-booking-stat-unpaid rounded-lg p-2"><strong className="block text-lg">{paidSummary.awaiting_payment_bookings}</strong>Booking รอชำระ</div>
+            <div className="registration-booking-stat registration-booking-stat-review rounded-lg p-2"><strong className="block text-lg">{paidSummary.pending_review_bookings}</strong>Booking รอตรวจสลิป</div>
+            <div className="registration-booking-stat registration-booking-stat-confirmed rounded-lg p-2"><strong className="block text-lg">{paidSummary.confirmed_bookings}</strong>Booking ยืนยันแล้ว</div>
           </div>}
           <div className="space-y-2.5">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
