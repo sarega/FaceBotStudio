@@ -133,29 +133,31 @@
 .event-description-content {
   color: rgb(71 85 105);
   font-size: 0.875rem;
-  line-height: 1.75;
+  line-height: 1.55;
+  display: flow-root;
+  overflow-x: auto;
+  overflow-wrap: anywhere;
 }
 
-.event-description-content > * + * {
-  margin-top: 0.85rem;
+.event-description-content :is(* + p, * + div, * + ul, * + ol, * + blockquote) {
+  margin-top: 0.55rem;
 }
 
-.event-description-content h2 {
+.event-description-content :is(h1, h2) {
   color: rgb(15 23 42);
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1.35;
   letter-spacing: -0.015em;
-  margin-top: 1.5rem;
+  margin-top: 1rem;
 }
 
-.event-description-content h3,
-.event-description-content h4 {
+.event-description-content :is(h3, h4, h5, h6) {
   color: rgb(30 41 59);
   font-size: 1rem;
   font-weight: 700;
   line-height: 1.5;
-  margin-top: 1.25rem;
+  margin-top: 0.8rem;
 }
 
 .event-description-content ul,
@@ -181,13 +183,14 @@
 .event-description-content img {
   display: block;
   max-width: 100%;
-  margin: 1.25rem auto;
+  height: auto;
+  margin: 0.8rem auto;
   border-radius: 1rem;
 }
 
 .event-description-content img.fr-fil { float: left; margin: 0.35rem 1.25rem 0.75rem 0; }
 .event-description-content img.fr-fir { float: right; margin: 0.35rem 0 0.75rem 1.25rem; }
-.event-description-content figure { display: table; margin: 1.25rem auto; max-width: 100%; }
+.event-description-content figure { display: table; margin: 0.8rem auto; max-width: 100%; }
 .event-description-content figcaption { color: rgb(100 116 139); display: table-caption; caption-side: bottom; font-size: 0.875em; padding-top: 0.35rem; text-align: center; }
 
 .event-description-content hr {
@@ -199,7 +202,7 @@
 .event-description-content table {
   border-collapse: collapse;
   display: table;
-  margin: 1.25rem 0;
+  margin: 0.8rem 0;
   width: 100%;
 }
 
@@ -225,11 +228,9 @@
 }
 
 html.theme-dark .event-description-content { color: rgb(148 163 184); }
-html.theme-dark .event-description-content h2,
-html.theme-dark .event-description-content h3,
-html.theme-dark .event-description-content h4,
-html.theme-dark .event-description-content strong { color: rgb(226 232 240); }
-html.theme-dark .event-description-content blockquote { background: rgb(15 23 42); }
+html.theme-dark .event-description-content :is(h1, h2, h3, h4, h5, h6, strong) { color: rgb(226 232 240); }
+html.theme-dark .event-description-content :is(blockquote, th) { background: rgb(15 23 42); color: rgb(226 232 240); }
+html.theme-dark .event-description-content figcaption { color: rgb(148 163 184); }
 
 .public-event-themed {
   --public-theme: #2563eb;

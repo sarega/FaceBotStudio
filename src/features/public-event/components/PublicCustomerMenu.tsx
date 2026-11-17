@@ -3,7 +3,7 @@ import { CalendarDays, ChevronDown, LogOut, Ticket, UserRound } from "lucide-rea
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
 
 /** Customer-only navigation. Never mixes staff/admin and attendee authentication. */
-export function PublicCustomerMenu() {
+export function PublicCustomerMenu({ compact = false }: { compact?: boolean }) {
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -83,8 +83,8 @@ export function PublicCustomerMenu() {
         <span className="block h-10 w-24 animate-pulse rounded-full bg-slate-200/50" aria-label="Checking account" />
       ) : !account ? (
         <div className="flex items-center gap-2">
-          <a href="/account/register" className="public-customer-guest-link rounded-lg px-2 py-2 text-xs font-semibold sm:text-sm">สมัคร / Register</a>
-          <a href="/account/login" className="public-customer-signin rounded-lg px-3 py-2 text-xs font-semibold sm:text-sm">เข้าสู่ระบบ / Sign in</a>
+          <a href="/account/register" className="public-customer-guest-link rounded-lg px-2 py-2 text-xs font-semibold sm:text-sm">สมัคร<span className={compact ? "hidden sm:inline" : undefined}> / Register</span></a>
+          <a href="/account/login" className="public-customer-signin rounded-lg px-3 py-2 text-xs font-semibold sm:text-sm">เข้าสู่ระบบ<span className={compact ? "hidden sm:inline" : undefined}> / Sign in</span></a>
         </div>
       ) : (
         <>

@@ -154,9 +154,9 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone }: { sl
 
   const total = attendees.reduce((sum, row) => sum + (catalog?.categories.find(({ id }) => id === row.category_id)?.unit_minor ?? 0), 0);
   return (
-    <div className="surface-panel space-y-4 rounded-[1.75rem] p-4 sm:p-5">
+    <div className="surface-panel space-y-3 rounded-2xl p-3 sm:p-4">
       <h2 className="text-lg font-semibold">ลงทะเบียน / Registration</h2>
-      <section className="paid-signup-card space-y-3 rounded-xl p-3.5 sm:p-4" aria-label="Account access">
+      <section className="paid-signup-card space-y-2 rounded-xl p-3" aria-label="Account access">
         {accountLoading ? (
           <p className="paid-signup-hint text-sm" role="status">กำลังตรวจสอบบัญชี / Checking account…</p>
         ) : customerAccount ? (

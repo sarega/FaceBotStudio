@@ -116,9 +116,10 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
     const originalSrc = tagName === "img" ? element.getAttribute("src") || "" : "";
     const originalAlt = tagName === "img" ? element.getAttribute("alt") || "" : "";
     const originalTitle = element.getAttribute("title") || "";
-    const originalWidth = tagName === "img" ? element.getAttribute("width") || "" : "";
-    const originalHeight = tagName === "img" ? element.getAttribute("height") || "" : "";
+    const originalWidth = element.getAttribute("width") || "";
+    const originalHeight = element.getAttribute("height") || "";
     const originalClass = element.getAttribute("class") || "";
+    const originalScope = element.getAttribute("scope") || "";
     const originalColspan = element.getAttribute("colspan") || "";
     const originalRowspan = element.getAttribute("rowspan") || "";
     const originalColor = tagName === "font" ? element.getAttribute("color") || "" : "";
@@ -129,6 +130,7 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
     Array.from(element.attributes).forEach((attribute) => element.removeAttribute(attribute.name));
     if (tagName === "a") {
       const sourceAnchor = element as HTMLAnchorElement;
+      if (originalTitle) sourceAnchor.setAttribute("title", originalTitle);
       if (isSafeHref(originalHref)) {
         sourceAnchor.setAttribute("href", originalHref);
         sourceAnchor.setAttribute("target", "_blank");
@@ -154,6 +156,17 @@ export function sanitizeEventDescriptionHtml(value: string | null | undefined) {
         element.setAttribute("size", originalSize);
       }
     }
+    if (["table", "td", "th", "col"].includes(tagName)) {
+      if (/^\d{1,4}%?$/.test(originalWidth)) element.setAttribute("width", originalWidth);
+      if (tagName !== "col" && /^\d{1,4}%?$/.test(originalHeight)) element.setAttribute("height", originalHeight);
+    }
+    if (tagName === "table" && originalClass.split(/\s+/).includes("fr-alternate-rows")) {
+      element.setAttribute("class", "fr-alternate-rows");
+    }
+    if (tagName === "th") {
+      const scope = originalScope.toLowerCase();
+      if (["row", "col", "rowgroup", "colgroup"].includes(scope)) element.setAttribute("scope", scope);
+    }
     if (["td", "th"].includes(tagName)) {
       if (/^\d{1,2}$/.test(originalColspan)) element.setAttribute("colspan", originalColspan);
       if (/^\d{1,2}$/.test(originalRowspan)) element.setAttribute("rowspan", originalRowspan);
@@ -178,14 +191,19 @@ export function eventDescriptionToPlainText(value: string | null | undefined) {
     .trim();
 }
 
+export function hasEventDescriptionMarkup(value: string) {
+  return /<\/?[a-z][\w-]*(?=[\s/>])[^>]*>/i.test(value);
+}
+
 export function renderEventDescriptionHtml(value: string | null | undefined) {
   const source = String(value || "").trim();
   if (!source) return "";
-  if (/<[a-z][\s\S]*>/i.test(source)) {
+  if (hasEventDescriptionMarkup(source)) {
     return sanitizeEventDescriptionHtml(source);
   }
 
   return source
+    .replace(/\r\n?/g, "\n")
     .split(/\n{2,}/)
     .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br />")}</p>`)
     .join("");

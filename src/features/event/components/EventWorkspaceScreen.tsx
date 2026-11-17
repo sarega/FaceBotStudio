@@ -1,3 +1,5 @@
+import { EventDescriptionContent } from "../../../components/EventDescriptionContent";
+import type { CSSProperties } from "react";
 import {
   useState,
   type ComponentProps,
@@ -2283,6 +2285,13 @@ export function EventWorkspaceScreen({
                               </div>
                             </div>
                           </div>
+
+                          {settings.event_description.trim() && publicSectionEntries.some((section) => section.id === "about" && section.enabled) && (
+                            <section className="public-event-themed border-t border-slate-200 p-4" style={{ "--public-theme": publicThemeColor } as CSSProperties}>
+                              <h4 className="mb-2 font-semibold text-slate-900">About This Event</h4>
+                              <EventDescriptionContent description={settings.event_description} />
+                            </section>
+                          )}
 
                           <div className="grid grid-cols-2 border-t border-slate-200 sm:grid-cols-4">
                             {[

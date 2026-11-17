@@ -19,6 +19,7 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
 import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
+import { hasEventDescriptionMarkup, renderEventDescriptionHtml } from "./src/lib/eventDescriptionHtml";
 import { parseOutreachCsv } from "./backend/outreachCsv";
 import { buildStoredZipArchive, createStoredZipWriter } from "./backend/zipArchive";
 import {
@@ -4909,7 +4910,8 @@ async function buildPublicEventPagePayload(
   const capacity = await getEventCapacitySnapshot(event.id, settings);
   const eventState = getEventState(settings);
   const location = buildEventLocationSummaryFromSettings(settings);
-  const summary = resolvePublicSummary(settings.event_public_summary, settings.event_description);
+  const description = settings.event_description || "";
+  const summary = resolvePublicSummary(settings.event_public_summary, description);
   const sponsorEntries = parsePublicSponsorEntries(settings.event_public_sponsors_json);
   const speakerEntries = parsePublicSpeakerEntries(settings.event_public_speakers_json);
   const sectionEntries = parsePublicEventSections(settings.event_public_sections_json);
@@ -4979,7 +4981,9 @@ async function buildPublicEventPagePayload(
       slug: publicSlug,
       status: event.effective_status,
       summary,
-      description: sanitizeEventDescriptionHtml(settings.event_description),
+      description: hasEventDescriptionMarkup(description)
+        ? sanitizeEventDescriptionHtml(description)
+        : renderEventDescriptionHtml(description),
       poster_url: String(settings.event_public_poster_url || "").trim(),
       cta_label: ctaLabel,
       success_message:

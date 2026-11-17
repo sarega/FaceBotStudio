@@ -1,3 +1,4 @@
+import { AttendeeThemeSelect, type ThemeMode } from "./components/AttendeeThemeSelect";
 import { PaidRegistrationSettings } from "./features/registrations/components/PaidRegistrationSettings";
 import { PaidReviewQueue } from "./features/registrations/components/PaidReviewQueue";
 import { lazy, Suspense, useDeferredValue, useState, useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
@@ -193,7 +194,7 @@ interface AuditLogEntry {
 type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
-type ThemeMode = "light" | "dark" | "system";
+
 type AppTab = "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
@@ -830,6 +831,7 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
 const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "cashier", "checker", "viewer"];
 const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "cashier", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
+const ATTENDEE_THEME_STORAGE_KEY = "facebotstudio-attendee-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
 const PUBLIC_EVENT_CHAT_HISTORY_STORAGE_KEY_PREFIX = "facebotstudio-public-event-chat-history-v1";
 const LOG_PAGE_SIZE = 200;
@@ -915,9 +917,9 @@ function stripCheckinTokenFromUrl() {
   window.history.replaceState({}, document.title, nextUrl);
 }
 
-function getStoredThemeMode(): ThemeMode {
+function getStoredThemeMode(key = THEME_STORAGE_KEY): ThemeMode {
   if (typeof window === "undefined") return "system";
-  const raw = window.localStorage.getItem(THEME_STORAGE_KEY);
+  const raw = window.localStorage.getItem(key);
   return raw === "light" || raw === "dark" || raw === "system" ? raw : "system";
 }
 
@@ -3161,6 +3163,7 @@ export default function App() {
   const [emailTestAddress, setEmailTestAddress] = useState("");
   const [emailTestSending, setEmailTestSending] = useState(false);
   const [emailTestMessage, setEmailTestMessage] = useState("");
+  const [attendeeTheme, setAttendeeTheme] = useState(() => getStoredThemeMode(ATTENDEE_THEME_STORAGE_KEY));
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [language, setLanguage] = useState<AppLanguage>(() => getStoredLanguage());
   const [userTimezone, setUserTimezone] = useState(DEFAULT_TIMEZONE);
@@ -4752,20 +4755,23 @@ export default function App() {
     return () => mediaQuery.removeListener(update);
   }, []);
 
+  const attendeeRoute = isPublicEventRoute || isPublicEventCatalogRoute || isCustomerAccountRoute || isCustomerAppRoute || isCustomerCheckoutRoute;
+  const activeTheme = attendeeRoute ? attendeeTheme : themeMode;
+
   useEffect(() => {
     const root = document.documentElement;
     const apply = () => {
-      const resolved = resolveThemeMode(themeMode);
+      const resolved = resolveThemeMode(activeTheme);
       root.classList.toggle("theme-dark", resolved === "dark");
       root.classList.toggle("theme-light", resolved === "light");
-      root.dataset.themeMode = themeMode;
+      root.dataset.themeMode = activeTheme;
       root.dataset.themeResolved = resolved;
-      window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+      window.localStorage.setItem(attendeeRoute ? ATTENDEE_THEME_STORAGE_KEY : THEME_STORAGE_KEY, activeTheme);
     };
 
     apply();
 
-    if (themeMode !== "system" || !window.matchMedia) {
+    if (activeTheme !== "system" || !window.matchMedia) {
       return undefined;
     }
 
@@ -4775,7 +4781,7 @@ export default function App() {
     return () => {
       media.removeEventListener?.("change", handleChange);
     };
-  }, [themeMode]);
+  }, [activeTheme, attendeeRoute]);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -9739,7 +9745,7 @@ export default function App() {
   }
 
   if (isCustomerAccountRoute) {
-    return <CustomerAccountScreen />;
+    return <CustomerAccountScreen themeControl={<AttendeeThemeSelect mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
   }
 
   if (!isPublicEventRoute && authStatus === "checking") {
@@ -10361,6 +10367,7 @@ export default function App() {
   if (isPublicEventRoute) {
     return (
       <PublicEventPageScreen
+        themeControl={<AttendeeThemeSelect mode={attendeeTheme} onChange={setAttendeeTheme} />}
         page={publicEventPage}
         loading={publicEventLoading}
         errorMessage={publicEventError}

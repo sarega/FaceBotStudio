@@ -1,3 +1,4 @@
+import { renderEventDescriptionHtml } from "../lib/eventDescriptionHtml";
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
   AlignCenter, AlignLeft, AlignRight, Bold, Code2, ImagePlus, IndentDecrease, IndentIncrease,
@@ -34,7 +35,7 @@ export function EventDescriptionHtmlEditor({ value, onChange, onUploadImage }: E
   useEffect(() => {
     if (mode !== "visual" || !editorRef.current || document.activeElement === editorRef.current) return;
     if (lastValueRef.current === value && editorRef.current.innerHTML) return;
-    editorRef.current.innerHTML = value;
+    editorRef.current.innerHTML = renderEventDescriptionHtml(value);
     lastValueRef.current = value;
   }, [mode, value]);
 

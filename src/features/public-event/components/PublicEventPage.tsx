@@ -19,7 +19,8 @@ import {
 } from "lucide-react";
 
 import { PublicContactActionLink, StatusBadge, type BadgeTone } from "../../../components/shared/AppUi";
-import { renderEventDescriptionHtml } from "../../../lib/eventDescriptionHtml";
+import type { ReactNode } from "react";
+import { EventDescriptionContent } from "../../../components/EventDescriptionContent";
 import { CountdownSection } from "./CountdownSection";
 import { OrganizerCard } from "./OrganizerCard";
 import { PaidRegistrationPanel } from "./PaidRegistrationPanel";
@@ -53,6 +54,7 @@ type PublicChatMessage = {
 };
 
 type PublicEventPageProps = {
+  themeControl: ReactNode;
   page: PublicEventPageResponse | null;
   loading: boolean;
   errorMessage: string;
@@ -107,15 +109,12 @@ function AboutSection({ description }: { description: string }) {
   if (!description) return null;
 
   return (
-    <section className="py-3.5 sm:py-4">
+    <section className="py-3">
       <div className="flex items-center gap-2">
         <Eye className="h-4 w-4 text-blue-600" />
         <h2 className="text-base font-semibold text-slate-900 sm:text-lg">About This Event</h2>
       </div>
-      <div
-        className="event-description-content mt-2.5"
-        dangerouslySetInnerHTML={{ __html: renderEventDescriptionHtml(description) }}
-      />
+      <div className="mt-2"><EventDescriptionContent description={description} /></div>
     </section>
   );
 }
@@ -130,7 +129,7 @@ function LocationTravelSection({
   publicLocationLabel: string;
 }) {
   return (
-    <section className="py-3.5 sm:py-4">
+    <section className="py-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-900 sm:text-lg">Location & Travel</h2>
@@ -178,7 +177,7 @@ function LocationTravelSection({
       {location.travel_info && (
         <div className="mt-3 border-t border-slate-200 pt-3">
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Travel Info</p>
-          <p className="mt-1.5 whitespace-pre-line text-sm leading-6 text-slate-600">
+          <p className="mt-1.5 whitespace-pre-line text-sm leading-snug text-slate-600">
             {location.travel_info}
           </p>
         </div>
@@ -214,7 +213,7 @@ function TicketSalesCard({ event }: { event: PublicEventPageResponse["event"] })
             <Ticket className="h-5 w-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-slate-900">Tickets & seats</h2>
           </div>
-          <p className="mt-1 text-sm leading-6 text-slate-500">
+          <p className="mt-1 text-sm leading-snug text-slate-500">
             Choose a performance, compare prices, then select seats from the live Meetrix inventory.
           </p>
         </div>
@@ -261,7 +260,7 @@ function TicketSalesCard({ event }: { event: PublicEventPageResponse["event"] })
           <ArrowRight className="h-4 w-4" />
         </a>
       ) : (
-        <div className="surface-subpanel mt-4 rounded-xl px-3.5 py-3 text-sm leading-6 text-slate-600">
+        <div className="surface-subpanel mt-4 rounded-xl px-3.5 py-3 text-sm leading-snug text-slate-600">
           Ticket checkout is being configured. Please check back soon.
         </div>
       )}
@@ -309,11 +308,12 @@ export function PublicEventPage({
   onChatRemoveImage,
   onChatSubmit,
   onChatInputKeyDown,
+  themeControl,
 }: PublicEventPageProps) {
   const [headerCondensed, setHeaderCondensed] = useState(false);
   const publicEventName = page?.event.name || "Event";
   const publicLocationLabel = page?.location.compact || "Venue details will be announced soon";
-  const publicSummary = page?.event.summary || page?.event.description || "";
+  const publicSummary = page?.event.summary || "";
   const externalTicketing = Boolean(
     page?.event.ticketing_mode === "external" && page.event.external_ticket_url,
   );
@@ -349,6 +349,9 @@ export function PublicEventPage({
         ? "Choose a performance and seat from our live ticket inventory."
         : "Ticket checkout is being configured.";
     }
+    if (paidRegistration) return page?.event.paid_registration_enabled
+      ? "Book a ticket, follow the payment instructions, and upload your slip for review."
+      : "Paid registration is currently unavailable.";
     if (externalTicketing) return "Tickets are available through our ticketing partner.";
     switch (page?.event.registration_availability) {
       case "full":
@@ -428,11 +431,14 @@ export function PublicEventPage({
     <div className="public-event-themed public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans" style={publicThemeStyle}>
       <header className="sticky top-0 z-40 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
         <nav className="public-customer-nav relative z-50 border-b" aria-label="Attendee navigation">
-          <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-2 sm:px-6 lg:px-8">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-1 px-3 py-1 sm:gap-3 sm:px-6 lg:px-8">
             <a href="/events" className="public-customer-nav-link text-xs font-semibold sm:text-sm">
-              ← งานทั้งหมด / All events
+              ← <span className="sm:hidden">งานทั้งหมด</span><span className="hidden sm:inline">งานทั้งหมด / All events</span>
             </a>
-            <PublicCustomerMenu />
+            <div className="flex min-w-0 items-center gap-1 sm:gap-3">
+              {themeControl}
+              <PublicCustomerMenu compact />
+            </div>
           </div>
         </nav>
         <AnimatePresence initial={false}>
@@ -443,7 +449,7 @@ export function PublicEventPage({
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
               transition={{ duration: 0.2, ease: "easeOut" }}
-              className="overflow-hidden"
+              className="hidden overflow-hidden sm:block"
             >
               <PlatformBrandPane brand={page.brand} />
             </motion.div>
@@ -480,6 +486,7 @@ export function PublicEventPage({
         </AnimatePresence>
       </header>
 
+      {page && <div className="sm:hidden"><PlatformBrandPane brand={page.brand} /></div>}
       <main className="mx-auto max-w-6xl px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8 lg:py-5">
         {loading ? (
           <div className="flex min-h-[50vh] items-center justify-center">
@@ -491,21 +498,21 @@ export function PublicEventPage({
               <AlertCircle className="h-7 w-7" />
             </div>
             <h1 className="mt-5 text-2xl font-bold tracking-tight text-slate-900">Public page unavailable</h1>
-            <p className="mt-2 text-sm leading-6 text-slate-500">
+            <p className="mt-2 text-sm leading-snug text-slate-500">
               {errorMessage || "This event page is not published or could not be found."}
             </p>
           </div>
         ) : (
           <>
             {page.appearance.cover_url && (
-              <section className="relative mb-4 min-h-[11rem] overflow-hidden rounded-[1.75rem] bg-slate-900 shadow-sm sm:min-h-[15rem] lg:min-h-[18rem]">
+              <section className="relative mb-4 min-h-[8rem] overflow-hidden rounded-[1.75rem] bg-slate-900 shadow-sm sm:min-h-[12rem] lg:min-h-[14rem]">
                 <img
                   src={page.appearance.cover_url}
                   alt={`${page.event.name} cover`}
                   className="absolute inset-0 h-full w-full object-cover"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/20 to-transparent" />
-                <div className="relative flex min-h-[11rem] items-end p-5 sm:min-h-[15rem] sm:p-7 lg:min-h-[18rem] lg:p-9">
+                <div className="relative flex min-h-[8rem] items-end p-5 sm:min-h-[15rem] sm:p-7 lg:min-h-[18rem] lg:p-9">
                   <div className="max-w-4xl">
                     <div className="mb-3 h-1 w-16 rounded-full bg-white/90" />
                     <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/75">Featured Event</p>
@@ -516,28 +523,16 @@ export function PublicEventPage({
                 </div>
               </section>
             )}
-            <section className="grid gap-4 lg:items-start lg:grid-cols-[minmax(0,18.5rem)_minmax(0,1fr)]">
-              <div className="surface-panel self-start overflow-hidden rounded-[1.75rem]">
-                <div className="aspect-[800/1132] w-full">
-                  {page.event.poster_url ? (
-                    <img
-                      src={page.event.poster_url}
-                      alt={`${page.event.name} poster`}
-                      className="h-full w-full object-cover object-top"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-slate-50 px-6 text-center">
-                      <Eye className="h-9 w-9 text-slate-400" />
-                      <div>
-                        <p className="text-sm font-semibold text-slate-700">Event poster</p>
-                        <p className="mt-1 text-xs text-slate-500">Recommended size 800 x 1132 px</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
+            <section className={`grid gap-3 lg:items-start ${page.event.poster_url ? "lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]" : ""}`}>
+              {page.event.poster_url && (
+                <img
+                  src={page.event.poster_url}
+                  alt={`${page.event.name} poster`}
+                  className="mx-auto block h-auto w-full max-w-56 rounded-2xl lg:max-w-none"
+                />
+              )}
 
-              <div className="surface-panel space-y-4 rounded-[1.75rem] p-4 lg:self-start sm:p-5">
+              <div className="surface-panel min-w-0 space-y-3 rounded-2xl p-3 sm:p-4">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <StatusBadge tone={eventStatusTone}>
                     {eventStatusLabel}
@@ -548,23 +543,23 @@ export function PublicEventPage({
                 </div>
 
                 <div>
-                  <h1 className="text-[1.9rem] font-bold tracking-tight text-slate-900 sm:text-[2.35rem]">
+                  <h1 className="break-words text-2xl font-bold leading-tight tracking-tight text-slate-900 sm:text-3xl">
                     {page.event.name}
                   </h1>
                   {publicSummary && (
-                    <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                    <p className="mt-2 max-w-3xl text-sm leading-snug text-slate-600">
                       {publicSummary}
                     </p>
                   )}
                 </div>
 
-                <div className="grid gap-2.5 sm:grid-cols-2">
-                  <div className="surface-tile rounded-xl px-3.5 py-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
                     <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Date & Time</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">{page.event.date_label}</p>
                     <p className="mt-1 text-xs text-slate-500">{page.event.timezone}</p>
                   </div>
-                  <div className="surface-tile rounded-xl px-3.5 py-3">
+                  <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
                     <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Location</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">
                       {page.location.title || publicLocationLabel}
@@ -576,23 +571,23 @@ export function PublicEventPage({
                 </div>
 
                 <div className={`grid gap-2.5 ${customerTicketing || page.event.show_seat_availability ? "sm:grid-cols-3" : "sm:grid-cols-1"}`}>
-                  <div className="surface-tile rounded-xl px-3.5 py-3">
+                  <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
                     <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{customerTicketing ? "Ticket sales" : "Registration"}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-900">{availabilityHelper}</p>
                   </div>
                   {customerTicketing ? (
                     <>
-                      <div className="surface-tile rounded-xl px-3.5 py-3">
+                      <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">From</p>
                         <p className="mt-1 text-sm font-semibold text-slate-900">{formatTicketPrice(page.event.ticket_sales.starting_price)}</p>
                       </div>
-                      <div className="surface-tile rounded-xl px-3.5 py-3">
+                      <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
                         <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats left</p>
                         <p className="mt-1 text-sm font-semibold text-slate-900">{page.event.ticket_sales.available_seat_count || "-"}</p>
                       </div>
                     </>
                   ) : page.event.show_seat_availability && (
-                    <div className="surface-tile rounded-xl px-3.5 py-3">
+                    <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Seats</p>
                       <p className="mt-1 text-sm font-semibold text-slate-900">
                         {page.event.registration_limit == null
@@ -602,7 +597,7 @@ export function PublicEventPage({
                     </div>
                   )}
                   {!customerTicketing && page.event.show_seat_availability && (
-                    <div className="surface-tile rounded-xl px-3.5 py-3">
+                    <div className="surface-tile min-w-0 break-words rounded-xl px-2.5 py-2">
                       <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Remaining</p>
                       <p className="mt-1 text-sm font-semibold text-slate-900">
                         {page.event.remaining_seats == null ? "Open" : page.event.remaining_seats}
@@ -641,8 +636,8 @@ export function PublicEventPage({
               </div>
             </section>
 
-            <section className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,21.5rem)]">
-              <div className="order-2 divide-y divide-slate-200 xl:order-1">
+            <section className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,21.5rem)]">
+              <div className="order-2 min-w-0 divide-y divide-slate-200 xl:order-1">
                 {mainColumnSections}
               </div>
 
@@ -656,7 +651,7 @@ export function PublicEventPage({
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h2 className="text-lg font-semibold text-slate-900">Tickets</h2>
-                        <p className="mt-1 text-sm leading-6 text-slate-500">Choose tickets and complete your purchase with our ticketing partner.</p>
+                        <p className="mt-1 text-sm leading-snug text-slate-500">Choose tickets and complete your purchase with our ticketing partner.</p>
                       </div>
                       <StatusBadge tone="blue">External</StatusBadge>
                     </div>
@@ -675,7 +670,7 @@ export function PublicEventPage({
                 <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
                   {recoveryEmailSent && (
                     <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-4" role="status">
-                      <p className="text-sm leading-6 text-blue-900">{registrationResult?.message}</p>
+                      <p className="text-sm leading-snug text-blue-900">{registrationResult?.message}</p>
                     </div>
                   )}
                   {!ticketReady ? (
@@ -769,7 +764,7 @@ export function PublicEventPage({
                       ) : (
                         <div className="surface-subpanel mt-4 rounded-xl px-3.5 py-3.5">
                           <p className="text-sm font-semibold text-slate-900">{availabilityHelper}</p>
-                          <p className="mt-2 text-sm leading-6 text-slate-500">
+                          <p className="mt-2 text-sm leading-snug text-slate-500">
                             This page stays here for event details, location, and ticket recovery when available.
                           </p>
                           {page.privacy.enabled && (
@@ -789,7 +784,7 @@ export function PublicEventPage({
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-slate-900">Find My Ticket</p>
-                            <p className="mt-1 text-sm leading-6 text-slate-500">
+                            <p className="mt-1 text-sm leading-snug text-slate-500">
                               Enter the email used for registration and we will send a secure ticket link. Phone and attendee name can help narrow the match.
                             </p>
                           </div>
@@ -897,7 +892,7 @@ export function PublicEventPage({
                         )}
                       </div>
 
-                      <div className="surface-subpanel rounded-2xl px-4 py-4 text-sm leading-6 text-slate-600">
+                      <div className="surface-subpanel rounded-2xl px-4 py-4 text-sm leading-snug text-slate-600">
                         <p className="font-semibold text-slate-900">{recoveredRegistrationResult?.event.name}</p>
                         <p className="mt-1">{recoveredRegistrationResult?.event.date_label}</p>
                         <p className="mt-1">{recoveredRegistrationResult?.event.location}</p>
@@ -923,7 +918,7 @@ export function PublicEventPage({
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h2 className="text-lg font-semibold text-slate-900">Help & Contact</h2>
-                        <p className="mt-1 text-sm leading-6 text-slate-500">
+                        <p className="mt-1 text-sm leading-snug text-slate-500">
                           {page.contact.intro}
                         </p>
                       </div>
@@ -1035,7 +1030,7 @@ export function PublicEventPage({
                             }`}
                             style={{ fontFamily: "var(--font-edit)" }}
                           >
-                            {message.text && <p className="whitespace-pre-line leading-6">{message.text}</p>}
+                            {message.text && <p className="whitespace-pre-line leading-snug">{message.text}</p>}
 
                             {message.attachments.length > 0 && (
                               <div className={`${message.text ? "mt-3" : ""} grid grid-cols-2 gap-2`}>
