@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.10.6",
+    date: "2026-11-17",
+    title: "Coupon code validation and current-price preview",
+    features: [
+      "Coupon Apply now validates code syntax before unrelated attendee options",
+      "A valid coupon discounts the current checkout subtotal while accommodation choices remain editable",
+      "Required accommodation answers are enforced only when placing the final booking",
+    ],
+  },
+  {
     version: "0.10.5",
     date: "2026-11-17",
     title: "Fix customer coupon CSRF when Admin is signed in",
