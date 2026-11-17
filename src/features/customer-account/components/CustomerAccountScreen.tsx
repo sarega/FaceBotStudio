@@ -411,6 +411,9 @@ export function CustomerAccountScreen({ themeControl }: { themeControl: ReactNod
     }
   };
 
+  // Only internal customer destinations may be used for the return link.
+  const requestedReturn = new URLSearchParams(window.location.search).get("return_to");
+  const returnTo = requestedReturn === "/app/security" ? requestedReturn : "/app/profile";
   const showBack = mode !== "profile" && mode !== "unavailable";
   const title = mode === "register" ? "Create your account"
     : mode === "forgot" ? "Reset your password"
@@ -441,6 +444,11 @@ export function CustomerAccountScreen({ themeControl }: { themeControl: ReactNod
           )}
         </div>
 
+        <nav aria-label="Account navigation" className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold">
+          <a href="/events" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><CalendarDays className="h-4 w-4" /> งานทั้งหมด / All Events</a>
+          <a href={returnTo} className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" /> กลับบัญชีของฉัน / Back to My Account</a>
+          <a href="/app/orders" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ShoppingBag className="h-4 w-4" /> การจอง / My Bookings</a>
+        </nav>
         <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl shadow-slate-900/10 sm:p-9">
           <div className="mb-7">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Customer account</p>

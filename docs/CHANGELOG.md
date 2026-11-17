@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4 - 2026-11-17
+
+- Linked attendee Customer Area and account editor with clear in-app navigation: Events, My Account, and My Bookings remain one click away.
+- Added breadcrumb navigation and persistent Events entry in the Customer App header and mobile menu.
+- Profile/Security edit links now carry a constrained return_to route, allowing a reliable return to the correct customer section without browser history.
+- Verified responsive links at 320 and 390 CSS pixel viewports and no horizontal page overflow.
+
 ## 0.9.3 - 2026-11-17
 
 - Audited guest and signed-in attendee flows in mobile Chromium viewports (320, 360, 390, and 430 CSS pixels), including login, event catalog, profile menu, and external bank-transfer invoice with mocked owned booking data.

@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.9.4",
+    date: "2026-11-17",
+    title: "Customer navigation without browser back",
+    features: [
+      "Customer App links directly to Events and My Account from mobile and desktop",
+      "Edit Profile and Security return to the originating section",
+      "Persistent navigation to bookings and events across customer pages",
+    ],
+  },
+  {
     version: "0.9.3",
     date: "2026-11-17",
     title: "Mobile payment experience improvements",
