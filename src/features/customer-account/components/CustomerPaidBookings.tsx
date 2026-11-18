@@ -1,3 +1,4 @@
+import { PaymentCountdown } from "../../../components/PaymentCountdown";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { CheckCircle2, UploadCloud } from "lucide-react";
 import { customerApi } from "./CustomerAccountScreen";
@@ -280,6 +281,11 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
           {booking.status === "awaiting_payment" && <p className="text-slate-600">
             ชำระภายใน / Due {new Date(booking.due_at).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", timeZoneName: "short" })}
           </p>}
+          {booking.status === "awaiting_payment" && <PaymentCountdown dueAt={booking.due_at} onExpired={() => {
+            setPage((current) => current && { ...current, bookings: current.bookings.map((item) =>
+              item.id === booking.id && item.status === "awaiting_payment" ? { ...item, status: "expired" } : item) });
+            setSelected((current) => current?.id === booking.id ? undefined : current);
+          }} />}
           {overview ? (
             <a className="inline-flex min-h-10 items-center font-semibold text-blue-700 underline"
               href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>
@@ -314,10 +320,10 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
               <p role="status" className="rounded-lg bg-emerald-50 p-3 text-emerald-700">
                 คูปองฟรี: ยืนยันแล้ว ไม่ต้องโอนเงิน / Complimentary booking confirmed. No payment required.
               </p>}
-            {detail.status === "awaiting_payment" && <div className="space-y-3">
+            {booking.status === "awaiting_payment" && detail.status === "awaiting_payment" && <div className="space-y-3">
               <Step n={1} title="ยอดที่ต้องชำระ / Amount to pay">
                 <p className="text-3xl font-extrabold text-slate-900">{baht(booking.total_due_minor)}</p>
-                <p className="mt-1 text-xs text-slate-700">ชำระภายใน {new Date(booking.due_at).toLocaleString("th-TH")}</p>
+                <p className="mt-1 text-xs text-slate-700">ชำระภายใน {new Date(booking.due_at).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</p>
               </Step>
               <Step n={2} title="สแกน QR หรือโอนเข้าบัญชี / Pay">
                 {detail.payment_mode === "external_manual"

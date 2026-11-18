@@ -109,7 +109,7 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
   if (!bookingAnswers) throw new PaidBookingError("invalid_seminar_answers");
   const now = Date.now();
   if (!(yield* paidEnrollmentOpen(eventId, now))) throw new PaidBookingError("registration_unavailable");
-  const dueMs = Math.min(now + Number(settings.hold_minutes) * 60_000, Number(settings.cutoff_ms ?? Infinity));
+  const dueMs = resolvePaidDeadline(settings, now);
   if (!Number.isSafeInteger(dueMs) || dueMs <= now) throw new PaidBookingError("registration_unavailable");
 
   const categories = yield query(
@@ -273,11 +273,10 @@ export function* reinstateOwnedPaidBooking(eventId: string, bookingId: string, c
   if (!expired || booking.payment_state !== "unpaid") throw new PaidBookingError("state_conflict");
   if (!(yield* paidEnrollmentOpen(eventId, now))) throw new PaidBookingError("registration_unavailable");
   const [settings] = yield query(
-    "SELECT capacity,hold_minutes,cutoff_ms,published FROM paid_event_settings WHERE event_id=?", eventId,
+    "SELECT capacity,hold_minutes,cutoff_ms,published,deadline_mode FROM paid_event_settings WHERE event_id=?", eventId,
   );
   if (!settings || Number(settings.published) !== 1) throw new PaidBookingError("registration_unavailable");
-  const due = Math.min(now + Number(settings.hold_minutes) * 60_000,
-    settings.cutoff_ms == null ? Infinity : Number(settings.cutoff_ms));
+  const due = resolvePaidDeadline(settings, now);
   if (!Number.isSafeInteger(due) || due <= now) throw new PaidBookingError("hold_expired");
   const requested = yield query(
     "SELECT category_id,COUNT(*) AS units FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL GROUP BY category_id",
@@ -368,12 +367,18 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
   };
 }
 
+export function resolvePaidDeadline(settings: PaidRow, now: number) {
+  const cutoff = settings.cutoff_ms == null ? Infinity : Number(settings.cutoff_ms);
+  return settings.deadline_mode === "fixed" ? cutoff : Math.min(now + Number(settings.hold_minutes) * 60_000, cutoff);
+}
+
 export interface PaidSettingsInput {
   organizationId: string;
   version: number;
   capacity: number;
   holdMinutes: number;
   cutoffMs: number | null;
+  deadlineMode?: "relative" | "fixed";
   published: boolean;
   paymentMode?: "promptpay" | "external_manual";
   categories: { id: string; label: string; unitMinor: number; accommodationDiscountMinor?: number; quota: number | null }[];
@@ -420,12 +425,14 @@ export function* savePaidSettings(eventId: string, organizationId: string, input
         (field) => field.key === "accommodation" && field.scope === "attendee" && field.required)) {
     throw new PaidBookingError("invalid_pricing_config");
   }
+  const deadlineMode = input.deadlineMode ?? (current?.deadline_mode === "fixed" ? "fixed" : "relative");
+  if (deadlineMode === "fixed" && input.cutoffMs == null) throw new PaidBookingError("invalid_paid_settings");
   const version = input.version + 1;
   yield query(
-    `INSERT INTO paid_event_settings (event_id,capacity,hold_minutes,cutoff_ms,version,published,payment_mode) VALUES (?,?,?,?,?,?,?)
+    `INSERT INTO paid_event_settings (event_id,capacity,hold_minutes,cutoff_ms,version,published,payment_mode,deadline_mode) VALUES (?,?,?,?,?,?,?,?)
      ON CONFLICT(event_id) DO UPDATE SET capacity=excluded.capacity,hold_minutes=excluded.hold_minutes,
-       cutoff_ms=excluded.cutoff_ms,version=excluded.version,published=excluded.published,payment_mode=excluded.payment_mode`,
-    eventId, input.capacity, input.holdMinutes, input.cutoffMs, version, Number(input.published), input.paymentMode ?? (current?.payment_mode === "external_manual" ? "external_manual" : "promptpay"),
+       cutoff_ms=excluded.cutoff_ms,version=excluded.version,published=excluded.published,payment_mode=excluded.payment_mode,deadline_mode=excluded.deadline_mode`,
+    eventId, input.capacity, input.holdMinutes, input.cutoffMs, version, Number(input.published), input.paymentMode ?? (current?.payment_mode === "external_manual" ? "external_manual" : "promptpay"), deadlineMode,
   );
   yield query("UPDATE paid_categories SET enabled=0 WHERE event_id=?", eventId);
   for (const category of input.categories) {

@@ -1480,6 +1480,10 @@ export class SqliteAppDatabase implements AppDatabase {
         if (name === "050_paid_external_payment.sql" && (this.db.pragma("table_info(paid_event_settings)") as { name: string }[]).some((column) => column.name === "payment_mode")) continue;
         this.db.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
       }
+      const paidSettingsColumns = this.db.pragma("table_info(paid_event_settings)") as { name: string }[];
+      if (!paidSettingsColumns.some((column) => column.name === "deadline_mode")) {
+        this.db.exec(readFileSync(new URL("./migrations/055_paid_deadline_mode.sql", import.meta.url), "utf8"));
+      }
       this.db.exec(readFileSync(new URL("./migrations/054_paid_coupons.sql", import.meta.url), "utf8").split("-- Complimentary bookings")[0]);
       for (const table of ["registrations", "event_performances"]) {
         this.db.exec(`

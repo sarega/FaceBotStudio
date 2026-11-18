@@ -194,9 +194,10 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(bookingMore.status, 201, await bookingMore.clone().text());
     assert.notEqual((await bookingMore.json()).id, recoveryBooking.id);
     const externalPrefix = origin + "/api/events/" + paidEvent.id + "/paid-registration";
+    const fixedCutoff = Date.now() + 7 * 86_400_000;
     const publishExternal = await fetch(externalPrefix + "/settings", {
       method: "PATCH", headers: staffCreateHeaders,
-      body: JSON.stringify({ version: 1, capacity: 25, hold_minutes: 2880, cutoff_ms: null,
+      body: JSON.stringify({ version: 1, capacity: 25, hold_minutes: 30, cutoff_ms: fixedCutoff, deadline_mode: "fixed",
         published: true, payment_mode: "external_manual",
         categories: [{ id: "general", label: "General", unit_minor: 250000, quota: null }] }),
     });
@@ -216,6 +217,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     });
     assert.equal(externalPlaced.status, 201, await externalPlaced.clone().text());
     const externalBooking = await externalPlaced.json();
+    assert.equal(Date.parse(externalBooking.due_at), fixedCutoff);
     assert.equal(await db.readPaidPaymentInstructions(paidEvent.id, externalBooking.id,
       (await db.getCustomerSessionWithAccount(hashSessionToken("test-owner")))!.account.id), undefined);
     const externalQueue = await fetch(externalPrefix + "/review-queue?reference=" + externalBooking.reference,

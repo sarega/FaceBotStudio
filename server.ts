@@ -17420,7 +17420,7 @@ async function startServer() {
   app.patch(paidSettingsPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);
-      const { capacity, version, hold_minutes, published, categories, cutoff_ms } = body;
+      const { capacity, version, hold_minutes, published, categories, cutoff_ms, deadline_mode } = body;
       if (body.payment_mode !== undefined && body.payment_mode !== "promptpay" && body.payment_mode !== "external_manual") {
         return res.status(400).json({ error: "invalid_payment_mode" });
       }
@@ -17432,6 +17432,8 @@ async function startServer() {
       const integer = (value: unknown, min: number, max = 2_147_483_647): value is number =>
         typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
       if (!integer(capacity, 1) || !integer(version, 0, 2_147_483_646) || !integer(hold_minutes, 1) ||
+          (deadline_mode !== undefined && deadline_mode !== "relative" && deadline_mode !== "fixed") ||
+          (deadline_mode === "fixed" && cutoff_ms == null) ||
           typeof published !== "boolean" || (cutoff_ms != null && !integer(cutoff_ms, 1, 8_640_000_000_000_000)) ||
           !Array.isArray(categories) || !categories.length || categories.length > 100) {
         return res.status(400).json({ error: "invalid_paid_settings" });
@@ -17482,7 +17484,8 @@ async function startServer() {
       }
       const settings = await appDb.savePaidSettings(req.eventScope!.eventId, {
         organizationId: req.auth!.user.organization_id, capacity, version, holdMinutes: hold_minutes,
-        published, paymentMode, cutoffMs: cutoff_ms as number | null ?? null, categories: parsed, fields,
+        published, paymentMode, deadlineMode: deadline_mode === "fixed" || deadline_mode === "relative" ? deadline_mode : undefined,
+        cutoffMs: cutoff_ms as number | null ?? null, categories: parsed, fields,
       });
       return res.json({ settings });
     } catch (error) {

@@ -1,3 +1,4 @@
+import { PaymentCountdown } from "../../../components/PaymentCountdown";
 import { paidSeminarFields, seminarDefaultAnswers, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
@@ -299,6 +300,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
                 dateStyle: "medium", timeStyle: "short", timeZone: timezone,
               }).format(new Date(booking.due_at))}
             </p>}
+            {booking.status === "awaiting_payment" && <PaymentCountdown dueAt={booking.due_at} locale={locale} />}
             <a className="paid-signup-secondary inline-flex min-h-10 items-center rounded-lg px-3 py-2 font-semibold"
               href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>
               {booking.status === "expired"

@@ -9,6 +9,7 @@ type Settings = {
   capacity: number;
   hold_minutes: number;
   cutoff_ms: number | null;
+  deadline_mode?: "relative" | "fixed";
   published: 0 | 1;
   payment_mode: "promptpay" | "external_manual";
   fields: PaidSeminarField[];
@@ -39,8 +40,7 @@ const field = "mt-1 block w-full rounded-lg border border-slate-300 bg-white px-
 
 function localDateInput(ms: number | null) {
   if (ms == null) return "";
-  const date = new Date(ms);
-  return new Date(ms - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  return new Date(ms + 7 * 60 * 60_000).toISOString().slice(0, 16);
 }
 
 function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
@@ -53,6 +53,7 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
   })) ?? [{ id: "general", label: "", price: "", discount: "0", quota: "" }]);
   const [seminar, setSeminar] = useState(settings?.fields ?? []);
   const [paymentMode, setPaymentMode] = useState(settings?.payment_mode === "external_manual" ? "external_manual" : "promptpay");
+  const [deadlineMode, setDeadlineMode] = useState(settings?.deadline_mode ?? "relative");
   const [holdDuration, setHoldDuration] = useState(settings?.hold_minutes ?? 1440);
   const displayRef = useRef<PaidPaymentDisplayHandle>(null);
   const [busy, setBusy] = useState(false);
@@ -102,7 +103,7 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           version: settings?.version ?? 0, capacity: Number(data.get("capacity")),
-          hold_minutes: Number(data.get("hold_minutes")), cutoff_ms: cutoff ? new Date(cutoff).getTime() : null,
+          hold_minutes: holdDuration, deadline_mode: deadlineMode, cutoff_ms: cutoff ? Date.parse(cutoff + "+07:00") : null,
           published: publish, payment_mode: paymentMode, categories: parsedCategories, fields: normalizedSeminar,
         }),
       });
@@ -167,12 +168,31 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
         <h3 className="font-bold">3. จำนวนที่รับและราคา</h3>
         <div className="grid gap-3 sm:grid-cols-3">
           <label>Capacity<input className={field} name="capacity" type="number" min={1} step={1} required defaultValue={settings?.capacity} /></label>
-          <label>Payment window (minutes)<input className={field} name="hold_minutes" type="number" min={1} max={43200}
-            step={1} required value={holdDuration} onChange={(event) => setHoldDuration(Number(event.target.value))} />
-            <button type="button" className="mt-2 rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-700"
-              onClick={() => setHoldDuration(1440)}>24 ชั่วโมง / 24 hours</button>
-          </label>
-          <label>Payment cutoff (device timezone)<input className={field} name="cutoff" type="datetime-local" defaultValue={localDateInput(settings?.cutoff_ms ?? null)} /></label>
+          <fieldset className="space-y-2 sm:col-span-2">
+            <label>กำหนดเวลาชำระ / Payment deadline
+              <select className={field} value={deadlineMode}
+                onChange={(event) => setDeadlineMode(event.target.value === "fixed" ? "fixed" : "relative")}>
+                <option value="relative">นับจากเวลาจอง / Time after booking</option>
+                <option value="fixed">วันและเวลาที่กำหนด / Fixed date and time</option>
+              </select>
+            </label>
+            {deadlineMode === "relative" && <>
+              <label>เวลาชำระหลังจอง (นาที)<input className={field} type="number" min={1} max={43200}
+                step={1} required value={holdDuration} onChange={(event) => setHoldDuration(Number(event.target.value))} /></label>
+              <div className="flex flex-wrap gap-2">
+                {[[30, "30 นาที"], [1440, "24 ชั่วโมง"], [10080, "7 วัน"]].map(([minutes, label]) => (
+                  <button key={minutes} type="button" aria-pressed={holdDuration === minutes}
+                    className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-700"
+                    onClick={() => setHoldDuration(Number(minutes))}>{label}</button>
+                ))}
+              </div>
+            </>}
+            <label>{deadlineMode === "fixed" ? "เส้นตายชำระของทุกใบจองใหม่" : "เส้นตายสูงสุด (ถ้ามี)"} · เวลาไทย (UTC+7)
+              <input className={field} name="cutoff" type="datetime-local" required={deadlineMode === "fixed"}
+                defaultValue={localDateInput(settings?.cutoff_ms ?? null)} />
+            </label>
+            <p className="text-xs text-slate-600">ใช้กับใบจองใหม่ ส่วนใบจองเดิมยังใช้กำหนดชำระที่บันทึกไว้</p>
+          </fieldset>
         </div>
         {categories.map((category) => <fieldset key={category.id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-2">
           <legend className="px-1">Category · {category.id}</legend>
@@ -315,7 +335,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           version: settings.version, capacity: settings.capacity, hold_minutes: settings.hold_minutes,
-          cutoff_ms: settings.cutoff_ms, published: true, categories: settings.categories,
+          cutoff_ms: settings.cutoff_ms, deadline_mode: settings.deadline_mode, published: true, categories: settings.categories,
           fields: settings.fields, payment_mode: settings.payment_mode,
         }),
       });

@@ -1,13 +1,23 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import type { PaidBookingInput } from "./paidRegistration";
+import { resolvePaidDeadline, type PaidBookingInput } from "./paidRegistration";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import Database from "better-sqlite3";
 import { SqliteAppDatabase } from "./sqliteAdapter";
+
+test("paid deadline supports timed holds, optional caps and a shared fixed cutoff", () => {
+  const now = Date.UTC(2026, 10, 18);
+  const minute = 60_000;
+  const cutoff = now + 7 * 24 * 60 * minute;
+  assert.equal(resolvePaidDeadline({ hold_minutes: 30 }, now), now + 30 * minute);
+  assert.equal(resolvePaidDeadline({ hold_minutes: 1440, cutoff_ms: now + minute }, now), now + minute);
+  assert.equal(resolvePaidDeadline({ hold_minutes: 30, cutoff_ms: cutoff, deadline_mode: "fixed" }, now), cutoff);
+  assert.equal(resolvePaidDeadline({ hold_minutes: 30, cutoff_ms: cutoff, deadline_mode: "fixed" }, cutoff + minute), cutoff);
+});
 
 async function raceGroups(file: string, command: PaidBookingInput) {
   const adapterUrl = new URL("./sqliteAdapter.ts", import.meta.url).href;
