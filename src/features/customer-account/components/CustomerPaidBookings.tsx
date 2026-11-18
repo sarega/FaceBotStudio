@@ -137,14 +137,21 @@ function PaidProofForm({ path, version, totalMinor, paymentMode, onSubmitted }: 
   return (
     <form onSubmit={submit} className="space-y-3">
       {paymentMode==="promptpay" && <p className="text-xs text-slate-700">ตรวจสอบ QR ในขั้นตอนที่ 2 ก่อนโอน</p>}
-      <label htmlFor={fileId} className="flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-blue-400 bg-blue-500/10 px-4 py-3 text-center font-semibold text-blue-700 hover:bg-blue-500/20">
+      <label htmlFor={fileId} className="relative flex min-h-24 cursor-pointer focus-within:ring-2 focus-within:ring-blue-600 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-blue-400 bg-blue-500/10 px-4 py-3 text-center font-semibold text-blue-700 hover:bg-blue-500/20">
         <UploadCloud className="h-7 w-7"/>
         <span>{file ? file.name : "เลือกภาพสลิป / Choose payment slip"}</span>
         <span className="text-xs font-normal text-slate-700">รูปภาพ JPG / PNG / WebP ไม่เกิน 4 MB</span>
-        <input id={fileId} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp"
+        <input id={fileId} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" type="file" accept="image/*"
           disabled={busy} onChange={(event) => {
             const chosen=event.target.files?.[0];
-            setFile(chosen);setError("");
+            setError("");
+            if (chosen && (!["image/png", "image/jpeg", "image/webp"].includes(chosen.type) || chosen.size > 4 * 1024 * 1024 || chosen.size === 0)) {
+              event.target.value = "";
+              setFile(undefined);
+              setError("กรุณาเลือกรูป JPG, PNG หรือ WebP ขนาดไม่เกิน 4 MB / Choose a JPG, PNG or WebP up to 4 MB.");
+              return;
+            }
+            setFile(chosen);
             if(chosen&&!paidAt){
               const now=new Date();
               setPaidAt(new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,16));
@@ -181,6 +188,7 @@ function PaidProofForm({ path, version, totalMinor, paymentMode, onSubmitted }: 
 
 type PaymentDisplay = { bank_name: string; account_name: string; account_number: string; qr_png_base64: string };
 function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; bookingId: string }) {
+  const [shareError, setShareError] = useState("");
   const [details,setDetails] = useState<PaymentDisplay>();
   const [loading,setLoading] = useState(true);
   useEffect(() => {
@@ -199,18 +207,39 @@ function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; 
       Payment details are incomplete. Contact the organizer before transferring.
     </p>;
   }
+  const qrUrl = "data:image/png;base64," + details.qr_png_base64;
+  const qrFile = details.qr_png_base64 && typeof navigator.share === "function" && typeof navigator.canShare === "function"
+    ? new File([Uint8Array.from(atob(details.qr_png_base64), (character) => character.charCodeAt(0))],
+        "meetrix-payment-qr.png", { type: "image/png" })
+    : undefined;
+  const canShareQr = qrFile && navigator.canShare({ files: [qrFile] });
+
   return <div className="space-y-2 text-sm">
     {!!details.bank_name && <p>ธนาคาร / Bank: {details.bank_name}</p>}
     {!!details.account_name && <p>ชื่อบัญชี / Recipient: <strong>{details.account_name}</strong></p>}
     {!!details.account_number && <p>เลขบัญชี / Account: <span className="font-mono font-semibold">{details.account_number}</span></p>}
     {!!details.qr_png_base64 && <div className="space-y-1">
-      <img src={"data:image/png;base64," + details.qr_png_base64} alt="Organizer-provided payment QR code"
+      <img src={qrUrl} alt="Organizer-provided payment QR code"
         className="block h-auto w-full max-w-72 rounded-xl bg-[#fff] p-3 object-contain" />
-      <a href={"data:image/png;base64," + details.qr_png_base64} download="meetrix-payment-qr.png"
+      {canShareQr && <button type="button" className="mr-2 inline-flex min-h-11 items-center rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white"
+        onClick={async () => {
+          setShareError("");
+          try {
+            await navigator.share({ files: [qrFile] });
+          } catch (error) {
+            if (!(error instanceof DOMException && error.name === "AbortError")) {
+              setShareError("แชร์รูปไม่สำเร็จ ลองกดดาวน์โหลด / Could not share. Try downloading the QR.");
+            }
+          }
+        }}>แชร์รูป QR / Share QR image</button>}
+      <a href={qrUrl} download="meetrix-payment-qr.png"
         className="inline-flex min-h-11 items-center rounded-lg border border-blue-400/50 px-4 py-2 text-sm font-semibold text-blue-700 underline underline-offset-2">
-        บันทึก QR / Save QR image
+        ดาวน์โหลด QR / Download QR
       </a>
-      <p className="text-xs">ใช้มือถือเครื่องเดียว: บันทึก QR แล้วนำเข้าแอปธนาคาร / Same phone: save the QR, then import it in your banking app.</p>
+      {shareError && <p role="status" className="text-xs text-rose-700">{shareError}</p>}
+      <p className="text-xs">{canShareQr
+        ? "แตะ แชร์รูป QR แล้วเลือกบันทึกรูป หากเครื่องมีตัวเลือกนี้ / Share the QR and choose Save Image if available."
+        : "บนมือถือ ลองกดค้างที่รูป QR เพื่อดูเมนูบันทึกรูป / On mobile, press and hold the QR to see image options."}</p>
       <p className="text-xs">ตรวจชื่อผู้รับและยอดเงินก่อนโอน / Verify the recipient and amount.</p>
     </div>}
 
