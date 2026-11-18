@@ -17746,17 +17746,27 @@ async function startServer() {
 
   app.get("/api/events/:eventId/paid-registration/daily-transfer-report",
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
-      const date = typeof req.query.date === "string" ? req.query.date : "";
-      const start = Date.parse(date + "T00:00:00+07:00");
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(start) ||
-          new Date(start + 7 * 3_600_000).toISOString().slice(0, 10) !== date) {
+      const parseDate = (value: unknown) => {
+        if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return NaN;
+        const ms = Date.parse(value + "T00:00:00+07:00");
+        return Number.isFinite(ms) && new Date(ms + 7 * 3_600_000).toISOString().slice(0, 10) === value ? ms : NaN;
+      };
+      const { date, from, to, all } = req.query;
+      const fullEvent = all === "1" && date == null && from == null && to == null;
+      const first = date ?? from;
+      const last = date ?? to;
+      const start = fullEvent ? 0 : parseDate(first);
+      const end = fullEvent ? 8_640_000_000_000_000 : parseDate(last) + 86_400_000;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start ||
+          (all != null && !fullEvent) || (date != null && (from != null || to != null))) {
         return res.status(400).json({ error: "invalid_report_date" });
       }
+      const period = fullEvent ? "ทุกวันที่มีรายการโอนของอีเวนต์" : first === last ? String(first) : `${first} ถึง ${last}`;
+      const filename = fullEvent ? "all" : first === last ? String(first) : `${first}_to_${last}`;
       const eventId = req.eventScope!.eventId;
       const organizationId = req.auth!.user.organization_id;
       try {
-        const transfers = await appDb.listDailyPaidTransfers(eventId, organizationId, start, start + 86_400_000);
-        if (transfers.length > 200) return res.status(422).json({ error: "report_limit_exceeded" });
+        const transfers = await appDb.listDailyPaidTransfers(eventId, organizationId, start, end);
         const event = await appDb.getEventById(eventId);
         const display = (await appDb.readPaidMode(eventId))?.paymentMode === "external_manual"
           ? await appDb.getPaidPaymentDisplay(eventId) : undefined;
@@ -17802,8 +17812,8 @@ async function startServer() {
           .box { display: inline-block; width: 12px; height: 12px; border: 1px solid #475569; }
           .slips { break-before: page; } article { display: inline-block; width: 48%; vertical-align: top; margin-bottom: 12px; }
           img { display: block; max-width: 95%; max-height: 270px; margin-top: 4px; }
-          </style><h1>รายงานตรวจสอบเงินโอนรายวัน</h1><p>${escapeXml(event?.name || eventId)}</p>
-          <p>วันที่โอน ${date} · สร้างรายงาน ${escapeXml(clock.format(Date.now()))} (เวลาไทย)</p>
+          </style><h1>รายงานตรวจสอบเงินโอน</h1><p>${escapeXml(event?.name || eventId)}</p>
+          <p>ช่วงวันที่โอน ${period} · สร้างรายงาน ${escapeXml(clock.format(Date.now()))} (เวลาไทย)</p>
           ${account ? `<p>บัญชีรับเงินที่ตั้งไว้ปัจจุบัน ${account}</p>` : ""}
           <p>ยอดตามสลิป ${amount(sum(transfers))} · ${transfers.length} รายการ</p>
           <p>แอดมินยืนยัน ${amount(sum(verified))} · รอตรวจหรือมีข้อยกเว้น ${amount(sum(transfers) - sum(verified))}</p>
@@ -17818,9 +17828,9 @@ async function startServer() {
           const page = await browser.newPage();
           await page.setContent(html, { waitUntil: "load" });
           const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
-          await recordAudit(req, "paid_registration.daily_transfer_report", "event", eventId, { date, count: transfers.length });
+          await recordAudit(req, "paid_registration.daily_transfer_report", "event", eventId, { period, count: transfers.length });
           return res.set("Cache-Control", "private, no-store")
-            .attachment(`daily-transfers-${date}.pdf`).type("application/pdf").send(Buffer.from(pdf));
+            .attachment(`transfers-${filename}.pdf`).type("application/pdf").send(Buffer.from(pdf));
         } finally {
           await browser.close();
         }

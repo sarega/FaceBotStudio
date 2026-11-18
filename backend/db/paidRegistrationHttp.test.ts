@@ -478,6 +478,9 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const reportPath = eventPrefix + "/daily-transfer-report";
     assert.equal((await fetch(reportPath + "?date=2026-02-30", { headers: staffHeaders })).status, 400);
     assert.equal((await fetch(reportPath + "?date=2026-11-18", { headers: headers("test-owner") })).status, 401);
+    for (const query of ["from=2026-11-19&to=2026-11-18", "from=2026-11-18", "all=1&date=2026-11-18"]) {
+      assert.equal((await fetch(reportPath + "?" + query, { headers: staffHeaders })).status, 400);
+    }
     if (process.env.FACEBOT_TEST_REPORT_PDF) {
       const reportDate = new Date(reportStart + 7 * 3_600_000).toISOString().slice(0, 10);
       const result = await fetch(reportPath + "?date=" + reportDate, { headers: staffHeaders });
@@ -485,6 +488,16 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       const pdf = Buffer.from(await result.arrayBuffer());
       assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
       writeFileSync(process.env.FACEBOT_TEST_REPORT_PDF, pdf);
+      for (const [query, filename] of [
+        [`from=${reportDate}&to=${reportDate}`, `transfers-${reportDate}.pdf`],
+        ["all=1", "transfers-all.pdf"],
+      ]) {
+        const exportResponse = await fetch(reportPath + "?" + query, { headers: staffHeaders });
+        assert.equal(exportResponse.status, 200);
+        assert.ok(exportResponse.headers.get("content-disposition")?.includes(filename));
+        assert.equal(Buffer.from(await exportResponse.arrayBuffer()).subarray(0, 5).toString(), "%PDF-");
+      }
+
     }
     const images = await Promise.all(attendees.map(({ id }: { id: string }) => fetch(credentialPath(id), { headers: headers("test-owner") })));
     assert.ok(images.every((qr) => qr.ok && qr.headers.get("content-type") === "image/png"));

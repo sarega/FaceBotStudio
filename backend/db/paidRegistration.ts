@@ -789,7 +789,7 @@ export function* listDailyPaidTransfers(eventId: string, start: number, end: num
        AND EXISTS (SELECT 1 FROM paid_proofs p WHERE p.attempt_id=a.id)
        AND COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms)>=?
        AND COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms)<?
-     ORDER BY COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms),a.id LIMIT 201`,
+     ORDER BY COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms),a.id`,
     eventId, start, end,
   );
 }
