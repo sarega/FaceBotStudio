@@ -2966,7 +2966,6 @@ function applyOrganizerProfileToSettings(current: Settings, profile: OrganizerPr
   if (!profile) return current;
   return {
     ...current,
-    event_public_organizer_profile_id: profile.organizer_profile_id || profile.id || current.event_public_organizer_profile_id,
     event_public_organizer_name: profile.display_name || profile.organization_name || "",
     event_public_organizer_description: profile.description,
     event_public_organizer_logo_url: profile.logo_url,
@@ -3156,6 +3155,7 @@ export default function App() {
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [settings, setSettings] = useState<Settings>(INITIAL_SETTINGS);
   const [savedSettings, setSavedSettings] = useState<Settings>(INITIAL_SETTINGS);
+  const [loadedSettingsEventId, setLoadedSettingsEventId] = useState("");
   const [organizerProfile, setOrganizerProfile] = useState<OrganizerProfileRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -4635,7 +4635,10 @@ export default function App() {
   };
 
   const handleOrganizerProfileChange = (profileId: string) => {
+    if (profileId === settings.event_public_organizer_profile_id) return;
     const nextProfile = organizerProfiles.find((profile) => (profile.organizer_profile_id || profile.id || "") === profileId) || null;
+    const name = nextProfile?.name || nextProfile?.display_name || nextProfile?.organization_name || "Default organizer";
+    if (!window.confirm(`เปลี่ยนผู้จัดงานนี้เป็น ${name} หรือไม่? การเปลี่ยนจะมีผลเมื่อกด Save ในหน้า Event`)) return;
     setOrganizerProfile(nextProfile);
     setSavedSettings((current) => ({
       ...applyOrganizerProfileToSettings(current, nextProfile),
@@ -5291,6 +5294,7 @@ export default function App() {
   }, [authStatus, checkinAccessMode, deferredRegistrationListQuery, publicEventSlug]);
 
   useEffect(() => {
+    setLoadedSettingsEventId("");
     const nextSettings = {
       ...settingsRef.current,
       ...getBlankEventScopedSettings(),
@@ -5814,6 +5818,7 @@ export default function App() {
       setOrganizerProfile(nextOrganizerProfile);
       setSettings(nextSettings);
       setSavedSettings(nextSettings);
+      setLoadedSettingsEventId(eventId);
     } catch (err) {
       console.error("Failed to fetch settings", err);
     }
@@ -11174,8 +11179,13 @@ export default function App() {
             </motion.div>
           )}
 
-          {activeTab === "organizer" && (
+          {activeTab === "organizer" && selectedEventId && loadedSettingsEventId !== selectedEventId && (
+            <p className="p-4 text-sm text-slate-500" role="status">กำลังโหลดผู้จัดงานของ Event นี้…</p>
+          )}
+          {activeTab === "organizer" && (!selectedEventId || loadedSettingsEventId === selectedEventId) && (
             <OrganizerScreen
+              key={JSON.stringify([selectedEventId, savedSettings.event_public_organizer_profile_id])}
+              eventOrganizerId={savedSettings.event_public_organizer_profile_id}
               authUser={authUser}
               apiFetch={apiFetch}
               canEditSettings={canEditSettings}

@@ -12,6 +12,7 @@ import type { AuthUser, OrganizerProfileRecord } from "../../../types";
 type OrganizerScreenProps = {
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   authUser: AuthUser | null;
+  eventOrganizerId: string;
   canEditSettings: boolean;
   onOrganizerProfilesChanged: () => void;
 };
@@ -99,10 +100,10 @@ function isErrorMessage(message: string) {
   return /failed|invalid|required|must|error/i.test(message);
 }
 
-export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganizerProfilesChanged }: OrganizerScreenProps) {
+export function OrganizerScreen({ apiFetch, authUser, eventOrganizerId, canEditSettings, onOrganizerProfilesChanged }: OrganizerScreenProps) {
   const apiFetchRef = useRef(apiFetch);
   const [organizers, setOrganizers] = useState<OrganizerProfileRecord[]>([]);
-  const [selectedOrganizerId, setSelectedOrganizerId] = useState("");
+  const [directorySelection, setDirectorySelection] = useState("");
   const [profileForm, setProfileForm] = useState<OrganizerProfileForm | null>(null);
   const [financeProfile, setFinanceProfile] = useState<Record<string, unknown> | null>(null);
   const [financeForm, setFinanceForm] = useState<OrganizerFinancialProfileForm | null>(null);
@@ -113,6 +114,8 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
   const [message, setMessage] = useState("");
   apiFetchRef.current = apiFetch;
 
+  const assignedOrganizerId = eventOrganizerId || organizerId(organizers[0]);
+  const selectedOrganizerId = directorySelection || assignedOrganizerId;
   const selectedOrganizer = organizers.find((profile) => organizerId(profile) === selectedOrganizerId) || null;
 
   const loadOrganizers = async () => {
@@ -125,7 +128,7 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
       if (!response.ok) throw new Error(data?.error || "Failed to load organizers");
       const rows = Array.isArray(data) ? data as OrganizerProfileRecord[] : [];
       setOrganizers(rows);
-      setSelectedOrganizerId((current) => rows.some((profile) => organizerId(profile) === current) ? current : organizerId(rows[0]));
+      setDirectorySelection((current) => rows.some((profile) => organizerId(profile) === current) ? current : "");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to load organizers");
     } finally {
@@ -138,10 +141,11 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
   }, [authUser?.id, canEditSettings]);
 
   useEffect(() => {
+    setFinanceProfile(null);
+    setFinanceForm(null);
     if (!selectedOrganizer) {
       setProfileForm(null);
-      setFinanceProfile(null);
-      setFinanceForm(null);
+      setFinanceLoading(false);
       return;
     }
 
@@ -190,7 +194,7 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
       if (!response.ok) throw new Error(data?.error || "Failed to create organizer");
       const created = data as OrganizerProfileRecord;
       setOrganizers((current) => [...current, created]);
-      setSelectedOrganizerId(organizerId(created));
+      setDirectorySelection(organizerId(created));
       setSection("profile");
       onOrganizerProfilesChanged();
       setMessage("Organizer created. Add its public profile and finance details.");
@@ -300,7 +304,15 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setSelectedOrganizerId(id)}
+                    aria-pressed={selected}
+                    disabled={saving}
+                    onClick={() => {
+                      if (selected) return;
+                      const name = profile.name || profile.display_name || profile.organization_name;
+                      if (window.confirm(`เปิดโปรไฟล์ ${name} ใน Directory หรือไม่? ผู้จัดงานที่บันทึกไว้กับ Event จะยังคงเดิม และการแก้ไขที่ยังไม่ได้บันทึกในโปรไฟล์นี้จะหายไป`)) {
+                        setDirectorySelection(id);
+                      }
+                    }}
                     className={`w-full rounded-xl border px-2.5 py-2 text-left transition ${selected ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:border-blue-300"}`}
                   >
                     <div className="flex items-start gap-2">
@@ -313,6 +325,7 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
                       </span>
                     </div>
                     <span className="mt-1.5 flex items-center justify-between text-[10px] text-slate-500">
+                      {id === assignedOrganizerId && <span className="font-semibold text-blue-700">ผู้จัดงานของ Event นี้</span>}
                       <span>{profile.verification_status === "verified" ? "Verified" : "Draft"}</span>
                       <span className={finance?.promptpay_ready === true ? "text-emerald-600" : "text-amber-600"}>{finance?.promptpay_ready === true ? "Payment ready" : "Payment setup"}</span>
                     </span>
@@ -338,7 +351,7 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
                   </div>
                   <div className="flex items-center gap-2">
                     <StatusBadge tone={financeProfile?.promptpay_ready === true ? "emerald" : "amber"}>{financeProfile?.promptpay_ready === true ? "PromptPay ready" : "Payment setup needed"}</StatusBadge>
-                    <ActionButton onClick={() => void (section === "profile" ? saveProfile() : saveFinance())} disabled={saving || financeLoading} tone="blue" active className="text-xs">
+                    <ActionButton onClick={() => void (section === "profile" ? saveProfile() : saveFinance())} disabled={saving || financeLoading || (section === "finance" && !financeForm)} tone="blue" active className="text-xs">
                       {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save {section === "profile" ? "profile" : "finance"}
                     </ActionButton>
                   </div>
@@ -426,7 +439,7 @@ export function OrganizerScreen({ apiFetch, authUser, canEditSettings, onOrganiz
                 {message && <p className={`mt-3 text-xs ${isErrorMessage(message) ? "text-rose-600" : "text-emerald-600"}`}>{message}</p>}
               </>
             ) : (
-              <div className="grid min-h-64 place-items-center text-center text-sm text-slate-500"><div><Building2 className="mx-auto mb-2 h-7 w-7 text-slate-400" /><p>เลือก Organizer หรือสร้างรายการใหม่</p></div></div>
+              <div className="grid min-h-64 place-items-center text-center text-sm text-slate-500"><div><Building2 className="mx-auto mb-2 h-7 w-7 text-slate-400" /><p>{!directoryLoading && eventOrganizerId && !directorySelection ? "ไม่พบ Organizer ที่ผูกกับ Event นี้ใน Directory" : "เลือก Organizer หรือสร้างรายการใหม่"}</p>{message && <p role="alert" className="mt-2 text-rose-600">{message}</p>}</div></div>
             )}
           </section>
         </div>
