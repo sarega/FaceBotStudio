@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.5 - 2026-11-18
+
+- Make email verification a prominent next step after customer registration. New customers land on the dedicated /account/check-email page instead of a small English-only notice on Sign in.
+- Display a bold bilingual Thai/English message, the registered email address, Inbox/Spam guidance, and an obvious Resend verification email action. Do not claim a message was sent when email delivery could not be queued.
+- Signed-in but unverified customers see the same actionable warning on their account screen, and a reminder from the Customer App and public Event registration pages.
+- Reuse the existing rate-limited resend API and keep server-side verified-email requirements in place.
+- When the check-email route is refreshed without a saved signup email, allow the customer to enter their address and request a replacement link.
+- Browser-tested at 390px and 1280px in Light and Dark themes, with no horizontal overflow or JavaScript errors.
+
 ## 0.11.3 - 2026-11-17
 
 - Improve low-contrast text and mismatched backgrounds in the dark-mode Registrations admin sections, especially Coupons & Promotions, Slip Review, Paid Attendee roster, and Booking/Event Stats.

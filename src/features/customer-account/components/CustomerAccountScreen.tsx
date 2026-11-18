@@ -1,3 +1,4 @@
+import { CustomerVerificationNotice } from "./CustomerVerificationNotice";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, CalendarDays, CheckCircle2, LockKeyhole, LogOut, Mail, RefreshCw, Save, ShieldCheck, ShoppingBag, UserRound } from "lucide-react";
@@ -20,7 +21,7 @@ export type CustomerAccount = {
 };
 
 
-type CustomerScreenMode = "login" | "register" | "forgot" | "reset" | "verify" | "profile" | "unavailable";
+type CustomerScreenMode = "login" | "register" | "check-email" | "forgot" | "reset" | "verify" | "profile" | "unavailable";
 
 type CustomerForm = {
   email: string;
@@ -44,6 +45,7 @@ const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function resolveCustomerMode(pathname: string): CustomerScreenMode {
   if (pathname.endsWith("/register")) return "register";
+  if (pathname.endsWith("/check-email")) return "check-email";
   if (pathname.endsWith("/forgot-password")) return "forgot";
   if (pathname.endsWith("/reset-password")) return "reset";
   if (pathname.endsWith("/verify-email")) return "verify";
@@ -150,6 +152,7 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [notice, setNotice] = useState("");
+  const [verificationDeliveryFailed,setVerificationDeliveryFailed]=useState(false);
   const handledTokenRef = useRef("");
 
   const setField = (field: keyof CustomerForm, value: string | boolean) => {
@@ -244,6 +247,7 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
         }
         setAccount(data.account);
         setField("password", "");
+        setNotice("");
         navigate("profile");
         return;
       }
@@ -261,10 +265,10 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
             accept_privacy: form.accept_privacy,
           }),
         });
-        navigate("login");
-        setNotice(data.verification_delivery_queued === false
-          ? "Account created. Please verify your email before signing in."
-          : "Account created. Check your email to verify the account.");
+        setVerificationDeliveryFailed(data.verification_delivery_queued === false);
+        setField("password","");
+        setNotice("");
+        navigate("check-email");
         return;
       }
       if (mode === "forgot") {
@@ -340,9 +344,10 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: form.email }),
       });
+      setVerificationDeliveryFailed(data.verification_delivery_queued === false);
       setNotice(data.verification_delivery_queued === false
-        ? "We could not queue the email yet. Please try again shortly or contact support."
-        : "A new verification email has been queued. Check your inbox and spam folder.");
+        ? "ยังส่งอีเมลไม่ได้ กรุณาลองใหม่หรือติดต่อผู้จัดงาน / Email delivery unavailable."
+        : "ส่งคำขออีเมลยืนยันแล้ว กรุณาตรวจ Inbox และ Spam / Check your email.");
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to resend verification email");
     } finally {
@@ -385,7 +390,8 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
   const requestedReturn = new URLSearchParams(window.location.search).get("return_to");
   const returnTo = requestedReturn === "/app/security" ? requestedReturn : "/app/profile";
   const showBack = mode !== "profile" && mode !== "unavailable";
-  const title = mode === "register" ? "Create your account"
+  const title = mode === "check-email" ? "ตรวจสอบอีเมลของคุณ / Check your email"
+    : mode === "register" ? "Create your account"
     : mode === "forgot" ? "Reset your password"
       : mode === "reset" ? "Choose a new password"
         : mode === "verify" ? "Verify your email"
@@ -403,6 +409,19 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
               <p>Customer accounts are not enabled in this environment yet.</p>
               {errorMessage && <p className="text-xs text-amber-800">{errorMessage}</p>}
             </div>
+          ) : mode === "check-email" ? (
+            <div className="space-y-4">
+              {!form.email.trim() && <CustomerField label="อีเมลที่ใช้สมัคร / Account email"
+                type="email" autoComplete="email" value={form.email}
+                onChange={value=>setField("email",value)}/>}
+              <CustomerVerificationNotice email={form.email} busy={busy}
+                onResend={()=>void resendVerification()}
+                status={notice} error={errorMessage} deliveryFailed={verificationDeliveryFailed}/>
+              <button type="button" onClick={()=>navigate("login")}
+                className="inline-flex min-h-11 items-center rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-blue-700">
+                ยืนยันอีเมลแล้ว? เข้าสู่ระบบ / Sign in
+              </button>
+            </div>
           ) : mode === "verify" ? (
             <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
               <CheckCircle2 className={`h-7 w-7 ${errorMessage ? "text-rose-700" : "text-blue-700"}`} />
@@ -410,6 +429,11 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
               {!busy && <button type="button" onClick={() => navigate("login")} className="rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500">Continue to sign in</button>}
             </div>
           ) : mode === "profile" && account ? (
+            <div className="space-y-5">
+            {!account.email_verified_at && <CustomerVerificationNotice email={account.email}
+              busy={busy} onResend={()=>void resendVerification()}
+              status={notice} error={errorMessage}
+              deliveryFailed={verificationDeliveryFailed}/>}
             <form className="space-y-6" onSubmit={(event) => void submit(event)}>
               <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex items-center gap-3">
@@ -437,6 +461,7 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
                 {!embedded && <a href="/app/security" className="inline-flex items-center text-blue-700 underline">Account security</a>}
               </div>
             </form>
+            </div>
           ) : (
             <form className="space-y-5" onSubmit={(event) => void submit(event)}>
               {(mode === "register" || mode === "profile") && <div className="grid gap-4 sm:grid-cols-2"><CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" /><CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" /></div>}
@@ -445,6 +470,9 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
               {mode === "register" && <CustomerField label="Phone" value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />}
               {(mode === "reset") && <CustomerField label="New password" value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete="new-password" />}
               {mode === "register" && <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><label className="flex gap-3"><input type="checkbox" checked={form.accept_terms} onChange={(event) => setField("accept_terms", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the terms of service.</label><label className="flex gap-3"><input type="checkbox" checked={form.accept_privacy} onChange={(event) => setField("accept_privacy", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the privacy notice.</label></div>}
+              {mode === "login" && <div className="mb-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                <strong>บัญชียังไม่ได้รับการยืนยัน?</strong> กรุณาเปิดอีเมลที่ใช้สมัครและกดลิงก์ Verify ก่อนจองที่นั่ง
+              </div>}
               {errorMessage && <p className="text-sm text-rose-700">{errorMessage}</p>}
               {notice && <p className="flex items-start gap-2 text-sm text-emerald-700"><Mail className="mt-0.5 h-4 w-4 shrink-0" /> {notice}</p>}
               <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? "Create account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Reset password" : "Sign in"}</button>

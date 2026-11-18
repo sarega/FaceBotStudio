@@ -2521,3 +2521,32 @@ html.theme-dark .registration-booking-stat { color: #f8fafc; border-color: #4359
 html.theme-dark .registration-booking-stat-unpaid { background: #493315; }
 html.theme-dark .registration-booking-stat-review { background: #30234b; }
 html.theme-dark .registration-booking-stat-confirmed { background: #16483e; }
+
+
+/* Customer onboarding: a high-visibility email confirmation step on all entry points. */
+.customer-verification-notice {
+  background: #fffbeb;
+  border-color: #f59e0b;
+  color: #713f12;
+}
+.customer-verification-icon { background: #fde68a; color: #92400e; }
+.customer-verification-email { background: #fef3c7; color: #713f12; }
+.customer-verification-button { background: #1d4ed8; color: #ffffff; }
+.customer-verification-button:hover:not(:disabled) { background: #1e40af; }
+.customer-verification-feedback { background: #ecfdf5; color: #065f46; }
+.customer-verification-error { background: #fff1f2; color: #9f1239; }
+.customer-verification-button:focus-visible {
+  outline: 3px solid #f59e0b;
+  outline-offset: 3px;
+}
+html.theme-dark .customer-verification-notice {
+  background: #382913;
+  border-color: #fbbf24;
+  color: #fef3c7;
+}
+html.theme-dark .customer-verification-icon { background: #713f12; color: #fde68a; }
+html.theme-dark .customer-verification-email { background: #513718; color: #fef3c7; }
+html.theme-dark .customer-verification-button { background: #60a5fa; color: #0f172a; }
+html.theme-dark .customer-verification-button:hover:not(:disabled) { background: #93c5fd; }
+html.theme-dark .customer-verification-feedback { background: #114c3c; color: #a7f3d0; }
+html.theme-dark .customer-verification-error { background: #571e2e; color: #fecdd3; }

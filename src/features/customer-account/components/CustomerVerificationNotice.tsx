@@ -1,0 +1,51 @@
+import { AlertCircle, MailCheck, RefreshCw } from "lucide-react";
+
+/** Public/customer-facing next step: never imply a message was sent if delivery failed. */
+export function CustomerVerificationNotice({
+  email, onResend, busy = false, status = "", error = "", deliveryFailed = false,
+}: {
+  email: string;
+  onResend?: () => void;
+  busy?: boolean;
+  status?: string;
+  error?: string;
+  deliveryFailed?: boolean;
+}) {
+  return <section role="alert" aria-label="Email verification required"
+    className="customer-verification-notice rounded-2xl border p-4 sm:p-6">
+    <div className="flex items-start gap-3">
+      <div className="customer-verification-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-xl">
+        <MailCheck className="h-6 w-6" aria-hidden="true"/>
+      </div>
+      <div className="min-w-0 flex-1 space-y-2">
+        <p className="text-xs font-bold uppercase tracking-wide">สำคัญ · Action required</p>
+        <h2 className="text-xl font-extrabold leading-snug sm:text-2xl">
+          กรุณาเปิดอีเมลและกดลิงก์ยืนยันบัญชี
+        </h2>
+        <p className="text-sm font-semibold sm:text-base">Check your email and click the verification link.</p>
+        <p className="text-sm leading-relaxed">
+          {deliveryFailed
+            ? "ระบบยังไม่สามารถส่งอีเมลได้ กรุณากดส่งอีกครั้ง หรือติดต่อผู้จัดงาน"
+            : "เราส่งลิงก์ยืนยันไปยังอีเมลที่ใช้สมัครแล้ว กรุณากดลิงก์ในอีเมลก่อนกลับมาลงทะเบียน"}
+        </p>
+        {email && <p className="customer-verification-email break-all rounded-lg px-3 py-2 text-sm font-bold">
+          <span className="mr-2">อีเมลของคุณ:</span>{email}
+        </p>}
+        <p className="text-sm leading-relaxed">
+          <strong>หาอีเมลไม่พบ?</strong> ตรวจกล่องจดหมายเข้า (Inbox), Spam หรือ Junk
+          แล้วกดส่งลิงก์อีกครั้งได้ด้านล่าง
+        </p>
+        <p className="text-sm font-semibold">ยังไม่ยืนยันอีเมล = ยังไม่สามารถจองที่นั่งได้</p>
+        {onResend && <button type="button" disabled={busy} onClick={onResend}
+          className="customer-verification-button inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60">
+          <RefreshCw className={"h-4 w-4"+(busy?" animate-spin":"")}/>
+          {busy ? "กำลังส่ง…" : "ส่งอีเมลยืนยันอีกครั้ง / Resend email"}
+        </button>}
+        {status && <p role="status" className="customer-verification-feedback rounded-lg p-3 text-sm font-semibold">{status}</p>}
+        {error && <p role="alert" className="customer-verification-error flex items-center gap-2 rounded-lg p-3 text-sm font-semibold">
+          <AlertCircle className="h-4 w-4 shrink-0"/>{error}
+        </p>}
+      </div>
+    </div>
+  </section>;
+}

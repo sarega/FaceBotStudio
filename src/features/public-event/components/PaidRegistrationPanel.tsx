@@ -268,9 +268,19 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
         </div>
       )}
       {customerAccount && !customerAccount.email_verified_at && (
-        <p role="alert" className="paid-signup-note rounded-lg p-2 text-xs">
-          {locale === "th" ? "กรุณายืนยันอีเมลก่อนจอง" : "Verify your email before booking."}
-        </p>
+        <div role="alert" className="paid-signup-note space-y-2 rounded-xl border border-amber-400 p-3">
+          <strong className="block text-base">
+            {locale === "th" ? "กรุณาเปิดอีเมลและกดลิงก์ยืนยันบัญชีก่อนจอง" :
+              "Check your inbox and verify your email before booking"}
+          </strong>
+          <p className="break-all text-sm">{customerAccount.email}</p>
+          <p className="text-sm">{locale === "th" ?
+            "ตรวจ Inbox และ Spam หากไม่พบอีเมล ให้กดส่งลิงก์อีกครั้ง" :
+            "Check Inbox and Spam. You can request a new verification email."}</p>
+          <a href="/account" className="inline-flex min-h-10 items-center rounded-lg border border-current px-3 py-2 text-sm font-bold underline">
+            {locale === "th" ? "ส่งอีเมลยืนยันอีกครั้ง / ไปที่บัญชี" : "Resend verification / My account"}
+          </a>
+        </div>
       )}
       {booking && (
         <details className={"public-booking-notice rounded-xl border px-3 py-2.5 text-xs " +

@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.5",
+    date: "2026-11-18",
+    title: "Clear email verification after customer signup",
+    features: [
+      "New customers see a large bilingual instruction to verify email before booking",
+      "Persistent reminders for unverified accounts on Customer App and Event pages",
+      "A prominent resend verification action with accurate delivery feedback",
+    ],
+  },
+  {
     version: "0.11.4",
     date: "2026-11-18",
     title: "Daily transfer reports and compact customer management",
