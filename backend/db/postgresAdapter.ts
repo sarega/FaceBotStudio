@@ -859,8 +859,8 @@ export class PostgresAppDatabase implements AppDatabase {
     return serializePaidBookingList(rows);
   }
 
-  async readOwnedPaidBooking(eventId: string, id: string, customerId: string) {
-    return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId));
+  async readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: import("./paidRegistration").PaidPreferenceEdit) {
+    return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId, edit));
   }
 
   async reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string) {

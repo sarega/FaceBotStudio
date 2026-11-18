@@ -13,8 +13,50 @@ type Booking = {
   total_due_minor: number;
   due_at: string;
 };
-type Detail = { status: string; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
-  coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
+type PreferenceField = { key: "food" | "transport"; scope: "booking" | "attendee"; required: boolean; options?: string[] };
+
+function PreferenceInput({ field, initial, path, attendeeId }: {
+  field: PreferenceField; initial?: string; path: string; attendeeId?: string;
+}) {
+  const [value, setValue] = useState(initial ?? "");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const inputClass = "mt-1 block w-full rounded-lg border border-slate-200 bg-white px-2 py-2";
+  return <form className="rounded-lg border border-slate-200 p-2" onSubmit={async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await customerApi(path, { method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: field.key, attendee_id: attendeeId, value }) });
+      setMessage("บันทึกแล้ว / Saved");
+    } catch {
+      setMessage("บันทึกไม่สำเร็จ กรุณาตรวจคำตอบแล้วลองอีกครั้ง / Could not save. Check your answer and retry.");
+    } finally {
+      setBusy(false);
+    }
+  }}>
+    <label className="block font-medium">
+      {field.key === "transport" ? "การเดินทาง / Transport" : "อาหาร / Food preference"}
+      {field.options ? <select className={inputClass} required={field.required} value={value}
+        onChange={(event) => { setValue(event.target.value); setMessage(""); }}>
+        <option value="">เลือกคำตอบ / Select an answer</option>
+        {value && !field.options.includes(value) && <option value={value} disabled>{value}</option>}
+        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select> : <input className={inputClass} maxLength={500} required={field.required} value={value}
+        onChange={(event) => { setValue(event.target.value); setMessage(""); }} />}
+    </label>
+    <button type="submit" disabled={busy || (!!value && !!field.options && !field.options.includes(value))}
+      className="mt-2 rounded-lg bg-blue-700 px-3 py-2 font-semibold text-white disabled:opacity-50">
+      {busy ? "กำลังบันทึก… / Saving…" : "บันทึกคำตอบ / Save answer"}
+    </button>
+    {message && <p role="status" className="mt-1">{message}</p>}
+  </form>;
+}
+
+type Detail = { preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
+  coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 const baht = (minor:number) => new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"}).format(minor/100);
 function Step({n,title,children,emphasis=false}:{n:number;title:string;children:ReactNode;emphasis?:boolean}) {
@@ -352,6 +394,22 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
               <CheckCircle2 className="h-6 w-6"/> ส่งสลิปสำเร็จแล้ว รอผู้จัดงานยืนยัน / Slip received
             </div>}
 
+            {!!detail.preference_fields?.length && <details className="rounded-lg border border-slate-200 p-3">
+              <summary className="cursor-pointer font-semibold">แก้ไขการเดินทางและอาหาร / Edit travel and food</summary>
+              <div className="mt-3 space-y-3">
+                {detail.preference_fields.filter(({ scope }) => scope === "booking").map((field) =>
+                  <PreferenceInput key={field.key} field={field} initial={detail.preference_answers?.[field.key]}
+                    path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`} />)}
+                {detail.preference_fields.some(({ scope }) => scope === "attendee") && detail.attendees.map((attendee) =>
+                  <section key={attendee.id} className="space-y-2">
+                    <h4 className="font-semibold">{attendee.first_name} {attendee.last_name}</h4>
+                    {detail.preference_fields?.filter(({ scope }) => scope === "attendee").map((field) =>
+                      <PreferenceInput key={field.key} field={field} initial={attendee.preference_answers?.[field.key]}
+                        attendeeId={attendee.id}
+                        path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`} />)}
+                  </section>)}
+              </div>
+            </details>}
             <details open={tickets || undefined} className="rounded-lg border border-slate-200 p-3 text-sm">
               <summary className="cursor-pointer font-medium text-slate-700">ผู้เข้าร่วมและรายละเอียดการจอง</summary>
               <div className="mt-3 space-y-3">

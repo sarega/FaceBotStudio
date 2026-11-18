@@ -1106,7 +1106,7 @@ export interface AppDatabase {
   listDuePaidEvents(now: number): Promise<string[]>;
   readPaidCatalog(eventId: string): Promise<PaidCatalog | undefined>;
   listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference?: string, confirmedOnly?: boolean): Promise<PaidRow[]>;
-  readOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<PaidRow | undefined>;
+  readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: import("./paidRegistration").PaidPreferenceEdit): Promise<PaidRow | undefined>;
   reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<{
     status: "awaiting_payment"; payment_status: "unpaid"; due_at: string; version: number;
   }>;

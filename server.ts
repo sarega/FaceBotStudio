@@ -17996,6 +17996,26 @@ async function startServer() {
     },
   );
 
+  app.patch("/api/customer/paid-bookings/:eventId/:id/preferences", requireVerifiedCustomer,
+    async (req: AuthenticatedRequest, res) => {
+      const { key, attendee_id, value } = readObjectBody(req);
+      if ((key !== "food" && key !== "transport") || typeof value !== "string" || value.length > 500 ||
+          (attendee_id !== undefined && (typeof attendee_id !== "string" || !attendee_id || attendee_id.length > 80))) {
+        return res.status(400).json({ error: "invalid_seminar_answers" });
+      }
+      try {
+        const updated = await appDb.readOwnedPaidBooking(req.params.eventId, req.params.id, req.customer!.account.id, {
+          key, value, attendeeId: typeof attendee_id === "string" ? attendee_id : undefined,
+        });
+        return res.set("Cache-Control", "private, no-store").status(updated ? 204 : 404).end();
+      } catch (error) {
+        if (error instanceof PaidBookingError) {
+          return res.status(error.code === "event_not_found" ? 404 : 409).json({ error: error.code });
+        }
+        return res.status(500).json({ error: "preferences_unavailable" });
+      }
+    });
+
   app.get("/api/customer/paid-bookings/:eventId/:id", requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
     try {
       const booking = await appDb.readOwnedPaidBooking(req.params.eventId, req.params.id, req.customer!.account.id);

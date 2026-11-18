@@ -340,7 +340,15 @@ export function* reinstateOwnedPaidBooking(eventId: string, bookingId: string, c
     version:Number(updated[0].version)};
 }
 
-export function* readOwnedPaidBooking(eventId: string, id: string, customerId: string): PaidCommand<PaidRow | undefined> {
+function editablePreferenceAnswers(answers: unknown): Record<string, string> {
+  return Object.fromEntries((Array.isArray(answers) ? answers : [])
+    .filter((answer) => (answer?.key === "food" || answer?.key === "transport") && typeof answer.value === "string")
+    .map((answer) => [answer.key, answer.value]));
+}
+
+export type PaidPreferenceEdit = { key: "food" | "transport"; attendeeId?: string; value: string };
+
+export function* readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: PaidPreferenceEdit): PaidCommand<PaidRow | undefined> {
   const [booking] = yield query(
     `SELECT b.id,b.reference,b.state,b.payment_state,b.currency,b.total_minor,b.due_ms,b.version,
       s.payment_mode,b.contact_json FROM paid_bookings b JOIN paid_event_settings s ON s.event_id=b.event_id
@@ -351,15 +359,40 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
     `SELECT id,category_id,category_label,unit_minor,first_name,last_name,contact_json
      FROM paid_attendees WHERE event_id=? AND booking_id=? AND cancelled_ms IS NULL ORDER BY ordinal`, eventId, id,
   );
+  const preferencesEditable = ["awaiting_payment", "verification_pending", "confirmed"].includes(String(booking.state)) &&
+    (booking.state !== "awaiting_payment" || Number(booking.due_ms) > Date.now());
+  const preferenceFields = (yield* readPaidSeminarForm(eventId)).filter(({ key }) => key === "food" || key === "transport");
+  if (edit) {
+    if (!preferencesEditable) throw new PaidBookingError("state_conflict");
+    const field = preferenceFields.find(({ key }) => key === edit.key);
+    const target = edit.attendeeId ? attendees.find(({ id }) => id === edit.attendeeId) : booking;
+    if (!field || !target || field.scope !== (edit.attendeeId ? "attendee" : "booking")) {
+      throw new PaidBookingError("invalid_seminar_answers");
+    }
+    const answers = normalizePaidSeminarAnswers([field], field.scope, { [edit.key]: edit.value });
+    if (!answers) throw new PaidBookingError("invalid_seminar_answers");
+    const contact = JSON.parse(String(target.contact_json || "{}"));
+    contact.answers = [...(Array.isArray(contact.answers) ? contact.answers.filter((answer: { key: string }) => answer.key !== edit.key) : []), ...answers];
+    target.contact_json = JSON.stringify(contact);
+    if (edit.attendeeId) {
+      yield query("UPDATE paid_attendees SET contact_json=? WHERE id=? AND booking_id=? AND cancelled_ms IS NULL",
+        String(target.contact_json), edit.attendeeId, id);
+    } else {
+      yield query("UPDATE paid_bookings SET contact_json=? WHERE id=? AND customer_id=?", String(target.contact_json), id, customerId);
+    }
+  }
   const dueMs = Number(booking.due_ms);
   return {
     ...booking, total_minor: Number(booking.total_minor), due_ms: dueMs,
     coupon: JSON.parse(String(booking.contact_json ?? "{}")).coupon ?? null,
+    preference_fields: preferencesEditable ? preferenceFields : [],
+    preference_answers: editablePreferenceAnswers(JSON.parse(String(booking.contact_json ?? "{}")).answers),
     state: booking.state === "awaiting_payment" && dueMs <= Date.now() ? "expired" : booking.state,
     attendees: attendees.map(({ contact_json, ...attendee }) => {
       const info = JSON.parse(String(contact_json || "{}"));
       const pricing = info?.pricing && typeof info.pricing === "object" ? info.pricing : null;
       return { ...attendee,
+        preference_answers: editablePreferenceAnswers(info.answers),
         base_minor: Number(pricing?.base_minor ?? attendee.unit_minor),
         accommodation_discount_minor: Number(pricing?.accommodation_discount_minor ?? 0),
       };

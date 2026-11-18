@@ -840,6 +840,32 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     });
     assert.equal(disabledQuote.status,422);
     assert.equal((await disabledQuote.json()).error,"coupon_disabled");
+    const preferencesFixture = new Database(database);
+    try {
+      preferencesFixture.prepare(`INSERT INTO paid_event_forms (event_id,fields_json) VALUES (?,?)
+        ON CONFLICT(event_id) DO UPDATE SET fields_json=excluded.fields_json`).run(newExternalEvent.id, JSON.stringify([
+        { key: "transport", scope: "booking", required: true, options: ["Shuttle", "Self-arranged"] },
+        { key: "food", scope: "attendee", required: true, options: ["มังสวิรัติ", "Regular"] },
+      ]));
+    } finally {
+      preferencesFixture.close();
+    }
+    const updatePreference = (token: string, input: object, csrf = "fixture-csrf") =>
+      fetch(ownerFreeUrl + "/preferences", { method: "PATCH", body: JSON.stringify(input),
+        headers: { ...headers(token), "Content-Type": "application/json", "x-csrf-token": csrf } });
+    const transport = { key: "transport", value: "Shuttle" };
+    const food = { key: "food", attendee_id: freeDetails.attendees[0].id, value: "มังสวิรัติ" };
+    assert.equal((await updatePreference("test-owner", transport, "wrong")).status, 403);
+    assert.equal((await updatePreference("test-other", transport)).status, 404);
+    assert.equal((await updatePreference("test-owner", { ...food, value: "Invalid" })).status, 409);
+    assert.equal((await updatePreference("test-owner", transport)).status, 204);
+    assert.equal((await updatePreference("test-owner", food)).status, 204);
+    const updatedPreferences = await (await fetch(ownerFreeUrl, { headers: headers("test-owner") })).json();
+    assert.equal(updatedPreferences.preference_answers.transport, "Shuttle");
+    assert.equal(updatedPreferences.attendees[0].preference_answers.food, "มังสวิรัติ");
+    assert.equal(updatedPreferences.status, "confirmed");
+    assert.equal(updatedPreferences.total_due_minor, freeDetails.total_due_minor);
+    assert.deepEqual(updatedPreferences.coupon, freeDetails.coupon);
     await db.updateEvent(event.id, { status: "cancelled" });
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 404);
