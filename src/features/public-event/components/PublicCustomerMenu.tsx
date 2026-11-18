@@ -105,7 +105,7 @@ export function PublicCustomerMenu({ compact = false, locale = "th" }: {
                 <p className="truncate text-sm font-semibold">{account.first_name} {account.last_name}</p>
                 <p className="truncate text-xs opacity-75">{account.email}</p>
               </div>
-              <a role="menuitem" href="/account" className="public-customer-item flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm">
+              <a role="menuitem" href="/app/profile" className="public-customer-item flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm">
                 <UserRound className="h-4 w-4" /> {locale === "th" ? "โปรไฟล์" : "Profile"}
               </a>
               <a role="menuitem" href="/app/orders" className="public-customer-item flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm">

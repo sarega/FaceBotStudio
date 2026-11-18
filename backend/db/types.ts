@@ -1089,7 +1089,7 @@ export interface AppDatabase {
   listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number): Promise<PaidRow[]>;
   readPaidAdminBooking(eventId: string, organizationId: string, reference: string): Promise<PaidRow | undefined>;
   managePaidBooking(input: PaidAdminAction): Promise<{ status: string; payment_status: string; version: number; due_at: string }>;
-  listPaidReviewQueue(eventId: string, organizationId: string, offset: number, reference?: string): Promise<PaidRow[]>;
+  listPaidReviewQueue(eventId: string, organizationId: string, offset: number, reference?: string, confirmedOnly?: boolean): Promise<PaidRow[]>;
   reviewPaidProof(input: PaidReviewInput): Promise<PaidReviewReceipt>;
   readPaidProof(eventId: string, bookingId: string, attemptId: string, organizationId: string): Promise<{ mime: string; content: Buffer } | undefined>;
   submitPaidProof(input: PaidProofInput): Promise<PaidProofReceipt>;
@@ -1104,7 +1104,7 @@ export interface AppDatabase {
   savePaidSettings(eventId: string, input: PaidSettingsInput): Promise<PaidRow>;
   listDuePaidEvents(now: number): Promise<string[]>;
   readPaidCatalog(eventId: string): Promise<PaidCatalog | undefined>;
-  listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference?: string): Promise<PaidRow[]>;
+  listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference?: string, confirmedOnly?: boolean): Promise<PaidRow[]>;
   readOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<PaidRow | undefined>;
   reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<{
     status: "awaiting_payment"; payment_status: "unpaid"; due_at: string; version: number;

@@ -17608,9 +17608,24 @@ async function startServer() {
     }
     try {
       const pageSize = 20;
-      const bookings = await appDb.listOwnedPaidBookings(req.customer!.account.id, pageSize + 1, offset, reference);
+      const bookings = await appDb.listOwnedPaidBookings(req.customer!.account.id, pageSize + 1, offset, reference, req.query.confirmed === "1");
+      const visible = bookings.slice(0, pageSize);
+      const slugs = new Map(await Promise.all([...new Set(visible.map((booking) => String(booking.event_id)))].map(async (eventId) => {
+        const event = await appDb.getEventById(eventId);
+        const settings = await getSettingsMap(eventId);
+        const slug = event && isTruthySetting(settings.event_public_page_enabled ?? "0")
+          ? resolveEnglishPublicSlug({
+              customSlug: settings.event_public_slug,
+              eventName: settings.event_name || event.name,
+              eventSlug: event.slug,
+              eventId: event.id,
+            })
+          : "";
+        return [eventId, slug] as const;
+      })));
       return res.set("Cache-Control", "private, no-store").json({
-        bookings: bookings.slice(0, pageSize), next_offset: bookings.length > pageSize ? offset + pageSize : null,
+        bookings: visible.map((booking) => ({ ...booking, event_slug: slugs.get(String(booking.event_id)) || "" })),
+        next_offset: bookings.length > pageSize ? offset + pageSize : null,
       });
     } catch {
       return res.status(500).json({ error: "booking_unavailable" });

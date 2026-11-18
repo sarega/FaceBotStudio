@@ -9749,7 +9749,7 @@ export default function App() {
   }
 
   if (isCustomerAppRoute) {
-    return <CustomerAppScreen />;
+    return <CustomerAppScreen themeControl={<AttendeeThemeSelect mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
   }
 
   if (isCustomerAccountRoute) {

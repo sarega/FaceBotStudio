@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, LockKeyhole, LogOut, Mail, RefreshCw, Save, ShieldCheck, ShoppingBag, UserRound } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCircle2, LockKeyhole, LogOut, Mail, RefreshCw, Save, ShieldCheck, ShoppingBag, UserRound } from "lucide-react";
 
 export type CustomerAccount = {
   id: string;
@@ -19,16 +19,6 @@ export type CustomerAccount = {
   status: "pending" | "active" | "disabled";
 };
 
-type CustomerOrderSummary = {
-  id: string;
-  event_name: string | null;
-  event_slug: string | null;
-  performance_title?: string;
-  total_amount: number;
-  currency: string;
-  status: string;
-  tickets?: Array<{ id: string }>;
-};
 
 type CustomerScreenMode = "login" | "register" | "forgot" | "reset" | "verify" | "profile" | "unavailable";
 
@@ -151,17 +141,15 @@ function customerFormDefaults(token = ""): CustomerForm {
   };
 }
 
-export function CustomerAccountScreen({ themeControl }: { themeControl: ReactNode }) {
+export function CustomerAccountScreen({ themeControl, embedded }: { themeControl?: ReactNode; embedded?: "profile" | "security" }) {
   const pathname = typeof window !== "undefined" ? window.location.pathname : "/account";
   const queryToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("token") || "" : "";
-  const [mode, setMode] = useState<CustomerScreenMode>(() => resolveCustomerMode(pathname));
+  const [mode, setMode] = useState<CustomerScreenMode>(() => embedded ? "profile" : resolveCustomerMode(pathname));
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [form, setForm] = useState<CustomerForm>(() => customerFormDefaults(queryToken));
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [notice, setNotice] = useState("");
-  const [orders, setOrders] = useState<CustomerOrderSummary[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(false);
   const handledTokenRef = useRef("");
 
   const setField = (field: keyof CustomerForm, value: string | boolean) => {
@@ -170,6 +158,7 @@ export function CustomerAccountScreen({ themeControl }: { themeControl: ReactNod
 
   const navigate = (nextMode: CustomerScreenMode) => {
     const nextPath = nextMode === "profile" ? "/account" : `/account/${nextMode === "reset" ? "reset-password" : nextMode === "verify" ? "verify-email" : nextMode === "forgot" ? "forgot-password" : nextMode}`;
+    if (embedded && nextMode !== "profile") { window.location.assign(nextPath); return; }
     window.history.pushState({}, "", nextPath);
     setMode(nextMode);
     setErrorMessage("");
@@ -200,25 +189,6 @@ export function CustomerAccountScreen({ themeControl }: { themeControl: ReactNod
       cancelled = true;
     };
   }, [account, mode]);
-
-  useEffect(() => {
-    if (mode !== "profile" || !account) return;
-    let cancelled = false;
-    setOrdersLoading(true);
-    void customerApi<{ orders: CustomerOrderSummary[] }>("/api/customer/orders")
-      .then((data) => {
-        if (!cancelled) setOrders(Array.isArray(data.orders) ? data.orders : []);
-      })
-      .catch(() => {
-        if (!cancelled) setOrders([]);
-      })
-      .finally(() => {
-        if (!cancelled) setOrdersLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [account?.id, mode]);
 
   useEffect(() => {
     if (mode !== "verify" || !form.token || handledTokenRef.current === form.token) return;
@@ -423,6 +393,86 @@ export function CustomerAccountScreen({ themeControl }: { themeControl: ReactNod
   const subtitle = mode === "profile" ? "Manage your customer details securely."
     : "Ticketing access for attendees and buyers.";
 
+  const accountContent = <>
+          {busy && mode === "profile" && !account ? (
+            <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
+              <RefreshCw className="h-4 w-4 animate-spin text-blue-700" /> Loading account…
+            </div>
+          ) : mode === "unavailable" ? (
+            <div className="space-y-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-5 text-sm text-amber-800">
+              <p>Customer accounts are not enabled in this environment yet.</p>
+              {errorMessage && <p className="text-xs text-amber-800">{errorMessage}</p>}
+            </div>
+          ) : mode === "verify" ? (
+            <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
+              <CheckCircle2 className={`h-7 w-7 ${errorMessage ? "text-rose-700" : "text-blue-700"}`} />
+              <p>{busy ? "Verifying your email…" : errorMessage || "This verification link is ready."}</p>
+              {!busy && <button type="button" onClick={() => navigate("login")} className="rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500">Continue to sign in</button>}
+            </div>
+          ) : mode === "profile" && account ? (
+            <form className="space-y-6" onSubmit={(event) => void submit(event)}>
+              <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/15 text-blue-700"><UserRound className="h-5 w-5" /></div>
+                  <div><p className="font-semibold text-slate-900">{account.first_name} {account.last_name}</p><p className="text-xs text-slate-600">{account.email}</p></div>
+                </div>
+                <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-700">{account.status}</span>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" />
+                <CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" />
+                <CustomerField label="Phone" value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />
+                <CustomerField label="Email" value={form.email} onChange={() => undefined} type="email" autoComplete="email" disabled />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <CustomerField label="Address line 1" value={form.address_line1} onChange={(value) => setField("address_line1", value)} autoComplete="address-line1" />
+                <CustomerField label="Address line 2" value={form.address_line2} onChange={(value) => setField("address_line2", value)} autoComplete="address-line2" />
+                <CustomerField label="District" value={form.district} onChange={(value) => setField("district", value)} />
+                <CustomerField label="Subdistrict" value={form.subdistrict} onChange={(value) => setField("subdistrict", value)} />
+                <CustomerField label="Province" value={form.province} onChange={(value) => setField("province", value)} autoComplete="address-level1" />
+                <CustomerField label="Postal code" value={form.postal_code} onChange={(value) => setField("postal_code", value)} autoComplete="postal-code" />
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button disabled={busy} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Save className="h-4 w-4" /> Save profile</button>
+                {!embedded && <a href="/app/security" className="inline-flex items-center text-blue-700 underline">Account security</a>}
+              </div>
+            </form>
+          ) : (
+            <form className="space-y-5" onSubmit={(event) => void submit(event)}>
+              {(mode === "register" || mode === "profile") && <div className="grid gap-4 sm:grid-cols-2"><CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" /><CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" /></div>}
+              {mode !== "reset" && <CustomerField label="Email" value={form.email} onChange={(value) => setField("email", value)} type="email" autoComplete="email" />}
+              {(mode === "register" || mode === "login") && <CustomerField label="Password" value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} />}
+              {mode === "register" && <CustomerField label="Phone" value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />}
+              {(mode === "reset") && <CustomerField label="New password" value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete="new-password" />}
+              {mode === "register" && <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><label className="flex gap-3"><input type="checkbox" checked={form.accept_terms} onChange={(event) => setField("accept_terms", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the terms of service.</label><label className="flex gap-3"><input type="checkbox" checked={form.accept_privacy} onChange={(event) => setField("accept_privacy", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the privacy notice.</label></div>}
+              {errorMessage && <p className="text-sm text-rose-700">{errorMessage}</p>}
+              {notice && <p className="flex items-start gap-2 text-sm text-emerald-700"><Mail className="mt-0.5 h-4 w-4 shrink-0" /> {notice}</p>}
+              <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? "Create account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Reset password" : "Sign in"}</button>
+              <div className="flex flex-wrap justify-between gap-3 text-sm text-slate-600">
+                {mode === "login" && <><button type="button" onClick={() => navigate("register")} className="hover:underline">Create account</button><button type="button" onClick={() => void resendVerification()} disabled={busy} className="hover:underline disabled:opacity-50">Resend verification</button><button type="button" onClick={() => navigate("forgot")} className="hover:underline">Forgot password?</button></>}
+                {mode === "register" && <button type="button" onClick={() => navigate("login")} className="hover:underline">Already have an account? Sign in</button>}
+                {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => navigate("login")} className="hover:underline">Back to sign in</button>}
+              </div>
+            </form>
+          )}
+
+          {errorMessage && mode === "profile" && <p className="mt-5 text-sm text-rose-700">{errorMessage}</p>}
+          {notice && mode === "profile" && <p className="mt-5 text-sm text-emerald-700">{notice}</p>}
+  </>;
+  if (embedded === "profile") return <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">{accountContent}</section>;
+
+  if (embedded === "security") return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+      <h2 className="mb-3 font-semibold text-slate-900">Session security</h2>
+      <div className="flex flex-wrap gap-2">
+                <button type="button" disabled={busy} onClick={() => void logout()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 font-semibold text-slate-700 hover:border-slate-300 hover:underline disabled:opacity-50"><LogOut className="h-4 w-4" /> Sign out</button>
+                <button type="button" disabled={busy} onClick={() => void revokeSessions()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">Revoke all sessions</button>
+                <button type="button" disabled={busy} onClick={() => void disableAccount()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">Disable account</button>
+      </div>
+      {errorMessage && <p role="alert" className="mt-3 text-rose-700">{errorMessage}</p>}
+    </section>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10 text-slate-900 selection:bg-blue-500/30">
       <div className="mx-auto w-full max-w-2xl">
@@ -456,102 +506,7 @@ export function CustomerAccountScreen({ themeControl }: { themeControl: ReactNod
             <p className="mt-2 text-sm leading-6 text-slate-600">{subtitle}</p>
           </div>
 
-          {busy && mode === "profile" && !account ? (
-            <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-              <RefreshCw className="h-4 w-4 animate-spin text-blue-700" /> Loading account…
-            </div>
-          ) : mode === "unavailable" ? (
-            <div className="space-y-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-5 text-sm text-amber-800">
-              <p>Customer accounts are not enabled in this environment yet.</p>
-              {errorMessage && <p className="text-xs text-amber-800">{errorMessage}</p>}
-            </div>
-          ) : mode === "verify" ? (
-            <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-              <CheckCircle2 className={`h-7 w-7 ${errorMessage ? "text-rose-700" : "text-blue-700"}`} />
-              <p>{busy ? "Verifying your email…" : errorMessage || "This verification link is ready."}</p>
-              {!busy && <button type="button" onClick={() => navigate("login")} className="rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500">Continue to sign in</button>}
-            </div>
-          ) : mode === "profile" && account ? (
-            <form className="space-y-6" onSubmit={(event) => void submit(event)}>
-              <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/15 text-blue-700"><UserRound className="h-5 w-5" /></div>
-                  <div><p className="font-semibold text-slate-900">{account.first_name} {account.last_name}</p><p className="text-xs text-slate-600">{account.email}</p></div>
-                </div>
-                <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-700">{account.status}</span>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <a href="/events" className="group flex items-center justify-between rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4 transition-colors hover:border-blue-300/50 hover:bg-blue-500/15">
-                  <span className="flex items-center gap-3"><CalendarDays className="h-5 w-5 text-blue-700" /><span><span className="block text-sm font-semibold text-slate-900">Browse events</span><span className="mt-1 block text-xs text-slate-600">Find another event to attend</span></span></span>
-                  <ChevronRight className="h-4 w-4 text-blue-700 transition-transform group-hover:translate-x-0.5" />
-                </a>
-                <a href="/app/orders" className="group flex items-center justify-between rounded-2xl border border-violet-400/20 bg-violet-500/10 p-4 transition-colors hover:border-violet-300/50 hover:bg-violet-500/15">
-                  <span className="flex items-center gap-3"><ShoppingBag className="h-5 w-5 text-violet-700" /><span><span className="block text-sm font-semibold text-slate-900">My tickets &amp; orders</span><span className="mt-1 block text-xs text-slate-600">Review purchases and payment status</span></span></span>
-                  <ChevronRight className="h-4 w-4 text-violet-700 transition-transform group-hover:translate-x-0.5" />
-                </a>
-              </div>
-              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4" aria-labelledby="customer-purchases-heading">
-                <div className="flex items-center justify-between gap-3">
-                  <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">Purchase history</p><h2 id="customer-purchases-heading" className="mt-1 text-base font-semibold text-slate-900">Events you selected</h2></div>
-                  {orders.length > 0 && <a href="/app/orders" className="text-xs font-semibold text-blue-700 hover:text-blue-700">View all</a>}
-                </div>
-                {ordersLoading ? (
-                  <p className="mt-4 flex items-center gap-2 text-sm text-slate-600"><RefreshCw className="h-4 w-4 animate-spin text-blue-700" /> Loading purchases…</p>
-                ) : orders.length > 0 ? (
-                  <div className="mt-4 space-y-2">
-                    {orders.slice(0, 3).map((order) => (
-                      <div key={order.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                        <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{order.event_name || order.performance_title || "Purchased event"}</p><p className="mt-1 text-xs text-slate-500">{order.performance_title || "Order"} · {order.tickets?.length || 0} ticket{order.tickets?.length === 1 ? "" : "s"} · {order.status.replaceAll("_", " ")}</p></div>
-                        {order.event_slug ? <a href={`/events/${encodeURIComponent(order.event_slug)}`} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-blue-300 hover:underline">Open event <ChevronRight className="h-3.5 w-3.5" /></a> : <a href="/app/orders" className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-blue-300 hover:underline">Open order <ChevronRight className="h-3.5 w-3.5" /></a>}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm leading-6 text-slate-600">ยังไม่มีรายการซื้อในบัญชีนี้ ลองดู event ที่เปิดขายได้จากปุ่ม Browse events</p>
-                )}
-              </section>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" />
-                <CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" />
-                <CustomerField label="Phone" value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />
-                <CustomerField label="Email" value={form.email} onChange={() => undefined} type="email" autoComplete="email" disabled />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <CustomerField label="Address line 1" value={form.address_line1} onChange={(value) => setField("address_line1", value)} autoComplete="address-line1" />
-                <CustomerField label="Address line 2" value={form.address_line2} onChange={(value) => setField("address_line2", value)} autoComplete="address-line2" />
-                <CustomerField label="District" value={form.district} onChange={(value) => setField("district", value)} />
-                <CustomerField label="Subdistrict" value={form.subdistrict} onChange={(value) => setField("subdistrict", value)} />
-                <CustomerField label="Province" value={form.province} onChange={(value) => setField("province", value)} autoComplete="address-level1" />
-                <CustomerField label="Postal code" value={form.postal_code} onChange={(value) => setField("postal_code", value)} autoComplete="postal-code" />
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <button disabled={busy} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Save className="h-4 w-4" /> Save profile</button>
-                <button type="button" disabled={busy} onClick={() => void logout()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 font-semibold text-slate-700 hover:border-slate-300 hover:underline disabled:opacity-50"><LogOut className="h-4 w-4" /> Sign out</button>
-                <button type="button" disabled={busy} onClick={() => void revokeSessions()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">Revoke all sessions</button>
-                <button type="button" disabled={busy} onClick={() => void disableAccount()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">Disable account</button>
-              </div>
-            </form>
-          ) : (
-            <form className="space-y-5" onSubmit={(event) => void submit(event)}>
-              {(mode === "register" || mode === "profile") && <div className="grid gap-4 sm:grid-cols-2"><CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" /><CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" /></div>}
-              {mode !== "reset" && <CustomerField label="Email" value={form.email} onChange={(value) => setField("email", value)} type="email" autoComplete="email" />}
-              {(mode === "register" || mode === "login") && <CustomerField label="Password" value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} />}
-              {mode === "register" && <CustomerField label="Phone" value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />}
-              {(mode === "reset") && <CustomerField label="New password" value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete="new-password" />}
-              {mode === "register" && <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><label className="flex gap-3"><input type="checkbox" checked={form.accept_terms} onChange={(event) => setField("accept_terms", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the terms of service.</label><label className="flex gap-3"><input type="checkbox" checked={form.accept_privacy} onChange={(event) => setField("accept_privacy", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the privacy notice.</label></div>}
-              {errorMessage && <p className="text-sm text-rose-700">{errorMessage}</p>}
-              {notice && <p className="flex items-start gap-2 text-sm text-emerald-700"><Mail className="mt-0.5 h-4 w-4 shrink-0" /> {notice}</p>}
-              <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? "Create account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Reset password" : "Sign in"}</button>
-              <div className="flex flex-wrap justify-between gap-3 text-sm text-slate-600">
-                {mode === "login" && <><button type="button" onClick={() => navigate("register")} className="hover:underline">Create account</button><button type="button" onClick={() => void resendVerification()} disabled={busy} className="hover:underline disabled:opacity-50">Resend verification</button><button type="button" onClick={() => navigate("forgot")} className="hover:underline">Forgot password?</button></>}
-                {mode === "register" && <button type="button" onClick={() => navigate("login")} className="hover:underline">Already have an account? Sign in</button>}
-                {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => navigate("login")} className="hover:underline">Back to sign in</button>}
-              </div>
-            </form>
-          )}
-
-          {errorMessage && mode === "profile" && <p className="mt-5 text-sm text-rose-700">{errorMessage}</p>}
-          {notice && mode === "profile" && <p className="mt-5 text-sm text-emerald-700">{notice}</p>}
+          {accountContent}
         </div>
         <p className="mt-6 flex items-center justify-center gap-2 text-center text-xs text-slate-600"><LockKeyhole className="h-3.5 w-3.5" /> Customer credentials are stored separately from organizer accounts.</p>
       </div>

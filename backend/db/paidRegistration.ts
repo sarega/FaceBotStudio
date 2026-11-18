@@ -452,7 +452,7 @@ export const OWNED_BOOKING_LIST_SQL = `
     b.due_ms,CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS status,
     b.payment_state AS payment_status
   FROM paid_bookings b JOIN events e ON e.id=b.event_id JOIN paid_event_settings s ON s.event_id=b.event_id
-  WHERE b.customer_id=? AND (b.reference=? OR ?='') ORDER BY b.created_ms DESC,b.id DESC LIMIT ? OFFSET ?
+  WHERE b.customer_id=? AND (b.reference=? OR ?='') AND (?=0 OR b.state='confirmed') ORDER BY b.created_ms DESC,b.id DESC LIMIT ? OFFSET ?
 `;
 
 export function serializePaidBookingList(rows: PaidRow[]): PaidRow[] {

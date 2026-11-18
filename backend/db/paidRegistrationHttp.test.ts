@@ -376,7 +376,14 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const listing = `${origin}/api/customer/paid-bookings?reference=${booking.reference}`;
     const ownList = await fetch(listing, { headers: headers("test-owner") });
     assert.equal(ownList.status, 200);
-    assert.equal((await ownList.json()).bookings[0].id, booking.id);
+    const listedBooking = (await ownList.json()).bookings[0];
+    assert.equal(listedBooking.id, booking.id);
+    assert.equal(listedBooking.status, "awaiting_payment");
+    assert.equal(listedBooking.event_slug, "http-paid-workshop");
+    assert.equal((await fetch(`${origin}/api/public/events/${listedBooking.event_slug}`)).status, 200);
+    const confirmedListing = listing + "&confirmed=1";
+    const fetchConfirmed = async () => (await (await fetch(confirmedListing, { headers: headers("test-owner") })).json()).bookings;
+    assert.deepEqual(await fetchConfirmed(), []);
     const otherList = await fetch(listing, { headers: headers("test-other") });
     assert.equal(otherList.status, 200);
     assert.deepEqual((await otherList.json()).bookings, []);
@@ -457,6 +464,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const confirmed = await approval.json();
     assert.equal(confirmed.status, "confirmed");
     assert.deepEqual(await (await approve("0812345678")).json(), confirmed);
+    assert.equal((await fetchConfirmed())[0].id, booking.id);
     const images = await Promise.all(attendees.map(({ id }: { id: string }) => fetch(credentialPath(id), { headers: headers("test-owner") })));
     assert.ok(images.every((qr) => qr.ok && qr.headers.get("content-type") === "image/png"));
     assert.notDeepEqual(Buffer.from(await images[0].arrayBuffer()), Buffer.from(await images[1].arrayBuffer()));

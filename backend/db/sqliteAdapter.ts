@@ -1711,8 +1711,8 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.runPaidCommand(eventId, () => readPaidCatalog(eventId));
   }
 
-  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "") {
-    const rows = this.db.prepare(OWNED_BOOKING_LIST_SQL).all(Date.now(), customerId, reference, reference, limit, offset) as PaidRow[];
+  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "", confirmedOnly = false) {
+    const rows = this.db.prepare(OWNED_BOOKING_LIST_SQL).all(Date.now(), customerId, reference, reference, confirmedOnly ? 1 : 0, limit, offset) as PaidRow[];
     return serializePaidBookingList(rows);
   }
 

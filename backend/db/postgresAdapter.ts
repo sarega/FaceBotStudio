@@ -845,10 +845,10 @@ export class PostgresAppDatabase implements AppDatabase {
     return this.runPaidCommand(eventId, () => readPaidCatalog(eventId));
   }
 
-  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "") {
+  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "", confirmedOnly = false) {
     let index = 0;
     const sql = OWNED_BOOKING_LIST_SQL.replace(/\?/g, () => `$${++index}`);
-    const { rows } = await this.pool.query<Record<string, unknown>>(sql, [Date.now(), customerId, reference, reference, limit, offset]);
+    const { rows } = await this.pool.query<Record<string, unknown>>(sql, [Date.now(), customerId, reference, reference, confirmedOnly ? 1 : 0, limit, offset]);
     return serializePaidBookingList(rows);
   }
 
