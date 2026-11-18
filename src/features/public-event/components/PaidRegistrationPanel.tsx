@@ -72,7 +72,7 @@ function SeminarInputs({ fields, values, onChange, locale }: {
           <option value="yes">{locale === "th" ? "ใช่" : "Yes"}</option>
           <option value="no">{locale === "th" ? "ไม่" : "No"}</option>
         </select>
-      ) : key === "food" && configured?.options ? (
+      ) : configured?.options ? (
         <select className={field} required={required} value={value}
           onChange={(event) => onChange(key,event.target.value)}>
           <option value="">{locale === "th" ? "เลือก" : "Select"}</option>

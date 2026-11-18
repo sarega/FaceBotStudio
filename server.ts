@@ -17744,6 +17744,93 @@ async function startServer() {
     },
   );
 
+  app.get("/api/events/:eventId/paid-registration/daily-transfer-report",
+    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+      const date = typeof req.query.date === "string" ? req.query.date : "";
+      const start = Date.parse(date + "T00:00:00+07:00");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(start) ||
+          new Date(start + 7 * 3_600_000).toISOString().slice(0, 10) !== date) {
+        return res.status(400).json({ error: "invalid_report_date" });
+      }
+      const eventId = req.eventScope!.eventId;
+      const organizationId = req.auth!.user.organization_id;
+      try {
+        const transfers = await appDb.listDailyPaidTransfers(eventId, organizationId, start, start + 86_400_000);
+        if (transfers.length > 200) return res.status(422).json({ error: "report_limit_exceeded" });
+        const event = await appDb.getEventById(eventId);
+        const display = (await appDb.readPaidMode(eventId))?.paymentMode === "external_manual"
+          ? await appDb.getPaidPaymentDisplay(eventId) : undefined;
+        const account = [display?.bank_name, display?.account_name, display?.account_number.replace(/\D/g, "").slice(-4)]
+          .filter(Boolean).map(escapeXml).join(" · ");
+        const money = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" });
+        const clock = new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "medium", timeZone: "Asia/Bangkok" });
+        const amount = (minor: unknown) => minor == null ? "—" : money.format(Number(minor) / 100);
+        const status = (value: unknown) => value === "verified" ? "แอดมินยืนยันแล้ว" :
+          value === "exception" ? "รายการต้องตรวจเพิ่มเติม" : "รอตรวจสลิป";
+        const verified = transfers.filter((row) => row.status === "verified");
+        const sum = (rows: typeof transfers) => rows.reduce((total, row) => total + Number(row.amount_minor ?? 0), 0);
+        const slips: string[] = [];
+        for (const [index, row] of transfers.entries()) {
+          let image = "";
+          try {
+            const proof = await appDb.readPaidProof(eventId, String(row.booking_id), String(row.attempt_id), organizationId);
+            if (proof) {
+              const thumbnail = await sharp(proof.content).rotate().resize(720, 1000, {
+                fit: "inside", withoutEnlargement: true,
+              }).jpeg({ quality: 82 }).toBuffer();
+              image = `<img alt="สลิปรายการ ${index + 1}" src="data:image/jpeg;base64,${thumbnail.toString("base64")}">`;
+            }
+          } catch {
+            // Retention, decryption or image errors should not hide the transfer record.
+          }
+          slips.push(`<article><strong>#${index + 1} · ${escapeXml(amount(row.amount_minor))}</strong>${image || "<p>ไม่มีภาพสลิปให้แสดง</p>"}</article>`);
+        }
+        const rows = transfers.map((row, index) => `<tr><td>${index + 1}</td>
+          <td>${escapeXml(clock.format(Number(row.transfer_ms)))}<br>ส่งสลิป ${escapeXml(clock.format(Number(row.submitted_ms)))}</td>
+          <td>${escapeXml([row.first_name, row.last_name].filter(Boolean).join(" "))}<br>${escapeXml(row.booking_reference)}
+          ${row.transfer_reference ? "<br>อ้างอิง " + escapeXml(row.transfer_reference) : ""}</td>
+          <td>${escapeXml(amount(row.amount_minor))}</td><td>${status(row.status)}
+          ${row.receiver_id ? "<br>" + escapeXml(row.receiver_name) + " · " + escapeXml(String(row.receiver_id).slice(-4)) : ""}</td>
+          <td><span class="box"></span></td></tr>`).join("");
+        const html = `<!doctype html><html lang="th"><meta charset="utf-8"><style>
+          ${buildEmbeddedTicketFontCss()}
+          @page { size: A4; margin: 14mm; } body { font: 11px "Noto Sans Thai", sans-serif; color: #182334; }
+          h1 { font-size: 21px; margin: 0 0 6px; } p { margin: 5px 0; }
+          table { width: 100%; border-collapse: collapse; margin-top: 14px; table-layout: fixed; }
+          th,td { padding: 6px; border-bottom: 1px solid #cbd5e1; text-align: left; overflow-wrap: anywhere; }
+          th { background: #e9f0f8; } tr,article { break-inside: avoid; }
+          .box { display: inline-block; width: 12px; height: 12px; border: 1px solid #475569; }
+          .slips { break-before: page; } article { display: inline-block; width: 48%; vertical-align: top; margin-bottom: 12px; }
+          img { display: block; max-width: 95%; max-height: 270px; margin-top: 4px; }
+          </style><h1>รายงานตรวจสอบเงินโอนรายวัน</h1><p>${escapeXml(event?.name || eventId)}</p>
+          <p>วันที่โอน ${date} · สร้างรายงาน ${escapeXml(clock.format(Date.now()))} (เวลาไทย)</p>
+          ${account ? `<p>บัญชีรับเงินที่ตั้งไว้ปัจจุบัน ${account}</p>` : ""}
+          <p>ยอดตามสลิป ${amount(sum(transfers))} · ${transfers.length} รายการ</p>
+          <p>แอดมินยืนยัน ${amount(sum(verified))} · รอตรวจหรือมีข้อยกเว้น ${amount(sum(transfers) - sum(verified))}</p>
+          <p>กรุณาเทียบรายการกับบัญชีรับเงินและติ๊กช่องเมื่อพบยอดเข้า</p>
+          ${rows ? `<table><colgroup><col style="width:5%"><col style="width:23%"><col style="width:31%">
+          <col style="width:13%"><col style="width:19%"><col style="width:9%"></colgroup>
+          <thead><tr><th>#</th><th>เวลา</th><th>ผู้จอง / อ้างอิง</th><th>ยอด</th><th>สถานะ</th><th>พบยอด</th></tr></thead>
+          <tbody>${rows}</tbody></table><section class="slips"><h2>ภาพสลิปตามลำดับรายการ</h2>${slips.join("")}</section>`
+          : "<p>ไม่มีรายการโอนที่มีสลิปในวันที่เลือก</p>"} </html>`;
+        const { browser } = await launchTicketBrowser();
+        try {
+          const page = await browser.newPage();
+          await page.setContent(html, { waitUntil: "load" });
+          const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+          await recordAudit(req, "paid_registration.daily_transfer_report", "event", eventId, { date, count: transfers.length });
+          return res.set("Cache-Control", "private, no-store")
+            .attachment(`daily-transfers-${date}.pdf`).type("application/pdf").send(Buffer.from(pdf));
+        } finally {
+          await browser.close();
+        }
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });
+        return res.status(500).json({ error: "report_unavailable" });
+      }
+    },
+  );
+
   app.get("/api/events/:eventId/paid-registration/review-queue",
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       const offset = Number(req.query.offset ?? 0);

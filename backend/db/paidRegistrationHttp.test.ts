@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -467,6 +467,25 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(confirmed.status, "confirmed");
     assert.deepEqual(await (await approve("0812345678")).json(), confirmed);
     assert.equal((await fetchConfirmed())[0].id, booking.id);
+    const reportStart = Date.parse(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" })
+      .format(new Date(verifiedTransferAt)) + "T00:00:00+07:00");
+    const reportRows = await db.listDailyPaidTransfers(event.id, "org_default", reportStart, reportStart + 86_400_000);
+    assert.equal(reportRows.length, 1);
+    assert.equal(reportRows[0].attempt_id, pending.attempt_id);
+    assert.equal(reportRows[0].status, "verified");
+    assert.equal(Number(reportRows[0].amount_minor), 50000);
+    await assert.rejects(db.listDailyPaidTransfers(event.id, "other-org", reportStart, reportStart + 86_400_000), /event_not_found/);
+    const reportPath = eventPrefix + "/daily-transfer-report";
+    assert.equal((await fetch(reportPath + "?date=2026-02-30", { headers: staffHeaders })).status, 400);
+    assert.equal((await fetch(reportPath + "?date=2026-11-18", { headers: headers("test-owner") })).status, 401);
+    if (process.env.FACEBOT_TEST_REPORT_PDF) {
+      const reportDate = new Date(reportStart + 7 * 3_600_000).toISOString().slice(0, 10);
+      const result = await fetch(reportPath + "?date=" + reportDate, { headers: staffHeaders });
+      assert.equal(result.status, 200, await result.clone().text().then((text) => text.slice(0, 100)));
+      const pdf = Buffer.from(await result.arrayBuffer());
+      assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
+      writeFileSync(process.env.FACEBOT_TEST_REPORT_PDF, pdf);
+    }
     const images = await Promise.all(attendees.map(({ id }: { id: string }) => fetch(credentialPath(id), { headers: headers("test-owner") })));
     assert.ok(images.every((qr) => qr.ok && qr.headers.get("content-type") === "image/png"));
     assert.notDeepEqual(Buffer.from(await images[0].arrayBuffer()), Buffer.from(await images[1].arrayBuffer()));

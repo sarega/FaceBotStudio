@@ -774,6 +774,26 @@ export function* checkInPaidCredential(eventId: string, credential: string, acto
   };
 }
 
+export function* listDailyPaidTransfers(eventId: string, start: number, end: number): PaidCommand<PaidRow[]> {
+  return yield query(
+    `SELECT b.id AS booking_id,b.reference AS booking_reference,
+       c.first_name,c.last_name,a.id AS attempt_id,a.status,a.created_ms AS submitted_ms,
+       COALESCE(a.observed_minor,a.claimed_minor) AS amount_minor,
+       COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms) AS transfer_ms,
+       COALESCE(a.trusted_reference,a.claimed_reference) AS transfer_reference,
+       r.receiver_name,r.receiver_id
+     FROM paid_payment_attempts a JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
+     JOIN customer_accounts c ON c.id=b.customer_id
+     LEFT JOIN paid_booking_receivers r ON r.booking_id=b.id
+     WHERE a.event_id=? AND a.status IN ('verified','proof_submitted','exception')
+       AND EXISTS (SELECT 1 FROM paid_proofs p WHERE p.attempt_id=a.id)
+       AND COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms)>=?
+       AND COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms)<?
+     ORDER BY COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms),a.id LIMIT 201`,
+    eventId, start, end,
+  );
+}
+
 export function* listPaidReviewQueue(eventId: string, offset: number, reference?: string): PaidCommand<PaidRow[]> {
   const rows = yield query(
     `SELECT b.id AS booking_id,b.reference AS booking_reference,b.version,b.total_minor,b.payment_state,

@@ -10927,9 +10927,9 @@ export default function App() {
             >
               {selectedEventId && (role === "owner" || role === "admin") && (
                 <>
-                  <PaidRegistrationSettings key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
+                  <PaidRegistrationSettings language={language} key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
                   <PaidCouponManager key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
-                  <PaidReviewQueue key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
+                  <PaidReviewQueue language={language} key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
                     focusBookingReference={reviewFocus?.eventId===selectedEventId?reviewFocus.reference:undefined}
                     onOpenCustomer={(customerId)=>{setCustomerFocusId(customerId);setActiveTab("customers");}}/>
                 </>
@@ -11007,7 +11007,7 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <CustomerManagementScreen apiFetch={apiFetch} focusCustomerId={customerFocusId}
+              <CustomerManagementScreen language={language} apiFetch={apiFetch} focusCustomerId={customerFocusId}
                 onOpenBooking={(booking)=>{
                   setReviewFocus({eventId:booking.event_id,reference:booking.booking_reference});
                   setSelectedEventId(booking.event_id);

@@ -170,9 +170,10 @@ function ReviewForm({ review, path, apiFetch, onUpdated }: {
   </div>;
 }
 
-export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBookingReference }: {
+export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer,focusBookingReference }: {
   eventId: string; apiFetch: ApiFetch; onOpenCustomer?:(customerId:string)=>void;
   focusBookingReference?:string;
+  language: "th" | "en";
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Review[]>();
@@ -183,6 +184,10 @@ export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBooking
   const [summaryError, setSummaryError] = useState(false);
   const [next, setNext] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const t = (th: string, en: string) => language === "th" ? th : en;
+  const [reportDate, setReportDate] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date()));
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState("");
   useEffect(()=>{
     if(!focusBookingReference)return;
     setOpen(true);setReference(focusBookingReference);setOffset(0);
@@ -190,6 +195,31 @@ export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBooking
   const fetchRef = useRef(apiFetch);
   fetchRef.current = apiFetch;
   const prefix = `/api/events/${encodeURIComponent(eventId)}/paid-registration`;
+
+  async function downloadReport() {
+    if (!reportDate || reportBusy) return;
+    setReportBusy(true);
+    setReportError("");
+    try {
+      const response = await apiFetch(`${prefix}/daily-transfer-report?date=${encodeURIComponent(reportDate)}`);
+      if (!response.ok) {
+        const { error } = await response.json().catch(() => ({}));
+        throw new Error(error === "report_limit_exceeded"
+          ? t("วันที่เลือกมีมากกว่า 200 สลิป จึงสร้าง PDF ไม่ได้", "This date exceeds the 200-slip report limit.")
+          : t("สร้างรายงานไม่สำเร็จ กรุณาลองอีกครั้ง", "Could not generate the report. Try again."));
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `daily-transfers-${reportDate}.pdf`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : t("สร้างรายงานไม่สำเร็จ", "Could not generate the report."));
+    } finally {
+      setReportBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -228,6 +258,17 @@ export function PaidReviewQueue({ eventId, apiFetch, onOpenCustomer,focusBooking
         subtitle="ตรวจสลิป · ยืนยันการชำระเงิน" open={open} onToggle={()=>setOpen(!open)}
         actions={<button type="button" className="registration-section-refresh" onClick={()=>setRefresh((value)=>value+1)}>Refresh</button>} />
       {open && <div className="registration-section-content space-y-3">
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-2">
+          <label className="text-sm font-medium text-slate-900">{t("วันที่โอน (เวลาไทย)", "Transfer date (Thailand time)")}
+            <input type="date" className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5"
+              value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
+          </label>
+          <button type="button" disabled={reportBusy || !reportDate} onClick={() => void downloadReport()}
+            className="rounded-lg bg-blue-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
+            {reportBusy ? t("กำลังสร้างรายงาน…", "Generating report…") : t("สร้าง PDF ตรวจยอดโอน", "Download transfer report PDF")}
+          </button>
+        </div>
+        {reportError && <p role="alert" className="text-red-700">{reportError}</p>}
         {summaryError && <p role="alert" className="text-red-700">Could not load the registration totals.</p>}
         {summary && <div className="flex flex-wrap gap-2 text-sm">
           <span className="rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-800">

@@ -48,3 +48,13 @@ test("invalid seminar default configurations are rejected before saving",()=>{
     key:"notes",scope:"booking",required:false,options:["One","Two"],
   }]),undefined);
 });
+
+test("transport dropdown preserves custom choices and validates attendee answers", () => {
+  const config = { key: "transport", scope: "attendee", required: true, options: ["Shuttle", "Own car"], defaultValue: "Shuttle" };
+  const fields = parsePaidSeminarFields([config]);
+  assert.deepEqual(fields, [config]);
+  assert.deepEqual(seminarDefaultAnswers(fields!, "attendee"), { transport: "Shuttle" });
+  assert.ok(normalizePaidSeminarAnswers(fields!, "attendee", { transport: "Own car" }));
+  assert.equal(normalizePaidSeminarAnswers(fields!, "attendee", { transport: "Taxi" }), undefined);
+  assert.equal(parsePaidSeminarFields([{ ...config, defaultValue: "Taxi" }]), undefined);
+});

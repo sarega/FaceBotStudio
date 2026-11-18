@@ -1,6 +1,6 @@
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidPaymentDisplaySettings, type PaidPaymentDisplayHandle } from "./PaidPaymentDisplaySettings";
-import { paidSeminarFields, foodPreferencePresets, parsePaidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
+import { paidSeminarFields, foodPreferencePresets, transportPreferencePresets, parsePaidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 type Category = { id: string; label: string; price: string; discount: string; quota: string };
@@ -36,6 +36,12 @@ const readinessLabels: Record<string,string> = {
   chat_session_secret: "Railway: PUBLIC_CHAT_SESSION_SECRET or compatible ticket/media secret configured",
 };
 
+const seminarLabelsTh: Record<PaidSeminarKey, string> = {
+  arrival: "วันที่เดินทางมาถึง", departure: "วันที่เดินทางกลับ",
+  accommodation: "ต้องการที่พัก", room_preference: "ประเภทห้องที่ต้องการ",
+  transport: "การเดินทาง", food: "อาหารที่ต้องการ", notes: "หมายเหตุเพิ่มเติม",
+};
+
 const field = "mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2";
 
 function localDateInput(ms: number | null) {
@@ -43,9 +49,10 @@ function localDateInput(ms: number | null) {
   return new Date(ms + 7 * 60 * 60_000).toISOString().slice(0, 16);
 }
 
-function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
-  settings: Settings | null; path: string; eventId: string; apiFetch: ApiFetch; onSaved: (result: Settings) => void;
+function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: {
+  language: "th" | "en"; settings: Settings | null; path: string; eventId: string; apiFetch: ApiFetch; onSaved: (result: Settings) => void;
 }) {
+  const t = (th: string, en: string) => language === "th" ? th : en;
   const [categories, setCategories] = useState<Category[]>(settings?.categories.map((category) => ({
     id: category.id, label: category.label, price: (category.unit_minor / 100).toFixed(2),
     discount: ((category.accommodation_discount_minor ?? 0) / 100).toFixed(2),
@@ -90,7 +97,7 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
     }
     const normalizedSeminar = parsePaidSeminarFields(seminar);
     if (!normalizedSeminar) {
-      setError("Check Seminar questions: food choices need 2–20 unique names, and the default must match one of those choices.");
+      setError("Check Seminar questions: dropdown choices need 2–20 unique names, and the default must match one of those choices.");
       return;
     }
     setBusy(true);
@@ -145,60 +152,59 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
 
   return (
     <form onSubmit={save} className="space-y-3">
-      <h3 className="font-bold">ตั้งค่าและเปิดรับสมัครได้ในหน้านี้ — ไม่ต้องไป Organizer</h3>
-      {settings?.published === 1 && <p role="status" className="rounded-lg border border-green-300 p-2 font-semibold text-green-800">ตั้งค่า Published แล้ว</p>}
+      <h3 className="font-bold">{t("ตั้งค่าและเปิดรับสมัครได้ในหน้านี้", "Configure and publish registration here")}</h3>
+      {settings?.published === 1 && <p role="status" className="rounded-lg border border-green-300 p-2 font-semibold text-green-800">{t("เปิดรับสมัครแล้ว", "Registration published")}</p>}
       <fieldset disabled={busy} className="space-y-3">
         <fieldset className="rounded-xl border-2 border-blue-200 p-3">
-          <legend className="px-2 font-bold">1. วิธีรับเงิน</legend>
+          <legend className="px-2 font-bold">{t("วิธีรับเงิน", "Payment method")}</legend>
           <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border bg-white p-3">
             <input type="radio" className="mt-1" checked={paymentMode === "external_manual"}
               onChange={() => setPaymentMode("external_manual")} />
-            <span><strong>External payment / Admin verifies manually (Internal Event)</strong>
-            <span className="block text-xs text-slate-600">No PromptPay setup required. Register first; accept payment outside this system.
-              Admin checks it and confirms the booking later. QR is issued only after confirmation.</span></span>
+            <span><strong>{t("รับเงินภายนอกและตรวจสอบด้วยตนเอง", "External payment with manual review")}</strong>
+            <span className="block text-xs text-slate-600">{t("รับชำระภายนอกและยืนยันใบจองหลังตรวจสอบยอด ระบบออก QR เข้างานหลังยืนยัน", "Accept payment externally and confirm bookings after review. The admission QR is issued after confirmation.")}</span></span>
           </label>
           <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border bg-white p-3">
             <input type="radio" className="mt-1" checked={paymentMode === "promptpay"}
               onChange={() => setPaymentMode("promptpay")} />
-            <span><strong>PromptPay + payment proof</strong>
-            <span className="block text-xs text-slate-600">Requires an Organizer receiving account and secure proof storage.</span></span>
+            <span><strong>{t("พร้อมเพย์และสลิป", "PromptPay and payment proof")}</strong>
+            <span className="block text-xs text-slate-600">{t("ต้องตั้งค่าบัญชีรับเงินของผู้จัดและพื้นที่จัดเก็บสลิป", "Requires an organizer receiving account and secure proof storage.")}</span></span>
           </label>
         </fieldset>
         {paymentMode === "external_manual" && <PaidPaymentDisplaySettings ref={displayRef} eventId={eventId} apiFetch={apiFetch} />}
-        <h3 className="font-bold">3. จำนวนที่รับและราคา</h3>
+        <h3 className="font-bold">{t("จำนวนที่รับและราคา", "Capacity and pricing")}</h3>
         <div className="grid gap-3 sm:grid-cols-3">
-          <label>Capacity<input className={field} name="capacity" type="number" min={1} step={1} required defaultValue={settings?.capacity} /></label>
+          <label>{t("จำนวนที่รับ", "Capacity")}<input className={field} name="capacity" type="number" min={1} step={1} required defaultValue={settings?.capacity} /></label>
           <fieldset className="space-y-2 sm:col-span-2">
-            <label>กำหนดเวลาชำระ / Payment deadline
+            <label>{t("กำหนดเวลาชำระ", "Payment deadline")}
               <select className={field} value={deadlineMode}
                 onChange={(event) => setDeadlineMode(event.target.value === "fixed" ? "fixed" : "relative")}>
-                <option value="relative">นับจากเวลาจอง / Time after booking</option>
-                <option value="fixed">วันและเวลาที่กำหนด / Fixed date and time</option>
+                <option value="relative">{t("นับจากเวลาจอง", "Time after booking")}</option>
+                <option value="fixed">{t("วันและเวลาที่กำหนด", "Fixed date and time")}</option>
               </select>
             </label>
             {deadlineMode === "relative" && <>
-              <label>เวลาชำระหลังจอง (นาที)<input className={field} type="number" min={1} max={43200}
+              <label>{t("เวลาชำระหลังจอง (นาที)", "Payment window (minutes)")}<input className={field} type="number" min={1} max={43200}
                 step={1} required value={holdDuration} onChange={(event) => setHoldDuration(Number(event.target.value))} /></label>
               <div className="flex flex-wrap gap-2">
-                {[[30, "30 นาที"], [1440, "24 ชั่วโมง"], [10080, "7 วัน"]].map(([minutes, label]) => (
+                {[[30, t("30 นาที", "30 minutes")], [1440, t("24 ชั่วโมง", "24 hours")], [10080, t("7 วัน", "7 days")]].map(([minutes, label]) => (
                   <button key={minutes} type="button" aria-pressed={holdDuration === minutes}
                     className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-700"
                     onClick={() => setHoldDuration(Number(minutes))}>{label}</button>
                 ))}
               </div>
             </>}
-            <label>{deadlineMode === "fixed" ? "เส้นตายชำระของทุกใบจองใหม่" : "เส้นตายสูงสุด (ถ้ามี)"} · เวลาไทย (UTC+7)
+            <label>{deadlineMode === "fixed" ? t("เส้นตายชำระของทุกใบจองใหม่", "Deadline for all new bookings") : t("เส้นตายสูงสุด (ถ้ามี)", "Latest payment deadline (optional)")} · {t("เวลาไทย (UTC+7)", "Thailand time (UTC+7)")}
               <input className={field} name="cutoff" type="datetime-local" required={deadlineMode === "fixed"}
                 defaultValue={localDateInput(settings?.cutoff_ms ?? null)} />
             </label>
-            <p className="text-xs text-slate-600">ใช้กับใบจองใหม่ ส่วนใบจองเดิมยังใช้กำหนดชำระที่บันทึกไว้</p>
+            <p className="text-xs text-slate-600">{t("ใช้กับใบจองใหม่ ส่วนใบจองเดิมใช้กำหนดชำระที่บันทึกไว้", "New bookings use this setting. Existing bookings keep their saved deadline.")}</p>
           </fieldset>
         </div>
         {categories.map((category) => <fieldset key={category.id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-2">
-          <legend className="px-1">Category · {category.id}</legend>
-          <label>Label<input className={field} required maxLength={180} value={category.label} onChange={(event) => update(category.id, { label: event.target.value })} /></label>
-          <label>Price (THB, 0 = Free)<input className={field} required inputMode="decimal" value={category.price} onChange={(event) => update(category.id, { price: event.target.value })} /></label>
-          <label>Discount if no accommodation (THB)
+          <legend className="px-1">{t("ประเภท · ", "Category · ")}{category.id}</legend>
+          <label>{t("ชื่อประเภท", "Category name")}<input className={field} required maxLength={180} value={category.label} onChange={(event) => update(category.id, { label: event.target.value })} /></label>
+          <label>{t("ราคา (บาท, 0 = ฟรี)", "Price (THB, 0 = Free)")}<input className={field} required inputMode="decimal" value={category.price} onChange={(event) => update(category.id, { price: event.target.value })} /></label>
+          <label>{t("ส่วนลดเมื่อไม่พัก (บาท)", "Discount if no accommodation (THB)")}
             <input className={field} required inputMode="decimal" value={category.discount}
               onChange={(event) => {
                 const amount = event.target.value;
@@ -211,25 +217,23 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
                   ]);
                 }
               }} />
-            <span className="block text-xs text-slate-500">Deducted per attendee who selects No. Enter 0 to disable.</span>
+            <span className="block text-xs text-slate-500">{t("หักต่อผู้เข้าร่วมที่เลือกไม่พัก ใส่ 0 หากไม่มีส่วนลด", "Deducted per attendee who selects No. Enter 0 to disable.")}</span>
           </label>
-          <label>Quota (optional)<input className={field} type="number" min={1} step={1} value={category.quota} onChange={(event) => update(category.id, { quota: event.target.value })} /></label>
+          <label>{t("โควตา (ไม่บังคับ)", "Quota (optional)")}<input className={field} type="number" min={1} step={1} value={category.quota} onChange={(event) => update(category.id, { quota: event.target.value })} /></label>
           {categories.length > 1 && <button type="button" className="justify-self-start text-blue-700 underline"
-            onClick={() => setCategories((current) => current.filter((item) => item.id !== category.id))}>Remove category</button>}
+            onClick={() => setCategories((current) => current.filter((item) => item.id !== category.id))}>{t("ลบประเภท", "Remove category")}</button>}
         </fieldset>)}
         {categories.length < 100 && <button type="button" className="text-blue-700 underline"
-          onClick={() => setCategories((current) => [...current, { id: crypto.randomUUID(), label: "", price: "", discount: "0", quota: "" }])}>Add category</button>}
+          onClick={() => setCategories((current) => [...current, { id: crypto.randomUUID(), label: "", price: "", discount: "0", quota: "" }])}>{t("เพิ่มประเภท", "Add category")}</button>}
         <p className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
-          Pricing option: configure a no-accommodation discount for each category, then set
-          Accommodation needed to <strong>Required / For each attendee</strong> below (automatically enabled when you enter a discount). The invoice amount
-          will be calculated from each attendee's answer.
+          {t("ส่วนลดสำหรับผู้ไม่พักจะเปิดคำถามเรื่องที่พักแบบบังคับต่อผู้เข้าร่วม และใช้คำตอบคำนวณยอดในใบแจ้งชำระ", "A no-accommodation discount makes the accommodation question required for each attendee. Their answer determines the invoice amount.")}
         </p>
-        <fieldset className="space-y-2 rounded-lg border border-slate-200 p-3">
-          <legend className="px-1">Seminar questions</legend>
+        <fieldset className="space-y-2 rounded-lg border border-slate-200 p-3 text-slate-900">
+          <legend className="px-1">{t("คำถามสำหรับผู้สมัคร", "Seminar questions")}</legend>
           {(Object.keys(paidSeminarFields) as PaidSeminarKey[]).map((key) => {
             const configured = seminar.find((item) => item.key === key);
             return <div key={key} className="grid items-end gap-2 sm:grid-cols-[minmax(10rem,1fr)_1fr]">
-              <label>{paidSeminarFields[key].label}
+              <label>{t(seminarLabelsTh[key], paidSeminarFields[key].label)}
                 <select className={field} value={configured?.scope ?? ""} onChange={(event) => {
                   const scope = event.target.value;
                   setSeminar((current) => {
@@ -238,51 +242,51 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
                       ? [...rest, { ...configured, key, scope, required: configured?.required ?? false }] : rest;
                   });
                 }}>
-                  <option value="">Hidden</option><option value="booking">Once per booking</option><option value="attendee">For each attendee</option>
+                  <option value="">{t("ซ่อน", "Hidden")}</option><option value="booking">{t("ถามครั้งเดียวต่อใบจอง", "Once per booking")}</option><option value="attendee">{t("ถามผู้เข้าร่วมแต่ละคน", "For each attendee")}</option>
                 </select>
               </label>
               {configured && <div className="space-y-2 rounded-lg bg-slate-50 p-2">
                 <label className="flex gap-2">
                   <input type="checkbox" checked={configured.required} onChange={(event) =>
                     updateSeminar(key,{required:event.target.checked})} />
-                  Require {paidSeminarFields[key].label.toLowerCase()}
+                  {t("บังคับตอบ", "Required")}
                 </label>
-                {key === "food" && <div className="space-y-2">
-                  <label className="block text-xs font-medium">Answer format
+                {(key === "food" || key === "transport") && <div className="space-y-2">
+                  <label className="block text-xs font-medium">{t("รูปแบบคำตอบ", "Answer format")}
                     <select className={field} value={configured.options ? "select" : "text"}
-                      onChange={(event) => updateSeminar("food",event.target.value==="select"
-                        ? {options:[...foodPreferencePresets],defaultValue:undefined}
+                      onChange={(event) => updateSeminar(key,event.target.value==="select"
+                        ? {options:[...(key === "food" ? foodPreferencePresets : transportPreferencePresets)],defaultValue:undefined}
                         : {options:undefined,defaultValue:undefined})}>
-                      <option value="text">Free text</option>
-                      <option value="select">Dropdown choices</option>
+                      <option value="text">{t("พิมพ์คำตอบเอง", "Free text")}</option>
+                      <option value="select">{t("เลือกจากรายการ", "Dropdown choices")}</option>
                     </select>
                   </label>
                   {configured.options && <label className="block text-xs font-medium">
-                    Choices (one per line, 2–20 unique values)
+                    {t("ตัวเลือก (บรรทัดละหนึ่งข้อ 2–20 ข้อ ห้ามซ้ำ)", "Choices (one per line, 2–20 unique values)")}
                     <textarea className={field} rows={3} value={configured.options.join("\n")}
-                      onChange={(event) => updateSeminar("food",{
+                      onChange={(event) => updateSeminar(key,{
                         options:event.target.value.split("\n"),
                         defaultValue:undefined,
                       })}/>
                   </label>}
                 </div>}
-                {paidSeminarFields[key].type === "boolean" || (key === "food" && configured.options) ?
-                  <label className="block text-xs font-medium">Default answer
+                {paidSeminarFields[key].type === "boolean" || configured.options ?
+                  <label className="block text-xs font-medium">{t("คำตอบเริ่มต้น", "Default answer")}
                     <select className={field} value={configured.defaultValue ?? ""}
                       onChange={(event) => updateSeminar(key,
                         {defaultValue:event.target.value||undefined})}>
-                      <option value="">No default — customer chooses</option>
+                      <option value="">{t("ให้ผู้สมัครเลือกเอง", "No default — customer chooses")}</option>
                       {(paidSeminarFields[key].type==="boolean"
-                        ? [{value:"yes",label:"Yes"},{value:"no",label:"No"}]
+                        ? [{value:"yes",label:t("ใช่", "Yes")},{value:"no",label:t("ไม่", "No")}]
                         : (configured.options??[]).filter(Boolean).map((option) =>
                           ({value:option,label:option}))).map((option) =>
                         <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                   </label>
-                  : <label className="block text-xs font-medium">Default answer (optional)
+                  : <label className="block text-xs font-medium">{t("คำตอบเริ่มต้น (ไม่บังคับ)", "Default answer (optional)")}
                     <input className={field} type={paidSeminarFields[key].type === "date" ? "date" : "text"}
                       maxLength={500} value={configured.defaultValue ?? ""}
-                      placeholder="Leave blank for no default"
+                      placeholder={t("เว้นว่างหากไม่มีคำตอบเริ่มต้น", "Leave blank for no default")}
                       onChange={(event) => updateSeminar(key,{defaultValue:event.target.value||undefined})}/>
                   </label>}
               </div>}
@@ -291,10 +295,10 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
         </fieldset>
         <div className="flex flex-wrap gap-2 border-t pt-4">
           <button type="submit" name="action" value="publish" className="rounded-xl bg-blue-700 px-5 py-3 text-base font-bold text-white disabled:opacity-50">
-            {busy ? "กำลังบันทึก…" : "บันทึกและเปิดรับสมัคร"}
+            {busy ? t("กำลังบันทึก…", "Saving…") : t("บันทึกและเปิดรับสมัคร", "Save and publish")}
           </button>
           <button type="submit" name="action" value="draft" className="rounded-xl border px-4 py-3 font-semibold">
-            บันทึกแบบร่าง
+            {t("บันทึกแบบร่าง", "Save draft")}
           </button>
         </div>
       </fieldset>
@@ -303,7 +307,8 @@ function SettingsForm({ settings, path, eventId, apiFetch, onSaved }: {
   );
 }
 
-export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: string; apiFetch: ApiFetch }) {
+export function PaidRegistrationSettings({ language, eventId, apiFetch }: { language: "th" | "en"; eventId: string; apiFetch: ApiFetch }) {
+  const t = (th: string, en: string) => language === "th" ? th : en;
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState<Settings | null>();
   const [error, setError] = useState(false);
@@ -370,48 +375,47 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
 
   return (
     <section className="paid-admin-settings registration-admin-section registration-admin-settings">
-      <RegistrationSectionHeader tone="settings" title="Registration Settings"
-        subtitle="ตั้งค่าลงทะเบียน · ราคาและการชำระเงิน" open={open} onToggle={() => setOpen(!open)} />
+      <RegistrationSectionHeader tone="settings" title={t("ตั้งค่าลงทะเบียน", "Registration Settings")}
+        subtitle={t("ราคาและการชำระเงิน", "Pricing and payment")} open={open} onToggle={() => setOpen(!open)} />
       {open && <div className="registration-section-content">
-      {(error ? <p role="alert">Could not load paid registration settings.</p> :
-        settings === undefined ? <p role="status">Loading settings…</p> :
-          <SettingsForm key={settings?.version ?? 0} settings={settings} path={path} eventId={eventId} apiFetch={apiFetch}
+      {(error ? <p role="alert">{t("โหลดการตั้งค่าลงทะเบียนไม่สำเร็จ", "Could not load paid registration settings.")}</p> :
+        settings === undefined ? <p role="status">{t("กำลังโหลดการตั้งค่า…", "Loading settings…")}</p> :
+          <SettingsForm language={language} key={settings?.version ?? 0} settings={settings} path={path} eventId={eventId} apiFetch={apiFetch}
             onSaved={(result) => { setSettings(result); setSaved(true); void loadReadiness(); }} />)}
       {open && readiness && (
         <section className={"paid-admin-readiness rounded-xl border-2 p-3 " + (readiness.paid_ready && readiness.checks.customer_signup_enabled
           ? "paid-admin-readiness-ready" : "paid-admin-readiness-warning")}>
           <h3 className="font-bold">{readiness.paid_ready && readiness.checks.customer_signup_enabled
-            ? "หน้า Event พร้อมรับสมัครบัญชีและจองที่นั่ง" : "สิ่งที่ต้องเปิดก่อนให้ผู้เข้าร่วมสมัครบัญชีและลงทะเบียน"}</h3>
+            ? t("หน้า Event พร้อมรับสมัครบัญชีและจองที่นั่ง", "Event page is ready for sign-ups and bookings") : t("สิ่งที่ต้องเปิดก่อนให้ผู้เข้าร่วมสมัครบัญชีและลงทะเบียน", "Complete these settings to enable sign-ups and bookings")}</h3>
           {(!readiness.checks.customer_accounts_enabled || !readiness.checks.customer_signup_enabled ||
             !readiness.checks.paid_server_enabled) && <div className="mt-2 space-y-2 text-sm">
-            <p>ตั้งค่าที่ <strong>Railway → FaceBotStudio Service → Variables</strong> (ไม่ใช่ Organizer Settings):</p>
+            <p>{t("ตั้งค่าตัวแปรที่", "Set the variables in")} <strong>Railway → FaceBotStudio Service → Variables</strong></p>
             <pre className="paid-admin-env overflow-x-auto rounded-lg p-2 text-xs">{"CUSTOMER_APP_ENABLED=1\nCUSTOMER_ACCOUNT_REGISTRATION_ENABLED=1\nPAID_REGISTRATION_PUBLIC_ENABLED=1"}</pre>
-            <p>กด Deploy หลังแก้ค่า แล้วกลับมากด Recheck ที่นี่</p>
+            <p>{t("กด Deploy หลังแก้ค่า แล้วกลับมากด Recheck ที่นี่", "Deploy the changes, then run the checks again.")}</p>
           </div>}
           {readiness.payment_mode === "external_manual" && readiness.proof_upload_ready === false &&
             <p className="paid-admin-problem mt-2">
-              รับสลิปยังไม่ได้: ตั้งค่า Railway PAID_PROOF_ENCRYPTION_KEY (64 hex) แล้ว Deploy /
-              Slip upload needs PAID_PROOF_ENCRYPTION_KEY.
+              {t("ตั้งค่า PAID_PROOF_ENCRYPTION_KEY ใน Railway แล้ว Deploy เพื่อเปิดรับสลิป", "Set PAID_PROOF_ENCRYPTION_KEY in Railway and deploy to enable slip uploads.")}
             </p>}
-          {!readiness.checks.event_active && <p className="paid-admin-problem mt-2">กรุณาตั้งสถานะ Event เป็น Active ใน Event Setup</p>}
-          {!readiness.checks.event_web_page && <p className="paid-admin-problem mt-2">กรุณาเปิด Event Web Page ใน Public Page Builder</p>}
-          {!readiness.checks.paid_published && <p className="paid-admin-problem mt-2">ยังไม่ได้ Publish Paid Registration — กด “บันทึกและเปิดรับสมัคร” ในฟอร์มด้านบน</p>}
+          {!readiness.checks.event_active && <p className="paid-admin-problem mt-2">{t("กรุณาตั้งสถานะ Event เป็น Active ใน Event Setup", "Set the event status to Active in Event Setup.")}</p>}
+          {!readiness.checks.event_web_page && <p className="paid-admin-problem mt-2">{t("กรุณาเปิด Event Web Page ใน Public Page Builder", "Enable the public event page in Public Page Builder.")}</p>}
+          {!readiness.checks.paid_published && <p className="paid-admin-problem mt-2">{t("ยังไม่ได้ Publish Paid Registration — กด “บันทึกและเปิดรับสมัคร” ในฟอร์มด้านบน", "Use Save and publish above to open registration.")}</p>}
           <div className="mt-3 flex flex-wrap gap-3">
             <a href="/account/register" target="_blank" rel="noopener noreferrer" className="paid-admin-link font-semibold underline">
-              ทดลองหน้าสมัครบัญชี
+              {t("ทดลองหน้าสมัครบัญชี", "Test sign-up page")}
             </a>
             <a href="/account/login" target="_blank" rel="noopener noreferrer" className="paid-admin-link font-semibold underline">
-              ทดลองหน้าเข้าสู่ระบบ
+              {t("ทดลองหน้าเข้าสู่ระบบ", "Test sign-in page")}
             </a>
-            <button type="button" className="paid-admin-link font-semibold underline" onClick={() => void loadReadiness()}>Recheck</button>
+            <button type="button" className="paid-admin-link font-semibold underline" onClick={() => void loadReadiness()}>{t("ตรวจอีกครั้ง", "Recheck")}</button>
           </div>
         </section>
       )}
       {open && settings !== undefined && <details className="paid-admin-diagnostics space-y-2 rounded-xl border p-3">
-        <summary className="cursor-pointer font-semibold">ตรวจสอบปัญหาการเปิดรับสมัคร / Help Bot (เฉพาะเมื่อมีปัญหา)</summary>
+        <summary className="cursor-pointer font-semibold">{t("ตรวจสอบปัญหาการเปิดรับสมัคร / Help Bot (เฉพาะเมื่อมีปัญหา)", "Registration and Help Bot diagnostics")}</summary>
         <div className="flex items-center justify-between gap-2">
-          <h3 className="font-semibold">Event activation checks — registration + Help Bot</h3>
-          <button type="button" className="paid-admin-link underline" onClick={() => void loadReadiness()}>Recheck</button>
+          <h3 className="font-semibold">{t("ตรวจความพร้อมของการลงทะเบียนและบอตช่วยเหลือ", "Event activation checks — registration + Help Bot")}</h3>
+          <button type="button" className="paid-admin-link underline" onClick={() => void loadReadiness()}>{t("ตรวจอีกครั้ง", "Recheck")}</button>
         </div>
         {readiness && <>
           {readiness.payment_mode === "promptpay" && !readiness.checks.organizer_receiver_ready &&
@@ -436,7 +440,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
             key === "event_chat_enabled" || key === "chat_session_secret") && (
             <button type="button" disabled={publishing} onClick={() => void publishNow()}
               className="rounded-lg bg-blue-700 px-3 py-2 font-semibold text-white disabled:opacity-50">
-              {publishing ? "Opening…" : "Publish paid registration now"}
+              {publishing ? t("กำลังเปิดรับสมัคร…", "Opening…") : t("เปิดรับสมัครตอนนี้", "Publish paid registration now")}
             </button>
           )}
           {!readiness.checks.customer_signup_enabled && <p className="paid-admin-warning-text text-xs">
@@ -445,7 +449,7 @@ export function PaidRegistrationSettings({ eventId, apiFetch }: { eventId: strin
         </>}
         {readinessError && <p role="alert" className="paid-admin-problem">{readinessError}</p>}
       </details>}
-      {open && saved && <p role="status">Settings saved.</p>}
+      {open && saved && <p role="status">{t("บันทึกการตั้งค่าแล้ว", "Settings saved.")}</p>}
       </div>}
     </section>
   );

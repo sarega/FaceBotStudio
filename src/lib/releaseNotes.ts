@@ -1,5 +1,17 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.4",
+    date: "2026-11-18",
+    title: "Daily transfer reports and compact customer management",
+    features: [
+      "Download a daily transfer reconciliation PDF from Slip Review, with payment totals and slip thumbnails",
+      "Configure fixed or relative payment deadlines and show customers a live countdown",
+      "Set custom transport dropdown choices and switch key registration settings labels between Thai and English",
+      "See booking status in the customer account and fit more of the Customers dashboard on smaller screens",
+      "Open the organizer saved for the selected event",
+    ],
+  },
+  {
     version: "0.11.3",
     date: "2026-11-17",
     title: "Clearer dark-mode registration management",

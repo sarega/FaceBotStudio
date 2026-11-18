@@ -13,11 +13,13 @@ export type PaidSeminarField = {
   key: PaidSeminarKey; scope: "booking" | "attendee"; required: boolean;
   /** Optional chosen answer for new registrations; historical answers remain unchanged. */
   defaultValue?: string;
-  /** Optional select choices. Food may be configured as free text or select. */
+  /** Optional select choices. Food and Transport may be configured as free text or select. */
   options?: string[];
 };
 
 export const foodPreferencePresets = ["Vegetarian", "Non-vegetarian"] as const;
+
+export const transportPreferencePresets = ["Self-arranged", "Need transport"] as const;
 
 export type PaidSeminarAnswer = { key: PaidSeminarKey; label: string; value: string };
 
@@ -34,7 +36,7 @@ export function parsePaidSeminarFields(value: unknown): PaidSeminarField[] | und
     const defaultValue = typeof row.defaultValue === "string" ? row.defaultValue.trim() : "";
     let options: string[] | undefined;
     if (row.options !== undefined) {
-      if (row.key !== "food" || !Array.isArray(row.options) ||
+      if ((row.key !== "food" && row.key !== "transport") || !Array.isArray(row.options) ||
           row.options.length < 2 || row.options.length > 20 ||
           row.options.some((choice: unknown) => typeof choice !== "string" ||
             choice.trim().length < 1 || choice.trim().length > 80)) return;
@@ -49,7 +51,7 @@ export function parsePaidSeminarFields(value: unknown): PaidSeminarField[] | und
       if (!Number.isFinite(date.getTime()) ||
           date.toISOString().slice(0, 10) !== defaultValue) return;
     }
-    if (row.key === "food" && options && defaultValue && !options.includes(defaultValue)) return;
+    if (options && defaultValue && !options.includes(defaultValue)) return;
     keys.add(row.key);
     result.push({key:row.key,scope:row.scope,required:row.required,
       ...(defaultValue ? {defaultValue} : {}),
@@ -76,7 +78,7 @@ export function normalizePaidSeminarAnswers(
     }
     const definition = paidSeminarFields[field.key];
     if (text.length > 500 || (definition.type === "boolean" && text !== "yes" && text !== "no") ||
-        (field.key === "food" && field.options && !field.options.includes(text))) return;
+        (field.options && !field.options.includes(text))) return;
     if (definition.type === "date") {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return;
       const date = new Date(text);

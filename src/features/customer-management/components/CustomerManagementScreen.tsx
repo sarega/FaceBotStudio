@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Clock3, Mail, RefreshCw, Search, ShoppingBag, UserRound, Users, XCircle } from "lucide-react";
+import { Mail, RefreshCw, Search, ShoppingBag, UserRound, XCircle } from "lucide-react";
 
 type CustomerEmailDelivery = {
   status: "queued" | "processing" | "sent" | "failed";
@@ -89,6 +89,7 @@ type CustomerResponse = {
 };
 
 type Props = {
+  language: "th" | "en";
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   focusCustomerId?:string;
   onOpenBooking?:(booking:CustomerPaidBooking)=>void;
@@ -135,7 +136,8 @@ function deliveryTone(delivery: CustomerEmailDelivery | null): "green" | "amber"
   return "slate";
 }
 
-export function CustomerManagementScreen({ apiFetch,focusCustomerId,onOpenBooking }: Props) {
+export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,onOpenBooking }: Props) {
+  const t = (th: string, en: string) => language === "th" ? th : en;
   const [data, setData] = useState<CustomerResponse | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | CustomerRecord["status"]>("all");
@@ -238,48 +240,47 @@ export function CustomerManagementScreen({ apiFetch,focusCustomerId,onOpenBookin
   };
 
   return (
-    <div className="customer-management-screen space-y-4">
+    <div className="customer-management-screen space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-600">Customer management</p>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">Customer accounts</h1>
-          <p className="mt-1 text-sm text-slate-500">ดูบัญชีลูกค้า การยืนยันอีเมล และประวัติการซื้อจาก Meetrix</p>
+          <h1 className="text-xl font-bold tracking-tight text-slate-950">{t("บัญชีลูกค้า", "Customer accounts")}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" disabled={exporting}
             onClick={()=>void exportCsv("/api/admin/customers/attendee-roster.csv","meetrix-all-events-attendee-roster.csv")}
             className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50">
-            {exporting?"กำลังส่งออก…":"Export ผู้เข้าร่วมทุกคน (ทุก Event)"}
+            {exporting?t("กำลังส่งออก…", "Exporting…"):t("ส่งออกรายชื่อผู้เข้าร่วม", "Export attendees")}
           </button>
           <button type="button" disabled={exporting}
             onClick={()=>void exportCsv("/api/admin/customers/paid-bookings.csv","meetrix-paid-bookings.csv")}
             className="rounded-xl border border-blue-300 bg-white px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50 disabled:opacity-50">
-            Export Bookings (แยกตามการจอง)
+            {t("ส่งออกรายการจอง", "Export bookings")}
           </button>
-        </div>
         <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-blue-300 hover:text-blue-700 disabled:opacity-50">
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> {t("รีเฟรช", "Refresh")}
         </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      <dl aria-label="Customer and booking summary" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-1.5">
         {[
-          { label: "Accounts", value: summary.total, helper: "เปิดบัญชีทั้งหมด", icon: Users, tone: "blue" as const },
-          { label: "Email verified", value: summary.verified, helper: "ยืนยันอีเมลแล้ว", icon: CheckCircle2, tone: "green" as const },
-          { label: "Pending email", value: summary.pending, helper: "รอยืนยันอีเมล", icon: Clock3, tone: "amber" as const },
-          {label:"Bookings / จองแล้ว",value:summary.bookings,helper:"การจองทุก Event",icon:ShoppingBag,tone:"blue" as const},
-          {label:"รอชำระเงิน",value:summary.awaiting_payment,helper:"จองแล้ว ยังไม่ส่งสลิป",icon:Clock3,tone:"amber" as const},
-          {label:"ส่งสลิป · รอตรวจ",value:summary.awaiting_review,helper:"Admin ต้องตรวจสอบ",icon:Clock3,tone:"amber" as const},
-          {label:"ยืนยันแล้ว",value:summary.confirmed,helper:money(summary.confirmed_minor/100),icon:CheckCircle2,tone:"green" as const},
-          {label:"หมดอายุ / ยกเลิก",value:summary.expired+summary.cancelled,helper:"รายการที่ไม่สำเร็จ",icon:XCircle,tone:"rose" as const},
-          {label:"Ticket orders (อื่น ๆ)",value:summary.paid_orders,helper:"แยกจาก Paid Bookings",icon:ShoppingBag,tone:"blue" as const},
-        ].map(({ label, value, helper, icon: Icon, tone }) => (
-          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="flex items-start justify-between gap-2"><div><p className="text-[11px] font-semibold text-slate-500">{label}</p><p className="mt-1 text-xl font-bold text-slate-950">{value}</p></div><span className={`flex h-8 w-8 items-center justify-center rounded-xl ${tone === "green" ? "bg-emerald-50 text-emerald-600" : "bg-blue-50 text-blue-600"}`}><Icon className="h-4 w-4" /></span></div>
-            <p className="mt-1 text-[11px] text-slate-500">{helper}</p>
+          { label: t("บัญชีทั้งหมด", "Accounts"), value: summary.total },
+          { label: t("ยืนยันอีเมลแล้ว", "Email verified"), value: summary.verified },
+          { label: t("รอยืนยันอีเมล", "Pending email"), value: summary.pending },
+          { label: t("การจองทุกงาน", "All event bookings"), value: summary.bookings },
+          { label: t("รอชำระเงิน", "Awaiting payment"), value: summary.awaiting_payment },
+          { label: t("รอตรวจสลิป", "Slips to review"), value: summary.awaiting_review },
+          { label: t("ยืนยันการจองแล้ว", "Confirmed bookings"), value: summary.confirmed, amount: money(summary.confirmed_minor / 100) },
+          { label: t("หมดอายุ / ยกเลิก", "Expired / cancelled"), value: summary.expired + summary.cancelled },
+          { label: t("ออเดอร์ตั๋วอื่น ๆ", "Other ticket orders"), value: summary.paid_orders },
+        ].map(({ label, value, amount }) => (
+          <div key={label} className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+            <dt className="text-xs font-medium leading-snug text-slate-600">{label}</dt>
+            <dd className="text-base font-bold leading-tight text-slate-900 tabular-nums">{value}</dd>
+            {amount && <dd className="basis-full text-xs font-medium text-emerald-700 tabular-nums">{amount}</dd>}
           </div>
         ))}
-      </div>
+      </dl>
 
       {data && <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center gap-2 p-3">
