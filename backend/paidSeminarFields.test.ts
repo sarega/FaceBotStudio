@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { foodPreferencePresets, normalizePaidSeminarAnswers, parsePaidSeminarFields,
+import { roomSurchargeMinor, foodPreferencePresets, normalizePaidSeminarAnswers, parsePaidSeminarFields,
   seminarDefaultAnswers } from "./paidSeminarFields";
 
 test("seminar form saves and restores accommodation default and selectable food options", () => {
@@ -57,4 +57,16 @@ test("transport dropdown preserves custom choices and validates attendee answers
   assert.ok(normalizePaidSeminarAnswers(fields!, "attendee", { transport: "Own car" }));
   assert.equal(normalizePaidSeminarAnswers(fields!, "attendee", { transport: "Taxi" }), undefined);
   assert.equal(parsePaidSeminarFields([{ ...config, defaultValue: "Taxi" }]), undefined);
+});
+
+test("single room adds the configured amount per attendee", () => {
+  const room = { key: "room_preference", scope: "attendee", required: true,
+    options: ["Shared", "Single"], surcharge: { option: "Single", minor: 130000 } };
+  const fields = parsePaidSeminarFields([room]);
+  assert.ok(fields);
+  assert.equal(340000 + roomSurchargeMinor(fields, { room_preference: "Single" }), 470000);
+  assert.equal(roomSurchargeMinor(fields, { room_preference: "Shared" }), 0);
+  assert.equal(roomSurchargeMinor(fields, { room_preference: "Single", accommodation: "no" }), 0);
+  assert.equal(parsePaidSeminarFields([{ ...room, scope: "booking" }]), undefined);
+  assert.equal(parsePaidSeminarFields([{ ...room, surcharge: { option: "Missing", minor: 130000 } }]), undefined);
 });

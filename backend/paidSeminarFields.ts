@@ -15,6 +15,7 @@ export type PaidSeminarField = {
   defaultValue?: string;
   /** Optional select choices. Food and Transport may be configured as free text or select. */
   options?: string[];
+  surcharge?: { option: string; minor: number };
 };
 
 export const foodPreferencePresets = ["Vegetarian", "Non-vegetarian"] as const;
@@ -42,7 +43,7 @@ export function parsePaidSeminarFields(value: unknown): PaidSeminarField[] | und
     const defaultValue = typeof row.defaultValue === "string" ? row.defaultValue.trim() : "";
     let options: string[] | undefined;
     if (row.options !== undefined) {
-      if ((row.key !== "food" && row.key !== "transport") || !Array.isArray(row.options) ||
+      if ((row.key !== "food" && row.key !== "transport" && row.key !== "room_preference") || !Array.isArray(row.options) ||
           row.options.length < 2 || row.options.length > 20 ||
           row.options.some((choice: unknown) => typeof choice !== "string" ||
             choice.trim().length < 1 || choice.trim().length > 80)) return;
@@ -58,10 +59,17 @@ export function parsePaidSeminarFields(value: unknown): PaidSeminarField[] | und
           date.toISOString().slice(0, 10) !== defaultValue) return;
     }
     if (options && defaultValue && !options.includes(defaultValue)) return;
+    const surcharge = row.surcharge;
+    if (surcharge !== undefined && (
+      row.key !== "room_preference" || row.scope !== "attendee" || !row.required ||
+      !surcharge || typeof surcharge.option !== "string" || !options?.includes(surcharge.option) ||
+      !Number.isSafeInteger(surcharge.minor) || surcharge.minor < 1 || surcharge.minor > 2_147_483_647
+    )) return;
     keys.add(row.key);
     result.push({key:row.key,scope:row.scope,required:row.required,
       ...(defaultValue ? {defaultValue} : {}),
-      ...(options ? {options} : {})});
+      ...(options ? {options} : {}),
+      ...(surcharge ? { surcharge: { option: surcharge.option, minor: surcharge.minor } } : {})});
   }
   return result;
 }
@@ -75,6 +83,7 @@ export function normalizePaidSeminarAnswers(
   if (Object.keys(values).some((key) => !matching.some((field) => field.key === key))) return;
   const answers: PaidSeminarAnswer[] = [];
   for (const field of matching) {
+    if (field.key === "room_preference" && field.surcharge && values.accommodation === "no") continue;
     const value = values[field.key];
     if (value !== undefined && typeof value !== "string") return;
     const text = typeof value === "string" ? value.trim() : "";
@@ -101,4 +110,10 @@ export function seminarDefaultAnswers(fields: PaidSeminarField[], scope: PaidSem
   Record<string, string> {
   return Object.fromEntries(fields.filter((field) => field.scope === scope && field.defaultValue)
     .map((field) => [field.key, field.defaultValue!]));
+}
+
+
+export function roomSurchargeMinor(fields: PaidSeminarField[], answers?: Record<string, unknown>) {
+  const surcharge = fields.find(({ key }) => key === "room_preference")?.surcharge;
+  return surcharge && answers?.accommodation !== "no" && answers?.room_preference === surcharge.option ? surcharge.minor : 0;
 }

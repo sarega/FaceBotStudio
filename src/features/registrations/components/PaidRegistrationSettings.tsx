@@ -97,7 +97,7 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
     }
     const normalizedSeminar = parsePaidSeminarFields(seminar);
     if (!normalizedSeminar) {
-      setError("Check Seminar questions: dropdown choices need 2–20 unique names, and the default must match one of those choices.");
+      setError("Check Seminar questions: dropdown choices need 2–20 unique names, the default must match a choice, and a room surcharge requires a positive amount and a required per-attendee question.");
       return;
     }
     setBusy(true);
@@ -251,12 +251,12 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
                     updateSeminar(key,{required:event.target.checked})} />
                   {t("บังคับตอบ", "Required")}
                 </label>
-                {(key === "food" || key === "transport") && <div className="space-y-2">
+                {(key === "food" || key === "transport" || key === "room_preference") && <div className="space-y-2">
                   <label className="block text-xs font-medium">{t("รูปแบบคำตอบ", "Answer format")}
                     <select className={field} value={configured.options ? "select" : "text"}
                       onChange={(event) => updateSeminar(key,event.target.value==="select"
-                        ? {options:[...(key === "food" ? foodPreferencePresets : transportPreferencePresets)],defaultValue:undefined}
-                        : {options:undefined,defaultValue:undefined})}>
+                        ? {options:[...(key === "food" ? foodPreferencePresets : key === "transport" ? transportPreferencePresets : ["ห้องคู่ / Shared room", "ห้องเดี่ยว / Single room"])],defaultValue:undefined}
+                        : {options:undefined,defaultValue:undefined,surcharge:undefined})}>
                       <option value="text">{t("พิมพ์คำตอบเอง", "Free text")}</option>
                       <option value="select">{t("เลือกจากรายการ", "Dropdown choices")}</option>
                     </select>
@@ -266,8 +266,28 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
                     <textarea className={field} rows={3} value={configured.options.join("\n")}
                       onChange={(event) => updateSeminar(key,{
                         options:event.target.value.split("\n"),
+                        surcharge:undefined,
                         defaultValue:undefined,
                       })}/>
+                  </label>}
+                </div>}
+                {key === "room_preference" && configured.options && <div className="grid gap-2 sm:grid-cols-2">
+                  <label>{t("ตัวเลือกที่คิดเพิ่ม", "Room choice with a surcharge")}
+                    <select className={field} value={configured.surcharge?.option ?? ""} onChange={(event) => {
+                      const option = event.target.value;
+                      updateSeminar(key, option ? { scope: "attendee", required: true,
+                        surcharge: { option, minor: configured.surcharge?.minor ?? 0 } } : { surcharge: undefined });
+                    }}>
+                      <option value="">{t("ไม่มีส่วนเพิ่ม", "No surcharge")}</option>
+                      {configured.options.map((option, index) => option.trim() &&
+                        <option key={index} value={option.trim()}>{option.trim()}</option>)}
+                    </select>
+                  </label>
+                  {configured.surcharge && <label>{t("ส่วนเพิ่มต่อคน (บาท)", "Surcharge per person (THB)")}
+                    <input className={field} type="number" min="0.01" max="21474836.47" step="0.01" required
+                      value={configured.surcharge.minor ? configured.surcharge.minor / 100 : ""}
+                      onChange={(event) => updateSeminar(key, { surcharge: { option: configured.surcharge!.option,
+                        minor: Math.round(Number(event.target.value) * 100) } })} />
                   </label>}
                 </div>}
                 {paidSeminarFields[key].type === "boolean" || configured.options ?

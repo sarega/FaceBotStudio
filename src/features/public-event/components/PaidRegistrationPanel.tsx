@@ -1,5 +1,5 @@
 import { PaymentCountdown } from "../../../components/PaymentCountdown";
-import { paidSeminarFields, seminarDefaultAnswers, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
+import { roomSurchargeMinor, paidSeminarFields, seminarDefaultAnswers, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
 
@@ -60,10 +60,11 @@ function SeminarInputs({ fields, values, onChange, locale }: {
     room_preference: "ความต้องการห้องพัก", transport: "การเดินทาง", food: "อาหาร",
     notes: "หมายเหตุเพิ่มเติม",
   };
-  return fields.map(({ key, required }) => {
+  return fields.map((configured) => {
+    const { key, required } = configured;
+    if (key === "room_preference" && configured.surcharge && values?.accommodation === "no") return null;
     const definition = paidSeminarFields[key];
     const value = values?.[key] ?? "";
-    const configured = fields.find((field) => field.key === key);
     return <label key={key} className="block text-sm">
       {locale === "th" ? thaiLabels[key] : definition.label}{required ? " *" : ""}
       {definition.type === "boolean" ? (
@@ -76,7 +77,7 @@ function SeminarInputs({ fields, values, onChange, locale }: {
         <select className={field} required={required} value={value}
           onChange={(event) => onChange(key,event.target.value)}>
           <option value="">{locale === "th" ? "เลือก" : "Select"}</option>
-          {configured.options.map((option) => <option key={option} value={option}>{option}</option>)}
+          {configured.options.map((option) => <option key={option} value={option}>{option}{configured.surcharge?.option === option && values?.accommodation !== "no" ? ` (+฿${(configured.surcharge.minor / 100).toLocaleString()})` : ""}</option>)}
         </select>
       ) : definition.type === "date" ? (
         <input className={field} type="date" required={required} value={value} onChange={(event) => onChange(key, event.target.value)} />
@@ -252,7 +253,8 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
     const category = catalog?.categories.find(({ id }) => id === row.category_id);
     if (!category) return 0;
     return category.unit_minor -
-      (row.answers?.accommodation === "no" ? category.accommodation_discount_minor ?? 0 : 0);
+      (row.answers?.accommodation === "no" ? category.accommodation_discount_minor ?? 0 : 0) +
+      roomSurchargeMinor(catalog?.fields ?? [], row.answers);
   };
   const total = attendees.reduce((sum, row) => sum + attendeePrice(row), 0);
   return (
@@ -345,7 +347,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
                 </label>
                 <SeminarInputs fields={catalog.fields.filter(({ scope }) => scope === "attendee")} values={row.answers} locale={locale}
                   onChange={(key, value) => update(index, { answers: { ...row.answers, [key]: value } })} />
-                {(catalog.categories.find((category) => category.id === row.category_id)?.accommodation_discount_minor ?? 0) > 0 &&
+                {((catalog.categories.find((category) => category.id === row.category_id)?.accommodation_discount_minor ?? 0) > 0 || roomSurchargeMinor(catalog.fields, row.answers) > 0) &&
                   <p className="rounded-md bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-900">
                     {locale === "th" ? "ราคาสุทธิ" : "Attendee price"}: {money.format(attendeePrice(row) / 100)}
                     {row.answers?.accommodation === "no" && (

@@ -1,7 +1,7 @@
 import { applyCoupon, recordCouponRedemption } from "./paidCoupons";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { decryptPaidProof, encryptPaidProof, paidProofEncryptionConfigured } from "../paidProofEncryption";
-import { isEditableSeminarKey, type EditableSeminarKey, normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
+import { roomSurchargeMinor, isEditableSeminarKey, type EditableSeminarKey, normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
 import { createHash, randomUUID } from "node:crypto";
 
 export type PaidSql = { sql: string; params: (string | number | Buffer | null)[] };
@@ -146,11 +146,13 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
     if (discountMinor > 0 && accommodationChoice !== "yes" && accommodationChoice !== "no") {
       throw new PaidBookingError("invalid_seminar_answers");
     }
-    const unitMinor = baseMinor - (accommodationChoice === "no" ? discountMinor : 0);
+    const surchargeMinor = roomSurchargeMinor(fields, Object.fromEntries(answers.map(({ key, value }) => [key, value])));
+    const unitMinor = baseMinor - (accommodationChoice === "no" ? discountMinor : 0) + surchargeMinor;
+    if (unitMinor > 2_147_483_647) throw new PaidBookingError("invalid_total");
     totalMinor += unitMinor;
-    return { ...attendee, label: String(category.label), unitMinor, baseMinor, appliedDiscountMinor: accommodationChoice === "no" ? discountMinor : 0, answers };
+    return { ...attendee, label: String(category.label), unitMinor, baseMinor, surchargeMinor, appliedDiscountMinor: accommodationChoice === "no" ? discountMinor : 0, answers };
   });
-  if (!Number.isSafeInteger(totalMinor) || totalMinor < 1) throw new PaidBookingError("invalid_total");
+  if (!Number.isSafeInteger(totalMinor) || totalMinor < 1 || totalMinor > 2_147_483_647) throw new PaidBookingError("invalid_total");
   const subtotalMinor = totalMinor;
   const applied = input.couponCode ? yield* applyCoupon(eventId,customerId,input.couponCode,subtotalMinor) : null;
   if (applied) totalMinor = applied.total_minor;
@@ -181,7 +183,7 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
         (id,event_id,booking_id,ordinal,category_id,category_label,unit_minor,first_name,last_name,contact_json)
         VALUES (?,?,?,?,?,?,?,?,?,?)`,
       randomUUID(), eventId, id, index + 1, attendee.categoryId, attendee.label, attendee.unitMinor,
-      attendee.firstName, attendee.lastName, JSON.stringify({ email: attendee.email, phone: attendee.phone, answers: attendee.answers, pricing: { base_minor: attendee.baseMinor, accommodation_discount_minor: attendee.appliedDiscountMinor } }),
+      attendee.firstName, attendee.lastName, JSON.stringify({ email: attendee.email, phone: attendee.phone, answers: attendee.answers, pricing: { base_minor: attendee.baseMinor, room_surcharge_minor: attendee.surchargeMinor, accommodation_discount_minor: attendee.appliedDiscountMinor } }),
     );
   }
   if (complimentary) {
@@ -368,7 +370,9 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
   const preferencesEditable = ["awaiting_payment", "verification_pending", "confirmed", "expired"].includes(String(booking.state)) &&
     booking.event_status !== "cancelled" && booking.payment_state !== "refunded" &&
     (!eventStart || Date.now() < eventStart.getTime());
-  const preferenceFields = (yield* readPaidSeminarForm(eventId)).filter(({ key }) => isEditableSeminarKey(key));
+  const preferenceFields = (yield* readPaidSeminarForm(eventId)).filter(({ key, surcharge }) =>
+    isEditableSeminarKey(key) && !surcharge && (key !== "room_preference" || !attendees.some(({ contact_json }) =>
+      Number(JSON.parse(String(contact_json || "{}")).pricing?.room_surcharge_minor) > 0)));
   if (edit) {
     if (!preferencesEditable) throw new PaidBookingError("state_conflict");
     const field = preferenceFields.find(({ key }) => key === edit.key);

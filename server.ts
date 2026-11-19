@@ -1,7 +1,7 @@
 import { isValidCouponCode } from "./backend/db/paidCoupons";
 import sharp from "sharp";
 import { paidProofEncryptionConfigured } from "./backend/paidProofEncryption";
-import { isEditableSeminarKey, parsePaidSeminarFields } from "./backend/paidSeminarFields";
+import { roomSurchargeMinor, isEditableSeminarKey, parsePaidSeminarFields } from "./backend/paidSeminarFields";
 import { parsePaidMessengerCommand, paidMessengerStatusText } from "./backend/paidMessenger";
 import { detectPaidProofImage, optimizePaidProofImage } from "./backend/paidProofImage";
 import { PaidBookingError } from "./backend/db/paidRegistration";
@@ -17261,7 +17261,7 @@ async function startServer() {
         let priceProvisional=false;
         for(const attendee of body.attendees) {
           if(!attendee || typeof attendee!=="object") return res.status(400).json({error:"invalid_attendees"});
-          const entry=attendee as {category_id?:string;answers?:{accommodation?:string}};
+          const entry=attendee as {category_id?:string;answers?:{accommodation?:string;room_preference?:string}};
           const category=catalog.categories.find(c=>c.id===entry.category_id);
           if(!category) return res.status(400).json({error:"invalid_attendees"});
           const answer=entry.answers?.accommodation;
@@ -17270,7 +17270,7 @@ async function startServer() {
           // submission enforces its required answers.
           if(category.accommodation_discount_minor>0 && !["yes","no"].includes(String(answer)))
             priceProvisional=true;
-          subtotal+=category.unit_minor-(answer==="no"?category.accommodation_discount_minor:0);
+          subtotal+=category.unit_minor-(answer==="no"?category.accommodation_discount_minor:0)+roomSurchargeMinor(catalog.fields, entry.answers);
         }
         if(!Number.isSafeInteger(subtotal)||subtotal<=0)
           return res.status(400).json({error:"invalid_total"});
