@@ -824,7 +824,7 @@ export function* checkInPaidCredential(eventId: string, credential: string, acto
 }
 
 export function* listDailyPaidTransfers(eventId: string, start: number, end: number): PaidCommand<PaidRow[]> {
-  return yield query(
+  const transfers = yield query(
     `SELECT b.id AS booking_id,b.reference AS booking_reference,
        c.first_name,c.last_name,a.id AS attempt_id,a.status,a.created_ms AS submitted_ms,
        COALESCE(a.observed_minor,a.claimed_minor) AS amount_minor,
@@ -841,6 +841,18 @@ export function* listDailyPaidTransfers(eventId: string, start: number, end: num
      ORDER BY COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms),a.id`,
     eventId, start, end,
   );
+  const namesByBooking = new Map(transfers.map(({ booking_id }) => [booking_id, [] as string[]]));
+  if (transfers.length) {
+    const attendees = yield query(
+      "SELECT booking_id,first_name,last_name FROM paid_attendees WHERE event_id=? AND cancelled_ms IS NULL ORDER BY ordinal",
+      eventId,
+    );
+    for (const attendee of attendees) {
+      namesByBooking.get(attendee.booking_id)?.push([attendee.first_name, attendee.last_name].filter(Boolean).join(" "));
+    }
+  }
+  return transfers.map((row) => ({ ...row, attendee_names: namesByBooking.get(row.booking_id) ?? [] }));
+
 }
 
 export function* listPaidReviewQueue(eventId: string, offset: number, reference?: string): PaidCommand<PaidRow[]> {

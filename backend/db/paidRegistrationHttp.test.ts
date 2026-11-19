@@ -405,7 +405,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(paymentQr.status, 200);
     assert.equal(paymentQr.headers.get("content-type"), "image/png");
     assert.equal((await fetch(`${ownedPath}/payment-qr`, { headers: headers("test-other") })).status, 404);
-    const image = await sharp({ create: { width: 2, height: 2, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    const image = await sharp({ create: { width: 96, height: 144, channels: 3, background: "#dce8f5" } }).png().toBuffer();
     const proof = (token: string, bytes: Buffer) => fetch(`${ownedPath}/proofs`, {
       method: "POST", body: Uint8Array.from(bytes),
       headers: {
@@ -473,6 +473,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(reportRows.length, 1);
     assert.equal(reportRows[0].attempt_id, pending.attempt_id);
     assert.equal(reportRows[0].status, "verified");
+    assert.deepEqual(reportRows[0].attendee_names, ["One Guest", "Two Guest"]);
     assert.equal(Number(reportRows[0].amount_minor), 50000);
     await assert.rejects(db.listDailyPaidTransfers(event.id, "other-org", reportStart, reportStart + 86_400_000), /event_not_found/);
     const reportPath = eventPrefix + "/daily-transfer-report";

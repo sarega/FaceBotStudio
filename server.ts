@@ -17793,35 +17793,38 @@ async function startServer() {
           } catch {
             // Retention, decryption or image errors should not hide the transfer record.
           }
-          slips.push(`<article><strong>#${index + 1} · ${escapeXml(amount(row.amount_minor))}</strong>${image || "<p>ไม่มีภาพสลิปให้แสดง</p>"}</article>`);
+          slips.push(image || "<span>ไม่มีภาพสลิป</span>");
         }
         const rows = transfers.map((row, index) => `<tr><td>${index + 1}</td>
           <td>${escapeXml(clock.format(Number(row.transfer_ms)))}<br>ส่งสลิป ${escapeXml(clock.format(Number(row.submitted_ms)))}</td>
-          <td>${escapeXml([row.first_name, row.last_name].filter(Boolean).join(" "))}<br>${escapeXml(row.booking_reference)}
+          <td><strong>ผู้ลงทะเบียน</strong>
+          ${Array.isArray(row.attendee_names) && row.attendee_names.length
+            ? `<ul>${row.attendee_names.map((name) => `<li>${escapeXml(name)}</li>`).join("")}</ul>`
+            : "<p>ไม่มีรายชื่อผู้เข้าร่วมที่ยังมีผล</p>"}
+          ผู้จอง: ${escapeXml([row.first_name, row.last_name].filter(Boolean).join(" "))}<br>${escapeXml(row.booking_reference)}
           ${row.transfer_reference ? "<br>อ้างอิง " + escapeXml(row.transfer_reference) : ""}</td>
           <td>${escapeXml(amount(row.amount_minor))}</td><td>${status(row.status)}
           ${row.receiver_id ? "<br>" + escapeXml(row.receiver_name) + " · " + escapeXml(String(row.receiver_id).slice(-4)) : ""}</td>
-          <td><span class="box"></span></td></tr>`).join("");
+          <td><span class="box"></span></td><td>${slips[index]}</td></tr>`).join("");
         const html = `<!doctype html><html lang="th"><meta charset="utf-8"><style>
           ${buildEmbeddedTicketFontCss()}
           @page { size: A4; margin: 14mm; } body { font: 11px "Noto Sans Thai", sans-serif; color: #182334; }
           h1 { font-size: 21px; margin: 0 0 6px; } p { margin: 5px 0; }
           table { width: 100%; border-collapse: collapse; margin-top: 14px; table-layout: fixed; }
           th,td { padding: 6px; border-bottom: 1px solid #cbd5e1; text-align: left; overflow-wrap: anywhere; }
-          th { background: #e9f0f8; } tr,article { break-inside: avoid; }
+          th { background: #e9f0f8; } tr { break-inside: avoid; } td { vertical-align: top; } ul { padding-left: 15px; margin: 3px 0 7px; }
           .box { display: inline-block; width: 12px; height: 12px; border: 1px solid #475569; }
-          .slips { break-before: page; } article { display: inline-block; width: 48%; vertical-align: top; margin-bottom: 12px; }
-          img { display: block; max-width: 95%; max-height: 270px; margin-top: 4px; }
+          img { display: block; width: 100%; max-height: 215px; object-fit: contain; object-position: top left; }
           </style><h1>รายงานตรวจสอบเงินโอน</h1><p>${escapeXml(event?.name || eventId)}</p>
           <p>ช่วงวันที่โอน ${period} · สร้างรายงาน ${escapeXml(clock.format(Date.now()))} (เวลาไทย)</p>
           ${account ? `<p>บัญชีรับเงินที่ตั้งไว้ปัจจุบัน ${account}</p>` : ""}
           <p>ยอดตามสลิป ${amount(sum(transfers))} · ${transfers.length} รายการ</p>
           <p>แอดมินยืนยัน ${amount(sum(verified))} · รอตรวจหรือมีข้อยกเว้น ${amount(sum(transfers) - sum(verified))}</p>
           <p>กรุณาเทียบรายการกับบัญชีรับเงินและติ๊กช่องเมื่อพบยอดเข้า</p>
-          ${rows ? `<table><colgroup><col style="width:5%"><col style="width:23%"><col style="width:31%">
-          <col style="width:13%"><col style="width:19%"><col style="width:9%"></colgroup>
-          <thead><tr><th>#</th><th>เวลา</th><th>ผู้จอง / อ้างอิง</th><th>ยอด</th><th>สถานะ</th><th>พบยอด</th></tr></thead>
-          <tbody>${rows}</tbody></table><section class="slips"><h2>ภาพสลิปตามลำดับรายการ</h2>${slips.join("")}</section>`
+          ${rows ? `<table><colgroup><col style="width:5%"><col style="width:15%"><col style="width:25%">
+          <col style="width:12%"><col style="width:13%"><col style="width:8%"><col style="width:22%"></colgroup>
+          <thead><tr><th>#</th><th>เวลา</th><th>ผู้ลงทะเบียน / เลขอ้างอิง</th><th>ยอด</th><th>สถานะ</th><th>พบยอด</th><th>สลิป</th></tr></thead>
+          <tbody>${rows}</tbody></table>`
           : "<p>ไม่มีรายการโอนที่มีสลิปในวันที่เลือก</p>"} </html>`;
         const { browser } = await launchTicketBrowser();
         try {
