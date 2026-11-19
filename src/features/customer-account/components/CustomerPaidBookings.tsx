@@ -1,3 +1,4 @@
+import { paidSeminarFields, type EditableSeminarKey, type PaidSeminarAnswer } from "../../../../backend/paidSeminarFields";
 import { PaymentCountdown } from "../../../components/PaymentCountdown";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { CheckCircle2, UploadCloud } from "lucide-react";
@@ -9,14 +10,15 @@ type Booking = {
   event_name: string;
   event_slug: string;
   reference: string;
+  attendee_count?: number;
   status: string;
   total_due_minor: number;
   due_at: string;
 };
-type PreferenceField = { key: "food" | "transport"; scope: "booking" | "attendee"; required: boolean; options?: string[] };
+type PreferenceField = { key: EditableSeminarKey; scope: "booking" | "attendee"; required: boolean; options?: string[] };
 
-function PreferenceInput({ field, initial, path, attendeeId }: {
-  field: PreferenceField; initial?: string; path: string; attendeeId?: string;
+function PreferenceInput({ field, initial, path, attendeeId, onSaved }: {
+  field: PreferenceField; initial?: string; path: string; attendeeId?: string; onSaved: (value: string) => void;
 }) {
   const [value, setValue] = useState(initial ?? "");
   const [busy, setBusy] = useState(false);
@@ -30,6 +32,7 @@ function PreferenceInput({ field, initial, path, attendeeId }: {
     try {
       await customerApi(path, { method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: field.key, attendee_id: attendeeId, value }) });
+      onSaved(value.trim());
       setMessage("บันทึกแล้ว / Saved");
     } catch {
       setMessage("บันทึกไม่สำเร็จ กรุณาตรวจคำตอบแล้วลองอีกครั้ง / Could not save. Check your answer and retry.");
@@ -38,13 +41,13 @@ function PreferenceInput({ field, initial, path, attendeeId }: {
     }
   }}>
     <label className="block font-medium">
-      {field.key === "transport" ? "การเดินทาง / Transport" : "อาหาร / Food preference"}
+      {field.key === "transport" ? "การเดินทาง / Transport" : field.key === "food" ? "อาหาร / Food preference" : paidSeminarFields[field.key].label}
       {field.options ? <select className={inputClass} required={field.required} value={value}
         onChange={(event) => { setValue(event.target.value); setMessage(""); }}>
         <option value="">เลือกคำตอบ / Select an answer</option>
         {value && !field.options.includes(value) && <option value={value} disabled>{value}</option>}
         {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select> : <input className={inputClass} maxLength={500} required={field.required} value={value}
+      </select> : <input type={paidSeminarFields[field.key].type === "date" ? "date" : "text"} className={inputClass} maxLength={500} required={field.required} value={value}
         onChange={(event) => { setValue(event.target.value); setMessage(""); }} />}
     </label>
     <button type="submit" disabled={busy || (!!value && !!field.options && !field.options.includes(value))}
@@ -55,8 +58,8 @@ function PreferenceInput({ field, initial, path, attendeeId }: {
   </form>;
 }
 
-type Detail = { preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
-  coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
+type Detail = { registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
+  coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; email?: string; phone?: string; registration_answers?: PaidSeminarAnswer[]; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 const baht = (minor:number) => new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"}).format(minor/100);
 function Step({n,title,children,emphasis=false}:{n:number;title:string;children:ReactNode;emphasis?:boolean}) {
@@ -293,6 +296,17 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
     return () => request.abort();
   }, [selected]);
 
+  function showSavedAnswer(key: EditableSeminarKey, value: string, attendeeId?: string) {
+    const update = (answers: PaidSeminarAnswer[] = []) => [
+      ...answers.filter((answer) => answer.key !== key),
+      ...(value ? [{ key, value, label: paidSeminarFields[key].label }] : []),
+    ];
+    setDetail((current) => current && (attendeeId
+      ? { ...current, attendees: current.attendees.map((attendee) => attendee.id === attendeeId
+        ? { ...attendee, registration_answers: update(attendee.registration_answers) } : attendee) }
+      : { ...current, registration_answers: update(current.registration_answers) }));
+  }
+
   async function reactivate(booking: Booking) {
     if (reactivating) return;
     setReactivating(booking.id);
@@ -340,6 +354,8 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
       {page?.bookings.map((booking) => (
         <article key={booking.id} className="space-y-2 border-t border-slate-200 pt-3 text-sm">
           <h3 className="font-semibold">{booking.event_name}</h3>
+          <p className="break-all text-xs text-slate-600">เลขใบจอง / Booking {booking.reference}
+            {booking.attendee_count != null && ` · ${booking.attendee_count} คน / attendees`}</p>
           <p className="font-semibold">{baht(booking.total_due_minor)} · {
             ({
               awaiting_payment: "รอชำระเงิน / Awaiting payment",
@@ -377,7 +393,7 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
             <button type="button" aria-expanded={selected?.id === booking.id}
               className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700"
               onClick={() => { setError(""); setDetail(undefined); didScrollToInvoice.current = false; setSelected(selected?.id === booking.id ? undefined : booking); }}>
-              {selected?.id === booking.id ? "ซ่อนรายละเอียด / Hide details" : booking.status === "awaiting_payment" ? "ชำระเงินและส่งสลิป / Pay now" : "ดูรายละเอียด / Details"}
+              {selected?.id === booking.id ? "ซ่อนรายละเอียด / Hide details" : "ดูหรือแก้ไขใบจอง / View or edit booking"}
             </button>
             {!tickets && booking.event_slug && <a href={`/events/${encodeURIComponent(booking.event_slug)}#public-registration`}
               className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 px-4 font-semibold text-blue-700">
@@ -387,6 +403,65 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
           {selected?.id === booking.id && !detail && !error && <p role="status">กำลังโหลดรายละเอียด / Loading booking…</p>}
           {selected?.id === booking.id && detail && (
             <div ref={paymentAnchorRef} className="scroll-mt-4 space-y-3" aria-label="Payment and booking details">
+            {!!detail.preference_fields?.length && <details className="rounded-lg border border-slate-200 p-3">
+              <summary className="cursor-pointer font-semibold">แก้ไขข้อมูลลงทะเบียน / Edit registration details</summary>
+              <div className="mt-3 space-y-3">
+                {detail.preferences_close_at && <p>แก้ไขได้ก่อน / Edit before {new Date(detail.preferences_close_at).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })} (เวลาไทย)</p>}
+                {detail.preference_fields.filter(({ scope }) => scope === "booking").map((field) =>
+                  <PreferenceInput key={field.key} field={field} initial={detail.preference_answers?.[field.key]}
+                    onSaved={(value) => showSavedAnswer(field.key, value)}
+                    path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`} />)}
+                {detail.preference_fields.some(({ scope }) => scope === "attendee") && detail.attendees.map((attendee) =>
+                  <section key={attendee.id} className="space-y-2">
+                    <h4 className="font-semibold">{attendee.first_name} {attendee.last_name}</h4>
+                    {detail.preference_fields?.filter(({ scope }) => scope === "attendee").map((field) =>
+                      <PreferenceInput key={field.key} field={field} initial={attendee.preference_answers?.[field.key]}
+                        attendeeId={attendee.id}
+                        onSaved={(value) => showSavedAnswer(field.key, value, attendee.id)}
+                        path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`} />)}
+                  </section>)}
+              </div>
+            </details>}
+            <details open className="rounded-lg border border-slate-200 p-3 text-sm">
+              <summary className="cursor-pointer font-medium text-slate-700">ผู้เข้าร่วมและรายละเอียดการจอง</summary>
+              <div className="mt-3 space-y-3">
+            {detail.registrant_name && <p>ผู้จอง / Booked by <strong>{detail.registrant_name}</strong></p>}
+            {(detail.registrant_email || detail.registrant_phone) && <p className="break-words">{[detail.registrant_email, detail.registrant_phone].filter(Boolean).join(" · ")}</p>}
+            {detail.registration_answers?.map(({ key, label, value }) => <p key={key}>{label} · {value}</p>)}
+            <ul className="space-y-2">{detail.attendees.map((attendee) => (
+              <li key={attendee.id}>
+                {attendee.first_name} {attendee.last_name} · {attendee.category_label} ·
+                {" "}{new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(attendee.unit_minor / 100)}
+                {!!attendee.accommodation_discount_minor && (
+                  <span className="ml-2 text-emerald-700">
+                    (No accommodation: −{new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" })
+                      .format(attendee.accommodation_discount_minor / 100)})
+                  </span>
+                )}
+                {(attendee.email || attendee.phone) && <p className="break-words text-slate-600">{[attendee.email, attendee.phone].filter(Boolean).join(" · ")}</p>}
+                {attendee.registration_answers?.map(({ key, label, value }) => <p className="text-slate-600" key={key}>{label} · {value}</p>)}
+                {detail.status === "confirmed" && (
+                  <a className="ml-2 text-blue-700 underline" target="_blank" rel="noopener noreferrer"
+                    href={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/attendees/${encodeURIComponent(attendee.id)}/credential`}>
+                    Admission QR
+                  </a>
+                )}
+              </li>
+            ))}</ul>
+            {detail.coupon && <div className="space-y-1 rounded-lg border border-emerald-500/30 p-3 text-sm">
+              <p className="font-semibold text-emerald-700">Coupon: {detail.coupon.code}</p>
+              <div className="flex justify-between"><span>Subtotal</span>
+                <span>{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
+                  .format(detail.coupon.subtotal_minor/100)}</span></div>
+              <div className="flex justify-between text-emerald-700"><span>Discount</span>
+                <span>−{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
+                  .format(detail.coupon.discount_minor/100)}</span></div>
+              <div className="flex justify-between font-semibold"><span>Total due</span>
+                <span>{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
+                  .format(booking.total_due_minor/100)}</span></div>
+            </div>}
+              </div>
+            </details>
             {detail.status==="confirmed" && booking.total_due_minor===0 &&
               <p role="status" className="rounded-lg bg-emerald-50 p-3 text-emerald-700">
                 คูปองฟรี: ยืนยันแล้ว ไม่ต้องโอนเงิน / Complimentary booking confirmed. No payment required.
@@ -423,57 +498,7 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
               <CheckCircle2 className="h-6 w-6"/> ส่งสลิปสำเร็จแล้ว รอผู้จัดงานยืนยัน / Slip received
             </div>}
 
-            {!!detail.preference_fields?.length && <details className="rounded-lg border border-slate-200 p-3">
-              <summary className="cursor-pointer font-semibold">แก้ไขการเดินทางและอาหาร / Edit travel and food</summary>
-              <div className="mt-3 space-y-3">
-                {detail.preference_fields.filter(({ scope }) => scope === "booking").map((field) =>
-                  <PreferenceInput key={field.key} field={field} initial={detail.preference_answers?.[field.key]}
-                    path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`} />)}
-                {detail.preference_fields.some(({ scope }) => scope === "attendee") && detail.attendees.map((attendee) =>
-                  <section key={attendee.id} className="space-y-2">
-                    <h4 className="font-semibold">{attendee.first_name} {attendee.last_name}</h4>
-                    {detail.preference_fields?.filter(({ scope }) => scope === "attendee").map((field) =>
-                      <PreferenceInput key={field.key} field={field} initial={attendee.preference_answers?.[field.key]}
-                        attendeeId={attendee.id}
-                        path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`} />)}
-                  </section>)}
-              </div>
-            </details>}
-            <details open={tickets || undefined} className="rounded-lg border border-slate-200 p-3 text-sm">
-              <summary className="cursor-pointer font-medium text-slate-700">ผู้เข้าร่วมและรายละเอียดการจอง</summary>
-              <div className="mt-3 space-y-3">
-            <ul className="space-y-1">{detail.attendees.map((attendee) => (
-              <li key={attendee.id}>
-                {attendee.first_name} {attendee.last_name} · {attendee.category_label} ·
-                {" "}{new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" }).format(attendee.unit_minor / 100)}
-                {!!attendee.accommodation_discount_minor && (
-                  <span className="ml-2 text-emerald-700">
-                    (No accommodation: −{new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" })
-                      .format(attendee.accommodation_discount_minor / 100)})
-                  </span>
-                )}
-                {detail.status === "confirmed" && (
-                  <a className="ml-2 text-blue-700 underline" target="_blank" rel="noopener noreferrer"
-                    href={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/attendees/${encodeURIComponent(attendee.id)}/credential`}>
-                    Admission QR
-                  </a>
-                )}
-              </li>
-            ))}</ul>
-            {detail.coupon && <div className="space-y-1 rounded-lg border border-emerald-500/30 p-3 text-sm">
-              <p className="font-semibold text-emerald-700">Coupon: {detail.coupon.code}</p>
-              <div className="flex justify-between"><span>Subtotal</span>
-                <span>{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
-                  .format(detail.coupon.subtotal_minor/100)}</span></div>
-              <div className="flex justify-between text-emerald-700"><span>Discount</span>
-                <span>−{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
-                  .format(detail.coupon.discount_minor/100)}</span></div>
-              <div className="flex justify-between font-semibold"><span>Total due</span>
-                <span>{new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"})
-                  .format(booking.total_due_minor/100)}</span></div>
-            </div>}
-              </div>
-            </details>
+
             </div>
           )}
           </>}

@@ -1,7 +1,7 @@
 import { isValidCouponCode } from "./backend/db/paidCoupons";
 import sharp from "sharp";
 import { paidProofEncryptionConfigured } from "./backend/paidProofEncryption";
-import { parsePaidSeminarFields } from "./backend/paidSeminarFields";
+import { isEditableSeminarKey, parsePaidSeminarFields } from "./backend/paidSeminarFields";
 import { parsePaidMessengerCommand, paidMessengerStatusText } from "./backend/paidMessenger";
 import { detectPaidProofImage, optimizePaidProofImage } from "./backend/paidProofImage";
 import { PaidBookingError } from "./backend/db/paidRegistration";
@@ -17999,7 +17999,7 @@ async function startServer() {
   app.patch("/api/customer/paid-bookings/:eventId/:id/preferences", requireVerifiedCustomer,
     async (req: AuthenticatedRequest, res) => {
       const { key, attendee_id, value } = readObjectBody(req);
-      if ((key !== "food" && key !== "transport") || typeof value !== "string" || value.length > 500 ||
+      if (!isEditableSeminarKey(key) || typeof value !== "string" || value.length > 500 ||
           (attendee_id !== undefined && (typeof attendee_id !== "string" || !attendee_id || attendee_id.length > 80))) {
         return res.status(400).json({ error: "invalid_seminar_answers" });
       }

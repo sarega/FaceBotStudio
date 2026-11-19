@@ -1,7 +1,7 @@
 import { applyCoupon, recordCouponRedemption } from "./paidCoupons";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { decryptPaidProof, encryptPaidProof, paidProofEncryptionConfigured } from "../paidProofEncryption";
-import { normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
+import { isEditableSeminarKey, type EditableSeminarKey, normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
 import { createHash, randomUUID } from "node:crypto";
 
 export type PaidSql = { sql: string; params: (string | number | Buffer | null)[] };
@@ -342,16 +342,17 @@ export function* reinstateOwnedPaidBooking(eventId: string, bookingId: string, c
 
 function editablePreferenceAnswers(answers: unknown): Record<string, string> {
   return Object.fromEntries((Array.isArray(answers) ? answers : [])
-    .filter((answer) => (answer?.key === "food" || answer?.key === "transport") && typeof answer.value === "string")
+    .filter((answer) => isEditableSeminarKey(answer?.key) && typeof answer.value === "string")
     .map((answer) => [answer.key, answer.value]));
 }
 
-export type PaidPreferenceEdit = { key: "food" | "transport"; attendeeId?: string; value: string };
+export type PaidPreferenceEdit = { key: EditableSeminarKey; attendeeId?: string; value: string };
 
 export function* readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: PaidPreferenceEdit): PaidCommand<PaidRow | undefined> {
   const [booking] = yield query(
     `SELECT b.id,b.reference,b.state,b.payment_state,b.currency,b.total_minor,b.due_ms,b.version,
-      s.payment_mode,b.contact_json FROM paid_bookings b JOIN paid_event_settings s ON s.event_id=b.event_id
+      s.payment_mode,b.contact_json,e.status AS event_status FROM paid_bookings b JOIN paid_event_settings s ON s.event_id=b.event_id
+     JOIN events e ON e.id=b.event_id
      WHERE b.event_id=? AND b.id=? AND b.customer_id=?`, eventId, id, customerId,
   );
   if (!booking) return undefined;
@@ -359,9 +360,15 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
     `SELECT id,category_id,category_label,unit_minor,first_name,last_name,contact_json
      FROM paid_attendees WHERE event_id=? AND booking_id=? AND cancelled_ms IS NULL ORDER BY ordinal`, eventId, id,
   );
-  const preferencesEditable = ["awaiting_payment", "verification_pending", "confirmed"].includes(String(booking.state)) &&
-    (booking.state !== "awaiting_payment" || Number(booking.due_ms) > Date.now());
-  const preferenceFields = (yield* readPaidSeminarForm(eventId)).filter(({ key }) => key === "food" || key === "transport");
+  const eventSettings = yield query(
+    "SELECT key,value FROM event_settings WHERE event_id=? AND key IN ('event_date','event_timezone')", eventId,
+  );
+  const eventStart = getEventState(Object.fromEntries(eventSettings.map(({ key, value }) =>
+    [String(key), String(value ?? "")]))).eventDate;
+  const preferencesEditable = ["awaiting_payment", "verification_pending", "confirmed", "expired"].includes(String(booking.state)) &&
+    booking.event_status !== "cancelled" && booking.payment_state !== "refunded" &&
+    (!eventStart || Date.now() < eventStart.getTime());
+  const preferenceFields = (yield* readPaidSeminarForm(eventId)).filter(({ key }) => isEditableSeminarKey(key));
   if (edit) {
     if (!preferencesEditable) throw new PaidBookingError("state_conflict");
     const field = preferenceFields.find(({ key }) => key === edit.key);
@@ -382,9 +389,15 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
     }
   }
   const dueMs = Number(booking.due_ms);
+  const contact = JSON.parse(String(booking.contact_json ?? "{}"));
   return {
     ...booking, total_minor: Number(booking.total_minor), due_ms: dueMs,
-    coupon: JSON.parse(String(booking.contact_json ?? "{}")).coupon ?? null,
+    coupon: contact.coupon ?? null,
+    registrant_name: contact.name,
+    registrant_email: contact.email,
+    registrant_phone: contact.phone,
+    registration_answers: Array.isArray(contact.answers) ? contact.answers : [],
+    preferences_close_at: eventStart?.toISOString() ?? null,
     preference_fields: preferencesEditable ? preferenceFields : [],
     preference_answers: editablePreferenceAnswers(JSON.parse(String(booking.contact_json ?? "{}")).answers),
     state: booking.state === "awaiting_payment" && dueMs <= Date.now() ? "expired" : booking.state,
@@ -393,6 +406,8 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
       const pricing = info?.pricing && typeof info.pricing === "object" ? info.pricing : null;
       return { ...attendee,
         preference_answers: editablePreferenceAnswers(info.answers),
+        registration_answers: Array.isArray(info.answers) ? info.answers : [],
+        email: info.email, phone: info.phone,
         base_minor: Number(pricing?.base_minor ?? attendee.unit_minor),
         accommodation_discount_minor: Number(pricing?.accommodation_discount_minor ?? 0),
       };
@@ -490,14 +505,15 @@ export function* savePaidSettings(eventId: string, organizationId: string, input
 export const OWNED_BOOKING_LIST_SQL = `
   SELECT b.id,b.event_id,b.reference,e.name AS event_name,e.slug AS event_slug,s.payment_mode,b.currency,b.total_minor AS total_due_minor,
     b.due_ms,CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS status,
-    b.payment_state AS payment_status
+    b.payment_state AS payment_status,
+    (SELECT COUNT(*) FROM paid_attendees a WHERE a.booking_id=b.id AND a.cancelled_ms IS NULL) AS attendee_count
   FROM paid_bookings b JOIN events e ON e.id=b.event_id JOIN paid_event_settings s ON s.event_id=b.event_id
   WHERE b.customer_id=? AND (b.reference=? OR ?='') AND (?=0 OR b.state='confirmed') ORDER BY b.created_ms DESC,b.id DESC LIMIT ? OFFSET ?
 `;
 
 export function serializePaidBookingList(rows: PaidRow[]): PaidRow[] {
   return rows.map(({ due_ms, ...booking }) => ({
-    ...booking, total_due_minor: Number(booking.total_due_minor), due_at: new Date(Number(due_ms)).toISOString(),
+    ...booking, attendee_count: Number(booking.attendee_count), total_due_minor: Number(booking.total_due_minor), due_at: new Date(Number(due_ms)).toISOString(),
   }));
 }
 

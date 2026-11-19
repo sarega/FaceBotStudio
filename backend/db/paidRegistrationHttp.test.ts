@@ -846,6 +846,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
         ON CONFLICT(event_id) DO UPDATE SET fields_json=excluded.fields_json`).run(newExternalEvent.id, JSON.stringify([
         { key: "transport", scope: "booking", required: true, options: ["Shuttle", "Self-arranged"] },
         { key: "food", scope: "attendee", required: true, options: ["มังสวิรัติ", "Regular"] },
+        { key: "arrival", scope: "attendee", required: false },
       ]));
     } finally {
       preferencesFixture.close();
@@ -860,12 +861,21 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await updatePreference("test-owner", { ...food, value: "Invalid" })).status, 409);
     assert.equal((await updatePreference("test-owner", transport)).status, 204);
     assert.equal((await updatePreference("test-owner", food)).status, 204);
+    const arrival = { ...food, key: "arrival", value: "2026-12-03" };
+    assert.equal((await updatePreference("test-owner", arrival)).status, 204);
+    assert.equal((await updatePreference("test-owner", { ...food, key: "accommodation", value: "no" })).status, 400);
     const updatedPreferences = await (await fetch(ownerFreeUrl, { headers: headers("test-owner") })).json();
     assert.equal(updatedPreferences.preference_answers.transport, "Shuttle");
     assert.equal(updatedPreferences.attendees[0].preference_answers.food, "มังสวิรัติ");
     assert.equal(updatedPreferences.status, "confirmed");
     assert.equal(updatedPreferences.total_due_minor, freeDetails.total_due_minor);
     assert.deepEqual(updatedPreferences.coupon, freeDetails.coupon);
+    assert.equal(updatedPreferences.attendees[0].registration_answers.find(({ key }: { key: string }) => key === "arrival").value, arrival.value);
+    await db.upsertSettings({ event_date: "2000-01-01T10:00", event_timezone: "Asia/Bangkok" }, newExternalEvent.id);
+    assert.equal((await updatePreference("test-owner", food)).status, 409);
+    const closedPreferences = await (await fetch(ownerFreeUrl, { headers: headers("test-owner") })).json();
+    assert.deepEqual(closedPreferences.preference_fields, []);
+    assert.equal(closedPreferences.attendees[0].preference_answers.food, food.value);
     await db.updateEvent(event.id, { status: "cancelled" });
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 404);

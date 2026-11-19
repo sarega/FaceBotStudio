@@ -21,6 +21,12 @@ export const foodPreferencePresets = ["Vegetarian", "Non-vegetarian"] as const;
 
 export const transportPreferencePresets = ["Self-arranged", "Need transport"] as const;
 
+export type EditableSeminarKey = Exclude<PaidSeminarKey, "accommodation">;
+
+export function isEditableSeminarKey(key: unknown): key is EditableSeminarKey {
+  return typeof key === "string" && key !== "accommodation" && Object.hasOwn(paidSeminarFields, key);
+}
+
 export type PaidSeminarAnswer = { key: PaidSeminarKey; label: string; value: string };
 
 export function parsePaidSeminarFields(value: unknown): PaidSeminarField[] | undefined {
