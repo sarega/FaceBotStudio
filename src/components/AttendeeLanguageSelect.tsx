@@ -1,3 +1,4 @@
+import { Globe2 } from "lucide-react";
 import type { AppLanguage } from "../lib/i18n";
 
 export function AttendeeLanguageSelect({ locale, onChange }: {
@@ -5,11 +6,14 @@ export function AttendeeLanguageSelect({ locale, onChange }: {
   onChange: (locale: AppLanguage) => void;
 }) {
   return (
-    <select aria-label="ภาษา / Language" value={locale}
-      className="min-h-11 shrink-0 rounded-lg border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-900"
-      onChange={(event) => onChange(event.target.value === "en" ? "en" : "th")}>
-      <option value="th">ไทย</option>
-      <option value="en">English</option>
-    </select>
+    <span title="ภาษา / Language" className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 focus-within:ring-2 focus-within:ring-blue-500">
+      <Globe2 className="h-4 w-4" aria-hidden="true" />
+      <select aria-label="ภาษา / Language" value={locale}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        onChange={(event) => onChange(event.target.value === "en" ? "en" : "th")}>
+        <option value="th">ไทย</option>
+        <option value="en">English</option>
+      </select>
+    </span>
   );
 }
