@@ -248,7 +248,8 @@ function ExternalPaymentInstructions({ eventId, bookingId }: { eventId: string; 
 
   </div>;
 }
-export function CustomerPaidBookings({ overview = false, tickets = false }: { overview?: boolean; tickets?: boolean }) {
+export function CustomerPaidBookings({ locale = "th", overview = false, tickets = false }: { locale?: "th" | "en"; overview?: boolean; tickets?: boolean }) {
+  const t = (th: string, en: string) => locale === "th" ? th : en;
   const [reference, setReference] = useState(() => {
     if (overview || tickets) return "";
     const value = new URLSearchParams(window.location.search).get("paid_booking") || "";
@@ -340,7 +341,7 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
 
   return (
     <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 text-slate-700">
-      <h2 className="text-lg font-bold text-slate-900">{tickets ? "บัตรสัมมนา / Seminar passes" : "การจองและชำระเงิน / My bookings"}</h2>
+      <h2 className="text-lg font-bold text-slate-900">{tickets ? t("บัตรสัมมนา", "Seminar passes") : t("การจองและชำระเงิน", "My bookings")}</h2>
       {overview && page && (offset > 0 || page.bookings.length > 0) && <p className="text-sm text-slate-600">รายการจอง / Bookings {offset + 1}–{offset + page.bookings.length}</p>}
       {reference && <button type="button" className="text-sm text-blue-700 underline" onClick={() => {
         setReference("");
@@ -358,11 +359,11 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
             {booking.attendee_count != null && ` · ${booking.attendee_count} คน / attendees`}</p>
           <p className="font-semibold">{baht(booking.total_due_minor)} · {
             ({
-              awaiting_payment: "รอชำระเงิน / Awaiting payment",
-              verification_pending: "ส่งสลิปแล้ว รอตรวจสอบ / Under review",
-              confirmed: "ยืนยันแล้ว / Confirmed",
-              expired: "หมดเวลาชำระเงิน / Expired",
-              cancelled: "ยกเลิกแล้ว / Cancelled",
+              awaiting_payment: t("รอชำระเงิน", "Awaiting payment"),
+              verification_pending: t("ส่งสลิปแล้ว รอตรวจสอบ", "Under review"),
+              confirmed: t("ยืนยันแล้ว", "Confirmed"),
+              expired: t("หมดเวลาชำระเงิน", "Expired"),
+              cancelled: t("ยกเลิกแล้ว", "Cancelled"),
             } as Record<string, string>)[booking.status] || booking.status
           }</p>
           {booking.status === "awaiting_payment" && <p className="text-slate-600">
@@ -376,7 +377,7 @@ export function CustomerPaidBookings({ overview = false, tickets = false }: { ov
           {overview ? (
             <a className="inline-flex min-h-10 items-center font-semibold text-blue-700 underline"
               href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>
-              {booking.status === "awaiting_payment" ? "ไปชำระเงิน / Continue to payment" : "ดูรายการจอง / View booking"}
+              {booking.status === "awaiting_payment" ? t("ไปชำระเงิน", "Continue to payment") : t("ดูรายการจอง", "View booking")}
             </a>
           ) : <>
           {booking.status === "expired" && (

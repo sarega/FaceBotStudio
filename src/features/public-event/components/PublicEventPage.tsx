@@ -1,6 +1,6 @@
 import { PublicCustomerMenu } from "./PublicCustomerMenu";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useEffect, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -55,6 +55,8 @@ type PublicChatMessage = {
 
 type PublicEventPageProps = {
   themeControl: ReactNode;
+  locale: "th" | "en";
+  languageControl: ReactNode;
   page: PublicEventPageResponse | null;
   loading: boolean;
   errorMessage: string;
@@ -120,10 +122,11 @@ function AboutSection({ description, locale }: { description: string; locale: "t
 }
 
 function LocationTravelSection({
-  location,
+  locale, location,
   mapEmbedUrl,
   publicLocationLabel,
 }: {
+  locale: "th" | "en";
   location: PublicEventPageResponse["location"];
   mapEmbedUrl: string;
   publicLocationLabel: string;
@@ -132,7 +135,7 @@ function LocationTravelSection({
     <section className="py-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-slate-900 sm:text-lg">Location & Travel</h2>
+          <h2 className="text-base font-semibold text-slate-900 sm:text-lg">{locale === "th" ? "สถานที่และการเดินทาง" : "Location & Travel"}</h2>
           <p className="mt-1 text-sm text-slate-500">
             {location.title || publicLocationLabel}
           </p>
@@ -195,7 +198,7 @@ function formatTicketPrice(value: number | null) {
   }).format(value);
 }
 
-function TicketSalesCard({ event }: { event: PublicEventPageResponse["event"] }) {
+function TicketSalesCard({ event, locale }: { locale: "th" | "en"; event: PublicEventPageResponse["event"] }) {
   const sales = event.ticket_sales || {
     enabled: false,
     starting_price: null,
@@ -211,7 +214,7 @@ function TicketSalesCard({ event }: { event: PublicEventPageResponse["event"] })
         <div>
           <div className="flex items-center gap-2">
             <Ticket className="h-5 w-5 text-blue-600" />
-            <h2 className="text-lg font-semibold text-slate-900">Tickets & seats</h2>
+            <h2 className="text-lg font-semibold text-slate-900">{locale === "th" ? "บัตรและที่นั่ง" : "Tickets & seats"}</h2>
           </div>
           <p className="mt-1 text-sm leading-snug text-slate-500">
             Choose a performance, compare prices, then select seats from the live Meetrix inventory.
@@ -308,18 +311,8 @@ export function PublicEventPage({
   onChatRemoveImage,
   onChatSubmit,
   onChatInputKeyDown,
-  themeControl,
+  themeControl, locale, languageControl,
 }: PublicEventPageProps) {
-  const [locale, setLocale] = useState<"th" | "en">(() =>
-    window.localStorage.getItem("meetrix-public-locale") === "en" ? "en" : "th");
-  function changeLocale(next: "th" | "en") {
-    setLocale(next);
-    window.localStorage.setItem("meetrix-public-locale", next);
-    document.documentElement.lang = next;
-  }
-  useEffect(() => {
-    document.documentElement.lang = locale;
-  }, [locale]);
   const publicEventName = page?.event.name || "Event";
   const publicLocationLabel = page?.location.compact || "Venue details will be announced soon";
   const publicSummary = page?.event.summary || "";
@@ -394,7 +387,7 @@ export function PublicEventPage({
             case "location":
               return (
                 <LocationTravelSection
-                  key="location"
+                  key="location" locale={locale}
                   location={page.location}
                   mapEmbedUrl={mapEmbedUrl}
                   publicLocationLabel={publicLocationLabel}
@@ -419,13 +412,8 @@ export function PublicEventPage({
             <a href="/events" className="public-customer-nav-link text-xs font-semibold sm:text-sm">
               ← {locale === "th" ? "งานทั้งหมด" : "All events"}
             </a>
-            <div className="flex min-w-0 items-center gap-1 sm:gap-3">
-              <div role="group" aria-label="Language / ภาษา" className="public-locale-switch inline-flex shrink-0 rounded-lg border p-0.5">
-                <button type="button" aria-pressed={locale === "th"} onClick={() => changeLocale("th")}
-                  className={locale === "th" ? "active" : ""}>TH</button>
-                <button type="button" aria-pressed={locale === "en"} onClick={() => changeLocale("en")}
-                  className={locale === "en" ? "active" : ""}>EN</button>
-              </div>
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 sm:gap-3">
+              {languageControl}
               {themeControl}
               <PublicCustomerMenu compact locale={locale} />
             </div>
@@ -444,7 +432,7 @@ export function PublicEventPage({
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
               <AlertCircle className="h-7 w-7" />
             </div>
-            <h1 className="mt-5 text-2xl font-bold tracking-tight text-slate-900">Public page unavailable</h1>
+            <h1 className="mt-5 text-2xl font-bold tracking-tight text-slate-900">{locale === "th" ? "เปิดหน้างานไม่ได้" : "Public page unavailable"}</h1>
             <p className="mt-2 text-sm leading-snug text-slate-500">
               {errorMessage || "This event page is not published or could not be found."}
             </p>
@@ -595,12 +583,12 @@ export function PublicEventPage({
                   <PaidRegistrationPanel key={page.event.slug} slug={page.event.slug} eventId={page.event.id}
                     enabled={Boolean(page.event.paid_registration_enabled)} timezone={page.event.timezone} locale={locale} />
                 ) : customerTicketing ? (
-                  <TicketSalesCard event={page.event} />
+                  <TicketSalesCard locale={locale} event={page.event} />
                 ) : externalTicketing ? (
                   <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <h2 className="text-lg font-semibold text-slate-900">Tickets</h2>
+                        <h2 className="text-lg font-semibold text-slate-900">{locale === "th" ? "บัตรเข้างาน" : "Tickets"}</h2>
                         <p className="mt-1 text-sm leading-snug text-slate-500">Choose tickets and complete your purchase with our ticketing partner.</p>
                       </div>
                       <StatusBadge tone="blue">External</StatusBadge>
@@ -627,7 +615,7 @@ export function PublicEventPage({
                     <>
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <h2 className="text-lg font-semibold text-slate-900">Register</h2>
+                          <h2 className="text-lg font-semibold text-slate-900">{locale === "th" ? "ลงทะเบียน" : "Register"}</h2>
                           <p className="mt-1 text-sm text-slate-500">
                             Fill in one short form. Your ticket appears on this page immediately.
                           </p>
@@ -640,7 +628,7 @@ export function PublicEventPage({
                       {registrationAvailable ? (
                         <form className="mt-4 space-y-2.5" onSubmit={(event) => void onRegistrationSubmit(event)}>
                           <div>
-                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">First Name</label>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{locale === "th" ? "ชื่อ" : "First Name"}</label>
                             <input
                               value={registrationForm.first_name}
                               onChange={(event) => onRegistrationFieldChange("first_name", event.target.value)}
@@ -650,7 +638,7 @@ export function PublicEventPage({
                             />
                           </div>
                           <div>
-                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Last Name</label>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{locale === "th" ? "นามสกุล" : "Last Name"}</label>
                             <input
                               value={registrationForm.last_name}
                               onChange={(event) => onRegistrationFieldChange("last_name", event.target.value)}
@@ -660,7 +648,7 @@ export function PublicEventPage({
                             />
                           </div>
                           <div>
-                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Phone</label>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{locale === "th" ? "เบอร์โทรศัพท์" : "Phone"}</label>
                             <input
                               value={registrationForm.phone}
                               onChange={(event) => onRegistrationFieldChange("phone", event.target.value)}
@@ -671,7 +659,7 @@ export function PublicEventPage({
                             />
                           </div>
                           <div>
-                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Email</label>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{locale === "th" ? "อีเมล" : "Email"}</label>
                             <input
                               value={registrationForm.email}
                               onChange={(event) => onRegistrationFieldChange("email", event.target.value)}
@@ -733,7 +721,7 @@ export function PublicEventPage({
                       <div className="surface-subpanel mt-3 rounded-xl px-3.5 py-3.5">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-sm font-semibold text-slate-900">Find My Ticket</p>
+                            <p className="text-sm font-semibold text-slate-900">{locale === "th" ? "ค้นหาบัตรของฉัน" : "Find My Ticket"}</p>
                             <p className="mt-1 text-sm leading-snug text-slate-500">
                               Enter the email used for registration and we will send a secure ticket link. Phone and attendee name can help narrow the match.
                             </p>
@@ -743,7 +731,7 @@ export function PublicEventPage({
 
                         <form className="mt-3 space-y-2.5" onSubmit={(event) => void onTicketLookupSubmit(event)}>
                           <div>
-                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Phone</label>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{locale === "th" ? "เบอร์โทรศัพท์" : "Phone"}</label>
                             <input
                               value={ticketLookupForm.phone}
                               onChange={(event) => onTicketLookupFieldChange("phone", event.target.value)}
@@ -754,7 +742,7 @@ export function PublicEventPage({
                             />
                           </div>
                           <div>
-                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Email</label>
+                            <label className="mb-1 block text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{locale === "th" ? "อีเมล" : "Email"}</label>
                             <input
                               value={ticketLookupForm.email}
                               onChange={(event) => onTicketLookupFieldChange("email", event.target.value)}
@@ -867,7 +855,7 @@ export function PublicEventPage({
                   <div className="surface-panel rounded-[1.75rem] p-4 sm:p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <h2 className="text-lg font-semibold text-slate-900">Help & Contact</h2>
+                        <h2 className="text-lg font-semibold text-slate-900">{locale === "th" ? "ช่วยเหลือและติดต่อ" : "Help & Contact"}</h2>
                         <p className="mt-1 text-sm leading-snug text-slate-500">
                           {page.contact.intro}
                         </p>

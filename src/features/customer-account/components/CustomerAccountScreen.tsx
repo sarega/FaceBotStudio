@@ -143,7 +143,8 @@ function customerFormDefaults(token = ""): CustomerForm {
   };
 }
 
-export function CustomerAccountScreen({ themeControl, embedded }: { themeControl?: ReactNode; embedded?: "profile" | "security" }) {
+export function CustomerAccountScreen({ locale = "th", languageControl, themeControl, embedded }: { locale?: "th" | "en"; languageControl?: ReactNode; themeControl?: ReactNode; embedded?: "profile" | "security" }) {
+  const t = (th: string, en: string) => locale === "th" ? th : en;
   const pathname = typeof window !== "undefined" ? window.location.pathname : "/account";
   const queryToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("token") || "" : "";
   const [mode, setMode] = useState<CustomerScreenMode>(() => embedded ? "profile" : resolveCustomerMode(pathname));
@@ -390,14 +391,14 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
   const requestedReturn = new URLSearchParams(window.location.search).get("return_to");
   const returnTo = requestedReturn === "/app/security" ? requestedReturn : "/app/profile";
   const showBack = mode !== "profile" && mode !== "unavailable";
-  const title = mode === "check-email" ? "ตรวจสอบอีเมลของคุณ / Check your email"
-    : mode === "register" ? "Create your account"
-    : mode === "forgot" ? "Reset your password"
-      : mode === "reset" ? "Choose a new password"
-        : mode === "verify" ? "Verify your email"
-          : mode === "profile" ? "Your account" : "Welcome back";
-  const subtitle = mode === "profile" ? "Manage your customer details securely."
-    : "Ticketing access for attendees and buyers.";
+  const title = mode === "check-email" ? t("ตรวจสอบอีเมลของคุณ", "Check your email")
+    : mode === "register" ? t("สร้างบัญชี", "Create your account")
+    : mode === "forgot" ? t("รีเซ็ตรหัสผ่าน", "Reset your password")
+      : mode === "reset" ? t("ตั้งรหัสผ่านใหม่", "Choose a new password")
+        : mode === "verify" ? t("ยืนยันอีเมล", "Verify your email")
+          : mode === "profile" ? t("บัญชีของคุณ", "Your account") : t("เข้าสู่ระบบ", "Welcome back");
+  const subtitle = mode === "profile" ? t("จัดการข้อมูลบัญชีของคุณ", "Manage your customer details securely.")
+    : t("บัญชีสำหรับลงทะเบียนและซื้อตั๋ว", "Ticketing access for attendees and buyers.");
 
   const accountContent = <>
           {busy && mode === "profile" && !account ? (
@@ -411,15 +412,15 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
             </div>
           ) : mode === "check-email" ? (
             <div className="space-y-4">
-              {!form.email.trim() && <CustomerField label="อีเมลที่ใช้สมัคร / Account email"
+              {!form.email.trim() && <CustomerField label={t("อีเมลที่ใช้สมัคร", "Account email")}
                 type="email" autoComplete="email" value={form.email}
                 onChange={value=>setField("email",value)}/>}
-              <CustomerVerificationNotice email={form.email} busy={busy}
+              <CustomerVerificationNotice locale={locale} email={form.email} busy={busy}
                 onResend={()=>void resendVerification()}
                 status={notice} error={errorMessage} deliveryFailed={verificationDeliveryFailed}/>
               <button type="button" onClick={()=>navigate("login")}
                 className="inline-flex min-h-11 items-center rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-blue-700">
-                ยืนยันอีเมลแล้ว? เข้าสู่ระบบ / Sign in
+                {t("ยืนยันอีเมลแล้ว? เข้าสู่ระบบ", "Already verified? Sign in")}
               </button>
             </div>
           ) : mode === "verify" ? (
@@ -430,7 +431,7 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
             </div>
           ) : mode === "profile" && account ? (
             <div className="space-y-5">
-            {!account.email_verified_at && <CustomerVerificationNotice email={account.email}
+            {!account.email_verified_at && <CustomerVerificationNotice locale={locale} email={account.email}
               busy={busy} onResend={()=>void resendVerification()}
               status={notice} error={errorMessage}
               deliveryFailed={verificationDeliveryFailed}/>}
@@ -443,43 +444,43 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
                 <span className="rounded-full bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-700">{account.status}</span>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
-                <CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" />
-                <CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" />
-                <CustomerField label="Phone" value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />
-                <CustomerField label="Email" value={form.email} onChange={() => undefined} type="email" autoComplete="email" disabled />
+                <CustomerField label={t("ชื่อ", "First name")} value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" />
+                <CustomerField label={t("นามสกุล", "Last name")} value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" />
+                <CustomerField label={t("เบอร์โทรศัพท์", "Phone")} value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />
+                <CustomerField label={t("อีเมล", "Email")} value={form.email} onChange={() => undefined} type="email" autoComplete="email" disabled />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
-                <CustomerField label="Address line 1" value={form.address_line1} onChange={(value) => setField("address_line1", value)} autoComplete="address-line1" />
-                <CustomerField label="Address line 2" value={form.address_line2} onChange={(value) => setField("address_line2", value)} autoComplete="address-line2" />
-                <CustomerField label="District" value={form.district} onChange={(value) => setField("district", value)} />
-                <CustomerField label="Subdistrict" value={form.subdistrict} onChange={(value) => setField("subdistrict", value)} />
-                <CustomerField label="Province" value={form.province} onChange={(value) => setField("province", value)} autoComplete="address-level1" />
-                <CustomerField label="Postal code" value={form.postal_code} onChange={(value) => setField("postal_code", value)} autoComplete="postal-code" />
+                <CustomerField label={t("ที่อยู่บรรทัดที่ 1", "Address line 1")} value={form.address_line1} onChange={(value) => setField("address_line1", value)} autoComplete="address-line1" />
+                <CustomerField label={t("ที่อยู่บรรทัดที่ 2", "Address line 2")} value={form.address_line2} onChange={(value) => setField("address_line2", value)} autoComplete="address-line2" />
+                <CustomerField label={t("เขต / อำเภอ", "District")} value={form.district} onChange={(value) => setField("district", value)} />
+                <CustomerField label={t("แขวง / ตำบล", "Subdistrict")} value={form.subdistrict} onChange={(value) => setField("subdistrict", value)} />
+                <CustomerField label={t("จังหวัด", "Province")} value={form.province} onChange={(value) => setField("province", value)} autoComplete="address-level1" />
+                <CustomerField label={t("รหัสไปรษณีย์", "Postal code")} value={form.postal_code} onChange={(value) => setField("postal_code", value)} autoComplete="postal-code" />
               </div>
               <div className="flex flex-wrap gap-3">
-                <button disabled={busy} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Save className="h-4 w-4" /> Save profile</button>
-                {!embedded && <a href="/app/security" className="inline-flex items-center text-blue-700 underline">Account security</a>}
+                <button disabled={busy} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Save className="h-4 w-4" /> {t("บันทึกโปรไฟล์", "Save profile")}</button>
+                {!embedded && <a href="/app/security" className="inline-flex items-center text-blue-700 underline">{t("ความปลอดภัยของบัญชี", "Account security")}</a>}
               </div>
             </form>
             </div>
           ) : (
             <form className="space-y-5" onSubmit={(event) => void submit(event)}>
-              {(mode === "register" || mode === "profile") && <div className="grid gap-4 sm:grid-cols-2"><CustomerField label="First name" value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" /><CustomerField label="Last name" value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" /></div>}
-              {mode !== "reset" && <CustomerField label="Email" value={form.email} onChange={(value) => setField("email", value)} type="email" autoComplete="email" />}
-              {(mode === "register" || mode === "login") && <CustomerField label="Password" value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} />}
-              {mode === "register" && <CustomerField label="Phone" value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />}
-              {(mode === "reset") && <CustomerField label="New password" value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete="new-password" />}
-              {mode === "register" && <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><label className="flex gap-3"><input type="checkbox" checked={form.accept_terms} onChange={(event) => setField("accept_terms", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the terms of service.</label><label className="flex gap-3"><input type="checkbox" checked={form.accept_privacy} onChange={(event) => setField("accept_privacy", event.target.checked)} className="mt-1 accent-blue-500" /> I accept the privacy notice.</label></div>}
+              {(mode === "register" || mode === "profile") && <div className="grid gap-4 sm:grid-cols-2"><CustomerField label={t("ชื่อ", "First name")} value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" /><CustomerField label={t("นามสกุล", "Last name")} value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" /></div>}
+              {mode !== "reset" && <CustomerField label={t("อีเมล", "Email")} value={form.email} onChange={(value) => setField("email", value)} type="email" autoComplete="email" />}
+              {(mode === "register" || mode === "login") && <CustomerField label={t("รหัสผ่าน", "Password")} value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} />}
+              {mode === "register" && <CustomerField label={t("เบอร์โทรศัพท์", "Phone")} value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />}
+              {(mode === "reset") && <CustomerField label={t("รหัสผ่านใหม่", "New password")} value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete="new-password" />}
+              {mode === "register" && <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><label className="flex gap-3"><input type="checkbox" checked={form.accept_terms} onChange={(event) => setField("accept_terms", event.target.checked)} className="mt-1 accent-blue-500" /> {t("ฉันยอมรับข้อกำหนดการใช้บริการ", "I accept the terms of service.")}</label><label className="flex gap-3"><input type="checkbox" checked={form.accept_privacy} onChange={(event) => setField("accept_privacy", event.target.checked)} className="mt-1 accent-blue-500" /> {t("ฉันยอมรับประกาศความเป็นส่วนตัว", "I accept the privacy notice.")}</label></div>}
               {mode === "login" && <div className="mb-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-                <strong>บัญชียังไม่ได้รับการยืนยัน?</strong> กรุณาเปิดอีเมลที่ใช้สมัครและกดลิงก์ Verify ก่อนจองที่นั่ง
+                {t("กรุณายืนยันอีเมลก่อนจองที่นั่ง", "Verify your email before booking a spot.")}
               </div>}
               {errorMessage && <p className="text-sm text-rose-700">{errorMessage}</p>}
               {notice && <p className="flex items-start gap-2 text-sm text-emerald-700"><Mail className="mt-0.5 h-4 w-4 shrink-0" /> {notice}</p>}
-              <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? "Create account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Reset password" : "Sign in"}</button>
+              <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? t("สร้างบัญชี", "Create account") : mode === "forgot" ? t("ส่งลิงก์รีเซ็ต", "Send reset link") : mode === "reset" ? t("รีเซ็ตรหัสผ่าน", "Reset password") : t("เข้าสู่ระบบ", "Sign in")}</button>
               <div className="flex flex-wrap justify-between gap-3 text-sm text-slate-600">
-                {mode === "login" && <><button type="button" onClick={() => navigate("register")} className="hover:underline">Create account</button><button type="button" onClick={() => void resendVerification()} disabled={busy} className="hover:underline disabled:opacity-50">Resend verification</button><button type="button" onClick={() => navigate("forgot")} className="hover:underline">Forgot password?</button></>}
-                {mode === "register" && <button type="button" onClick={() => navigate("login")} className="hover:underline">Already have an account? Sign in</button>}
-                {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => navigate("login")} className="hover:underline">Back to sign in</button>}
+                {mode === "login" && <><button type="button" onClick={() => navigate("register")} className="hover:underline">{t("สร้างบัญชี", "Create account")}</button><button type="button" onClick={() => void resendVerification()} disabled={busy} className="hover:underline disabled:opacity-50">{t("ส่งอีเมลยืนยันอีกครั้ง", "Resend verification")}</button><button type="button" onClick={() => navigate("forgot")} className="hover:underline">{t("ลืมรหัสผ่าน?", "Forgot password?")}</button></>}
+                {mode === "register" && <button type="button" onClick={() => navigate("login")} className="hover:underline">{t("มีบัญชีแล้ว? เข้าสู่ระบบ", "Already have an account? Sign in")}</button>}
+                {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => navigate("login")} className="hover:underline">{t("กลับไปเข้าสู่ระบบ", "Back to sign in")}</button>}
               </div>
             </form>
           )}
@@ -510,26 +511,26 @@ export function CustomerAccountScreen({ themeControl, embedded }: { themeControl
               <ShieldCheck className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-sm font-bold tracking-wide text-slate-900">Meetrix Account</p>
-              <p className="text-xs text-slate-500">Customer access</p>
+              <p className="text-sm font-bold tracking-wide text-slate-900">{t("บัญชี Meetrix", "Meetrix Account")}</p>
+              <p className="text-xs text-slate-500">{t("สำหรับผู้เข้าร่วม", "Customer access")}</p>
             </div>
           </div>
-          {themeControl}
+          <div className="flex flex-wrap items-center gap-2">{languageControl}{themeControl}</div>
           {showBack && (
             <button type="button" onClick={() => navigate("login")} className="inline-flex items-center gap-2 text-sm text-slate-600 hover:underline">
-              <ArrowLeft className="h-4 w-4" /> Back to sign in
+              <ArrowLeft className="h-4 w-4" /> {t("กลับไปเข้าสู่ระบบ", "Back to sign in")}
             </button>
           )}
         </div>
 
         <nav aria-label="Account navigation" className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold">
-          <a href="/events" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><CalendarDays className="h-4 w-4" /> งานทั้งหมด / All Events</a>
-          <a href={returnTo} className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" /> กลับบัญชีของฉัน / Back to My Account</a>
-          <a href="/app/orders" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ShoppingBag className="h-4 w-4" /> การจอง / My Bookings</a>
+          <a href="/events" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><CalendarDays className="h-4 w-4" /> {t("งานทั้งหมด", "All events")}</a>
+          <a href={returnTo} className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" /> {t("กลับบัญชีของฉัน", "Back to my account")}</a>
+          <a href="/app/orders" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ShoppingBag className="h-4 w-4" /> {t("การจองของฉัน", "My bookings")}</a>
         </nav>
         <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl shadow-slate-900/10 sm:p-9">
           <div className="mb-7">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Customer account</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">{t("บัญชีผู้เข้าร่วม", "Customer account")}</p>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">{title}</h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">{subtitle}</p>
           </div>

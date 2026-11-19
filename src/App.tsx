@@ -1,3 +1,4 @@
+import { AttendeeLanguageSelect } from "./components/AttendeeLanguageSelect";
 import { AttendeeThemeSelect, type ThemeMode } from "./components/AttendeeThemeSelect";
 import { PaidRegistrationSettings } from "./features/registrations/components/PaidRegistrationSettings";
 import { PaidCouponManager } from "./features/registrations/components/PaidCouponManager";
@@ -3168,6 +3169,7 @@ export default function App() {
   const [emailTestMessage, setEmailTestMessage] = useState("");
   const [attendeeTheme, setAttendeeTheme] = useState(() => getStoredThemeMode(ATTENDEE_THEME_STORAGE_KEY));
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
+  const [attendeeLocale, setAttendeeLocale] = useState<AppLanguage>(() => window.localStorage.getItem("meetrix-public-locale") === "en" ? "en" : "th");
   const [language, setLanguage] = useState<AppLanguage>(() => getStoredLanguage());
   const [userTimezone, setUserTimezone] = useState(DEFAULT_TIMEZONE);
   const [publicEventPage, setPublicEventPage] = useState<PublicEventPageResponse | null>(null);
@@ -4762,6 +4764,10 @@ export default function App() {
   }, []);
 
   const attendeeRoute = isPublicEventRoute || isPublicEventCatalogRoute || isCustomerAccountRoute || isCustomerAppRoute || isCustomerCheckoutRoute;
+  const attendeeLanguageControl = <AttendeeLanguageSelect locale={attendeeLocale} onChange={setAttendeeLocale} />;
+  useEffect(() => {
+    window.localStorage.setItem("meetrix-public-locale", attendeeLocale);
+  }, [attendeeLocale]);
   const activeTheme = attendeeRoute ? attendeeTheme : themeMode;
 
   useEffect(() => {
@@ -4790,9 +4796,9 @@ export default function App() {
   }, [activeTheme, attendeeRoute]);
 
   useEffect(() => {
-    document.documentElement.lang = language;
+    document.documentElement.lang = attendeeRoute ? attendeeLocale : language;
     window.localStorage.setItem("meetrix-language", language);
-  }, [language]);
+  }, [language, attendeeRoute, attendeeLocale]);
 
   useEffect(() => {
     if (!adminAgentChatStorageKey) {
@@ -9741,7 +9747,7 @@ export default function App() {
   }
 
   if (isPublicEventCatalogRoute) {
-    return <PublicEventCatalog />;
+    return <PublicEventCatalog locale={attendeeLocale} languageControl={attendeeLanguageControl} />;
   }
 
   if (isCustomerCheckoutRoute) {
@@ -9749,11 +9755,11 @@ export default function App() {
   }
 
   if (isCustomerAppRoute) {
-    return <CustomerAppScreen themeControl={<AttendeeThemeSelect mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
+    return <CustomerAppScreen locale={attendeeLocale} languageControl={attendeeLanguageControl} themeControl={<AttendeeThemeSelect locale={attendeeLocale} mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
   }
 
   if (isCustomerAccountRoute) {
-    return <CustomerAccountScreen themeControl={<AttendeeThemeSelect mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
+    return <CustomerAccountScreen locale={attendeeLocale} languageControl={attendeeLanguageControl} themeControl={<AttendeeThemeSelect locale={attendeeLocale} mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
   }
 
   if (!isPublicEventRoute && authStatus === "checking") {
@@ -10375,7 +10381,9 @@ export default function App() {
   if (isPublicEventRoute) {
     return (
       <PublicEventPageScreen
-        themeControl={<AttendeeThemeSelect mode={attendeeTheme} onChange={setAttendeeTheme} />}
+        locale={attendeeLocale}
+        languageControl={attendeeLanguageControl}
+        themeControl={<AttendeeThemeSelect locale={attendeeLocale} mode={attendeeTheme} onChange={setAttendeeTheme} />}
         page={publicEventPage}
         loading={publicEventLoading}
         errorMessage={publicEventError}
