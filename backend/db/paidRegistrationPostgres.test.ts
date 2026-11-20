@@ -113,8 +113,11 @@ test("PostgreSQL paid schema initializes from an empty database", {
   try {
     assert.equal((await fixture.query("SELECT to_regclass('public.schema_migrations') AS present")).rows[0].present, null);
     await db.initialize();
-    assert.equal((await fixture.query("SELECT COUNT(*)::int AS count FROM schema_migrations WHERE name LIKE '04%'")).rows[0].count, 9);
+    const migrations = (await readdir(new URL("./migrations/", import.meta.url)))
+      .filter((name) => name.endsWith(".sql")).sort();
     await runPostgresMigrations(fixture);
+    const applied = await fixture.query<{ name: string }>("SELECT name FROM schema_migrations");
+    assert.deepEqual(applied.rows.map(({ name }) => name).sort(), migrations);
     assert.ok(await db.getEventById("evt_default"));
   } finally {
     await Promise.all([db.close(), fixture.end()]);

@@ -9,6 +9,8 @@ coverage/
 bot.db
 *.db
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.sqlite3
 *.db-shm
 *.db-wal

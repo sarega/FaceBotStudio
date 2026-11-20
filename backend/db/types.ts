@@ -721,6 +721,9 @@ export interface AuthUserRow {
   id: string;
   username: string;
   display_name: string;
+  staff_email?: string | null;
+  pending_staff_email?: string | null;
+  staff_email_purpose?: string | null;
   role: UserRole;
   assigned_event_ids?: string[];
   organization_id: string;
@@ -749,6 +752,7 @@ export interface CreateUserInput {
   username: string;
   display_name: string;
   password_hash: string;
+  invite_email?: string;
   role: UserRole;
   assigned_event_ids?: string[];
 }
@@ -1300,6 +1304,8 @@ export interface AppDatabase {
   getUserPreferences(userId: string): Promise<UserPreferencesRow | undefined>;
   upsertUserPreferences(userId: string, input: { language: "th" | "en"; timezone: string }): Promise<UserPreferencesRow>;
   listUsers(): Promise<AuthUserRow[]>;
+  stageStaffEmail(userId: string, email: string, purpose: "invite" | "verify", tokenHash: string, expiresAt: string, retryBefore: string): Promise<boolean>;
+  consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null): Promise<string | null>;
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;
   setUserActive(userId: string, isActive: boolean): Promise<boolean>;

@@ -1,3 +1,4 @@
+import { StaffEmailSettings } from "../../auth/components/StaffEmailScreen";
 import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
@@ -276,6 +277,7 @@ export function SettingsScreen({
             <div className="surface-panel rounded-2xl p-4 sm:p-5">
               <h2 className="flex items-center gap-2 text-lg font-semibold"><UserCircle2 className="h-5 w-5 text-violet-600" />{label("settings.myAccount", "My account")}</h2>
               <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm"><dt className="text-slate-500">{label("settings.name", "Name")}</dt><dd className="font-semibold text-slate-900">{authUser?.display_name || "—"}</dd><dt className="text-slate-500">{label("settings.username", "Username")}</dt><dd className="font-mono text-slate-700">{authUser?.username || "—"}</dd><dt className="text-slate-500">{label("settings.organization", "Organization")}</dt><dd className="text-slate-700">{authUser?.organization_name || "—"}</dd><dt className="text-slate-500">{label("settings.accountType", "Account type")}</dt><dd className="font-semibold capitalize text-blue-700">{authUser?.role || "—"}</dd><dt className="text-slate-500">{label("settings.lastLogin", "Last login")}</dt><dd className="text-slate-700">{authUser?.last_login_at ? new Date(authUser.last_login_at).toLocaleString(preferences.language === "th" ? "th-TH" : "en-US", { timeZone: preferences.timezone }) : "—"}</dd></dl>
+              {authUser && <StaffEmailSettings email={authUser.staff_email} apiFetch={apiFetch} />}
             </div>
             <div className="surface-panel rounded-2xl p-4 sm:p-5">
               <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck className="h-5 w-5 text-emerald-600" />{label("settings.permissions", "Access & permissions")}</h2><p className="mt-1 text-sm text-slate-500">{label("settings.effectiveAccess", "Effective access for the current {role} account.").replace("{role}", authUser?.role || "user")}</p></div>{canManageUsers && <ActionButton onClick={onOpenTeamAccess} tone="neutral" className="text-sm">{label("settings.manageTeam", "Manage team")}</ActionButton>}</div>

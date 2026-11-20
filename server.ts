@@ -117,6 +117,7 @@ import {
   type RegistrationWindowState,
 } from "./backend/datetime";
 import { getEmailConfig, logEmailStartupDiagnostics } from "./backend/email/config";
+import { sendProviderEmail } from "./backend/email/provider";
 import { sendTransactionalEmail } from "./backend/email/service";
 import {
   buildRegistrationConfirmationLinks,
@@ -3183,6 +3184,8 @@ function toPublicAuthUser(user: AuthUserRow) {
     organization_name: user.organization_name,
     is_active: user.is_active,
     assigned_event_ids: user.assigned_event_ids || [],
+    staff_email: user.staff_email ?? null,
+    pending_invite_email: user.staff_email_purpose === "invite" ? user.pending_staff_email : null,
     created_at: user.created_at,
     last_login_at: user.last_login_at,
     system_version: SYSTEM_VERSION,
@@ -3599,6 +3602,34 @@ function buildEventUpdateEmailTemplate(options: {
     updateSummary: options.updateSummary,
     supportEmail: emailConfig.replyToAddress,
   });
+}
+
+const STAFF_EMAIL_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function sendStaffEmail(user: AuthUserRow, email: string, purpose: "invite" | "verify") {
+  const config = getEmailConfig();
+  if (!config.ready) return "Email service is unavailable";
+  const token = createSessionToken();
+  const now = Date.now();
+  const expiry = now + STAFF_EMAIL_TTL_MS;
+  const staged = await appDb.stageStaffEmail(
+    user.id, email, purpose, hashSessionToken(token),
+    new Date(expiry).toISOString(), new Date(expiry - 60_000).toISOString(),
+  );
+  if (!staged) return "Email request unavailable. Wait one minute and try again.";
+  const link = new URL("/staff/email", config.appUrl);
+  link.hash = new URLSearchParams({ token, purpose }).toString();
+  const subject = purpose === "invite" ? "Activate your FaceBotStudio staff account" : "Verify your FaceBotStudio staff email";
+  const username = normalizeUsername(user.username).replace(/[^a-z0-9._-]/g, "");
+  try {
+    await sendProviderEmail({
+      to: email, subject, text: `${subject}\nUsername: ${username}\n\n${link.href}\n\nThis link expires in 24 hours.`,
+      html: `<p>${subject}</p><p>Username: ${username}</p><p><a href="${link.href.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">Continue to FaceBotStudio</a></p><p>This link expires in 24 hours.</p>`,
+    }, config);
+  } catch {
+    return "Email delivery failed. Try again in one minute.";
+  }
+  return null;
 }
 
 async function queueCustomerAccountEmail(
@@ -15505,6 +15536,68 @@ async function startServer() {
     return res.json({ status: changed ? "unlinked" : "already_unlinked" });
   });
 
+  const staffEmailRateLimit = createRateLimitMiddleware({
+    name: "staff_email",
+    windowMs: 10 * 60 * 1000,
+    max: 15,
+    keyFn: getRequesterRateLimitScope,
+    errorMessage: "Too many staff email requests. Please wait and try again.",
+  });
+
+  app.post("/api/auth/staff-email/request", requireAuth, staffEmailRateLimit, async (req: AuthenticatedRequest, res) => {
+    const issues: ValidationIssue[] = [];
+    const body = readObjectBody(req);
+    const email = normalizeCustomerEmail(readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 }));
+    const password = readRequiredString(body, "password", issues, { label: "Current password", maxLength: 512 });
+    if (issues.length) return respondValidationError(res, issues);
+    if (!isValidCustomerEmail(email)) return res.status(400).json({ error: "Enter a valid email address" });
+    const user = req.auth!.user;
+    if (user.staff_email) return res.status(409).json({ error: "This account already has a verified email" });
+    try {
+      const hash = await appDb.getUserPasswordHash(user.username);
+      if (!hash || !verifyPasswordWithMetadata(password, hash).valid) {
+        return res.status(403).json({ error: "Incorrect password" });
+      }
+      const error = await sendStaffEmail(user, email, "verify");
+      if (error) return res.status(503).json({ error });
+      await recordAudit(req, "auth.staff_email_sent", "user", user.id);
+      return res.json({ status: "sent" });
+    } catch {
+      return res.status(500).json({ error: "Failed to send staff email" });
+    }
+  });
+
+  app.post("/api/auth/staff-email/confirm", staffEmailRateLimit, async (req: AuthenticatedRequest, res) => {
+    const issues: ValidationIssue[] = [];
+    const body = readObjectBody(req);
+    const token = readRequiredString(body, "token", issues, { label: "Email token", maxLength: 128 });
+    const purpose = readEnumValue(body, "purpose", ["invite", "verify"], issues, { required: true, label: "Purpose" });
+    const password = purpose === "invite"
+      ? readRequiredString(body, "password", issues, { label: "New password", maxLength: 512 })
+      : null;
+    if (issues.length) return respondValidationError(res, issues);
+    if (password !== null && password.length < 12) return res.status(400).json({ error: "Use at least 12 characters" });
+    if (purpose === "verify" && !req.auth?.user) {
+      return res.status(403).json({ error: "Sign in to the matching staff account, then reopen this email link." });
+    }
+    try {
+      const userId = await appDb.consumeStaffEmail(
+        hashSessionToken(token), new Date().toISOString(),
+        req.auth?.user.id ?? null, password === null ? null : hashPassword(password),
+      );
+      if (!userId) return res.status(400).json({ error: "This link is invalid, expired, or belongs to another account." });
+      await appDb.recordAuditLog({ actor_user_id: userId, action: purpose === "invite" ? "auth.staff_invite_accepted" : "auth.staff_email_verified", target_type: "user", target_id: userId }).catch(() => {
+        console.error("Failed to record staff email confirmation");
+      });
+      return res.json({ status: "verified" });
+    } catch (error: any) {
+      const conflict = error?.code === "23505" || error?.code === "SQLITE_CONSTRAINT_UNIQUE";
+      return res.status(conflict ? 409 : 500).json({
+        error: conflict ? "This email is already verified on another staff account" : "Failed to verify staff email",
+      });
+    }
+  });
+
   app.post("/api/auth/login", loginIpRateLimit, loginUsernameRateLimit, async (req, res) => {
     try {
       const body = readObjectBody(req);
@@ -15517,7 +15610,7 @@ async function startServer() {
       const username = normalizeUsername(usernameRaw);
 
       const user = await appDb.getUserByUsername(username);
-      if (!user || !user.is_active) {
+      if (!user || !user.is_active || user.staff_email_purpose === "invite") {
         await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_failed", {
           username,
           reason: "invalid_user",
@@ -15651,12 +15744,17 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/users", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
+  app.post("/api/auth/users", requireRoles(["owner", "admin"]), staffEmailRateLimit, async (req: AuthenticatedRequest, res) => {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
       const username = normalizeUsername(readRequiredString(body, "username", issues, { label: "Username", maxLength: 128 }));
-      const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
+      const email = body.email == null ? "" : normalizeCustomerEmail(
+        readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 }),
+      );
+      const password = !email && body.role === "checker"
+        ? readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 })
+        : null;
       const role = readEnumValue(body, "role", ALL_USER_ROLES, issues, { required: true, label: "role" }) as UserRole | "";
       const displayName = readOptionalString(body, "display_name", 180) || username;
       const assignedEventIds = normalizeEventAssignmentIds(body.event_ids);
@@ -15668,7 +15766,16 @@ async function startServer() {
       if (!username || !isValidUsername(username)) {
         return res.status(400).json({ error: "Username must be 3-32 chars and use only a-z, 0-9, dot, dash, or underscore" });
       }
-      if (password.length < 8) {
+      if (!email && normalizedRole !== "checker") {
+        return res.status(400).json({ error: "A staff email is required to send an invitation" });
+      }
+      if (email && !isValidCustomerEmail(email)) {
+        return res.status(400).json({ error: "Enter a valid email address" });
+      }
+      if (email && !getEmailConfig().ready) {
+        return res.status(503).json({ error: "Email service is unavailable" });
+      }
+      if (password !== null && password.length < 8) {
         return res.status(400).json({ error: "Password must be at least 8 characters" });
       }
       if (normalizedRole === "owner") {
@@ -15687,7 +15794,8 @@ async function startServer() {
       const user = await appDb.createUser({
         username,
         display_name: displayName,
-        password_hash: hashPassword(password),
+        password_hash: hashPassword(password ?? createSessionToken()),
+        invite_email: email || undefined,
         role: normalizedRole,
         assigned_event_ids: EVENT_ASSIGNMENT_ROLES.has(normalizedRole) ? assignedEventIds || [] : [],
       });
@@ -15696,13 +15804,34 @@ async function startServer() {
         role: user.role,
         event_ids: assignedEventIds || [],
       });
+      const deliveryError = email ? await sendStaffEmail(user, email, "invite") : null;
+      if (email && !deliveryError) await recordAudit(req, "auth.staff_invite_sent", "user", user.id);
       return res.status(201).json({
+        delivery_error: deliveryError,
         user: toPublicAuthUser({ ...user, assigned_event_ids: assignedEventIds || [] }),
       });
     } catch (error: any) {
       console.error("Failed to create user:", error);
       const conflict = error?.code === "23505" || String(error?.message || "").includes("UNIQUE");
       return res.status(conflict ? 409 : 500).json({ error: conflict ? "Username already exists" : "Failed to create user" });
+    }
+  });
+
+  app.post("/api/auth/users/:id/resend-invite", requireRoles(["owner", "admin"]), staffEmailRateLimit, async (req: AuthenticatedRequest, res) => {
+    try {
+      const target = await appDb.getUserById(String(req.params.id));
+      if (!target || target.organization_id !== req.auth!.user.organization_id || !canManageTargetUser(req.auth!.user, target, "status")) {
+        return res.status(404).json({ error: "Pending invitation not found" });
+      }
+      if (!target.is_active || target.staff_email_purpose !== "invite" || !target.pending_staff_email) {
+        return res.status(409).json({ error: "This account has no pending invitation" });
+      }
+      const error = await sendStaffEmail(target, target.pending_staff_email, "invite");
+      if (error) return res.status(503).json({ error });
+      await recordAudit(req, "auth.staff_invite_sent", "user", target.id);
+      return res.json({ status: "sent" });
+    } catch {
+      return res.status(500).json({ error: "Failed to resend invitation" });
     }
   });
 
@@ -15729,6 +15858,11 @@ async function startServer() {
       }
       if (req.auth.user.role === "admin" && (normalizedRole === "owner" || normalizedRole === "admin")) {
         return res.status(403).json({ error: "Admins can only assign operator, cashier, checker, or viewer roles" });
+      }
+
+      if (normalizedRole !== targetUser.role && normalizedRole !== "checker" &&
+          !targetUser.staff_email && targetUser.staff_email_purpose !== "invite") {
+        return res.status(409).json({ error: "Verify the staff email before changing this account's role" });
       }
 
       const updated = await appDb.updateUserRole(userId, normalizedRole);

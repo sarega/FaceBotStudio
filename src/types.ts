@@ -37,6 +37,8 @@ export type EmbeddingStatus = "pending" | "ready" | "failed" | "skipped";
 export type OrganizerVerificationStatus = "draft" | "pending_review" | "verified" | "rejected" | "needs_update";
 
 export interface AuthUser {
+  staff_email?: string | null;
+  pending_invite_email?: string | null;
   id: string;
   username: string;
   display_name: string;

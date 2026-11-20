@@ -23,8 +23,8 @@ type TeamAccessPanelProps = {
   onNewUserDisplayNameChange: (value: string) => void;
   newUserUsername: string;
   onNewUserUsernameChange: (value: string) => void;
-  newUserPassword: string;
-  onNewUserPasswordChange: (value: string) => void;
+  newUserEmail: string;
+  onNewUserEmailChange: (value: string) => void;
   newUserRole: UserRole;
   onNewUserRoleChange: (value: UserRole) => void;
   newUserEventIds: string[];
@@ -37,6 +37,7 @@ type TeamAccessPanelProps = {
   onUserEventAccessChange: (userId: string, eventIds: string[]) => void | Promise<void>;
   onUserAccessToggle: (userId: string, nextIsActive: boolean) => void | Promise<void>;
   onDeleteUser: (user: AuthUser) => void | Promise<void>;
+  onResendInvite: (userId: string) => void | Promise<void>;
   onCreateUser: () => void | Promise<void>;
 };
 
@@ -53,8 +54,8 @@ export function TeamAccessPanel({
   onNewUserDisplayNameChange,
   newUserUsername,
   onNewUserUsernameChange,
-  newUserPassword,
-  onNewUserPasswordChange,
+  newUserEmail,
+  onNewUserEmailChange,
   newUserRole,
   onNewUserRoleChange,
   newUserEventIds,
@@ -68,6 +69,7 @@ export function TeamAccessPanel({
   onUserAccessToggle,
   onDeleteUser,
   onCreateUser,
+  onResendInvite,
 }: TeamAccessPanelProps) {
   const [draftEventIds, setDraftEventIds] = useState<Record<string, string[]>>({});
 
@@ -101,6 +103,7 @@ export function TeamAccessPanel({
             <RefreshCw className={`w-4 h-4 text-slate-500 ${teamLoading ? "animate-spin" : ""}`} />
           </button>
         </div>
+        {teamMessage && <p role="status" className="mt-3 text-sm text-slate-800">{teamMessage}</p>}
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.92fr)]">
@@ -124,11 +127,14 @@ export function TeamAccessPanel({
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-slate-900">{user.display_name}</p>
                       <p className="mt-1 text-xs text-slate-500">{user.username}</p>
+                      <p className="mt-1 break-all text-sm text-slate-700">
+                        {user.staff_email ? `${user.staff_email} · Verified` : user.pending_invite_email || "Email unverified"}
+                      </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 lg:justify-end">
                       <StatusLine
                         items={[
-                          user.is_active ? "active" : "disabled",
+                          user.is_active ? (user.pending_invite_email ? "invited" : "active") : "disabled",
                           roleLabel(user.role),
                         ]}
                       />
@@ -160,6 +166,11 @@ export function TeamAccessPanel({
                     </div>
                     {(canManageTargetAccess(user) || canDeleteTeamUser(user)) && (
                       <div className="flex flex-wrap gap-2 lg:justify-end">
+                        {user.is_active && user.pending_invite_email && canManageTargetAccess(user) && (
+                          <ActionButton onClick={() => void onResendInvite(user.id)} disabled={teamLoading} tone="neutral">
+                            Resend invitation
+                          </ActionButton>
+                        )}
                         <ActionButton
                           onClick={() => void onUserAccessToggle(user.id, !user.is_active)}
                           disabled={teamLoading}
@@ -242,7 +253,7 @@ export function TeamAccessPanel({
               <UserPlus className="w-4 h-4 text-blue-600" />
               <p className="text-sm font-semibold text-slate-900">Add Team Member</p>
             </div>
-            <p className="mt-1 text-xs text-slate-500">Create an account, then limit event-scoped roles to selected Events.</p>
+            <p className="mt-1 text-xs text-slate-500">Invite a staff member and choose which events they can access.</p>
             <div className="mt-3 space-y-2.5">
               <input
                 value={newUserDisplayName}
@@ -257,11 +268,13 @@ export function TeamAccessPanel({
                 placeholder="username"
               />
               <input
-                type="password"
-                value={newUserPassword}
-                onChange={(event) => onNewUserPasswordChange(event.target.value)}
+                type="email"
+                aria-label="Staff email"
+                autoComplete="off"
+                value={newUserEmail}
+                onChange={(event) => onNewUserEmailChange(event.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Temporary password"
+                placeholder="Staff email"
               />
               <select
                 value={newUserRole}
@@ -299,20 +312,16 @@ export function TeamAccessPanel({
               )}
               <ActionButton
                 onClick={() => void onCreateUser()}
-                disabled={teamLoading || !newUserUsername.trim() || !newUserPassword || newUserPassword.length < 8 || (EVENT_SCOPED_ROLES.includes(newUserRole) && !newUserEventIds.length)}
+                disabled={teamLoading || !newUserUsername.trim() || !newUserEmail.trim() || (EVENT_SCOPED_ROLES.includes(newUserRole) && !newUserEventIds.length)}
                 tone="blue"
                 active
                 className="w-full text-sm"
               >
                 <UserPlus className="w-4 h-4" />
-                Create User
+                Send invitation
               </ActionButton>
             </div>
-            {teamMessage && (
-              <p className={`mt-4 text-xs ${teamMessage.toLowerCase().includes("failed") || teamMessage.toLowerCase().includes("error") || teamMessage.toLowerCase().includes("exists") ? "text-rose-600" : "text-emerald-600"}`}>
-                {teamMessage}
-              </p>
-            )}
+
           </div>
         )}
       </div>

@@ -1261,6 +1261,13 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_direct_tickets_active_seat ON direct_tickets (seat_id) WHERE status IN ('held', 'issued', 'checked_in');
     `);
 
+    this.ensureColumn("users", "staff_email", "TEXT");
+    this.ensureColumn("users", "pending_staff_email", "TEXT");
+    this.ensureColumn("users", "staff_email_token_hash", "TEXT");
+    this.ensureColumn("users", "staff_email_expires_at", "TEXT");
+    this.ensureColumn("users", "staff_email_purpose", "TEXT");
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_staff_email_unique ON users (staff_email);
+      CREATE UNIQUE INDEX IF NOT EXISTS users_staff_email_token_unique ON users (staff_email_token_hash);`);
     this.ensureColumn("registrations", "event_id", "TEXT");
     this.ensureColumn("registrations", "channel_platform", "TEXT");
     this.ensureColumn("registrations", "channel_external_id", "TEXT");
@@ -4455,6 +4462,9 @@ export class SqliteAppDatabase implements AppDatabase {
         u.id,
         u.username,
         u.display_name,
+        u.staff_email,
+        u.pending_staff_email,
+        u.staff_email_purpose,
         u.is_active,
         u.created_at,
         u.last_login_at,
@@ -4469,24 +4479,50 @@ export class SqliteAppDatabase implements AppDatabase {
     return rows.map((row) => this.mapAuthUserRow(row));
   }
 
+  async stageStaffEmail(userId: string, email: string, purpose: "invite" | "verify", tokenHash: string, expiresAt: string, retryBefore: string) {
+    const result = this.db.prepare(
+      `UPDATE users SET pending_staff_email = @email, staff_email_purpose = @purpose,
+         staff_email_token_hash = @tokenHash, staff_email_expires_at = @expiresAt
+       WHERE id = @userId AND is_active = 1 AND staff_email IS NULL
+         AND (staff_email_purpose = @purpose OR (staff_email_purpose IS NULL AND @purpose = 'verify'))
+         AND (staff_email_expires_at IS NULL OR staff_email_expires_at <= @retryBefore)`,
+    ).run({ userId, email, purpose, tokenHash, expiresAt, retryBefore });
+    return result.changes > 0;
+  }
+
+  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null) {
+    const row = this.db.prepare(
+      `UPDATE users SET staff_email = pending_staff_email, pending_staff_email = NULL,
+         staff_email_purpose = NULL, staff_email_token_hash = NULL, staff_email_expires_at = NULL,
+         password_hash = COALESCE(@passwordHash, password_hash)
+       WHERE staff_email_token_hash = @tokenHash AND staff_email_expires_at > @now AND is_active = 1
+         AND ((@passwordHash IS NOT NULL AND staff_email_purpose = 'invite')
+           OR (@passwordHash IS NULL AND staff_email_purpose = 'verify' AND id = @userId))
+       RETURNING id`,
+    ).get({ tokenHash, now, userId, passwordHash }) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
   async createUser(input: CreateUserInput) {
     const username = normalizeUsername(input.username);
     const displayName = String(input.display_name || "").trim();
     const userId = generateEntityId("usr");
     const membershipId = generateEntityId("mem");
 
-    this.db.prepare(
-      `INSERT INTO users (id, username, display_name, password_hash, is_active)
-       VALUES (?, ?, ?, ?, 1)`,
-    ).run(userId, username, displayName || username, input.password_hash);
+    this.db.transaction(() => {
+      this.db.prepare(
+        `INSERT INTO users (id, username, display_name, password_hash, is_active, pending_staff_email, staff_email_purpose)
+         VALUES (?, ?, ?, ?, 1, ?, ?)`,
+      ).run(userId, username, displayName || username, input.password_hash, input.invite_email ?? null, input.invite_email ? "invite" : null);
 
-    this.db.prepare(
-      `INSERT INTO memberships (id, organization_id, user_id, role)
-       VALUES (?, ?, ?, ?)`,
-    ).run(membershipId, DEFAULT_ORGANIZATION_ID, userId, input.role);
-    for (const eventId of input.assigned_event_ids || []) {
-      await this.assignUserToEvent(userId, eventId);
-    }
+      this.db.prepare(
+        `INSERT INTO memberships (id, organization_id, user_id, role)
+         VALUES (?, ?, ?, ?)`,
+      ).run(membershipId, DEFAULT_ORGANIZATION_ID, userId, input.role);
+      for (const eventId of input.assigned_event_ids || []) {
+        this.assignUserToEvent(userId, eventId);
+      }
+    })();
 
     const user = await this.getUserById(userId);
     if (!user) throw new Error("Failed to load newly created user");
@@ -4502,8 +4538,11 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async setUserActive(userId: string, isActive: boolean) {
     const result = this.db.prepare(
-      "UPDATE users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).run(isActive ? 1 : 0, String(userId || "").trim());
+      `UPDATE users SET is_active = @isActive, updated_at = CURRENT_TIMESTAMP,
+         staff_email_token_hash = CASE WHEN @isActive THEN staff_email_token_hash END,
+         staff_email_expires_at = CASE WHEN @isActive THEN staff_email_expires_at END
+       WHERE id = @userId`,
+    ).run({ isActive: isActive ? 1 : 0, userId: String(userId || "").trim() });
     return result.changes > 0;
   }
 
@@ -4531,6 +4570,9 @@ export class SqliteAppDatabase implements AppDatabase {
         u.id,
         u.username,
         u.display_name,
+        u.staff_email,
+        u.pending_staff_email,
+        u.staff_email_purpose,
         u.is_active,
         u.created_at,
         u.last_login_at,
@@ -5189,7 +5231,7 @@ export class SqliteAppDatabase implements AppDatabase {
     ).run(generateEntityId("mem"), DEFAULT_ORGANIZATION_ID, userId);
   }
 
-  private async assignUserToEvent(userId: string, eventId: string) {
+  private assignUserToEvent(userId: string, eventId: string) {
     const normalizedUserId = String(userId || "").trim();
     const normalizedEventId = String(eventId || "").trim();
     if (!normalizedUserId || !normalizedEventId) return;
@@ -5205,6 +5247,9 @@ export class SqliteAppDatabase implements AppDatabase {
         u.id,
         u.username,
         u.display_name,
+        u.staff_email,
+        u.pending_staff_email,
+        u.staff_email_purpose,
         u.is_active,
         u.created_at,
         u.last_login_at,
@@ -5226,6 +5271,9 @@ export class SqliteAppDatabase implements AppDatabase {
     return {
       id: String(row.id),
       username: String(row.username),
+      staff_email: row.staff_email == null ? null : String(row.staff_email),
+      pending_staff_email: row.pending_staff_email == null ? null : String(row.pending_staff_email),
+      staff_email_purpose: row.staff_email_purpose == null ? null : String(row.staff_email_purpose),
       display_name: String(row.display_name),
       role: String(row.role) as UserRole,
       organization_id: String(row.organization_id),

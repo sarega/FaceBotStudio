@@ -3861,6 +3861,9 @@ export class PostgresAppDatabase implements AppDatabase {
         u.id,
         u.username,
         u.display_name,
+        u.staff_email,
+        u.pending_staff_email,
+        u.staff_email_purpose,
         u.is_active,
         u.created_at::text AS created_at,
         u.last_login_at::text AS last_login_at,
@@ -3875,6 +3878,32 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows.map((row) => this.mapAuthUserRow(row));
   }
 
+  async stageStaffEmail(userId: string, email: string, purpose: "invite" | "verify", tokenHash: string, expiresAt: string, retryBefore: string) {
+    const result = await this.pool.query(
+      `UPDATE users SET pending_staff_email = $2, staff_email_purpose = $3,
+         staff_email_token_hash = $4, staff_email_expires_at = $5
+       WHERE id = $1 AND is_active AND staff_email IS NULL
+         AND (staff_email_purpose = $3 OR (staff_email_purpose IS NULL AND $3 = 'verify'))
+         AND (staff_email_expires_at IS NULL OR staff_email_expires_at <= $6)`,
+      [userId, email, purpose, tokenHash, expiresAt, retryBefore],
+    );
+    return result.rowCount > 0;
+  }
+
+  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null) {
+    const result = await this.pool.query<{ id: string }>(
+      `UPDATE users SET staff_email = pending_staff_email, pending_staff_email = NULL,
+         staff_email_purpose = NULL, staff_email_token_hash = NULL, staff_email_expires_at = NULL,
+         password_hash = COALESCE($4, password_hash)
+       WHERE staff_email_token_hash = $1 AND staff_email_expires_at > $2 AND is_active
+         AND (($4::text IS NOT NULL AND staff_email_purpose = 'invite')
+           OR ($4::text IS NULL AND staff_email_purpose = 'verify' AND id = $3))
+       RETURNING id`,
+      [tokenHash, now, userId, passwordHash],
+    );
+    return result.rows[0]?.id ?? null;
+  }
+
   async createUser(input: CreateUserInput) {
     const username = normalizeUsername(input.username);
     const displayName = String(input.display_name || "").trim() || username;
@@ -3885,9 +3914,9 @@ export class PostgresAppDatabase implements AppDatabase {
     try {
       await client.query("BEGIN");
       await client.query(
-        `INSERT INTO users (id, username, display_name, password_hash, is_active)
-         VALUES ($1, $2, $3, $4, TRUE)`,
-        [userId, username, displayName, input.password_hash],
+        `INSERT INTO users (id, username, display_name, password_hash, is_active, pending_staff_email, staff_email_purpose)
+         VALUES ($1, $2, $3, $4, TRUE, $5, CASE WHEN $5::text IS NOT NULL THEN 'invite' END)`,
+        [userId, username, displayName, input.password_hash, input.invite_email ?? null],
       );
       await client.query(
         `INSERT INTO memberships (id, organization_id, user_id, role)
@@ -3920,7 +3949,10 @@ export class PostgresAppDatabase implements AppDatabase {
 
   async setUserActive(userId: string, isActive: boolean) {
     const result = await this.pool.query(
-      "UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+      `UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP,
+         staff_email_token_hash = CASE WHEN $1 THEN staff_email_token_hash END,
+         staff_email_expires_at = CASE WHEN $1 THEN staff_email_expires_at END
+       WHERE id = $2`,
       [isActive, String(userId || "").trim()],
     );
     return result.rowCount > 0;
@@ -3952,6 +3984,9 @@ export class PostgresAppDatabase implements AppDatabase {
         u.id,
         u.username,
         u.display_name,
+        u.staff_email,
+        u.pending_staff_email,
+        u.staff_email_purpose,
         u.is_active,
         u.created_at::text AS created_at,
         u.last_login_at::text AS last_login_at,
@@ -4590,6 +4625,9 @@ export class PostgresAppDatabase implements AppDatabase {
         u.id,
         u.username,
         u.display_name,
+        u.staff_email,
+        u.pending_staff_email,
+        u.staff_email_purpose,
         u.is_active,
         u.created_at::text AS created_at,
         u.last_login_at::text AS last_login_at,
@@ -4611,6 +4649,9 @@ export class PostgresAppDatabase implements AppDatabase {
     return {
       id: String(row.id),
       username: String(row.username),
+      staff_email: row.staff_email == null ? null : String(row.staff_email),
+      pending_staff_email: row.pending_staff_email == null ? null : String(row.pending_staff_email),
+      staff_email_purpose: row.staff_email_purpose == null ? null : String(row.staff_email_purpose),
       display_name: String(row.display_name),
       role: String(row.role) as UserRole,
       organization_id: String(row.organization_id),

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.8 - 2026-11-20
+
+- Invite staff by email from Team Access with a role and event assignments. The recipient verifies the address and sets their password using a one-time link that expires after 24 hours.
+- Existing staff can verify their email in My account. Staff continue signing in by username, and on-site Gate access keys use the existing flow.
+- Show pending invitations in Team Access and allow authorized managers to resend them. Disabling the account invalidates outstanding links.
+- Slip Review shows when a booking filter is active and lets staff return to the full queue. Restore the audit summary pagination parameters used by both database adapters.
+
 ## 0.11.7 - 2026-11-20
 
 - Synchronize Admin Notification Inbox read/archive state between devices using database-backed user/organizer/event-scoped acknowledgements, instead of browser localStorage as the source of truth.

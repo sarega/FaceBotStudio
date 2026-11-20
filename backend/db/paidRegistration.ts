@@ -1244,7 +1244,9 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<
   });
 }
 
-export function* readPaidEventSummary(eventId: string, includeActivity = false): PaidCommand<PaidRow | undefined> {
+export function* readPaidEventSummary(
+  eventId: string, includeActivity = false, activityLimit = 100, activityOffset = 0,
+): PaidCommand<PaidRow | undefined> {
   const [summary] = yield query(
     `WITH occupancy AS (
        SELECT booking_id,COUNT(*) AS attendees,

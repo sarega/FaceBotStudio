@@ -170,9 +170,10 @@ function ReviewForm({ review, path, apiFetch, onUpdated }: {
   </div>;
 }
 
-export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, summary, summaryError, onSummaryRefresh }: {
+export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, onFocusConsumed, summary, summaryError, onSummaryRefresh }: {
   eventId: string; apiFetch: ApiFetch; onOpenCustomer?:(customerId:string)=>void;
   focusBookingReference?:string;
+  onFocusConsumed: () => void;
   summary?: Record<string, unknown> | null;
   summaryError: boolean;
   onSummaryRefresh: () => void;
@@ -183,6 +184,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
   const [reference, setReference] = useState("");
+  const [referenceDraft, setReferenceDraft] = useState("");
   const [next, setNext] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
   const t = (th: string, en: string) => language === "th" ? th : en;
@@ -195,11 +197,20 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const [reportError, setReportError] = useState("");
   useEffect(()=>{
     if(focusBookingReference === undefined)return;
-    setOpen(true);setReference(focusBookingReference);setOffset(0);
+    setOpen(true);setReference(focusBookingReference);setReferenceDraft(focusBookingReference);setOffset(0);
+    onFocusConsumed();
   },[focusBookingReference,eventId]);
   const fetchRef = useRef(apiFetch);
   fetchRef.current = apiFetch;
   const prefix = `/api/events/${encodeURIComponent(eventId)}/paid-registration`;
+
+  function showFullQueue() {
+    setReference("");
+    setReferenceDraft("");
+    setOffset(0);
+    onFocusConsumed();
+    setRefresh((value) => value + 1);
+  }
 
   async function downloadReport() {
     if (!reportReady || reportBusy) return;
@@ -253,7 +264,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           ? t(`รอตรวจสลิป ${Number(summary.pending_review_bookings)} ใบจอง · ยังไม่ส่งสลิป ${Number(summary.awaiting_payment_attendees)} คน`,
               `${Number(summary.pending_review_bookings)} bookings to review · ${Number(summary.awaiting_payment_attendees)} attendees awaiting payment`)
           : t("ตรวจสลิปและยืนยันการชำระเงิน", "Review slips and confirm payments")} open={open} onToggle={()=>setOpen(!open)}
-        actions={<button type="button" className="registration-section-refresh" onClick={()=>setRefresh((value)=>value+1)}>Refresh</button>} />
+        actions={<button type="button" className="registration-section-refresh" onClick={showFullQueue}>{t("รีเฟรช", "Refresh")}</button>} />
       {open && <div className="registration-section-content space-y-3">
         <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-2">
           <label className="text-sm font-medium text-slate-900">{t("ช่วงรายงาน (เวลาไทย)", "Report period (Thailand time)")}
@@ -298,13 +309,20 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
         </details>
         <form className="flex flex-wrap items-end gap-2" onSubmit={(event) => {
           event.preventDefault();
-          setReference(String(new FormData(event.currentTarget).get("reference") || "").trim());
+          setReference(referenceDraft.trim());
           setOffset(0);
           setRefresh((value) => value + 1);
         }}>
-          <label>Booking reference<input name="reference" className={inputClass} maxLength={36} /></label>
+          <label>{t("เลขอ้างอิงใบจอง", "Booking reference")}<input name="reference" className={inputClass} maxLength={36}
+            value={referenceDraft} onChange={(event) => setReferenceDraft(event.target.value)} /></label>
           <button type="submit" className="rounded-lg border border-slate-300 px-3 py-2">Find booking</button>
         </form>
+        {reference && <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="break-all">{t("กำลังแสดงใบจอง", "Filtered to booking")} {reference}</span>
+          <button type="button" onClick={showFullQueue} className="rounded-lg border border-slate-300 px-3 py-2 font-semibold">
+            {t("กลับไปคิวทั้งหมด", "Show all reviews")}
+          </button>
+        </div>}
         {error && <p role="alert" className="text-red-700">{error}</p>}
         {!rows && !error && <p role="status">Loading reviews…</p>}
         {rows?.length === 0 && <p>{reference ? "No payable or pending booking found for this reference." : "No payment proofs awaiting review."}</p>}

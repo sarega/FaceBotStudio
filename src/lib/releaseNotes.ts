@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.8",
+    date: "2026-11-20",
+    title: "Staff invitations and clearer slip review",
+    features: [
+      "Invite staff by email with their role and event access",
+      "Verify staff email in Settings and continue signing in with a username",
+      "See the active booking filter and return to the full Slip Review queue",
+    ],
+  },
+  {
     version: "0.11.7",
     date: "2026-11-20",
     title: "Admin notifications sync across devices",

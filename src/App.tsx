@@ -116,6 +116,7 @@ import type { RegistrationChatBatch, RegistrationSortDirection, RegistrationSort
 const ReportsScreen = lazy(() => import("./features/reports/components/ReportsScreen").then(({ ReportsScreen }) => ({ default: ReportsScreen })));
 const SettingsScreen = lazy(() => import("./features/settings/components/SettingsScreen").then(({ SettingsScreen }) => ({ default: SettingsScreen })));
 const TestConsoleScreen = lazy(() => import("./features/test/components/TestConsoleScreen").then(({ TestConsoleScreen }) => ({ default: TestConsoleScreen })));
+const StaffEmailScreen = lazy(() => import("./features/auth/components/StaffEmailScreen").then(({ StaffEmailScreen }) => ({ default: StaffEmailScreen })));
 const TeamAccessPanel = lazy(() => import("./features/team/components/TeamAccessPanel").then(({ TeamAccessPanel }) => ({ default: TeamAccessPanel })));
 import { AdminEmailStatusResponse, AdminEmailTestResponse, AuthUser, ChannelAccountRecord, ChannelPlatform, ChannelPlatformDefinition, CheckinAccessSession, CheckinSessionRecord, EmbeddingPreviewResponse, EventDocumentChunkRecord, EventDocumentRecord, EventRecord, EventStatus, ImageAttachment, LlmUsageSummary, Message, OrganizerProfileRecord, PublicEventChatHistoryResponse, PublicEventChatResponse, PublicEventPageResponse, PublicEventRegistrationResponse, PublicInboxConversationDetailResponse, PublicInboxConversationStatus, PublicInboxConversationSummary, PublicInboxReplyResponse, RetrievalDebugResponse, Settings, UserRole } from "./types";
 import { EMAIL_TEMPLATE_DEFAULTS, EMAIL_TEMPLATE_KIND_OPTIONS, getEmailTemplateSettingKey, replaceEmailTemplateTokens, type EmailTemplateKind } from "./lib/emailTemplateCatalog";
@@ -3269,8 +3270,8 @@ export default function App() {
   const [teamMessage, setTeamMessage] = useState("");
   const [newUserUsername, setNewUserUsername] = useState("");
   const [newUserDisplayName, setNewUserDisplayName] = useState("");
-  const [newUserPassword, setNewUserPassword] = useState("");
-  const [newUserRole, setNewUserRole] = useState<UserRole>("checker");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("operator");
   const [newUserEventIds, setNewUserEventIds] = useState<string[]>([]);
   const [documents, setDocuments] = useState<EventDocumentRecord[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
@@ -9603,7 +9604,7 @@ export default function App() {
         body: JSON.stringify({
           username: newUserUsername,
           display_name: newUserDisplayName,
-          password: newUserPassword,
+          email: newUserEmail,
           role: newUserRole,
           event_ids: newUserEventIds,
         }),
@@ -9612,16 +9613,30 @@ export default function App() {
       if (!res.ok) {
         throw new Error(data?.error || "Failed to create user");
       }
-      setTeamMessage(`Created user ${data.user?.username || newUserUsername}`);
+      setTeamMessage(data.delivery_error || `Invitation sent to ${newUserEmail}`);
       setNewUserUsername("");
       setNewUserDisplayName("");
-      setNewUserPassword("");
-      setNewUserRole("checker");
+      setNewUserEmail("");
+      setNewUserRole("operator");
       setNewUserEventIds([]);
       await fetchTeamUsers();
-      window.setTimeout(() => setTeamMessage(""), 2500);
     } catch (err) {
       setTeamMessage(err instanceof Error ? err.message : "Failed to create user");
+    } finally {
+      setTeamLoading(false);
+    }
+  };
+
+  const handleResendInvite = async (userId: string) => {
+    setTeamMessage("");
+    setTeamLoading(true);
+    try {
+      const res = await apiFetch(`/api/auth/users/${encodeURIComponent(userId)}/resend-invite`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to resend invitation");
+      setTeamMessage("Invitation sent");
+    } catch (error) {
+      setTeamMessage(error instanceof Error ? error.message : "Failed to resend invitation");
     } finally {
       setTeamLoading(false);
     }
@@ -9947,6 +9962,10 @@ export default function App() {
     return <LoadingScreen />;
   }
 
+  if (currentPathname === "/staff/email") {
+    return <Suspense fallback={<LoadingScreen />}><StaffEmailScreen apiFetch={apiFetch} /></Suspense>;
+  }
+
   if (!isPublicEventRoute && authStatus === "unauthenticated") {
     return (
       <AuthScreen
@@ -10057,8 +10076,8 @@ export default function App() {
       onNewUserDisplayNameChange={setNewUserDisplayName}
       newUserUsername={newUserUsername}
       onNewUserUsernameChange={setNewUserUsername}
-      newUserPassword={newUserPassword}
-      onNewUserPasswordChange={setNewUserPassword}
+      newUserEmail={newUserEmail}
+      onNewUserEmailChange={setNewUserEmail}
       newUserRole={newUserRole}
       newUserEventIds={newUserEventIds}
       onNewUserRoleChange={(nextRole) => {
@@ -10079,6 +10098,7 @@ export default function App() {
       onUserAccessToggle={handleUserAccessToggle}
       onDeleteUser={handleDeleteUser}
       onCreateUser={handleCreateUser}
+      onResendInvite={handleResendInvite}
     />
   ) : null;
 
