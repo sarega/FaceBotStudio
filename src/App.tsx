@@ -1,3 +1,4 @@
+import { Bell } from "lucide-react";
 import { AttendeeLanguageSelect } from "./components/AttendeeLanguageSelect";
 import { AttendeeThemeSelect, type ThemeMode } from "./components/AttendeeThemeSelect";
 import { PaidRegistrationSettings } from "./features/registrations/components/PaidRegistrationSettings";
@@ -197,7 +198,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 
-type AppTab = "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
+type AppTab = "notifications" | "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -328,6 +329,7 @@ interface HelpContent {
 }
 
 const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
+  notifications: { title: "Notifications", summary: "Review recent booking and payment activity for the selected event.", points: [] },
   reports: {
     title: "Reports Help",
     summary: "Review event performance, check-in progress, direct-ticket inventory, and payment reconciliation in one view.",
@@ -812,6 +814,7 @@ const DIRTY_NAVIGATION_SECTION_LABELS: Record<DirtyNavigationSectionId, string> 
   agent: "Agent",
 };
 const APP_TAB_LABELS: Record<AppTab, string> = {
+  notifications: "Notifications",
   event: "Event",
   mail: "Mail",
   design: "Context",
@@ -3147,6 +3150,9 @@ export default function App() {
   const initialWorkspaceSession = readWorkspaceSession();
   const [activeTab, setActiveTab] = useState<AppTab>(initialWorkspaceSession.activeTab);
   const [customerFocusId,setCustomerFocusId]=useState("");
+  const [notificationData, setNotificationData] = useState<{ eventId: string; userId?: string; summary: Record<string, unknown> | null; failed?: boolean }>();
+  const [notificationRefresh, setNotificationRefresh] = useState(0);
+  const [notificationSeen, setNotificationSeen] = useState<{ key: string; time: number }>();
   const [reviewFocus,setReviewFocus]=useState<{eventId:string;reference:string}|null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -4768,6 +4774,43 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("meetrix-public-locale", attendeeLocale);
   }, [attendeeLocale]);
+  const canViewNotifications = !attendeeRoute && !checkinAccessMode && authStatus === "authenticated" &&
+    (role === "owner" || role === "admin") && !!selectedEventId;
+  const eventNotificationData = canViewNotifications && notificationData?.eventId === selectedEventId && notificationData.userId === authUser?.id ? notificationData : undefined;
+  const notificationSummary = eventNotificationData?.summary;
+  const notificationActivity = (notificationSummary?.activity ?? []) as {
+    id: string; reference: string; action: "create" | "submit_proof"; occurred_ms: number;
+  }[];
+  const notificationKey = `meetrix-notifications:${authUser?.id}:${selectedEventId}`;
+  const seenAt = notificationSeen?.key === notificationKey ? notificationSeen.time : 0;
+  const unreadNotifications = notificationActivity.filter((item) => item.occurred_ms > seenAt).length;
+  const notifyLabel = (th: string, en: string) => language === "th" ? th : en;
+  useEffect(() => {
+    setNotificationSeen({ key: notificationKey, time: Number(window.localStorage.getItem(notificationKey)) || 0 });
+  }, [notificationKey]);
+  useEffect(() => {
+    if (!canViewNotifications) return;
+    const request = new AbortController();
+    let timer: number;
+    const loadNotifications = async () => {
+      try {
+        const response = await apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}/paid-registration/summary?activity=1`,
+          { signal: request.signal });
+        if (!response.ok) throw new Error();
+        const { summary } = await response.json();
+        if (!request.signal.aborted) setNotificationData({ eventId: selectedEventId, userId: authUser?.id, summary });
+      } catch {
+        if (!request.signal.aborted) setNotificationData((current) => ({
+          eventId: selectedEventId, userId: authUser?.id,
+          summary: current?.eventId === selectedEventId && current.userId === authUser?.id ? current.summary : null, failed: true,
+        }));
+      } finally {
+        if (!request.signal.aborted) timer = window.setTimeout(loadNotifications, 30_000);
+      }
+    };
+    void loadNotifications();
+    return () => { request.abort(); window.clearTimeout(timer); };
+  }, [canViewNotifications, selectedEventId, authUser?.id, notificationRefresh]);
   const activeTheme = attendeeRoute ? attendeeTheme : themeMode;
 
   useEffect(() => {
@@ -10436,6 +10479,14 @@ export default function App() {
         header={(
           <AdminWorkspaceHeader
             language={language}
+            notificationControl={canViewNotifications && <button type="button"
+              aria-label={notifyLabel(`การแจ้งเตือน (${unreadNotifications} ใหม่)`, `Notifications (${unreadNotifications} new)`)}
+              aria-current={activeTab === "notifications" ? "page" : undefined}
+              onClick={() => setActiveTab("notifications")}
+              className="relative inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700">
+              <Bell className="h-4 w-4" />
+              {unreadNotifications > 0 && <span aria-hidden="true" className="absolute -right-1 -top-1 rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white">{unreadNotifications}</span>}
+            </button>}
             isAgentMobileFocusMode={isAgentMobileFocusMode}
             sidebarCollapsed={effectiveSidebarCollapsed}
             onToggleSidebarCollapsed={handleToggleSidebarCollapsed}
@@ -10925,6 +10976,43 @@ export default function App() {
             )
           )}
 
+          {activeTab === "notifications" && canViewNotifications && (
+            <section className="surface-panel space-y-4 rounded-2xl p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div><h1 className="text-xl font-bold text-slate-900">{notifyLabel("การแจ้งเตือน", "Notifications")}</h1>
+                  <p className="text-sm text-slate-600">{selectedEvent?.name}</p></div>
+                <button type="button" disabled={!unreadNotifications}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-50"
+                  onClick={() => {
+                    const time = notificationActivity[0]?.occurred_ms ?? seenAt;
+                    window.localStorage.setItem(notificationKey, String(time));
+                    setNotificationSeen({ key: notificationKey, time });
+                  }}>{notifyLabel("ทำเครื่องหมายว่าอ่านแล้ว", "Mark all as read")}</button>
+              </div>
+              {eventNotificationData?.failed && <p role="alert">{notifyLabel("โหลดการแจ้งเตือนไม่สำเร็จ", "Could not refresh notifications.")}</p>}
+              {notificationSummary && <button type="button" className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-semibold text-white"
+                onClick={() => { setReviewFocus({ eventId: selectedEventId, reference: "" }); setActiveTab("registrations"); }}>
+                {notifyLabel(`รอตรวจสลิป ${Number(notificationSummary.pending_review_bookings)} ใบจอง · ยังไม่ส่งสลิป ${Number(notificationSummary.awaiting_payment_attendees)} คน`,
+                  `${Number(notificationSummary.pending_review_bookings)} bookings to review · ${Number(notificationSummary.awaiting_payment_attendees)} attendees awaiting payment`)}
+              </button>}
+              {eventNotificationData && !eventNotificationData.failed && !notificationActivity.length &&
+                <p className="text-sm text-slate-600">{notifyLabel("ยังไม่มีกิจกรรมการจอง", "No booking activity yet.")}</p>}
+              <ul className="divide-y divide-slate-200">
+                {notificationActivity.map((entry) => <li key={entry.id}>
+                  <button type="button" className="flex w-full flex-wrap items-center justify-between gap-2 py-3 text-left text-sm"
+                    onClick={() => { setReviewFocus({ eventId: selectedEventId, reference: entry.reference }); setActiveTab("registrations"); }}>
+                    <span className="min-w-0 break-all text-slate-900">
+                      {entry.occurred_ms > seenAt && <span className="mr-2 text-blue-700">●</span>}
+                      {entry.action === "submit_proof" ? notifyLabel("ส่งสลิปแล้ว", "Payment slip submitted") : notifyLabel("ใบจองใหม่", "New booking")}
+                      <span className="block text-xs text-slate-600">{entry.reference}</span>
+                    </span>
+                    <time className="text-xs text-slate-600">{new Date(entry.occurred_ms).toLocaleString(language === "th" ? "th-TH" : "en-GB", { timeZone: "Asia/Bangkok" })}</time>
+                  </button>
+                </li>)}
+              </ul>
+            </section>
+          )}
+
           {activeTab === "registrations" && (
             <motion.div
               key="registrations"
@@ -10937,7 +11025,8 @@ export default function App() {
                 <>
                   <PaidRegistrationSettings language={language} key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
                   <PaidCouponManager key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
-                  <PaidReviewQueue language={language} key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
+                  <PaidReviewQueue summary={notificationSummary} summaryError={!!eventNotificationData?.failed}
+                    onSummaryRefresh={() => setNotificationRefresh((value) => value + 1)} language={language} key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
                     focusBookingReference={reviewFocus?.eventId===selectedEventId?reviewFocus.reference:undefined}
                     onOpenCustomer={(customerId)=>{setCustomerFocusId(customerId);setActiveTab("customers");}}/>
                 </>

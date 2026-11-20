@@ -15,7 +15,7 @@ type Booking = {
   total_due_minor: number;
   due_at: string;
 };
-type PreferenceField = { key: EditableSeminarKey; scope: "booking" | "attendee"; required: boolean; options?: string[] };
+type PreferenceField = { key: EditableSeminarKey; scope: "booking" | "attendee"; required: boolean; options?: string[]; surcharge?: { option: string; minor: number } };
 
 function PreferenceInput({ field, initial, path, attendeeId, onSaved }: {
   field: PreferenceField; initial?: string; path: string; attendeeId?: string; onSaved: (value: string) => void;
@@ -46,7 +46,7 @@ function PreferenceInput({ field, initial, path, attendeeId, onSaved }: {
         onChange={(event) => { setValue(event.target.value); setMessage(""); }}>
         <option value="">เลือกคำตอบ / Select an answer</option>
         {value && !field.options.includes(value) && <option value={value} disabled>{value}</option>}
-        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+        {field.options.map((option) => <option key={option} value={option}>{option}{field.surcharge?.option === option ? ` (+${baht(field.surcharge.minor)})` : ""}</option>)}
       </select> : <input type={paidSeminarFields[field.key].type === "date" ? "date" : "text"} className={inputClass} maxLength={500} required={field.required} value={value}
         onChange={(event) => { setValue(event.target.value); setMessage(""); }} />}
     </label>
@@ -58,8 +58,8 @@ function PreferenceInput({ field, initial, path, attendeeId, onSaved }: {
   </form>;
 }
 
-type Detail = { registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
-  coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; email?: string; phone?: string; registration_answers?: PaidSeminarAnswer[]; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
+type Detail = { registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; total_due_minor: number; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
+  coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; room_is_default?: boolean; email?: string; phone?: string; registration_answers?: PaidSeminarAnswer[]; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 const baht = (minor:number) => new Intl.NumberFormat("th-TH",{style:"currency",currency:"THB"}).format(minor/100);
 function Step({n,title,children,emphasis=false}:{n:number;title:string;children:ReactNode;emphasis?:boolean}) {
@@ -292,7 +292,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
       if (request.signal.aborted) return;
       setDetail(result);
       setPage((current) => current && { ...current, bookings: current.bookings.map((booking) =>
-        booking.id === selected.id ? { ...booking, status: result.status, due_at: result.due_at } : booking) });
+        booking.id === selected.id ? { ...booking, status: result.status, due_at: result.due_at, total_due_minor: result.total_due_minor } : booking) });
     }).catch(() => { if (!request.signal.aborted) setError("โหลดรายละเอียดการจองไม่สำเร็จ / Could not load booking details."); });
     return () => request.abort();
   }, [selected]);
@@ -415,10 +415,14 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                 {detail.preference_fields.some(({ scope }) => scope === "attendee") && detail.attendees.map((attendee) =>
                   <section key={attendee.id} className="space-y-2">
                     <h4 className="font-semibold">{attendee.first_name} {attendee.last_name}</h4>
-                    {detail.preference_fields?.filter(({ scope }) => scope === "attendee").map((field) =>
+                    {detail.preference_fields?.filter(({ scope, surcharge }) => scope === "attendee" && (!surcharge || !attendee.registration_answers?.some(
+                      ({ key, value }) => key === "accommodation" && value === "no"))).map((field) =>
                       <PreferenceInput key={field.key} field={field} initial={attendee.preference_answers?.[field.key]}
                         attendeeId={attendee.id}
-                        onSaved={(value) => showSavedAnswer(field.key, value, attendee.id)}
+                        onSaved={(value) => {
+                          if (field.surcharge) setSelected((current) => current?.id === booking.id ? { ...current } : current);
+                          else showSavedAnswer(field.key, value, attendee.id);
+                        }}
                         path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`} />)}
                   </section>)}
               </div>
@@ -440,7 +444,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                   </span>
                 )}
                 {(attendee.email || attendee.phone) && <p className="break-words text-slate-600">{[attendee.email, attendee.phone].filter(Boolean).join(" · ")}</p>}
-                {attendee.registration_answers?.map(({ key, label, value }) => <p className="text-slate-600" key={key}>{label} · {value}</p>)}
+                {attendee.registration_answers?.map(({ key, label, value }) => <p className="text-slate-600" key={key}>{label} · {value}{key === "room_preference" && attendee.room_is_default ? " (ค่าเริ่มต้น / Default)" : ""}</p>)}
                 {detail.status === "confirmed" && (
                   <a className="ml-2 text-blue-700 underline" target="_blank" rel="noopener noreferrer"
                     href={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/attendees/${encodeURIComponent(attendee.id)}/credential`}>
@@ -477,7 +481,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                   ? <ExternalPaymentInstructions eventId={booking.event_id} bookingId={booking.id}/>
                   : <div className="space-y-3">
                       <img src={"/api/customer/paid-bookings/"+encodeURIComponent(booking.event_id)+"/"+
-                        encodeURIComponent(booking.id)+"/payment-qr"} alt="Payment QR code"
+                        encodeURIComponent(booking.id)+"/payment-qr?v="+detail.version} alt="Payment QR code"
                         className="h-auto w-56 max-w-full rounded-xl bg-[#fff] p-3"/>
                       <p className="text-slate-700">สแกน QR แล้วตรวจชื่อบัญชีและยอดชำระก่อนโอน</p>
                     </div>}

@@ -17735,7 +17735,7 @@ async function startServer() {
   app.get("/api/events/:eventId/paid-registration/summary",
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       try {
-        const summary = await appDb.readPaidEventSummary(req.eventScope!.eventId, req.auth!.user.organization_id);
+        const summary = await appDb.readPaidEventSummary(req.eventScope!.eventId, req.auth!.user.organization_id, req.query.activity === "1");
         return res.set("Cache-Control", "private, no-store").json({ summary: summary ?? null });
       } catch (error) {
         if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });

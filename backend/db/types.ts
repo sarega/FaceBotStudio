@@ -1085,7 +1085,7 @@ export interface AppDatabase {
   confirmPaidMessengerDraft(input: PaidMessengerConfirmInput): Promise<PaidBookingReceipt>;
   readPaidMessengerStatus(eventId: string, pageId: string, senderId: string, reference: string): Promise<PaidMessengerStatus | undefined>;
   readPaidMessengerCustomer(eventId: string, pageId: string, senderId: string): Promise<string | undefined>;
-  readPaidEventSummary(eventId: string, organizationId: string): Promise<PaidRow | undefined>;
+  readPaidEventSummary(eventId: string, organizationId: string, includeActivity?: boolean): Promise<PaidRow | undefined>;
   listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number): Promise<PaidRow[]>;
   readPaidAdminBooking(eventId: string, organizationId: string, reference: string): Promise<PaidRow | undefined>;
   managePaidBooking(input: PaidAdminAction): Promise<{ status: string; payment_status: string; version: number; due_at: string }>;

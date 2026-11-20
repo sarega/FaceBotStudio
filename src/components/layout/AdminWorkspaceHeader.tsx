@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Bot,
   CalendarRange,
@@ -16,6 +17,7 @@ type BooleanStateSetter = (value: boolean | ((current: boolean) => boolean)) => 
 
 type AdminWorkspaceHeaderProps = {
   language: AppLanguage;
+  notificationControl?: ReactNode;
   isAgentMobileFocusMode: boolean;
   sidebarCollapsed: boolean;
   onToggleSidebarCollapsed: () => void;
@@ -37,7 +39,7 @@ type AdminWorkspaceHeaderProps = {
 };
 
 export function AdminWorkspaceHeader({
-  language,
+  language, notificationControl,
   isAgentMobileFocusMode,
   sidebarCollapsed,
   onToggleSidebarCollapsed,
@@ -95,6 +97,7 @@ export function AdminWorkspaceHeader({
               </div>
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-2">
+              {notificationControl}
               {selectedEvent && (
                 <div className="hidden items-center gap-1.5 xl:flex">
                   <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>

@@ -212,6 +212,7 @@ export function RegistrationsScreen({
        registrationStatusFilter==="registered" && person.checked_in_ms==null &&
          ["confirmed","awaiting_payment","verification_pending"].includes(person.booking_state)));
   },[paidPeople,registrationListQuery,registrationStatusFilter]);
+  const baht = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
   const paidReserved=paidSummary?Number(paidSummary.confirmed_attendees)+Number(paidSummary.held_attendees):0;
   const shownOccupied=activeAttendeeCount+paidReserved;
   const shownCapacity=paidSummary?Number(paidSummary.capacity):registrationCapacity.limit;
@@ -638,6 +639,24 @@ export function RegistrationsScreen({
             </div>
             <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
           </div>
+          {paidSummary && <dl className="mb-3 grid grid-cols-2 gap-2">
+            {[
+              { label: language === "th" ? "ยอดรวมตามใบจอง" : "Total booking value",
+                minor: Number(paidSummary.accepted_minor) + Number(paidSummary.unsettled_due_minor) },
+              { label: language === "th" ? "ตรวจยืนยันแล้ว" : "Verified payments", minor: Number(paidSummary.accepted_minor) },
+              { label: language === "th" ? "ยอดตามสลิปรอตรวจ" : "Slip amounts under review", minor: Number(paidSummary.pending_slip_minor) },
+              { label: language === "th" ? "ยอดใบจองรอชำระ" : "Awaiting payment", minor: Number(paidSummary.awaiting_payment_due_minor) },
+              ...(Number(paidSummary.slip_shortfall_minor) > 0 ? [{
+                label: language === "th" ? "ยอดขาดตามสลิปรอตรวจ" : "Shortfall on slips under review",
+                minor: Number(paidSummary.slip_shortfall_minor),
+              }] : []),
+            ].map(({ label, minor }) => (
+              <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                <dt className="text-xs text-slate-600">{label}</dt>
+                <dd className="break-words text-base font-bold tabular-nums text-slate-900">{baht.format(minor / 100)}</dd>
+              </div>
+            ))}
+          </dl>}
           {paidSummary&&<div className="mb-3 grid grid-cols-3 gap-2 text-center text-xs">
             <div className="registration-booking-stat registration-booking-stat-unpaid rounded-lg p-2"><strong className="block text-lg">{paidSummary.awaiting_payment_bookings}</strong>Booking รอชำระ</div>
             <div className="registration-booking-stat registration-booking-stat-review rounded-lg p-2"><strong className="block text-lg">{paidSummary.pending_review_bookings}</strong>Booking รอตรวจสลิป</div>

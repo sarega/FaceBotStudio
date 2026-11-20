@@ -1,3 +1,4 @@
+import { paidSeminarFields } from "../../../../backend/paidSeminarFields";
 import type { PaidRosterPerson } from "./paidRosterTypes";
 
 type Props = {
@@ -7,6 +8,8 @@ type Props = {
 };
 export function PaidAttendeeRoster({people,total,onRefresh}:Props) {
   if(!total)return null;
+  const money = new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB" });
+  const format = (minor: number) => money.format(minor / 100);
   return <section className="paid-attendee-roster border-b border-emerald-200 p-3">
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-sm font-bold text-emerald-900">
@@ -16,11 +19,11 @@ export function PaidAttendeeRoster({people,total,onRefresh}:Props) {
         className="text-xs font-semibold text-emerald-700 underline">Refresh</button>
     </div>
     <div className="max-h-[30rem] overflow-auto rounded-lg border border-emerald-200">
-      <table className="w-full min-w-[600px] text-left text-xs">
+      <table className="w-full min-w-[780px] text-left text-xs">
         <thead className="sticky top-0 text-emerald-950"><tr>
           <th className="px-3 py-2">ผู้เข้าร่วม</th><th className="px-3 py-2">ประเภท</th>
           <th className="px-3 py-2">ผู้จอง</th><th className="px-3 py-2">Booking</th>
-          <th className="px-3 py-2">สถานะ</th>
+          <th className="px-3 py-2">สถานะและยอด</th><th className="px-3 py-2">รายละเอียดลงทะเบียน</th>
         </tr></thead>
         <tbody className="divide-y divide-slate-100">
           {people.map(person=><tr key={person.attendee_id}>
@@ -40,6 +43,21 @@ export function PaidAttendeeRoster({people,total,onRefresh}:Props) {
                 person.booking_state==="awaiting_payment"?"รอชำระ":
                 person.booking_state==="expired"?"หมดอายุ":
                 person.booking_state==="cancelled"?"ยกเลิก":"ต้องตรวจสอบ"}
+              <span className="block font-normal tabular-nums">{format(person.unit_minor)} ต่อคน</span>
+              <span className="block whitespace-nowrap font-normal tabular-nums">{format(person.booking_total_minor)} ทั้งใบจอง</span>
+              {person.pending_slip_minor != null && <span className="block font-normal tabular-nums">ตามสลิป {format(person.pending_slip_minor)}</span>}
+            </td>
+            <td className="px-3 py-2">
+              {Object.keys(person.answers ?? {}).length || Object.keys(person.booking_answers ?? {}).length ? (
+                <details>
+                  <summary className="cursor-pointer whitespace-nowrap font-semibold text-blue-700">ดูคำตอบ</summary>
+                  <dl className="space-y-1 pt-1">
+                    {Object.entries({ ...person.booking_answers, ...person.answers }).map(([key, value]) =>
+                      <div key={key}><dt className="font-semibold">{paidSeminarFields[key as keyof typeof paidSeminarFields]?.label ?? key}</dt>
+                        <dd className="break-words text-slate-600">{value}</dd></div>)}
+                  </dl>
+                </details>
+              ) : "—"}
             </td>
           </tr>)}
         </tbody>

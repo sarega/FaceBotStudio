@@ -447,6 +447,18 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(readiness.checks.slip_encryption_ready, true);
     assert.equal(readiness.checks.event_chat_enabled, true);
     assert.equal((await fetch(eventPrefix + "/readiness", { headers: headers("test-owner") })).status, 401);
+    const activityResponse = await fetch(eventPrefix + "/summary?activity=1", { headers: staffHeaders });
+    assert.equal(activityResponse.status, 200);
+    const { summary: activitySummary } = await activityResponse.json();
+    assert.equal(activitySummary.pending_review_bookings, 1);
+    assert.equal(activitySummary.pending_slip_minor, "50000");
+    assert.equal(activitySummary.awaiting_payment_due_minor, "0");
+    assert.equal(activitySummary.slip_shortfall_minor, "0");
+    assert.equal(activitySummary.awaiting_payment_attendees, 0);
+    assert.ok(activitySummary.activity.some((item: { action: string; reference: string }) =>
+      item.action === "submit_proof" && item.reference === booking.reference));
+    assert.ok(activitySummary.activity.some((item: { action: string; reference: string }) =>
+      item.action === "create" && item.reference === booking.reference));
     const queue = await fetch(`${eventPrefix}/review-queue`, { headers: staffHeaders });
     assert.equal(queue.status, 200);
     assert.equal((await queue.json()).reviews[0].attempt_id, pending.attempt_id);
@@ -656,6 +668,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(summary.available_attendees, 0);
     assert.equal(summary.accepted_minor, "75000");
     assert.equal(summary.unsettled_due_minor, "50000");
+    assert.equal(summary.awaiting_payment_due_minor, "50000");
     const staffLookup = await fetch(`${eventPrefix}/bookings/by-reference/${manualBooking.reference}`, { headers: staffHeaders });
     assert.equal(staffLookup.status, 200);
     assert.equal((await staffLookup.json()).booking.id, manualBooking.id);
@@ -848,6 +861,8 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
         { key: "transport", scope: "booking", required: true, options: ["Shuttle", "Self-arranged"] },
         { key: "food", scope: "attendee", required: true, options: ["มังสวิรัติ", "Regular"] },
         { key: "arrival", scope: "attendee", required: false },
+        { key: "room_preference", scope: "attendee", required: true, options: ["Shared", "Single"],
+          surcharge: { option: "Single", minor: 130000 } },
       ]));
     } finally {
       preferencesFixture.close();
@@ -872,6 +887,24 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(updatedPreferences.total_due_minor, freeDetails.total_due_minor);
     assert.deepEqual(updatedPreferences.coupon, freeDetails.coupon);
     assert.equal(updatedPreferences.attendees[0].registration_answers.find(({ key }: { key: string }) => key === "arrival").value, arrival.value);
+    assert.equal(updatedPreferences.attendees[0].room_is_default, true);
+    assert.equal(updatedPreferences.attendees[0].registration_answers.find(({ key }: { key: string }) => key === "room_preference").value, "Shared");
+    const room = { key: "room_preference", attendee_id: freeDetails.attendees[0].id, value: "Single" };
+    assert.equal((await updatePreference("test-owner", room)).status, 409);
+    const readRecovery = async () => (await fetch(recoveryPath, { headers: headers("test-owner") })).json();
+    const beforeRoom = await readRecovery();
+    const changeRoom = (value: string) => fetch(recoveryPath + "/preferences", {
+      method: "PATCH", headers: { ...headers("test-owner"), "Content-Type": "application/json", "x-csrf-token": "fixture-csrf" },
+      body: JSON.stringify({ ...room, attendee_id: beforeRoom.attendees[0].id, value }),
+    });
+    assert.equal((await changeRoom("Single")).status, 204);
+    const singleRoom = await readRecovery();
+    assert.equal(singleRoom.total_due_minor, beforeRoom.total_due_minor + 130000);
+    assert.equal(singleRoom.version, beforeRoom.version + 1);
+    assert.equal((await changeRoom("Single")).status, 204);
+    assert.equal((await readRecovery()).total_due_minor, singleRoom.total_due_minor);
+    assert.equal((await changeRoom("Shared")).status, 204);
+    assert.equal((await readRecovery()).total_due_minor, beforeRoom.total_due_minor);
     await db.upsertSettings({ event_date: "2000-01-01T10:00", event_timezone: "Asia/Bangkok" }, newExternalEvent.id);
     assert.equal((await updatePreference("test-owner", food)).status, 409);
     const closedPreferences = await (await fetch(ownerFreeUrl, { headers: headers("test-owner") })).json();

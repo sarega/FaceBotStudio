@@ -170,9 +170,12 @@ function ReviewForm({ review, path, apiFetch, onUpdated }: {
   </div>;
 }
 
-export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer,focusBookingReference }: {
+export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, summary, summaryError, onSummaryRefresh }: {
   eventId: string; apiFetch: ApiFetch; onOpenCustomer?:(customerId:string)=>void;
   focusBookingReference?:string;
+  summary?: Record<string, unknown> | null;
+  summaryError: boolean;
+  onSummaryRefresh: () => void;
   language: "th" | "en";
 }) {
   const [open, setOpen] = useState(false);
@@ -180,8 +183,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer,fo
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
   const [reference, setReference] = useState("");
-  const [summary, setSummary] = useState<Record<string, string | number>>();
-  const [summaryError, setSummaryError] = useState(false);
   const [next, setNext] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
   const t = (th: string, en: string) => language === "th" ? th : en;
@@ -193,7 +194,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer,fo
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState("");
   useEffect(()=>{
-    if(!focusBookingReference)return;
+    if(focusBookingReference === undefined)return;
     setOpen(true);setReference(focusBookingReference);setOffset(0);
   },[focusBookingReference,eventId]);
   const fetchRef = useRef(apiFetch);
@@ -223,16 +224,8 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer,fo
   }
 
   useEffect(() => {
-    if (!open) return;
-    const request = new AbortController();
-    setSummaryError(false);
-    void fetchRef.current(`${prefix}/summary`, { signal: request.signal }).then(async (response) => {
-      if (!response.ok) throw new Error();
-      const result = await response.json();
-      if (!request.signal.aborted) setSummary(result.summary ?? undefined);
-    }).catch(() => { if (!request.signal.aborted) setSummaryError(true); });
-    return () => request.abort();
-  }, [open, prefix, refresh]);
+    if (refresh > 0) onSummaryRefresh();
+  }, [refresh]);
 
   useEffect(() => {
     if (!open) return;
@@ -256,7 +249,10 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer,fo
   return (
     <section id="paid-review-queue" className="registration-admin-section registration-admin-review">
       <RegistrationSectionHeader tone="review" title="Slip Review"
-        subtitle="ตรวจสลิป · ยืนยันการชำระเงิน" open={open} onToggle={()=>setOpen(!open)}
+        subtitle={summary
+          ? t(`รอตรวจสลิป ${Number(summary.pending_review_bookings)} ใบจอง · ยังไม่ส่งสลิป ${Number(summary.awaiting_payment_attendees)} คน`,
+              `${Number(summary.pending_review_bookings)} bookings to review · ${Number(summary.awaiting_payment_attendees)} attendees awaiting payment`)
+          : t("ตรวจสลิปและยืนยันการชำระเงิน", "Review slips and confirm payments")} open={open} onToggle={()=>setOpen(!open)}
         actions={<button type="button" className="registration-section-refresh" onClick={()=>setRefresh((value)=>value+1)}>Refresh</button>} />
       {open && <div className="registration-section-content space-y-3">
         <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-2">
@@ -286,13 +282,13 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer,fo
         {summaryError && <p role="alert" className="text-red-700">Could not load the registration totals.</p>}
         {summary && <div className="flex flex-wrap gap-2 text-sm">
           <span className="rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-800">
-            รอตรวจสลิป {summary.pending_review_bookings ?? 0} รายการ
+            รอตรวจสลิป {Number(summary.pending_review_bookings ?? 0)} รายการ
           </span>
           <span className="rounded-lg bg-emerald-50 px-3 py-2 font-semibold text-emerald-800">
-            ยืนยันแล้ว {summary.confirmed_bookings ?? 0} รายการ
+            ยืนยันแล้ว {Number(summary.confirmed_bookings ?? 0)} รายการ
           </span>
           <span className="rounded-lg bg-slate-100 px-3 py-2 text-slate-700">
-            ผู้เข้าร่วม {summary.attendees ?? 0} คน
+            ผู้เข้าร่วม {Number(summary.attendees ?? 0)} คน
           </span>
         </div>}
         <details className="rounded-lg border border-slate-200 p-3">
