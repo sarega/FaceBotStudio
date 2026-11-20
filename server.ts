@@ -18726,17 +18726,18 @@ async function startServer() {
     "/api/reports/summary",
     requireRoles(["owner", "admin", "operator", "viewer"]),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
-    async (req, res) => {
+    async (req: AuthenticatedRequest, res) => {
       try {
         const eventId = getRequestedEventId(req);
         const event = await appDb.getEventById(eventId);
         if (!event) return res.status(404).json({ error: "Event not found" });
 
-        const [registrationCountRows, registrationActivity, seats, tickets] = await Promise.all([
+        const [registrationCountRows, registrationActivity, seats, tickets, paidRegistration] = await Promise.all([
           appDb.getRegistrationCountsByEvent(eventId),
           appDb.getRegistrationActivityByDay(eventId, 14),
           appDb.listDirectSeats(eventId),
           appDb.listDirectTickets(eventId),
+          appDb.readPaidRegistrationReport(eventId, req.auth!.user.organization_id),
         ]);
 
         const byPerformance = new Map<string, { id: string; label: string; tickets: number; issued: number; checked_in: number; revenue_verified: number }>();
@@ -18781,7 +18782,7 @@ async function startServer() {
         const checkedInRegistrations = registrationCounts.checked_in;
         const checkInRate = activeRegistrations > 0 ? Math.round((checkedInRegistrations / activeRegistrations) * 100) : 0;
 
-        return res.json({
+        return res.set("Cache-Control", "private, no-store").json({
           generated_at: new Date().toISOString(),
           event: { id: event.id, name: event.name, event_date: event.event_date || null, event_end_date: event.event_end_date || null },
           registrations: {
@@ -18793,6 +18794,7 @@ async function startServer() {
             check_in_rate: checkInRate,
             by_day: registrationActivity,
           },
+          paid_registration: paidRegistration ?? null,
           direct_tickets: {
             seats: seatCounts,
             total: tickets.length,
@@ -19993,10 +19995,13 @@ async function startServer() {
       const organizationId=req.auth!.user.organization_id;
       const [rows,paid,paidSummary,event] = await Promise.all([
         appDb.exportRegistrations(eventId),
-        appDb.listPaidAttendeeRoster(eventId,organizationId),
+        appDb.listPaidAttendeeRoster(eventId,organizationId,10001),
         appDb.readPaidEventSummary(eventId,organizationId),
         appDb.getEventById(eventId),
       ]);
+      if (paid.length > 10000) {
+        return res.status(422).json({ error: "CSV export supports up to 10,000 paid attendees" });
+      }
       const eventName = (await appDb.getSettingValue("event_name", eventId)) || event?.name || "event";
       const filename = buildRegistrationExportFilename(eventName);
       const csvWithBOM = buildUnifiedAttendeesCsvWithBom(eventName,rows,paid);

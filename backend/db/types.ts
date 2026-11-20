@@ -1101,6 +1101,7 @@ export interface AppDatabase {
   getAdminNotificationState(organizationId:string,userId:string,eventId:string):Promise<AdminNotificationStateRow>;
   mutateAdminNotificationState(organizationId:string,userId:string,eventId:string,
     input:AdminNotificationMutation):Promise<AdminNotificationStateRow>;
+  readPaidRegistrationReport(eventId: string, organizationId: string): Promise<PaidRow | undefined>;
   readPaidEventSummary(eventId: string, organizationId: string, includeActivity?: boolean,
     activityLimit?:number, activityOffset?:number): Promise<PaidRow | undefined>;
   listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number): Promise<PaidRow[]>;

@@ -11367,7 +11367,8 @@ export default function App() {
           )}
           {activeTab === "reports" && (
             <motion.div key="reports" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <ReportsScreen eventId={selectedEventId} apiFetch={apiFetch} canExportDirectTickets={canManageRegistrations} language={language} />
+              <ReportsScreen key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch} canExportDirectTickets={canManageRegistrations}
+                canExportPaidTransfers={canManageUsers} language={language} />
             </motion.div>
           )}
           {activeTab === "direct_tickets" && (

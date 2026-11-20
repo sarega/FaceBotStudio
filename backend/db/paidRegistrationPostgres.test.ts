@@ -76,6 +76,12 @@ test("PostgreSQL paid migrations preserve legacy rows and serialize group holds,
     assert.deepEqual(scans.map((scan) => scan?.already_checked_in).sort(), [false, true]);
     assert.equal((await db.listNotificationDeliveries({ related_type: "paid_booking", related_id: booking.id })).length, 1);
     assert.equal((await db.readPaidEventSummary(event.id, "org_default"))?.accepted_minor, "50000");
+    const report = await db.readPaidRegistrationReport(event.id, "org_default");
+    assert.equal(report?.confirmed_attendees, 2);
+    const reportDays = report?.by_day as Array<{ registrations: number; checked_in: number }>;
+    assert.equal(reportDays.reduce((sum, day) => sum + day.registrations, 0), 2);
+    assert.equal(reportDays.reduce((sum, day) => sum + day.checked_in, 0), 1);
+    await assert.rejects(db.readPaidRegistrationReport(event.id, "other-org"), /event_not_found/);
     const candidates = await Promise.all(["Cross-event settlement A", "Cross-event settlement B"].map(async (name) => {
       const candidate = await db.createEvent({ name, organizer_id: "org_default" });
       await db.updateEvent(candidate.id, { status: "active" });

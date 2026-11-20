@@ -675,9 +675,48 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       name:"Free Legacy Registration Event",organizer_id:"org_default",
     });
     const legacyFixture=new Database(database);
-    legacyFixture.prepare("INSERT INTO registrations (id,event_id,first_name,last_name) VALUES (?,?,?,?)")
-      .run("REG-LEGACY-EXPORT",legacyRosterEvent.id,"Legacy","Guest");
+    legacyFixture.prepare("INSERT INTO registrations (id,event_id,first_name,last_name,status) VALUES (?,?,?,?,?)")
+      .run("REG-LEGACY-EXPORT",legacyRosterEvent.id,"Legacy","Guest","checked-in");
     legacyFixture.close();
+    const reportFor = (eventId: string) => fetch(
+      `${origin}/api/reports/summary?event_id=${eventId}`, { headers: staffHeaders },
+    );
+    const paidReportResponse = await reportFor(event.id);
+    assert.equal(paidReportResponse.status, 200, await paidReportResponse.clone().text());
+    const paidReport = await paidReportResponse.json();
+    assert.equal(paidReport.registrations.total, 0);
+    assert.equal(paidReport.paid_registration.confirmed_attendees, summary.confirmed_attendees);
+    assert.equal(paidReport.paid_registration.checked_in_attendees, 1);
+    assert.equal(paidReport.paid_registration.accepted_minor, summary.accepted_minor);
+    assert.equal(paidReport.paid_registration.by_day.reduce((sum: number, day: { registrations: number }) => sum + day.registrations, 0), 5);
+    assert.equal(paidReport.paid_registration.by_day.reduce((sum: number, day: { checked_in: number }) => sum + day.checked_in, 0), 1);
+    assert.equal(paidReport.direct_tickets.total, 0);
+
+    const performance = await db.upsertDirectPerformance({ event_id: legacyRosterEvent.id, code: "R1", title: "Round 1", starts_at: "2026-11-20T18:00:00+07:00" });
+    const [seat] = await db.importDirectSeats(legacyRosterEvent.id, performance.id, [
+      { zone: "A", row_label: "1", seat_label: "01" },
+    ]);
+    const direct = await db.createDirectTicket({
+      event_id: legacyRosterEvent.id, performance_id: performance.id, seat_id: seat.id,
+      ticket_class: "General", holder_name: "Direct Ticket Guest", payment_required: false,
+    });
+    assert.ok(direct.ticket);
+    const freeReportResponse = await reportFor(legacyRosterEvent.id);
+    assert.equal(freeReportResponse.status, 200, await freeReportResponse.clone().text());
+    const freeReport = await freeReportResponse.json();
+    assert.equal(freeReport.paid_registration, null);
+    assert.equal(freeReport.registrations.total, 1);
+    assert.equal(freeReport.registrations.active, 1);
+    assert.equal(freeReport.registrations.check_in_rate, 100);
+    assert.equal(freeReport.direct_tickets.total, 1);
+    assert.equal(freeReport.direct_tickets.seats.issued, 1);
+    assert.equal(freeReport.direct_tickets.by_performance[0].issued, 1);
+    const directExport = await fetch(
+      `${origin}/api/direct-ticketing/tickets/export?event_id=${legacyRosterEvent.id}`, { headers: staffHeaders },
+    );
+    assert.equal(directExport.status, 200);
+    assert.match(await directExport.text(), /Direct Ticket Guest/);
+
     const globalRoster=await fetch(origin+"/api/admin/customers/attendee-roster.csv",
       {headers:staffHeaders});
     assert.equal(globalRoster.status,200,await globalRoster.clone().text());

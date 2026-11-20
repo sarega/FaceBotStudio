@@ -1,3 +1,4 @@
+import { PaidTransferReportExport } from "../../reports/components/PaidTransferReportExport";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidBookingOperations } from "./PaidBookingOperations";
 import { useEffect, useRef, useState } from "react";
@@ -188,13 +189,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const [next, setNext] = useState<number | null>(null);
   const [refresh, setRefresh] = useState(0);
   const t = (th: string, en: string) => language === "th" ? th : en;
-  const [reportDate, setReportDate] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date()));
-  const [reportScope, setReportScope] = useState("day");
-  const [reportEnd, setReportEnd] = useState(reportDate);
-  const reportReady = reportScope === "all" || (!!reportDate &&
-    (reportScope === "day" || (!!reportEnd && reportEnd >= reportDate)));
-  const [reportBusy, setReportBusy] = useState(false);
-  const [reportError, setReportError] = useState("");
   useEffect(()=>{
     if(focusBookingReference === undefined)return;
     setOpen(true);setReference(focusBookingReference);setReferenceDraft(focusBookingReference);setOffset(0);
@@ -210,28 +204,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
     setOffset(0);
     onFocusConsumed();
     setRefresh((value) => value + 1);
-  }
-
-  async function downloadReport() {
-    if (!reportReady || reportBusy) return;
-    setReportBusy(true);
-    setReportError("");
-    try {
-      const params = new URLSearchParams(reportScope === "all" ? { all: "1" } :
-        reportScope === "range" ? { from: reportDate, to: reportEnd } : { date: reportDate });
-      const response = await apiFetch(`${prefix}/daily-transfer-report?${params}`);
-      if (!response.ok) throw new Error(t("สร้างรายงานไม่สำเร็จ กรุณาลองอีกครั้ง", "Could not generate the report. Try again."));
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || "transfers.pdf";
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (error) {
-      setReportError(error instanceof Error ? error.message : t("สร้างรายงานไม่สำเร็จ", "Could not generate the report."));
-    } finally {
-      setReportBusy(false);
-    }
   }
 
   useEffect(() => {
@@ -266,30 +238,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           : t("ตรวจสลิปและยืนยันการชำระเงิน", "Review slips and confirm payments")} open={open} onToggle={()=>setOpen(!open)}
         actions={<button type="button" className="registration-section-refresh" onClick={showFullQueue}>{t("รีเฟรช", "Refresh")}</button>} />
       {open && <div className="registration-section-content space-y-3">
-        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-2">
-          <label className="text-sm font-medium text-slate-900">{t("ช่วงรายงาน (เวลาไทย)", "Report period (Thailand time)")}
-            <select className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5"
-              value={reportScope} onChange={(event) => setReportScope(event.target.value)}>
-              <option value="day">{t("วันเดียว", "Single day")}</option>
-              <option value="range">{t("ช่วงวันที่", "Date range")}</option>
-              <option value="all">{t("ทั้งอีเวนต์", "Entire event")}</option>
-            </select>
-          </label>
-          {reportScope !== "all" && <label className="text-sm font-medium text-slate-900">
-            {reportScope === "range" ? t("ตั้งแต่วันที่โอน", "From") : t("วันที่โอน", "Transfer date")}
-            <input type="date" className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5"
-              value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
-          </label>}
-          {reportScope === "range" && <label className="text-sm font-medium text-slate-900">{t("ถึงวันที่โอน", "Through")}
-            <input type="date" min={reportDate} className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5"
-              value={reportEnd} onChange={(event) => setReportEnd(event.target.value)} />
-          </label>}
-          <button type="button" disabled={reportBusy || !reportReady} onClick={() => void downloadReport()}
-            className="rounded-lg bg-blue-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
-            {reportBusy ? t("กำลังสร้างรายงาน…", "Generating report…") : t("สร้าง PDF ตรวจยอดโอน", "Download transfer report PDF")}
-          </button>
-        </div>
-        {reportError && <p role="alert" className="text-red-700">{reportError}</p>}
+        <PaidTransferReportExport key={eventId} eventId={eventId} apiFetch={apiFetch} language={language} />
         {summaryError && <p role="alert" className="text-red-700">Could not load the registration totals.</p>}
         {summary && <div className="flex flex-wrap gap-2 text-sm">
           <span className="rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-800">

@@ -1195,7 +1195,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
  * Never duplicate paid attendees into legacy registrations storage.
  */
 export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<PaidRow[]> {
-  const safeLimit=Math.min(Math.max(Math.trunc(limit)||10000,1),10000);
+  const safeLimit=Math.min(Math.max(Math.trunc(limit)||10000,1),10001);
   const rows=yield query(
     `SELECT a.id AS attendee_id,a.booking_id,a.event_id,a.ordinal,a.first_name,a.last_name,
        a.category_id,a.category_label,a.unit_minor,a.contact_json AS attendee_contact_json,
@@ -1242,6 +1242,32 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<
       attendee_email:String(contact.email||""),attendee_phone:String(contact.phone||""),
       answers,booking_answers:bookingAnswers};
   });
+}
+
+export function* readPaidRegistrationReport(eventId: string): PaidCommand<PaidRow | undefined> {
+  const summary = yield* readPaidEventSummary(eventId);
+  if (!summary) return;
+
+  // Bucket epoch milliseconds by Thailand calendar day (UTC+07:00) on both adapters.
+  const days = yield query(
+    `WITH activity AS (
+       SELECT (b.created_ms+25200000)/86400000 AS day, COUNT(*) AS booked, 0 AS checked_in
+       FROM paid_bookings b JOIN paid_attendees a ON a.booking_id=b.id AND a.event_id=b.event_id
+       WHERE b.event_id=? GROUP BY (b.created_ms+25200000)/86400000
+       UNION ALL
+       SELECT (a.checked_in_ms+25200000)/86400000 AS day, 0 AS booked, COUNT(*) AS checked_in
+       FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
+       WHERE a.event_id=? AND a.checked_in_ms IS NOT NULL AND a.cancelled_ms IS NULL AND b.state='confirmed'
+       GROUP BY (a.checked_in_ms+25200000)/86400000
+     )
+     SELECT day, SUM(booked) AS registrations, SUM(checked_in) AS checked_in
+     FROM activity GROUP BY day ORDER BY day DESC LIMIT 14`, eventId, eventId,
+  );
+  return { ...summary, by_day: days.reverse().map((day) => ({
+    date: new Date(Number(day.day) * 86_400_000).toISOString().slice(0, 10),
+    registrations: Number(day.registrations),
+    checked_in: Number(day.checked_in),
+  })) };
 }
 
 export function* readPaidEventSummary(
