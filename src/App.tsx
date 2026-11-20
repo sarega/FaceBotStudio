@@ -1,3 +1,8 @@
+import {
+  archiveNotifications, blankNotificationState, markNotificationRead,
+  notificationIsArchived, notificationIsUnread, parseNotificationState, restoreNotifications,
+  type NotificationState,
+} from "./features/notifications/notificationState";
 import { Bell } from "lucide-react";
 import { AttendeeLanguageSelect } from "./components/AttendeeLanguageSelect";
 import { AttendeeThemeSelect, type ThemeMode } from "./components/AttendeeThemeSelect";
@@ -3152,7 +3157,15 @@ export default function App() {
   const [customerFocusId,setCustomerFocusId]=useState("");
   const [notificationData, setNotificationData] = useState<{ eventId: string; userId?: string; summary: Record<string, unknown> | null; failed?: boolean }>();
   const [notificationRefresh, setNotificationRefresh] = useState(0);
-  const [notificationSeen, setNotificationSeen] = useState<{ key: string; time: number }>();
+  const [notificationSeen, setNotificationSeen] = useState<NotificationState>();
+  const [notificationFilter,setNotificationFilter]=useState<"active"|"unread"|"archived">("active");
+  const [notificationLoading,setNotificationLoading]=useState(false);
+  const [notificationUpdatedAt,setNotificationUpdatedAt]=useState<number|null>(null);
+  const [notificationHistory,setNotificationHistory]=useState<{key:string;nextOffset:number;hasMore:boolean}>({
+    key:"",nextOffset:0,hasMore:false,
+  });
+  const [notificationHistoryLoading,setNotificationHistoryLoading]=useState(false);
+  const [notificationHistoryError,setNotificationHistoryError]=useState("");
   const [reviewFocus,setReviewFocus]=useState<{eventId:string;reference:string}|null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -4781,38 +4794,112 @@ export default function App() {
   const eventNotificationData = canViewNotifications && notificationData?.eventId === selectedEventId && notificationData.userId === authUser?.id ? notificationData : undefined;
   const notificationSummary = eventNotificationData?.summary;
   const notificationActivity = (notificationSummary?.activity ?? []) as {
-    id: string; reference: string; action: "create" | "submit_proof"; occurred_ms: number;
+    id: string; reference: string; action: string; occurred_ms: number;
+    first_name?: string; last_name?: string; booking_state?: string; total_minor?: number; attendee_count?: number;
   }[];
   const notificationKey = `meetrix-notifications:${authUser?.id}:${selectedEventId}`;
-  const seenAt = notificationSeen?.key === notificationKey ? notificationSeen.time : 0;
-  const unreadNotifications = notificationActivity.filter((item) => item.occurred_ms > seenAt).length;
+  const notificationHistoryKey=notificationKey;
+  const seen = notificationSeen?.key === notificationKey ? notificationSeen : blankNotificationState(notificationKey);
+  const visibleNotifications=notificationActivity.filter(item=>!notificationIsArchived(seen,item));
+  const archivedNotifications=notificationActivity.filter(item=>notificationIsArchived(seen,item));
+  const filteredNotifications=notificationFilter==="archived" ? archivedNotifications :
+    notificationFilter==="unread" ? visibleNotifications.filter(item=>notificationIsUnread(seen,item)) :
+    visibleNotifications;
+  const unreadNotifications=visibleNotifications.filter(item=>notificationIsUnread(seen,item)).length;
   const notifyLabel = (th: string, en: string) => language === "th" ? th : en;
-  useEffect(() => {
-    setNotificationSeen({ key: notificationKey, time: Number(window.localStorage.getItem(notificationKey)) || 0 });
-  }, [notificationKey]);
+  const notificationMoney = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
+  function saveNotificationSeen(next:NotificationState) {
+    try {window.localStorage.setItem(notificationKey,JSON.stringify(next));} catch { /* Storage unavailable. */ }
+    setNotificationSeen(next);
+  }
+  useEffect(()=>{
+    const read=()=>{
+      let raw:string|null=null;
+      try {raw=window.localStorage.getItem(notificationKey);} catch { /* Storage unavailable. */ }
+      setNotificationSeen(parseNotificationState(notificationKey,raw));
+    };
+    read();
+    const sync=(event:StorageEvent)=>{if(event.key===notificationKey||event.key===null)read();};
+    window.addEventListener("storage",sync);
+    setNotificationFilter("active");
+    setNotificationHistory({key:"",nextOffset:0,hasMore:false});
+    setNotificationHistoryError("");
+    return ()=>window.removeEventListener("storage",sync);
+  },[notificationKey]);
   useEffect(() => {
     if (!canViewNotifications) return;
     const request = new AbortController();
     let timer: number;
     const loadNotifications = async () => {
+      setNotificationLoading(true);
       try {
         const response = await apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}/paid-registration/summary?activity=1`,
           { signal: request.signal });
         if (!response.ok) throw new Error();
         const { summary } = await response.json();
-        if (!request.signal.aborted) setNotificationData({ eventId: selectedEventId, userId: authUser?.id, summary });
+        if (!request.signal.aborted) {
+          const firstPage=Array.isArray(summary?.activity)?summary.activity as Array<{id:string;occurred_ms:number}>:[];
+          setNotificationData(previous=>{
+            const historic=previous?.eventId===selectedEventId&&previous?.userId===authUser?.id
+              &&Array.isArray(previous.summary?.activity) ? previous.summary.activity as Array<{id:string;occurred_ms:number}> : [];
+            const ids=new Set(firstPage.map(item=>item.id));
+            const merged=[...firstPage,...historic.filter(item=>!ids.has(item.id))];
+            merged.sort((a,b)=>Number(b.occurred_ms)-Number(a.occurred_ms));
+            return {eventId:selectedEventId,userId:authUser?.id,
+              summary:summary?{...summary,activity:merged}:null,failed:false};
+          });
+          setNotificationHistory(current=>current.key===notificationHistoryKey?current:{
+            key:notificationHistoryKey,
+            nextOffset:Number(summary?.activity_next_offset??firstPage.length),
+            hasMore:Boolean(summary?.activity_has_more),
+          });
+          setNotificationUpdatedAt(Date.now());
+        }
       } catch {
         if (!request.signal.aborted) setNotificationData((current) => ({
           eventId: selectedEventId, userId: authUser?.id,
           summary: current?.eventId === selectedEventId && current.userId === authUser?.id ? current.summary : null, failed: true,
         }));
       } finally {
-        if (!request.signal.aborted) timer = window.setTimeout(loadNotifications, 30_000);
+        if (!request.signal.aborted) {
+          setNotificationLoading(false);
+          timer=window.setTimeout(loadNotifications,30_000);
+        }
       }
     };
     void loadNotifications();
     return () => { request.abort(); window.clearTimeout(timer); };
   }, [canViewNotifications, selectedEventId, authUser?.id, notificationRefresh]);
+  async function loadOlderNotifications(){
+    if(!canViewNotifications || notificationHistoryLoading || !notificationHistory.hasMore
+      || notificationHistory.key!==notificationHistoryKey)return;
+    setNotificationHistoryLoading(true);
+    setNotificationHistoryError("");
+    try{
+      const response=await apiFetch("/api/events/"+encodeURIComponent(selectedEventId)
+        +"/paid-registration/summary?activity=1&activity_limit=100&activity_offset="
+        +notificationHistory.nextOffset);
+      if(!response.ok)throw new Error("notification_history_failed");
+      const {summary}=await response.json();
+      const older=Array.isArray(summary?.activity)?summary.activity as Array<{id:string;occurred_ms:number}>:[];
+      setNotificationData(current=>{
+        if(!current||current.eventId!==selectedEventId||current.userId!==authUser?.id)return current;
+        const existing=Array.isArray(current.summary?.activity)
+          ? current.summary.activity as Array<{id:string;occurred_ms:number}>:[];
+        const ids=new Set(existing.map(item=>item.id));
+        const combined=[...existing,...older.filter(item=>!ids.has(item.id))];
+        combined.sort((a,b)=>Number(b.occurred_ms)-Number(a.occurred_ms));
+        return {...current,summary:{...current.summary,activity:combined}};
+      });
+      setNotificationHistory(current=>current.key===notificationHistoryKey?{
+        ...current,nextOffset:Number(summary?.activity_next_offset??current.nextOffset+older.length),
+        hasMore:Boolean(summary?.activity_has_more),
+      }:current);
+    }catch{setNotificationHistoryError(notifyLabel(
+      "โหลดประวัติเก่าไม่สำเร็จ กดลองอีกครั้ง",
+      "Older activity could not be loaded. Try again."));}
+    finally{setNotificationHistoryLoading(false);}
+  }
   const activeTheme = attendeeRoute ? attendeeTheme : themeMode;
 
   useEffect(() => {
@@ -10984,35 +11071,116 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div><h1 className="text-xl font-bold text-slate-900">{notifyLabel("การแจ้งเตือน", "Notifications")}</h1>
                   <p className="text-sm text-slate-600">{selectedEvent?.name}</p></div>
-                <button type="button" disabled={!unreadNotifications}
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-50"
-                  onClick={() => {
-                    const time = notificationActivity[0]?.occurred_ms ?? seenAt;
-                    window.localStorage.setItem(notificationKey, String(time));
-                    setNotificationSeen({ key: notificationKey, time });
-                  }}>{notifyLabel("ทำเครื่องหมายว่าอ่านแล้ว", "Mark all as read")}</button>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={notificationLoading}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                    onClick={()=>setNotificationRefresh(n=>n+1)}>
+                    <RefreshCw className={"mr-1 inline h-4 w-4"+(notificationLoading?" animate-spin":"")}/>
+                    {notifyLabel("รีเฟรช", "Refresh")}
+                  </button>
+                  <button type="button" disabled={!unreadNotifications}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                    onClick={()=>saveNotificationSeen(markNotificationRead(seen,visibleNotifications))}>
+                    {notifyLabel("อ่านแล้วทั้งหมด", "Mark all read")}
+                  </button>
+                </div>
               </div>
-              {eventNotificationData?.failed && <p role="alert">{notifyLabel("โหลดการแจ้งเตือนไม่สำเร็จ", "Could not refresh notifications.")}</p>}
+              {eventNotificationData?.failed && <p role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">
+                {notifyLabel("รีเฟรชไม่สำเร็จ กำลังแสดงรายการล่าสุดที่โหลดได้ กดรีเฟรชเพื่อลองอีกครั้ง",
+                  "Refresh failed. Showing previously loaded items. Press Refresh to retry.")}
+              </p>}
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" aria-pressed={notificationFilter==="active"} onClick={()=>setNotificationFilter("active")}
+                  className={"rounded-lg border px-3 py-2 text-sm font-semibold "+(notificationFilter==="active"?"border-blue-500 bg-blue-600 text-white":"border-slate-300 text-slate-700")}>
+                  {notifyLabel("รายการทั้งหมด", "Inbox")} ({visibleNotifications.length})
+                </button>
+                <button type="button" aria-pressed={notificationFilter==="unread"} onClick={()=>setNotificationFilter("unread")}
+                  className={"rounded-lg border px-3 py-2 text-sm font-semibold "+(notificationFilter==="unread"?"border-blue-500 bg-blue-600 text-white":"border-slate-300 text-slate-700")}>
+                  {notifyLabel("ยังไม่อ่าน", "Unread")} ({unreadNotifications})
+                </button>
+                <button type="button" aria-pressed={notificationFilter==="archived"} onClick={()=>setNotificationFilter("archived")}
+                  className={"rounded-lg border px-3 py-2 text-sm font-semibold "+(notificationFilter==="archived"?"border-blue-500 bg-blue-600 text-white":"border-slate-300 text-slate-700")}>
+                  {notifyLabel("รายการที่ซ่อน", "Archived")} ({archivedNotifications.length})
+                </button>
+                {notificationFilter==="archived" ?
+                  <button type="button" disabled={!seen.dismissedIds.length} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                    onClick={()=>saveNotificationSeen(restoreNotifications(seen))}>
+                    {notifyLabel("คืนรายการที่ซ่อนทั้งหมด", "Restore all")}
+                  </button> :
+                  <button type="button" disabled={!visibleNotifications.some(x=>!notificationIsUnread(seen,x))}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                    onClick={()=>saveNotificationSeen(archiveNotifications(seen,
+                      visibleNotifications.filter(x=>!notificationIsUnread(seen,x))))}>
+                    {notifyLabel("เก็บรายการที่อ่านแล้ว", "Archive read")}
+                  </button>}
+              </div>
+              <p className="text-xs text-slate-600">
+                {notifyLabel("การอ่าน/ซ่อนมีผลเฉพาะเบราว์เซอร์นี้ ไม่ลบ Booking หรือสลิปต้นทาง · กิจกรรมล่าสุดไม่เกิน 500 รายการ",
+                  "Read/archive is saved in this browser only. Bookings and slips are never deleted · Latest 500 activities")}
+                {notificationUpdatedAt && " · "+new Date(notificationUpdatedAt).toLocaleTimeString(language==="th"?"th-TH":"en-GB")}
+              </p>
               {notificationSummary && <button type="button" className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-semibold text-white"
                 onClick={() => { setReviewFocus({ eventId: selectedEventId, reference: "" }); setActiveTab("registrations"); }}>
                 {notifyLabel(`รอตรวจสลิป ${Number(notificationSummary.pending_review_bookings)} ใบจอง · ยังไม่ส่งสลิป ${Number(notificationSummary.awaiting_payment_attendees)} คน`,
                   `${Number(notificationSummary.pending_review_bookings)} bookings to review · ${Number(notificationSummary.awaiting_payment_attendees)} attendees awaiting payment`)}
               </button>}
-              {eventNotificationData && !eventNotificationData.failed && !notificationActivity.length &&
+              {eventNotificationData && !eventNotificationData.failed && !filteredNotifications.length &&
                 <p className="text-sm text-slate-600">{notifyLabel("ยังไม่มีกิจกรรมการจอง", "No booking activity yet.")}</p>}
-              <ul className="divide-y divide-slate-200">
-                {notificationActivity.map((entry) => <li key={entry.id}>
+              <ul className="max-h-[65vh] divide-y divide-slate-200 overflow-y-auto">
+                {filteredNotifications.map((entry) => <li key={entry.id} className="flex items-center gap-2">
                   <button type="button" className="flex w-full flex-wrap items-center justify-between gap-2 py-3 text-left text-sm"
-                    onClick={() => { setReviewFocus({ eventId: selectedEventId, reference: entry.reference }); setActiveTab("registrations"); }}>
+                    onClick={() => {
+                      if (notificationIsUnread(seen,entry)) saveNotificationSeen(markNotificationRead(seen,[entry]));
+                      setReviewFocus({ eventId: selectedEventId, reference: entry.reference });
+                      setActiveTab("registrations");
+                    }}>
                     <span className="min-w-0 break-all text-slate-900">
-                      {entry.occurred_ms > seenAt && <span className="mr-2 text-blue-700">●</span>}
-                      {entry.action === "submit_proof" ? notifyLabel("ส่งสลิปแล้ว", "Payment slip submitted") : notifyLabel("ใบจองใหม่", "New booking")}
-                      <span className="block text-xs text-slate-600">{entry.reference}</span>
+                      {notificationIsUnread(seen,entry) && <span className="mr-2 text-blue-700">●</span>}
+                      {({
+                        create:notifyLabel("ใบจองใหม่","New booking"),
+                        submit_proof:notifyLabel("ส่งสลิปแล้ว","Payment slip submitted"),
+                        review_verified:notifyLabel("ตรวจสลิปผ่าน","Payment approved"),
+                        review_rejected:notifyLabel("สลิปไม่ผ่าน","Payment rejected"),
+                        review_exception:notifyLabel("ตรวจสอบยอดผิดปกติ","Payment exception"),
+                        customer_reinstate:notifyLabel("ต่ออายุการจอง","Booking renewed"),
+                        admin_extend:notifyLabel("ขยายเวลาชำระ","Payment deadline extended"),
+                        admin_cancel:notifyLabel("ยกเลิกการจอง","Booking cancelled"),
+                        admin_reinstate:notifyLabel("เปิดการจองอีกครั้ง","Booking reinstated"),
+                        admin_refund:notifyLabel("คืนเงิน","Refund recorded"),
+                        expire:notifyLabel("การจองหมดเวลา","Booking expired")
+                      } as Record<string,string>)[entry.action]||entry.action}
+                      <span className="mt-1 block break-words text-sm font-semibold">
+                        {[entry.first_name, entry.last_name].filter(Boolean).join(" ") || notifyLabel("ผู้จอง", "Booker")}
+                        {entry.attendee_count != null && ` · ${entry.attendee_count} ${notifyLabel("คน", "attendees")}`}
+                        {entry.total_minor != null && ` · ${notificationMoney.format(Number(entry.total_minor) / 100)}`}
+                      </span>
+                      <span className="block text-xs text-slate-600">
+                        {({
+                          awaiting_payment: notifyLabel("รอชำระ", "Awaiting payment"),
+                          verification_pending: notifyLabel("รอตรวจสลิป", "Awaiting review"),
+                          confirmed: notifyLabel("ยืนยันแล้ว", "Confirmed"),
+                          expired: notifyLabel("หมดอายุ", "Expired"),
+                          cancelled: notifyLabel("ยกเลิก", "Cancelled"),
+                        } as Record<string, string>)[entry.booking_state ?? ""]} · {entry.reference}
+                      </span>
                     </span>
                     <time className="text-xs text-slate-600">{new Date(entry.occurred_ms).toLocaleString(language === "th" ? "th-TH" : "en-GB", { timeZone: "Asia/Bangkok" })}</time>
                   </button>
+                  <button type="button" className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700"
+                    aria-label={notificationFilter==="archived"?notifyLabel("คืนการแจ้งเตือน","Restore notification"):notifyLabel("ซ่อนการแจ้งเตือน","Archive notification")}
+                    onClick={()=>saveNotificationSeen(notificationFilter==="archived"
+                      ?restoreNotifications(seen,[entry]):archiveNotifications(seen,[entry]))}>
+                    {notificationFilter==="archived"?notifyLabel("คืนรายการ","Restore"):notifyLabel("ซ่อน","Archive")}
+                  </button>
                 </li>)}
               </ul>
+              {notificationHistoryError && <p role="alert" className="text-sm text-rose-700">{notificationHistoryError}</p>}
+              {notificationHistory.key===notificationHistoryKey && notificationHistory.hasMore &&
+                <button type="button" disabled={notificationHistoryLoading}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-3 text-sm font-semibold text-blue-700 disabled:opacity-50"
+                  onClick={()=>void loadOlderNotifications()}>
+                  {notificationHistoryLoading?notifyLabel("กำลังโหลด…","Loading…"):notifyLabel("โหลดรายการเก่าเพิ่มเติม","Load older notifications")}
+                </button>}
             </section>
           )}
 

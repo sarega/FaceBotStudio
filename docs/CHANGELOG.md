@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.6 - 2026-11-20
+
+- Repair in-app Admin Notifications: missing Refresh, no recovery for dismissed items, and fixed 40-entry limits.
+- Add Inbox, Unread and Archived tabs; Mark all read, Archive read, single-item Archive/Restore, Restore all and manual Refresh.
+- Persist per-user/per-event view state in this browser with cross-tab synchronization and migration of legacy numeric read timestamp.
+- Expand paid booking audit feed to include payment review outcomes and booking lifecycle events.
+- Support paged audit history (default 100, up to 200 per page) with Load older. Periodic polling merges fresh data with previously loaded pages.
+- Read/archive operations never delete bookings, proofs or audit events. Surface API errors with a retry button.
+- Add tests for read/archive/restore, pagination and approved-slip notifications.
+- Limitations: read/archive is not synchronized across devices; feed is for the selected Event and paid booking activities. External Desktop/Telegram/Email channels use different delivery state.
+
 ## 0.11.5 - 2026-11-18
 
 - Make email verification a prominent next step after customer registration. New customers land on the dedicated /account/check-email page instead of a small English-only notice on Sign in.

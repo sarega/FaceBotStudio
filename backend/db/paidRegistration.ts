@@ -1287,12 +1287,24 @@ export function* readPaidEventSummary(eventId: string, includeActivity = false):
     key, key.endsWith("_minor") ? String(value) : Number(value),
   ]));
   if (!includeActivity) return totals;
+  const limit=Math.min(200,Math.max(1,Math.trunc(activityLimit)||100));
+  const offset=Math.max(0,Math.trunc(activityOffset)||0);
   const activity = yield query(
-    `SELECT a.id,a.action,a.occurred_ms,b.reference
+    `SELECT a.id,a.action,a.occurred_ms,b.reference,
+       CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS booking_state,b.total_minor,
+       c.first_name,c.last_name,
+       (SELECT COUNT(*) FROM paid_attendees attendee WHERE attendee.booking_id=b.id AND attendee.cancelled_ms IS NULL) AS attendee_count
      FROM paid_audit_events a JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
-     WHERE a.event_id=? AND a.action IN ('create','submit_proof')
-     ORDER BY a.occurred_ms DESC,a.id DESC LIMIT 40`, eventId,
+     JOIN customer_accounts c ON c.id=b.customer_id
+     WHERE a.event_id=? AND a.action IN (
+       'create','submit_proof','review_verified','review_rejected','review_exception',
+       'customer_reinstate','admin_extend','admin_cancel','admin_reinstate','admin_refund','expire')
+     ORDER BY a.occurred_ms DESC,a.id DESC LIMIT ? OFFSET ?`, Date.now(), eventId,limit+1,offset,
   );
-  return { ...totals, activity: activity.map((row) => ({ ...row, occurred_ms: Number(row.occurred_ms) })) };
+  return { ...totals,
+    activity: activity.slice(0,limit).map((row) => ({ ...row, occurred_ms: Number(row.occurred_ms) })),
+    activity_has_more:activity.length>limit,
+    activity_next_offset:offset+Math.min(activity.length,limit),
+  };
 
 }

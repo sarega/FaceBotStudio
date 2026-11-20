@@ -451,6 +451,27 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(activityResponse.status, 200);
     const { summary: activitySummary } = await activityResponse.json();
     assert.equal(activitySummary.pending_review_bookings, 1);
+    const pageOneResponse=await fetch(eventPrefix+"/summary?activity=1&activity_limit=1&activity_offset=0",
+      {headers:staffHeaders});
+    assert.equal(pageOneResponse.status,200);
+    const pageOne=(await pageOneResponse.json()).summary;
+    assert.equal(pageOne.activity.length,1);
+    assert.equal(pageOne.activity_has_more,true);
+    assert.equal(pageOne.activity_next_offset,1);
+    const pageTwoResponse=await fetch(eventPrefix+"/summary?activity=1&activity_limit=1&activity_offset=1",
+      {headers:staffHeaders});
+    assert.equal(pageTwoResponse.status,200);
+    const pageTwo=(await pageTwoResponse.json()).summary;
+    assert.equal(pageTwo.activity.length,1);
+    assert.notEqual(pageOne.activity[0].id,pageTwo.activity[0].id);
+    assert.equal((await fetch(eventPrefix+"/summary?activity=1&activity_offset=-1",
+      {headers:staffHeaders})).status,400);
+
+    const slipNotification = activitySummary.activity.find((item: { action: string }) => item.action === "submit_proof");
+    assert.equal(slipNotification.booking_state, "verification_pending");
+    assert.equal(Number(slipNotification.total_minor), 50000);
+    assert.equal(Number(slipNotification.attendee_count), 2);
+    assert.ok(slipNotification.first_name);
     assert.equal(activitySummary.pending_slip_minor, "50000");
     assert.equal(activitySummary.awaiting_payment_due_minor, "0");
     assert.equal(activitySummary.slip_shortfall_minor, "0");
@@ -477,6 +498,11 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(approval.status, 200, await approval.clone().text());
     const confirmed = await approval.json();
     assert.equal(confirmed.status, "confirmed");
+    const updatedFeedResponse=await fetch(eventPrefix+"/summary?activity=1",{headers:staffHeaders});
+    assert.equal(updatedFeedResponse.status,200);
+    const updatedFeed=(await updatedFeedResponse.json()).summary.activity as Array<{action:string;reference:string}>;
+    assert.equal(updatedFeed.filter(item=>item.action==="review_verified"&&item.reference===booking.reference).length,1,
+      "approval creates exactly one notification-worthy audit record");
     assert.deepEqual(await (await approve("0812345678")).json(), confirmed);
     assert.equal((await fetchConfirmed())[0].id, booking.id);
     const reportStart = Date.parse(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" })

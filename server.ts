@@ -17735,7 +17735,16 @@ async function startServer() {
   app.get("/api/events/:eventId/paid-registration/summary",
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       try {
-        const summary = await appDb.readPaidEventSummary(req.eventScope!.eventId, req.auth!.user.organization_id, req.query.activity === "1");
+        const includeActivity=req.query.activity==="1";
+        const limit=Number(req.query.activity_limit??100);
+        const offset=Number(req.query.activity_offset??0);
+        if(includeActivity && (!Number.isInteger(limit)||limit<1||limit>200||
+          !Number.isSafeInteger(offset)||offset<0||offset>1_000_000)){
+          return res.status(400).json({error:"invalid_activity_pagination"});
+        }
+        const summary = await appDb.readPaidEventSummary(req.eventScope!.eventId,
+          req.auth!.user.organization_id,includeActivity,
+          includeActivity?limit:100,includeActivity?offset:0);
         return res.set("Cache-Control", "private, no-store").json({ summary: summary ?? null });
       } catch (error) {
         if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });

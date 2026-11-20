@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.6",
+    date: "2026-11-20",
+    title: "Reliable admin notifications and recoverable history",
+    features: [
+      "Refresh, unread, archive and restore controls",
+      "Payment review outcomes and booking changes appear in notifications",
+      "Load older activities without losing existing rows on refresh",
+    ],
+  },
+  {
     version: "0.11.5",
     date: "2026-11-18",
     title: "Clear email verification after customer signup",

@@ -1661,10 +1661,11 @@ export class SqliteAppDatabase implements AppDatabase {
     });
   }
 
-  async readPaidEventSummary(eventId: string, organizationId: string, includeActivity = false) {
+  async readPaidEventSummary(eventId: string, organizationId: string,
+    includeActivity = false, activityLimit = 100, activityOffset = 0) {
     return this.runPaidCommand(eventId, (ownerId) => {
       if (organizationId !== ownerId) throw new PaidBookingError("event_not_found");
-      return readPaidEventSummary(eventId, includeActivity);
+      return readPaidEventSummary(eventId, includeActivity, activityLimit, activityOffset);
     });
   }
 
