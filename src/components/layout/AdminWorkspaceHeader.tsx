@@ -97,7 +97,6 @@ export function AdminWorkspaceHeader({
               </div>
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-2">
-              {notificationControl}
               {selectedEvent && (
                 <div className="hidden items-center gap-1.5 xl:flex">
                   <StatusBadge tone={getEventStatusTone(selectedEvent.effective_status)}>
@@ -124,6 +123,7 @@ export function AdminWorkspaceHeader({
               >
                 <Search className="h-4 w-4" />
               </button>
+              {notificationControl && <div className="lg:hidden">{notificationControl}</div>}
             </div>
           </div>
 
@@ -186,6 +186,7 @@ export function AdminWorkspaceHeader({
               </div>
             </div>
           </div>
+          {notificationControl && <div className="ml-auto hidden shrink-0 pl-2 lg:flex">{notificationControl}</div>}
         </div>
       </div>
     </header>

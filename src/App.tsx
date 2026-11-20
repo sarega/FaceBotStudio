@@ -3655,6 +3655,7 @@ export default function App() {
   const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const effectiveSidebarCollapsed = sidebarCollapsed;
+  const canOpenNotifications = (role === "owner" || role === "admin") && !!selectedEventId;
   const primaryTabs = [
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: translate(language, "nav.event", "Event") }] : []),
     ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: translate(language, "nav.mail", "Mail") }] : []),
@@ -3664,6 +3665,7 @@ export default function App() {
     ...(canEditSettings ? [{ id: "organizer" as const, icon: WalletCards, label: translate(language, "nav.organizer", "Organizer") }] : []),
     ...(canViewLogs ? [{ id: "outreach" as const, icon: Send, label: translate(language, "nav.outreach", "Outreach") }] : []),
     ...(canManageCustomers ? [{ id: "customers" as const, icon: User, label: translate(language, "nav.customers", "Customers") }] : []),
+    ...(canOpenNotifications ? [{ id: "notifications" as const, icon: Bell, label: language === "th" ? "การแจ้งเตือน" : "Notifications" }] : []),
   ];
   const setupTabs = [
     ...(authUser ? [{ id: "settings" as const, icon: SettingsIcon, label: translate(language, "nav.settings", "Settings Center") }] : []),
@@ -4775,7 +4777,7 @@ export default function App() {
     window.localStorage.setItem("meetrix-public-locale", attendeeLocale);
   }, [attendeeLocale]);
   const canViewNotifications = !attendeeRoute && !checkinAccessMode && authStatus === "authenticated" &&
-    (role === "owner" || role === "admin") && !!selectedEventId;
+    canOpenNotifications;
   const eventNotificationData = canViewNotifications && notificationData?.eventId === selectedEventId && notificationData.userId === authUser?.id ? notificationData : undefined;
   const notificationSummary = eventNotificationData?.summary;
   const notificationActivity = (notificationSummary?.activity ?? []) as {
@@ -5799,6 +5801,7 @@ export default function App() {
       ...(canRunAgent ? ["agent"] : []),
       ...(canEditSettings ? ["organizer"] : []),
       ...(canManageCustomers ? ["customers"] : []),
+      ...(canOpenNotifications ? ["notifications"] : []),
       ...(canViewRegistrations ? ["registrations"] : []),
       ...(canSellDirectTickets ? ["direct_tickets"] : []),
       ...(canCheckinRegistrations ? ["checkin"] : []),
@@ -5812,7 +5815,7 @@ export default function App() {
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || getDefaultTabForRole(role));
     }
-  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canViewRegistrations, canSellDirectTickets, canCheckinRegistrations, canManageCustomers, canManageUsers, role]);
+  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canViewRegistrations, canSellDirectTickets, canCheckinRegistrations, canManageCustomers, canManageUsers, canOpenNotifications, role]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
