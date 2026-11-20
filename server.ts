@@ -17732,6 +17732,45 @@ async function startServer() {
     },
   );
 
+  // Admin inbox acknowledgement is per individual user, organizer and event.
+  // Never delete the underlying paid audit events, bookings or proof images.
+  app.get("/api/events/:eventId/admin-notifications/state",
+    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res:Response)=>{
+      try{
+        const state=await appDb.getAdminNotificationState(
+          req.auth!.user.organization_id,req.auth!.user.id,req.eventScope!.eventId);
+        return res.set("Cache-Control","private, no-store").json({state});
+      }catch(error){
+        console.error("Notification state read failed",error);
+        return res.status(500).json({error:"notification_state_unavailable"});
+      }
+    });
+  app.post("/api/events/:eventId/admin-notifications/state",
+    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res:Response)=>{
+      const body=req.body??{};
+      const actions=["read","read_all","archive","restore","restore_all","import"];
+      const validIds=(value:unknown)=>Array.isArray(value)&&value.length<=2000&&
+        value.every(id=>typeof id==="string"&&id.length>0&&id.length<=128);
+      if(!actions.includes(body.action)||!validIds(body.ids??[])||
+        !validIds(body.archivedIds??[]) ||
+        (body.ids?.length??0)+(body.archivedIds?.length??0)>4000 ||
+        (body.action!=="import"&&body.archivedIds?.length) ||
+        (body.action==="import"&&(!Number.isSafeInteger(body.time)||
+          body.time<0||body.time>Date.now()+60000))){
+        return res.status(400).json({error:"invalid_notification_operation"});
+      }
+      try{
+        const state=await appDb.mutateAdminNotificationState(
+          req.auth!.user.organization_id,req.auth!.user.id,req.eventScope!.eventId,
+          {action:body.action,ids:body.ids??[],archivedIds:body.archivedIds??[],
+            time:body.action==="import"?body.time:undefined});
+        return res.set("Cache-Control","private, no-store").json({state});
+      }catch(error){
+        console.error("Notification state update failed",error);
+        return res.status(500).json({error:"notification_state_update_failed"});
+      }
+    });
+
   app.get("/api/events/:eventId/paid-registration/summary",
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       try {

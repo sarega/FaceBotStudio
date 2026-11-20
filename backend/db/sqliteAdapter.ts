@@ -9,6 +9,8 @@ import { chunkDocumentContent, getDefaultEmbeddingStatus, getEmbeddingModelName,
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import type {
   AppDatabase,
+  AdminNotificationStateRow,
+  AdminNotificationMutation,
   AuditLogEntryInput,
   AuditLogRow,
   AuthSessionRow,
@@ -1485,6 +1487,7 @@ export class SqliteAppDatabase implements AppDatabase {
         this.db.exec(readFileSync(new URL("./migrations/055_paid_deadline_mode.sql", import.meta.url), "utf8"));
       }
       this.db.exec(readFileSync(new URL("./migrations/054_paid_coupons.sql", import.meta.url), "utf8").split("-- Complimentary bookings")[0]);
+      this.db.exec(readFileSync(new URL("./migrations/056_admin_notification_state.sql",import.meta.url),"utf8"));
       for (const table of ["registrations", "event_performances"]) {
         this.db.exec(`
           CREATE TRIGGER IF NOT EXISTS trg_paid_${table}_legacy_guard BEFORE INSERT ON ${table}
@@ -1659,6 +1662,75 @@ export class SqliteAppDatabase implements AppDatabase {
       if(ownerId!==organizationId) throw new PaidBookingError("event_not_found");
       return listPaidAttendeeRoster(eventId,limit);
     });
+  }
+
+  async getAdminNotificationState(organizationId:string,userId:string,eventId:string):Promise<AdminNotificationStateRow>{
+    const preference=this.db.prepare(
+      "SELECT read_before_ms,imported_at_ms FROM admin_notification_preferences WHERE organization_id=? AND user_id=? AND event_id=?"
+    ).get(organizationId,userId,eventId) as {read_before_ms:number;imported_at_ms:number|null}|undefined;
+    const entries=this.db.prepare(
+      "SELECT audit_id,read_ms,archived_ms FROM admin_notification_items WHERE organization_id=? AND user_id=? AND event_id=?"
+    ).all(organizationId,userId,eventId) as Array<{audit_id:string;read_ms:number|null;archived_ms:number|null}>;
+    return {time:Number(preference?.read_before_ms??0),imported:preference?.imported_at_ms!=null,
+      readIds:entries.filter(x=>x.read_ms!=null).map(x=>x.audit_id),
+      dismissedIds:entries.filter(x=>x.archived_ms!=null).map(x=>x.audit_id)};
+  }
+
+  async mutateAdminNotificationState(organizationId:string,userId:string,eventId:string,
+    input:AdminNotificationMutation):Promise<AdminNotificationStateRow>{
+    const ids=[...new Set(input.ids??[])];
+    const archivedIds=[...new Set(input.archivedIds??[])];
+    if(ids.length+archivedIds.length>4000)throw new Error("too_many_notification_ids");
+    const now=Date.now();
+    this.db.transaction(()=>{
+      this.db.prepare(
+        "INSERT OR IGNORE INTO admin_notification_preferences (organization_id,user_id,event_id) VALUES (?,?,?)"
+      ).run(organizationId,userId,eventId);
+      if(input.action==="import"){
+        const current=this.db.prepare(
+          "SELECT imported_at_ms FROM admin_notification_preferences WHERE organization_id=? AND user_id=? AND event_id=?"
+        ).get(organizationId,userId,eventId) as {imported_at_ms:number|null};
+        if(current.imported_at_ms!=null)return;
+        this.db.prepare(
+          "UPDATE admin_notification_preferences SET read_before_ms=MAX(read_before_ms,?),imported_at_ms=? WHERE organization_id=? AND user_id=? AND event_id=?"
+        ).run(Math.max(0,Number(input.time??0)),now,organizationId,userId,eventId);
+      } else {
+        this.db.prepare(
+          "UPDATE admin_notification_preferences SET imported_at_ms=COALESCE(imported_at_ms,?) WHERE organization_id=? AND user_id=? AND event_id=?"
+        ).run(now,organizationId,userId,eventId);
+      }
+      if(input.action==="read_all"){
+        const latest=this.db.prepare(
+          "SELECT COALESCE(MAX(occurred_ms),0) AS last_ms FROM paid_audit_events WHERE event_id=?"
+        ).get(eventId) as {last_ms:number};
+        this.db.prepare(
+          "UPDATE admin_notification_preferences SET read_before_ms=MAX(read_before_ms,?) WHERE organization_id=? AND user_id=? AND event_id=?"
+        ).run(Number(latest.last_ms),organizationId,userId,eventId);
+      }else if(input.action==="restore_all"){
+        this.db.prepare(
+          "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=? AND user_id=? AND event_id=?"
+        ).run(organizationId,userId,eventId);
+      }else if(input.action==="restore"){
+        const stmt=this.db.prepare(
+          "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=? AND user_id=? AND event_id=? AND audit_id=?"
+        );
+        for(const id of ids)stmt.run(organizationId,userId,eventId,id);
+      }else if(["read","archive","import"].includes(input.action)){
+        const read=input.action==="read" || input.action==="import";
+        const stmt=this.db.prepare(
+          `INSERT INTO admin_notification_items (organization_id,user_id,event_id,audit_id,read_ms,archived_ms)
+           SELECT ?,?,?,a.id,?,? FROM paid_audit_events a WHERE a.id=? AND a.event_id=?
+           ON CONFLICT(organization_id,user_id,event_id,audit_id) DO UPDATE SET
+             read_ms=COALESCE(admin_notification_items.read_ms,excluded.read_ms),
+             archived_ms=COALESCE(admin_notification_items.archived_ms,excluded.archived_ms)`
+        );
+        for(const id of ids)stmt.run(organizationId,userId,eventId,read?now:null,
+          read?null:now,id,eventId);
+        if(input.action==="import")for(const id of archivedIds)
+          stmt.run(organizationId,userId,eventId,null,now,id,eventId);
+      }
+    })();
+    return this.getAdminNotificationState(organizationId,userId,eventId);
   }
 
   async readPaidEventSummary(eventId: string, organizationId: string,

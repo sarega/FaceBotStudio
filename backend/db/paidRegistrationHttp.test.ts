@@ -439,6 +439,39 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       await sharp(image).ensureAlpha().raw().toBuffer(),
     );
     const eventPrefix = `${origin}/api/events/${event.id}/paid-registration`;
+    const notificationPath=origin+"/api/events/"+event.id+"/admin-notifications/state";
+    const notificationAudit=(await (await fetch(eventPrefix+"/summary?activity=1",{
+      headers:staffHeaders,
+    })).json()).summary.activity as Array<{id:string}>;
+    assert.ok(notificationAudit.length);
+    const notificationId=notificationAudit[0].id;
+    assert.equal((await fetch(notificationPath)).status,401,"customer cannot see admin notification state");
+    const initialNotification=await (await fetch(notificationPath,{headers:staffHeaders})).json();
+    assert.deepEqual(initialNotification.state,{time:0,readIds:[],dismissedIds:[],imported:false});
+    const notificationPost=async(body:Record<string,unknown>)=>fetch(notificationPath,{
+      method:"POST",headers:{...staffHeaders,"Content-Type":"application/json"},
+      body:JSON.stringify(body),
+    });
+    assert.equal((await notificationPost({action:"import",time:10,ids:[notificationId],
+      archivedIds:[notificationId]})).status,200);
+    const synchronized=(await (await fetch(notificationPath,{headers:staffHeaders})).json()).state;
+    assert.deepEqual(synchronized.readIds,[notificationId]);
+    assert.deepEqual(synchronized.dismissedIds,[notificationId]);
+    assert.equal((await notificationPost({action:"restore",ids:[notificationId]})).status,200);
+    assert.deepEqual((await (await fetch(notificationPath,{headers:staffHeaders})).json()).state.dismissedIds,[]);
+    assert.equal((await notificationPost({action:"archive",ids:[notificationId]})).status,200);
+    assert.deepEqual((await (await fetch(notificationPath,{headers:staffHeaders})).json()).state.dismissedIds,
+      [notificationId],"a second browser GET sees the first browser's archive");
+    assert.equal((await notificationPost({action:"restore_all"})).status,200);
+    assert.equal((await notificationPost({action:"archive",ids:["foreign-id"]})).status,200);
+    assert.deepEqual((await (await fetch(notificationPath,{headers:staffHeaders})).json()).state.dismissedIds,[]);
+    assert.equal((await notificationPost({action:"import",time:999999999,ids:[],
+      archivedIds:[notificationId]})).status,200);
+    assert.deepEqual((await (await fetch(notificationPath,{headers:staffHeaders})).json()).state.readIds,
+      [notificationId],"legacy migration can run only once");
+    assert.equal((await notificationPost({action:"unknown"})).status,400);
+    assert.equal((await notificationPost({action:"archive",ids:["x".repeat(200)]})).status,400);
+
     const readinessResponse = await fetch(eventPrefix + "/readiness", { headers: staffHeaders });
     assert.equal(readinessResponse.status, 200);
     const readiness = await readinessResponse.json();

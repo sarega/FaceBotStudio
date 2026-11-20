@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.7 - 2026-11-20
+
+- Synchronize Admin Notification Inbox read/archive state between devices using database-backed user/organizer/event-scoped acknowledgements, instead of browser localStorage as the source of truth.
+- Add portable migration 056_admin_notification_state.sql for PostgreSQL and SQLite: per-admin/event preferences (read-all high-water mark, migration flag) and per-audit-ID read/archive timestamps. Do not copy or delete any original Booking, slip, ticket or audit records.
+- Add authenticated GET/POST /api/events/:eventId/admin-notifications/state with scoped authorization and validated read, read_all, archive, restore, restore_all and one-time import operations.
+- Use transactionally merged per-ID upserts so two devices cannot replace each other's state. One-time localStorage import preserves previously read/hidden alerts and prevents stale migrations on other devices.
+- UI persists actions to the database and synchronizes with existing 30-second polling. Mark all read covers the Event's entire audit history. Stale polling results cannot override a recent save.
+- Test per-user isolation, multiple DB connections, migration idempotence, read/archive/restore, read_all, forged IDs and authenticated HTTP operations.
+- Desktop/Telegram/Email channels remain separate; read/archive is for the signed-in Admin, not the entire Admin team.
+
 ## 0.11.6 - 2026-11-20
 
 - Repair in-app Admin Notifications: missing Refresh, no recovery for dismissed items, and fixed 40-entry limits.

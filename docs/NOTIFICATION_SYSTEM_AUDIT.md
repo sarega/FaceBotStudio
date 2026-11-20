@@ -16,7 +16,7 @@
 - No notification read/archive action deletes source booking, proof, customer or audit data.
 
 ## Remaining design limitations
-- Read/archive state is browser-local. Cross-device or team-wide acknowledgement needs a server-backed authenticated inbox-state table.
+- Team-wide acknowledgements remain separate; per-Admin cross-device state is now implemented in v0.11.7.
 - The Admin inbox uses the selected Event, not all organizer Events. A unified multi-Event inbox needs a new aggregated API.
 - Legacy registration events, desktop alerts and Telegram/email delivery are not automatically merged into the paid booking inbox.
 - In-app polling is approximately every 30 seconds, not instant push. Archive in the inbox does not acknowledge external notifications.
@@ -30,3 +30,23 @@
 5. User/Event scope should isolate view state; unauthorized cross-organization requests must fail.
 6. Refresh failure retains previously loaded entries and permits retry.
 7. Check desktop and external delivery separately.
+
+
+## v0.11.7: cross-device Admin notification state
+
+The new database tables admin_notification_preferences and admin_notification_items
+are introduced by migration 056_admin_notification_state.sql. The key scope
+is organization_id + user_id + event_id. Original paid audit events, bookings,
+slips and credentials are never edited or deleted by acknowledgement actions.
+
+- Authenticated GET/POST /api/events/:eventId/admin-notifications/state reads and
+  mutates only the signed-in owner/admin's state for an accessible Event.
+- Allowed operations: read, read_all, archive, restore, restore_all, import.
+- The first browser with stored read/archive state imports it once; further
+  imports are ignored so an older device cannot resurrect previously restored items.
+- Mark all read uses the latest Event audit timestamp held on the database.
+- Individual read/archive changes are merged transactionally across devices.
+- The existing ~30 second polling synchronizes state; network failure is
+  reported without affecting original notification source records.
+- Team-wide acknowledgements, global multi-Event inbox aggregation and
+  Desktop/Telegram/Email read receipts remain separate future work.

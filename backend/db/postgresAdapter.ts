@@ -11,6 +11,8 @@ import { DEFAULT_EVENT_ID, DEFAULT_SETTINGS_ENTRIES, EVENT_SETTING_KEYS, NEW_EVE
 import { runPostgresMigrations } from "./migrate";
 import type {
   AppDatabase,
+  AdminNotificationStateRow,
+  AdminNotificationMutation,
   AuditLogEntryInput,
   AuditLogRow,
   AuthSessionRow,
@@ -779,6 +781,78 @@ export class PostgresAppDatabase implements AppDatabase {
       if(ownerId!==organizationId) throw new PaidBookingError("event_not_found");
       return listPaidAttendeeRoster(eventId,limit);
     });
+  }
+
+  async getAdminNotificationState(organizationId:string,userId:string,eventId:string):Promise<AdminNotificationStateRow>{
+    const [prefs,rows]=await Promise.all([
+      this.pool.query<{read_before_ms:string|number;imported_at_ms:string|number|null}>(
+        "SELECT read_before_ms,imported_at_ms FROM admin_notification_preferences WHERE organization_id=$1 AND user_id=$2 AND event_id=$3",
+        [organizationId,userId,eventId]),
+      this.pool.query<{audit_id:string;read_ms:string|number|null;archived_ms:string|number|null}>(
+        "SELECT audit_id,read_ms,archived_ms FROM admin_notification_items WHERE organization_id=$1 AND user_id=$2 AND event_id=$3",
+        [organizationId,userId,eventId]),
+    ]);
+    return {time:Number(prefs.rows[0]?.read_before_ms??0),imported:prefs.rows[0]?.imported_at_ms!=null,
+      readIds:rows.rows.filter(x=>x.read_ms!=null).map(x=>x.audit_id),
+      dismissedIds:rows.rows.filter(x=>x.archived_ms!=null).map(x=>x.audit_id)};
+  }
+
+  async mutateAdminNotificationState(organizationId:string,userId:string,eventId:string,
+    input:AdminNotificationMutation):Promise<AdminNotificationStateRow>{
+    const ids=[...new Set(input.ids??[])];
+    const archivedIds=[...new Set(input.archivedIds??[])];
+    if(ids.length+archivedIds.length>4000)throw new Error("too_many_notification_ids");
+    const now=Date.now();
+    const client=await this.pool.connect();
+    try{
+      await client.query("BEGIN");
+      await client.query(
+        "INSERT INTO admin_notification_preferences (organization_id,user_id,event_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+        [organizationId,userId,eventId]);
+      const current=await client.query<{imported_at_ms:string|number|null}>(
+        "SELECT imported_at_ms FROM admin_notification_preferences WHERE organization_id=$1 AND user_id=$2 AND event_id=$3 FOR UPDATE",
+        [organizationId,userId,eventId]);
+      const alreadyImported=current.rows[0]?.imported_at_ms!=null;
+      if(input.action==="import" && !alreadyImported){
+        await client.query(
+          "UPDATE admin_notification_preferences SET read_before_ms=GREATEST(read_before_ms,$1),imported_at_ms=$2 WHERE organization_id=$3 AND user_id=$4 AND event_id=$5",
+          [Math.max(0,Number(input.time??0)),now,organizationId,userId,eventId]);
+      }else if(input.action!=="import"){
+        await client.query(
+          "UPDATE admin_notification_preferences SET imported_at_ms=COALESCE(imported_at_ms,$1) WHERE organization_id=$2 AND user_id=$3 AND event_id=$4",
+          [now,organizationId,userId,eventId]);
+      }
+      if(input.action==="read_all"){
+        await client.query(
+          `UPDATE admin_notification_preferences SET read_before_ms=GREATEST(read_before_ms,
+            (SELECT COALESCE(MAX(occurred_ms),0) FROM paid_audit_events WHERE event_id=$3))
+            WHERE organization_id=$1 AND user_id=$2 AND event_id=$3`,
+          [organizationId,userId,eventId]);
+      }else if(input.action==="restore_all"){
+        await client.query(
+          "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=$1 AND user_id=$2 AND event_id=$3",
+          [organizationId,userId,eventId]);
+      }else if(input.action==="restore"){
+        if(ids.length)await client.query(
+          "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=$1 AND user_id=$2 AND event_id=$3 AND audit_id=ANY($4::text[])",
+          [organizationId,userId,eventId,ids]);
+      }else if(input.action!=="import" || !alreadyImported){
+        const upsert=async(id:string,read:boolean)=>{
+          await client.query(
+            `INSERT INTO admin_notification_items (organization_id,user_id,event_id,audit_id,read_ms,archived_ms)
+             SELECT $1,$2,$3,a.id,$4,$5 FROM paid_audit_events a WHERE a.id=$6 AND a.event_id=$3
+             ON CONFLICT(organization_id,user_id,event_id,audit_id) DO UPDATE SET
+               read_ms=COALESCE(admin_notification_items.read_ms,EXCLUDED.read_ms),
+               archived_ms=COALESCE(admin_notification_items.archived_ms,EXCLUDED.archived_ms)`,
+            [organizationId,userId,eventId,read?now:null,read?null:now,id]);
+        };
+        for(const id of ids)await upsert(id,input.action!=="archive");
+        if(input.action==="import")for(const id of archivedIds)await upsert(id,false);
+      }
+      await client.query("COMMIT");
+    }catch(error){await client.query("ROLLBACK");throw error;}
+    finally{client.release();}
+    return this.getAdminNotificationState(organizationId,userId,eventId);
   }
 
   async readPaidEventSummary(eventId: string, organizationId: string,

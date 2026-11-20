@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.7",
+    date: "2026-11-20",
+    title: "Admin notifications sync across devices",
+    features: [
+      "Read and archived notification state follows an Admin account across devices",
+      "Existing browser notification state migrates into the database once",
+      "Mark all read, archive and restore persist safely without affecting booking records",
+    ],
+  },
+  {
     version: "0.11.6",
     date: "2026-11-20",
     title: "Reliable admin notifications and recoverable history",

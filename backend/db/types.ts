@@ -1,6 +1,15 @@
 import type { CouponInput } from "./paidCoupons";
 import type { PaidAdminAction } from "./paidRegistration";
 import type { PaidMessengerDraftInput, PaidMessengerConfirmInput, PaidMessengerQuote, PaidMessengerStatus, PaidReviewInput, PaidReviewReceipt, PaidProofInput, PaidProofReceipt, PaidBookingInput, PaidBookingReceipt, PaidCatalog, PaidRow, PaidSettingsInput } from "./paidRegistration";
+export interface AdminNotificationStateRow {
+  time:number;readIds:string[];dismissedIds:string[];imported:boolean;
+}
+export interface AdminNotificationMutation {
+  action:"read"|"read_all"|"archive"|"restore"|"restore_all"|"import";
+  ids?:string[];
+  archivedIds?:string[];
+  time?:number;
+}
 export type MessageType = "incoming" | "outgoing";
 export type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 export type DirectSeatStatus = "available" | "held" | "issued" | "voided";
@@ -1085,6 +1094,9 @@ export interface AppDatabase {
   confirmPaidMessengerDraft(input: PaidMessengerConfirmInput): Promise<PaidBookingReceipt>;
   readPaidMessengerStatus(eventId: string, pageId: string, senderId: string, reference: string): Promise<PaidMessengerStatus | undefined>;
   readPaidMessengerCustomer(eventId: string, pageId: string, senderId: string): Promise<string | undefined>;
+  getAdminNotificationState(organizationId:string,userId:string,eventId:string):Promise<AdminNotificationStateRow>;
+  mutateAdminNotificationState(organizationId:string,userId:string,eventId:string,
+    input:AdminNotificationMutation):Promise<AdminNotificationStateRow>;
   readPaidEventSummary(eventId: string, organizationId: string, includeActivity?: boolean,
     activityLimit?:number, activityOffset?:number): Promise<PaidRow | undefined>;
   listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number): Promise<PaidRow[]>;

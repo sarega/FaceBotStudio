@@ -93,6 +93,45 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       pricing_version: 1, fields: [], categories: [{ id: "adult", label: "Adult", unit_minor: 25000, accommodation_discount_minor: 0 }],
     });
     const receipt = await db.createPaidBooking(command);
+    const adminA=await db.createUser({username:"notif-admin-a",display_name:"Notification Admin A",
+      password_hash:"fixture",role:"admin"});
+    const adminB=await db.createUser({username:"notif-admin-b",display_name:"Notification Admin B",
+      password_hash:"fixture",role:"admin"});
+    const eventActivity=await db.readPaidEventSummary(event.id,"org_default",true);
+    const notificationId=String((eventActivity!.activity as Array<{id:string}>)[0].id);
+    assert.deepEqual(await db.getAdminNotificationState("org_default",adminA.id,event.id),
+      {time:0,readIds:[],dismissedIds:[],imported:false});
+    const migrated=await db.mutateAdminNotificationState("org_default",adminA.id,event.id,
+      {action:"import",time:10,ids:[notificationId],archivedIds:[notificationId]});
+    assert.equal(migrated.time,10);
+    assert.deepEqual(migrated.readIds,[notificationId]);
+    assert.deepEqual(migrated.dismissedIds,[notificationId]);
+    await second.mutateAdminNotificationState("org_default",adminA.id,event.id,
+      {action:"import",time:999999999,ids:[],archivedIds:[]});
+    assert.deepEqual(await second.getAdminNotificationState("org_default",adminA.id,event.id),migrated,
+      "a second device must not replay legacy storage after first import");
+    assert.deepEqual(await second.getAdminNotificationState("org_default",adminB.id,event.id),
+      {time:0,readIds:[],dismissedIds:[],imported:false},
+      "another admin must not inherit the first admin's read state");
+    const restoredNotification=await second.mutateAdminNotificationState("org_default",adminA.id,event.id,
+      {action:"restore",ids:[notificationId]});
+    assert.deepEqual(restoredNotification.dismissedIds,[]);
+    const reArchived=await db.mutateAdminNotificationState("org_default",adminA.id,event.id,
+      {action:"archive",ids:[notificationId]});
+    assert.deepEqual(reArchived.dismissedIds,[notificationId]);
+    assert.deepEqual((await second.getAdminNotificationState("org_default",adminA.id,event.id)).dismissedIds,
+      [notificationId],"archive on one device must be immediately readable from another");
+    assert.deepEqual((await db.mutateAdminNotificationState("org_default",adminA.id,event.id,
+      {action:"restore_all"})).dismissedIds,[]);
+    assert.deepEqual((await db.mutateAdminNotificationState("org_default",adminA.id,event.id,
+      {action:"archive",ids:["invalid-event-notification"]})).dismissedIds,[],
+      "foreign or forged audit IDs must never be written");
+    const allRead=await second.mutateAdminNotificationState("org_default",adminA.id,event.id,
+      {action:"read_all"});
+    assert.ok(allRead.time>0,"read all must persist a server-calculated audit high-water mark");
+    assert.equal((await db.getAdminNotificationState("org_default",adminA.id,event.id)).time,allRead.time);
+    assert.ok((await db.readPaidEventSummary(event.id,"org_default",true))!.activity,
+      "read/archive actions must not remove the original booking audit event");
     const paidRoster=await db.listPaidAttendeeRoster(event.id,"org_default");
     assert.equal(paidRoster.length,2,"paid roster must contain one row for each person in one booking");
     assert.deepEqual(paidRoster.map(p=>p.first_name).sort(),["One","Two"]);
