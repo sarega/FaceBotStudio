@@ -18032,8 +18032,10 @@ async function startServer() {
       if (!Number.isSafeInteger(offset) || offset < 0) return res.status(400).json({ error: "invalid_offset" });
       const reference = typeof req.query.reference === "string" ? req.query.reference.trim().toLowerCase() : undefined;
       if (reference && !/^[a-f0-9-]{36}$/.test(reference)) return res.status(400).json({ error: "invalid_reference" });
+      const sort = req.query.sort ?? "asc";
+      if (sort !== "asc" && sort !== "desc") return res.status(400).json({ error: "invalid_sort" });
       try {
-        const rows = await appDb.listPaidReviewQueue(req.eventScope!.eventId, req.auth!.user.organization_id, offset, reference);
+        const rows = await appDb.listPaidReviewQueue(req.eventScope!.eventId, req.auth!.user.organization_id, offset, reference, sort);
         return res.set("Cache-Control", "private, no-store").json({
           reviews: rows.slice(0, 20), next_offset: rows.length > 20 ? offset + 20 : null,
         });

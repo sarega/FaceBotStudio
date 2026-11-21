@@ -903,7 +903,12 @@ export function* listDailyPaidTransfers(eventId: string, start: number, end: num
 
 }
 
-export function* listPaidReviewQueue(eventId: string, offset: number, reference?: string): PaidCommand<PaidRow[]> {
+export type PaidReviewSortOrder = "asc" | "desc";
+
+export function* listPaidReviewQueue(
+  eventId: string, offset: number, reference?: string, sort: PaidReviewSortOrder = "asc",
+): PaidCommand<PaidRow[]> {
+  const direction = sort === "desc" ? "DESC" : "ASC";
   const rows = yield query(
     `SELECT b.id AS booking_id,b.reference AS booking_reference,b.version,b.total_minor,b.payment_state,
        b.event_id,b.customer_id,b.created_ms AS booking_created_ms,b.due_ms,
@@ -924,7 +929,7 @@ export function* listPaidReviewQueue(eventId: string, offset: number, reference?
          OR (b.state='awaiting_payment' AND b.due_ms>?
            AND (es.payment_mode='external_manual' OR ?)))
      ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 ELSE 1 END,
-       COALESCE(a.created_ms,b.created_ms),b.id LIMIT 21 OFFSET ?`,
+       COALESCE(a.created_ms,b.created_ms) ${direction},b.id ${direction},a.id ${direction} LIMIT 21 OFFSET ?`,
     eventId, ...(reference ? [reference] : []), Date.now(), reference ? 1 : 0, offset,
   );
   return rows.map(({ receiver_id, ...row }) => ({

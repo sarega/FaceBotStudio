@@ -19,6 +19,56 @@ test("paid deadline supports timed holds, optional caps and a shared fixed cutof
   assert.equal(resolvePaidDeadline({ hold_minutes: 30, cutoff_ms: cutoff, deadline_mode: "fixed" }, cutoff + minute), cutoff);
 });
 
+test("the review queue orders slip submissions before pagination in both directions", async () => {
+  process.env.PAID_PROOF_ENCRYPTION_KEY = "01".repeat(32);
+  const directory = mkdtempSync(join(tmpdir(), "facebot-review-"));
+  const file = join(directory, "test.db");
+  const db = new SqliteAppDatabase(file);
+  const fixture = new Database(file);
+  try {
+    await db.initialize();
+    const organizationId = "org_default";
+    const event = await db.createEvent({ name: "Slip review order", organizer_id: organizationId });
+    await db.updateEvent(event.id, { status: "active" });
+    const customer = await db.createCustomerAccount({
+      email: "review@example.com", normalized_email: "review@example.com", password_hash: "fixture",
+      first_name: "Test", last_name: "Buyer", phone: "", normalized_phone: "", accepted_terms_at: new Date(), accepted_privacy_at: new Date(),
+    });
+    const settings = await db.savePaidSettings(event.id, {
+      organizationId, version: 0, capacity: 22, holdMinutes: 15, cutoffMs: null, published: true,
+      paymentMode: "external_manual", categories: [{ id: "adult", label: "Adult", unitMinor: 25000, quota: null }],
+    });
+    const attemptIds: string[] = [];
+    const setSubmissionTime = fixture.prepare("UPDATE paid_payment_attempts SET created_ms=? WHERE id=?");
+    const now = Date.now();
+    for (let index = 0; index < 22; index++) {
+      const booking = await db.createPaidBooking({
+        eventId: event.id, customerId: customer.id, key: `booking-${index}`, pricingVersion: Number(settings.version),
+        contact: { name: "Test Buyer" }, attendees: [{ categoryId: "adult", firstName: "Test", lastName: "Guest" }],
+      });
+      if (index === 21) break;
+      const proof = await db.submitPaidProof({
+        eventId: event.id, bookingId: booking.id, customerId: customer.id, key: `proof-${index}`, version: 1,
+        method: "bank_transfer", claimedMinor: 25000, claimedTransferMs: Date.now(), reference: null,
+        mime: "image/png", content: Buffer.from(`proof ${index}`),
+      });
+      setSubmissionTime.run(now - index * 1_000, proof.attempt_id);
+      attemptIds.push(proof.attempt_id);
+    }
+    for (const sort of ["desc", "asc"] as const) {
+      const expected = sort === "desc" ? attemptIds : [...attemptIds].reverse();
+      const firstPage = await db.listPaidReviewQueue(event.id, organizationId, 0, undefined, sort);
+      const secondPage = await db.listPaidReviewQueue(event.id, organizationId, 20, undefined, sort);
+      assert.deepEqual(firstPage.map((row) => row.attempt_id), expected);
+      assert.deepEqual(secondPage.map((row) => row.attempt_id), [expected[20], null]);
+    }
+  } finally {
+    fixture.close();
+    await db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 async function raceGroups(file: string, command: PaidBookingInput) {
   const adapterUrl = new URL("./sqliteAdapter.ts", import.meta.url).href;
   const source = `
