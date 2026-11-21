@@ -21,6 +21,7 @@ type Review = {
   version: number;
   total_minor: number;
   attendee_count: number;
+  attendee_names?: string[];
   claimed_minor: number | null;
   proof_id: string | null;
   claimed_transfer_ms: number | null;
@@ -327,11 +328,22 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                 <span className="rounded-md bg-amber-50 px-2 py-0.5 font-semibold text-amber-800">
                   {review.attempt_id ? t("รอตรวจสลิป", "Awaiting review") : t("ยังไม่ส่งสลิป", "No slip submitted")}
                 </span>
-                <span className="text-slate-700">{t(`${review.attendee_count} คน`, `${review.attendee_count} attendees`)}</span>
                 <span className="wrap-anywhere text-slate-600">{bookingLabel} {review.booking_reference}</span>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-2">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                    <p className="font-semibold text-slate-900">
+                      {t(`ผู้เข้าร่วมในใบจองนี้ (${review.attendee_count} คน)`, `Attendees in this booking (${review.attendee_count})`)}
+                    </p>
+                    {review.attendee_names?.length ? (
+                      <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-slate-700">
+                        {review.attendee_names.map((name, index) => <li key={index} className="wrap-anywhere">{name}</li>)}
+                      </ol>
+                    ) : <p className="mt-1 text-slate-600">
+                      {t("ไม่มีรายชื่อผู้เข้าร่วมให้แสดง", "No attendee names to display.")}
+                    </p>}
+                  </div>
                   <p className="font-semibold">ยอดที่ต้องชำระ
                     <span className="ml-2 text-lg text-slate-900">{money.format(review.total_minor/100)}</span>
                   </p>
@@ -343,7 +355,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   {review.claimed_transfer_ms!=null && <p className="text-slate-600">
                     เวลาโอน: {new Date(review.claimed_transfer_ms).toLocaleString("th-TH")}
                   </p>}
-                  <p className="text-slate-700">ผู้จอง: <strong>{review.customer_first_name} {review.customer_last_name}</strong></p>
+                  <p className="text-slate-700">{t("เจ้าของบัญชีผู้จอง", "Booking account holder")} <strong>{customerName}</strong></p>
                   <p className="break-all text-slate-700">อีเมลลูกค้า: {review.customer_email}</p>
                   <p className="break-all text-slate-700">บัญชีลูกค้า: {review.customer_id}</p>
                   {onOpenCustomer&&<button type="button" className="rounded-lg border border-blue-300 px-3 py-2 text-sm font-semibold text-blue-700"

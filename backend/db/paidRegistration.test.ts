@@ -44,7 +44,7 @@ test("the review queue orders slip submissions before pagination in both directi
     for (let index = 0; index < 22; index++) {
       const booking = await db.createPaidBooking({
         eventId: event.id, customerId: customer.id, key: `booking-${index}`, pricingVersion: Number(settings.version),
-        contact: { name: "Test Buyer" }, attendees: [{ categoryId: "adult", firstName: "Test", lastName: "Guest" }],
+        contact: { name: "Test Buyer" }, attendees: [{ categoryId: "adult", firstName: "Guest", lastName: String(index) }],
       });
       if (index === 21) break;
       const proof = await db.submitPaidProof({
@@ -61,6 +61,9 @@ test("the review queue orders slip submissions before pagination in both directi
       const secondPage = await db.listPaidReviewQueue(event.id, organizationId, 20, undefined, sort);
       assert.deepEqual(firstPage.map((row) => row.attempt_id), expected);
       assert.deepEqual(secondPage.map((row) => row.attempt_id), [expected[20], null]);
+      assert.deepEqual(firstPage.map((row) => row.attendee_names), expected.map((id) => [`Guest ${attemptIds.indexOf(id)}`]));
+      assert.deepEqual(secondPage[1].attendee_names, ["Guest 21"]);
+      assert.equal(secondPage[1].customer_first_name, "Test");
     }
   } finally {
     fixture.close();
@@ -247,6 +250,8 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal(submitted.status, "verification_pending");
     const [queued] = await db.listPaidReviewQueue(event.id, "org_default", 0);
     assert.equal(queued.attempt_id, submitted.attempt_id);
+    assert.equal(queued.attendee_count, 2);
+    assert.deepEqual(queued.attendee_names, ["One Guest", "Two Guest"]);
     assert.equal(queued.receiver_last_four, "5678");
     assert.ok(!("receiver_id" in queued) && !("content" in queued));
     await assert.rejects(db.listPaidReviewQueue(event.id, "other", 0), /event_not_found/);

@@ -916,8 +916,7 @@ export function* listPaidReviewQueue(
        c.email AS customer_email,c.phone AS customer_phone,
        a.id AS attempt_id,a.status,a.claimed_minor,a.claimed_transfer_ms,a.claimed_reference,a.created_ms,
        a.observed_minor,a.reason,r.receiver_name,r.receiver_id,es.payment_mode,p.id AS proof_id,
-       (SELECT COUNT(*) FROM paid_proofs other WHERE other.checksum=p.checksum AND other.attempt_id<>a.id) AS matching_proofs,
-       (SELECT COUNT(*) FROM paid_attendees attendee WHERE attendee.booking_id=b.id AND attendee.cancelled_ms IS NULL) AS attendee_count
+       (SELECT COUNT(*) FROM paid_proofs other WHERE other.checksum=p.checksum AND other.attempt_id<>a.id) AS matching_proofs
      FROM paid_bookings b JOIN events e ON e.id=b.event_id
      JOIN customer_accounts c ON c.id=b.customer_id
      LEFT JOIN paid_payment_attempts a
@@ -932,14 +931,30 @@ export function* listPaidReviewQueue(
        COALESCE(a.created_ms,b.created_ms) ${direction},b.id ${direction},a.id ${direction} LIMIT 21 OFFSET ?`,
     eventId, ...(reference ? [reference] : []), Date.now(), reference ? 1 : 0, offset,
   );
-  return rows.map(({ receiver_id, ...row }) => ({
-    ...row, receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),
-    attendee_count: Number(row.attendee_count), matching_proofs: Number(row.matching_proofs),
-    claimed_minor: row.claimed_minor == null ? null : Number(row.claimed_minor),
-    claimed_transfer_ms: row.claimed_transfer_ms == null ? null : Number(row.claimed_transfer_ms),
-    booking_created_ms: Number(row.booking_created_ms), due_ms: Number(row.due_ms),
-    created_ms: row.created_ms == null ? null : Number(row.created_ms), observed_minor: row.observed_minor == null ? null : Number(row.observed_minor),
-  }));
+  if (!rows.length) return [];
+
+  const namesByBooking = new Map(rows.map(({ booking_id }) => [String(booking_id), [] as string[]]));
+  const bookingIds = [...namesByBooking.keys()];
+  const attendees = yield query(
+    `SELECT booking_id,first_name,last_name FROM paid_attendees
+     WHERE event_id=? AND booking_id IN (${bookingIds.map(() => "?").join(",")}) AND cancelled_ms IS NULL
+     ORDER BY booking_id,ordinal`,
+    eventId, ...bookingIds,
+  );
+  for (const attendee of attendees) {
+    namesByBooking.get(String(attendee.booking_id))?.push([attendee.first_name, attendee.last_name].filter(Boolean).join(" "));
+  }
+  return rows.map(({ receiver_id, ...row }) => {
+    const attendeeNames = namesByBooking.get(String(row.booking_id)) ?? [];
+    return {
+      ...row, receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),
+      attendee_names: attendeeNames, attendee_count: attendeeNames.length, matching_proofs: Number(row.matching_proofs),
+      claimed_minor: row.claimed_minor == null ? null : Number(row.claimed_minor),
+      claimed_transfer_ms: row.claimed_transfer_ms == null ? null : Number(row.claimed_transfer_ms),
+      booking_created_ms: Number(row.booking_created_ms), due_ms: Number(row.due_ms),
+      created_ms: row.created_ms == null ? null : Number(row.created_ms), observed_minor: row.observed_minor == null ? null : Number(row.observed_minor),
+    };
+  });
 }
 
 export function* createPaidMessengerLinkToken(eventId: string, customerId: string, tokenHash: string): PaidCommand<number> {
