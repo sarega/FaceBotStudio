@@ -1495,6 +1495,8 @@ export class SqliteAppDatabase implements AppDatabase {
       }
       this.db.exec(readFileSync(new URL("./migrations/054_paid_coupons.sql", import.meta.url), "utf8").split("-- Complimentary bookings")[0]);
       this.db.exec(readFileSync(new URL("./migrations/056_admin_notification_state.sql",import.meta.url),"utf8"));
+      this.ensureColumn("admin_notification_items", "unread_ms", "INTEGER");
+      this.ensureColumn("admin_notification_items", "deleted_ms", "INTEGER");
       for (const table of ["registrations", "event_performances"]) {
         this.db.exec(`
           CREATE TRIGGER IF NOT EXISTS trg_paid_${table}_legacy_guard BEFORE INSERT ON ${table}
@@ -1676,11 +1678,13 @@ export class SqliteAppDatabase implements AppDatabase {
       "SELECT read_before_ms,imported_at_ms FROM admin_notification_preferences WHERE organization_id=? AND user_id=? AND event_id=?"
     ).get(organizationId,userId,eventId) as {read_before_ms:number;imported_at_ms:number|null}|undefined;
     const entries=this.db.prepare(
-      "SELECT audit_id,read_ms,archived_ms FROM admin_notification_items WHERE organization_id=? AND user_id=? AND event_id=?"
-    ).all(organizationId,userId,eventId) as Array<{audit_id:string;read_ms:number|null;archived_ms:number|null}>;
+      "SELECT audit_id,read_ms,archived_ms,unread_ms,deleted_ms FROM admin_notification_items WHERE organization_id=? AND user_id=? AND event_id=?"
+    ).all(organizationId,userId,eventId) as Array<{audit_id:string;read_ms:number|null;archived_ms:number|null;unread_ms:number|null;deleted_ms:number|null}>;
     return {time:Number(preference?.read_before_ms??0),imported:preference?.imported_at_ms!=null,
       readIds:entries.filter(x=>x.read_ms!=null).map(x=>x.audit_id),
-      dismissedIds:entries.filter(x=>x.archived_ms!=null).map(x=>x.audit_id)};
+      dismissedIds:entries.filter(x=>x.archived_ms!=null).map(x=>x.audit_id),
+      unreadIds:entries.filter(x=>x.unread_ms!=null).map(x=>x.audit_id),
+      deletedIds:entries.filter(x=>x.deleted_ms!=null).map(x=>x.audit_id)};
   }
 
   async mutateAdminNotificationState(organizationId:string,userId:string,eventId:string,
@@ -1713,28 +1717,36 @@ export class SqliteAppDatabase implements AppDatabase {
         this.db.prepare(
           "UPDATE admin_notification_preferences SET read_before_ms=MAX(read_before_ms,?) WHERE organization_id=? AND user_id=? AND event_id=?"
         ).run(Number(latest.last_ms),organizationId,userId,eventId);
+        this.db.prepare(
+          "UPDATE admin_notification_items SET unread_ms=NULL WHERE organization_id=? AND user_id=? AND event_id=? AND unread_ms IS NOT NULL"
+        ).run(organizationId,userId,eventId);
       }else if(input.action==="restore_all"){
         this.db.prepare(
           "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=? AND user_id=? AND event_id=?"
         ).run(organizationId,userId,eventId);
-      }else if(input.action==="restore"){
+      }else if(input.action==="restore" || input.action==="restore_deleted"){
+        const column = input.action==="restore" ? "archived_ms" : "deleted_ms";
         const stmt=this.db.prepare(
-          "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=? AND user_id=? AND event_id=? AND audit_id=?"
+          `UPDATE admin_notification_items SET ${column}=NULL WHERE organization_id=? AND user_id=? AND event_id=? AND audit_id=?`
         );
         for(const id of ids)stmt.run(organizationId,userId,eventId,id);
-      }else if(["read","archive","import"].includes(input.action)){
+      }else{
         const read=input.action==="read" || input.action==="import";
         const stmt=this.db.prepare(
-          `INSERT INTO admin_notification_items (organization_id,user_id,event_id,audit_id,read_ms,archived_ms)
-           SELECT ?,?,?,a.id,?,? FROM paid_audit_events a WHERE a.id=? AND a.event_id=?
+          `INSERT INTO admin_notification_items (organization_id,user_id,event_id,audit_id,read_ms,archived_ms,unread_ms,deleted_ms)
+           SELECT ?,?,?,a.id,?,?,?,? FROM paid_audit_events a WHERE a.id=? AND a.event_id=?
            ON CONFLICT(organization_id,user_id,event_id,audit_id) DO UPDATE SET
              read_ms=COALESCE(admin_notification_items.read_ms,excluded.read_ms),
-             archived_ms=COALESCE(admin_notification_items.archived_ms,excluded.archived_ms)`
+             archived_ms=COALESCE(admin_notification_items.archived_ms,excluded.archived_ms),
+             unread_ms=CASE WHEN excluded.read_ms IS NOT NULL THEN NULL
+               ELSE COALESCE(excluded.unread_ms,admin_notification_items.unread_ms) END,
+             deleted_ms=COALESCE(admin_notification_items.deleted_ms,excluded.deleted_ms)`
         );
         for(const id of ids)stmt.run(organizationId,userId,eventId,read?now:null,
-          read?null:now,id,eventId);
+          input.action==="archive"?now:null,input.action==="unread"?now:null,
+          input.action==="delete"?now:null,id,eventId);
         if(input.action==="import")for(const id of archivedIds)
-          stmt.run(organizationId,userId,eventId,null,now,id,eventId);
+          stmt.run(organizationId,userId,eventId,null,now,null,null,id,eventId);
       }
     })();
     return this.getAdminNotificationState(organizationId,userId,eventId);

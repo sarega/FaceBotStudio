@@ -7,11 +7,12 @@ export function AttendeeThemeSelect({ mode, onChange, locale = "en" }: {
   onChange: (mode: ThemeMode) => void;
 }) {
   const Icon = mode === "light" ? Sun : mode === "dark" ? Moon : Monitor;
+  const label = locale === "th" ? "ธีมการแสดงผล" : "Appearance";
   return (
-    <span title="ธีมการแสดงผล / Appearance" className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 focus-within:ring-2 focus-within:ring-blue-500">
+    <span title={label} className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 focus-within:ring-2 focus-within:ring-blue-500">
       <Icon className="h-4 w-4" aria-hidden="true" />
       <select
-        aria-label="ธีมการแสดงผล / Appearance"
+        aria-label={label}
         value={mode}
         onChange={(event) => onChange(event.target.value as ThemeMode)}
         className="absolute inset-0 h-full w-full cursor-pointer opacity-0"

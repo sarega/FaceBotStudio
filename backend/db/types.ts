@@ -2,10 +2,10 @@ import type { CouponInput } from "./paidCoupons";
 import type { PaidAdminAction } from "./paidRegistration";
 import type { PaidMessengerDraftInput, PaidMessengerConfirmInput, PaidMessengerQuote, PaidMessengerStatus, PaidReviewInput, PaidReviewReceipt, PaidProofInput, PaidProofReceipt, PaidBookingInput, PaidBookingReceipt, PaidCatalog, PaidRow, PaidSettingsInput } from "./paidRegistration";
 export interface AdminNotificationStateRow {
-  time:number;readIds:string[];dismissedIds:string[];imported:boolean;
+  time:number;readIds:string[];dismissedIds:string[];unreadIds:string[];deletedIds:string[];imported:boolean;
 }
 export interface AdminNotificationMutation {
-  action:"read"|"read_all"|"archive"|"restore"|"restore_all"|"import";
+  action:"read"|"read_all"|"unread"|"archive"|"restore"|"restore_all"|"delete"|"restore_deleted"|"import";
   ids?:string[];
   archivedIds?:string[];
   time?:number;

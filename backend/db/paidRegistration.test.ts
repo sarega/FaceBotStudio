@@ -100,7 +100,7 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     const eventActivity=await db.readPaidEventSummary(event.id,"org_default",true);
     const notificationId=String((eventActivity!.activity as Array<{id:string}>)[0].id);
     assert.deepEqual(await db.getAdminNotificationState("org_default",adminA.id,event.id),
-      {time:0,readIds:[],dismissedIds:[],imported:false});
+      {time:0,readIds:[],dismissedIds:[],unreadIds:[],deletedIds:[],imported:false});
     const migrated=await db.mutateAdminNotificationState("org_default",adminA.id,event.id,
       {action:"import",time:10,ids:[notificationId],archivedIds:[notificationId]});
     assert.equal(migrated.time,10);
@@ -111,7 +111,7 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.deepEqual(await second.getAdminNotificationState("org_default",adminA.id,event.id),migrated,
       "a second device must not replay legacy storage after first import");
     assert.deepEqual(await second.getAdminNotificationState("org_default",adminB.id,event.id),
-      {time:0,readIds:[],dismissedIds:[],imported:false},
+      {time:0,readIds:[],dismissedIds:[],unreadIds:[],deletedIds:[],imported:false},
       "another admin must not inherit the first admin's read state");
     const restoredNotification=await second.mutateAdminNotificationState("org_default",adminA.id,event.id,
       {action:"restore",ids:[notificationId]});

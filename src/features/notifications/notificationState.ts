@@ -4,6 +4,8 @@ export type NotificationState = {
   time: number; // Legacy "all read before this time" value.
   readIds: string[];
   dismissedIds: string[];
+  unreadIds?: string[];
+  deletedIds?: string[];
 };
 export type NotificationItem = { id:string; occurred_ms:number };
 const MAX_IDS=2000;
@@ -22,7 +24,7 @@ export function parseNotificationState(key:string,raw:string|null):NotificationS
   }catch {return blankNotificationState(key);}
 }
 export const notificationIsUnread=(state:NotificationState,item:NotificationItem)=>
-  Number(item.occurred_ms)>state.time&&!state.readIds.includes(item.id);
+  Boolean(state.unreadIds?.includes(item.id)) || (Number(item.occurred_ms)>state.time&&!state.readIds.includes(item.id));
 export const notificationIsArchived=(state:NotificationState,item:NotificationItem)=>
   state.dismissedIds.includes(item.id);
 const append=(prior:string[],added:string[])=>ids([...prior,...added]);
@@ -37,3 +39,6 @@ export function restoreNotifications(state:NotificationState,items?:Notification
   const restore=new Set(items.map(x=>x.id));
   return {...state,dismissedIds:state.dismissedIds.filter(id=>!restore.has(id))};
 }
+
+export const notificationIsDeleted=(state:NotificationState,item:NotificationItem)=>
+  Boolean(state.deletedIds?.includes(item.id));

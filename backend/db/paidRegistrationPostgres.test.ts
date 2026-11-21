@@ -76,6 +76,17 @@ test("PostgreSQL paid migrations preserve legacy rows and serialize group holds,
     assert.deepEqual(scans.map((scan) => scan?.already_checked_in).sort(), [false, true]);
     assert.equal((await db.listNotificationDeliveries({ related_type: "paid_booking", related_id: booking.id })).length, 1);
     assert.equal((await db.readPaidEventSummary(event.id, "org_default"))?.accepted_minor, "50000");
+    const admin = await db.createUser({ username: "notification-test", role: "admin", display_name: "Admin", password_hash: "fixture" });
+    const audit = (await db.readPaidEventSummary(event.id, "org_default", true))?.activity as Array<{ id: string }>;
+    const ids = audit.slice(0, 2).map(({ id }) => id).sort();
+    const mutateNotice = (action: "read_all" | "unread" | "read" | "delete" | "restore_deleted") =>
+      db.mutateAdminNotificationState("org_default", admin.id, event.id, { action, ids });
+    await mutateNotice("read_all");
+    assert.deepEqual((await mutateNotice("unread")).unreadIds.sort(), ids);
+    assert.deepEqual((await mutateNotice("read")).unreadIds, []);
+    assert.deepEqual((await mutateNotice("delete")).deletedIds.sort(), ids);
+    assert.deepEqual((await mutateNotice("restore_deleted")).deletedIds, []);
+
     const report = await db.readPaidRegistrationReport(event.id, "org_default");
     assert.equal(report?.confirmed_attendees, 2);
     const reportDays = report?.by_day as Array<{ registrations: number; checked_in: number }>;

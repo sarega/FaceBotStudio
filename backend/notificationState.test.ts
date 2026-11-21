@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {archiveNotifications,blankNotificationState,markNotificationRead,notificationIsArchived,
-  notificationIsUnread,parseNotificationState,restoreNotifications} from "../src/features/notifications/notificationState";
+  notificationIsDeleted,notificationIsUnread,parseNotificationState,restoreNotifications} from "../src/features/notifications/notificationState";
 test("notification operations never change server items and persist across reload",()=>{
  const items=[{id:"a",occurred_ms:10},{id:"b",occurred_ms:20},{id:"c",occurred_ms:30}];
  const blank=blankNotificationState("user-event");
@@ -24,4 +24,12 @@ test("legacy timestamps, corrupted storage and many entries handled",()=>{
  assert.equal(archived.dismissedIds.length,100,"older dismissal state must not fall off at 40");
  const restored=restoreNotifications(archived,[many[0]]);
  assert.equal(restored.dismissedIds.length,99);
+});
+
+test("explicit unread overrides the read-all cutoff and trash remains separate from archive", () => {
+  const state = { ...blankNotificationState("scope"), time: 100, readIds: ["old"], unreadIds: ["old"], deletedIds: ["old"] };
+  const item = { id: "old", occurred_ms: 20 };
+  assert.equal(notificationIsUnread(state, item), true);
+  assert.equal(notificationIsDeleted(state, item), true);
+  assert.equal(notificationIsArchived(state, item), false);
 });

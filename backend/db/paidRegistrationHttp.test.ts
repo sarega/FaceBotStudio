@@ -447,7 +447,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const notificationId=notificationAudit[0].id;
     assert.equal((await fetch(notificationPath)).status,401,"customer cannot see admin notification state");
     const initialNotification=await (await fetch(notificationPath,{headers:staffHeaders})).json();
-    assert.deepEqual(initialNotification.state,{time:0,readIds:[],dismissedIds:[],imported:false});
+    assert.deepEqual(initialNotification.state,{time:0,readIds:[],dismissedIds:[],unreadIds:[],deletedIds:[],imported:false});
     const notificationPost=async(body:Record<string,unknown>)=>fetch(notificationPath,{
       method:"POST",headers:{...staffHeaders,"Content-Type":"application/json"},
       body:JSON.stringify(body),
@@ -471,6 +471,25 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       [notificationId],"legacy migration can run only once");
     assert.equal((await notificationPost({action:"unknown"})).status,400);
     assert.equal((await notificationPost({action:"archive",ids:["x".repeat(200)]})).status,400);
+
+    const selectedIds = notificationAudit.slice(0, 2).map((item) => item.id);
+    const setNotificationAction = async (action: string, ids: string[] = selectedIds) => {
+      const response = await notificationPost({ action, ids });
+      assert.equal(response.status, 200);
+      return (await response.json()).state;
+    };
+    await setNotificationAction("read_all");
+    assert.deepEqual((await setNotificationAction("unread")).unreadIds.sort(), selectedIds.slice().sort());
+    assert.deepEqual((await setNotificationAction("read", selectedIds.slice(0, 1))).unreadIds, selectedIds.slice(1));
+    assert.deepEqual((await setNotificationAction("read_all")).unreadIds, []);
+    await setNotificationAction("archive", [notificationId]);
+    const trashed = await setNotificationAction("delete", [...selectedIds, "foreign-id"]);
+    assert.deepEqual(trashed.deletedIds.sort(), selectedIds.slice().sort());
+    assert.deepEqual(trashed.dismissedIds, [notificationId]);
+    const recovered = await setNotificationAction("restore_deleted");
+    assert.deepEqual(recovered.deletedIds, []);
+    assert.deepEqual(recovered.dismissedIds, [notificationId]);
+    await setNotificationAction("restore_all");
 
     const readinessResponse = await fetch(eventPrefix + "/readiness", { headers: staffHeaders });
     assert.equal(readinessResponse.status, 200);

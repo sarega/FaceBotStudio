@@ -17882,7 +17882,7 @@ async function startServer() {
   app.post("/api/events/:eventId/admin-notifications/state",
     requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res:Response)=>{
       const body=req.body??{};
-      const actions=["read","read_all","archive","restore","restore_all","import"];
+      const actions=["read","read_all","unread","archive","restore","restore_all","delete","restore_deleted","import"];
       const validIds=(value:unknown)=>Array.isArray(value)&&value.length<=2000&&
         value.every(id=>typeof id==="string"&&id.length>0&&id.length<=128);
       if(!actions.includes(body.action)||!validIds(body.ids??[])||

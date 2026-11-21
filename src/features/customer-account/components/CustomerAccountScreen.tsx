@@ -1,3 +1,4 @@
+import { customerErrorCopy, type CustomerCopy } from "../customerLocale";
 import { CustomerVerificationNotice } from "./CustomerVerificationNotice";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -78,8 +79,8 @@ export async function customerApi<T>(path: string, init: RequestInit = {}) {
   const response = await fetch(path, { ...init, headers, credentials: "same-origin" });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401) throw new Error("CUSTOMER_NOT_AUTHENTICATED");
-    if (response.status === 404) throw new Error("CUSTOMER_APP_DISABLED");
+    if (response.status === 401) throw new Error("CUSTOMER_NOT_AUTHENTICATED", { cause: data?.error });
+    if (response.status === 404) throw new Error("CUSTOMER_APP_DISABLED", { cause: data?.error });
     const issues = Array.isArray(data?.issues) ? data.issues.map((issue: { message?: string }) => issue.message).filter(Boolean).join(", ") : "";
     throw new Error(issues || data?.error || "Request failed");
   }
@@ -151,8 +152,10 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [form, setForm] = useState<CustomerForm>(() => customerFormDefaults(queryToken));
   const [busy, setBusy] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [notice, setNotice] = useState("");
+  const [errorCopy, setErrorMessage] = useState<CustomerCopy>();
+  const errorMessage = errorCopy ? t(...errorCopy) : "";
+  const [noticeCopy, setNotice] = useState<CustomerCopy>();
+  const notice = noticeCopy ? t(...noticeCopy) : "";
   const [verificationDeliveryFailed,setVerificationDeliveryFailed]=useState(false);
   const handledTokenRef = useRef("");
 
@@ -165,7 +168,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
     if (embedded && nextMode !== "profile") { window.location.assign(nextPath); return; }
     window.history.pushState({}, "", nextPath);
     setMode(nextMode);
-    setErrorMessage("");
+    setErrorMessage(undefined);
   };
 
   useEffect(() => {
@@ -184,7 +187,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           return;
         }
         setMode("unavailable");
-        setErrorMessage(error instanceof Error ? error.message : "Customer account is unavailable");
+        setErrorMessage(customerErrorCopy(error, ["ระบบบัญชีผู้เข้าร่วมยังไม่พร้อมใช้งาน", "Customer account is unavailable"]));
       })
       .finally(() => {
         if (!cancelled) setBusy(false);
@@ -205,9 +208,9 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
     })
       .then(() => {
         navigate("login");
-        setNotice("Email verified. You can now sign in.");
+        setNotice(["ยืนยันอีเมลแล้ว คุณเข้าสู่ระบบได้เลย", "Email verified. You can now sign in."]);
       })
-      .catch((error: unknown) => setErrorMessage(error instanceof Error ? error.message : "Failed to verify email"))
+      .catch((error: unknown) => setErrorMessage(customerErrorCopy(error, ["ยืนยันอีเมลไม่สำเร็จ", "Failed to verify email"])))
       .finally(() => setBusy(false));
   }, [form.token, mode]);
 
@@ -232,8 +235,8 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
-    setErrorMessage("");
-    setNotice("");
+    setErrorMessage(undefined);
+    setNotice(undefined);
     try {
       if (mode === "login") {
         const data = await customerApi<{ account: CustomerAccount }>("/api/customer/account/login", {
@@ -248,7 +251,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         }
         setAccount(data.account);
         setField("password", "");
-        setNotice("");
+        setNotice(undefined);
         navigate("profile");
         return;
       }
@@ -268,7 +271,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         });
         setVerificationDeliveryFailed(data.verification_delivery_queued === false);
         setField("password","");
-        setNotice("");
+        setNotice(undefined);
         navigate("check-email");
         return;
       }
@@ -278,7 +281,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: form.email }),
         });
-        setNotice("If that email exists, a reset link has been sent.");
+        setNotice(["หากอีเมลนี้มีบัญชีอยู่ ระบบจะส่งลิงก์ตั้งรหัสผ่านใหม่ให้", "If that email exists, a reset link has been sent."]);
         return;
       }
       if (mode === "reset") {
@@ -288,7 +291,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           body: JSON.stringify({ token: form.token, password: form.password }),
         });
         navigate("login");
-        setNotice("Password reset. You can now sign in.");
+        setNotice(["ตั้งรหัสผ่านใหม่แล้ว คุณเข้าสู่ระบบได้เลย", "Password reset. You can now sign in."]);
         return;
       }
       if (mode === "profile" && account) {
@@ -309,10 +312,10 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           }),
         });
         setAccount(data.account);
-        setNotice("Profile saved.");
+        setNotice(["บันทึกโปรไฟล์แล้ว", "Profile saved."]);
       }
     } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : "Request failed");
+      setErrorMessage(customerErrorCopy(error, ["ทำรายการไม่สำเร็จ กรุณาตรวจข้อมูลแล้วลองอีกครั้ง", "Request failed"]));
     } finally {
       setBusy(false);
     }
@@ -333,12 +336,12 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
 
   const resendVerification = async () => {
     if (!form.email.trim()) {
-      setErrorMessage("Enter your account email first.");
+      setErrorMessage(["กรอกอีเมลบัญชีของคุณก่อน", "Enter your account email first."]);
       return;
     }
     setBusy(true);
-    setErrorMessage("");
-    setNotice("");
+    setErrorMessage(undefined);
+    setNotice(undefined);
     try {
       const data = await customerApi<{ verification_delivery_queued?: boolean }>("/api/customer/account/resend-verification", {
         method: "POST",
@@ -347,10 +350,10 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
       });
       setVerificationDeliveryFailed(data.verification_delivery_queued === false);
       setNotice(data.verification_delivery_queued === false
-        ? "ยังส่งอีเมลไม่ได้ กรุณาลองใหม่หรือติดต่อผู้จัดงาน / Email delivery unavailable."
-        : "ส่งคำขออีเมลยืนยันแล้ว กรุณาตรวจ Inbox และ Spam / Check your email.");
+        ? ["ยังส่งอีเมลไม่ได้ กรุณาลองใหม่หรือติดต่อผู้จัดงาน", "Email delivery is unavailable. Try again or contact the organizer."]
+        : ["ส่งคำขออีเมลยืนยันแล้ว กรุณาตรวจกล่องจดหมายเข้าและสแปม", "Check your inbox and spam folder for the verification email."]);
     } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to resend verification email");
+      setErrorMessage(customerErrorCopy(error, ["ส่งอีเมลยืนยันซ้ำไม่สำเร็จ", "Failed to resend verification email"]));
     } finally {
       setBusy(false);
     }
@@ -358,30 +361,30 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
 
   const revokeSessions = async () => {
     setBusy(true);
-    setErrorMessage("");
+    setErrorMessage(undefined);
     try {
       await customerApi("/api/customer/account/sessions/revoke", { method: "POST" });
       setAccount(null);
       navigate("login");
-      setNotice("All customer sessions were revoked.");
+      setNotice(["ออกจากระบบทุกอุปกรณ์แล้ว", "All customer sessions were revoked."]);
     } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to revoke sessions");
+      setErrorMessage(customerErrorCopy(error, ["ออกจากระบบทุกอุปกรณ์ไม่สำเร็จ", "Failed to revoke sessions"]));
     } finally {
       setBusy(false);
     }
   };
 
   const disableAccount = async () => {
-    if (!window.confirm("Disable this customer account and sign out all sessions?")) return;
+    if (!window.confirm(t("ปิดใช้งานบัญชีนี้และออกจากระบบทุกอุปกรณ์หรือไม่?", "Disable this customer account and sign out all sessions?"))) return;
     setBusy(true);
-    setErrorMessage("");
+    setErrorMessage(undefined);
     try {
       await customerApi("/api/customer/account/disable", { method: "POST" });
       setAccount(null);
       navigate("login");
-      setNotice("Your customer account has been disabled.");
+      setNotice(["ปิดใช้งานบัญชีผู้เข้าร่วมแล้ว", "Your customer account has been disabled."]);
     } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to disable account");
+      setErrorMessage(customerErrorCopy(error, ["ปิดใช้งานบัญชีไม่สำเร็จ", "Failed to disable account"]));
     } finally {
       setBusy(false);
     }
@@ -403,11 +406,11 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
   const accountContent = <>
           {busy && mode === "profile" && !account ? (
             <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-              <RefreshCw className="h-4 w-4 animate-spin text-blue-700" /> Loading account…
+              <RefreshCw className="h-4 w-4 animate-spin text-blue-700" /> {t("กำลังโหลดบัญชี…", "Loading account…")}
             </div>
           ) : mode === "unavailable" ? (
             <div className="space-y-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-5 text-sm text-amber-800">
-              <p>Customer accounts are not enabled in this environment yet.</p>
+              <p>{t("ระบบบัญชีผู้เข้าร่วมยังไม่พร้อมใช้งาน", "Customer accounts are not enabled in this environment yet.")}</p>
               {errorMessage && <p className="text-xs text-amber-800">{errorMessage}</p>}
             </div>
           ) : mode === "check-email" ? (
@@ -426,8 +429,8 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           ) : mode === "verify" ? (
             <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
               <CheckCircle2 className={`h-7 w-7 ${errorMessage ? "text-rose-700" : "text-blue-700"}`} />
-              <p>{busy ? "Verifying your email…" : errorMessage || "This verification link is ready."}</p>
-              {!busy && <button type="button" onClick={() => navigate("login")} className="rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500">Continue to sign in</button>}
+              <p>{busy ? t("กำลังยืนยันอีเมล…", "Verifying your email…") : errorMessage || t("ลิงก์ยืนยันพร้อมใช้งาน", "This verification link is ready.")}</p>
+              {!busy && <button type="button" onClick={() => navigate("login")} className="rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-500">{t("ไปหน้าเข้าสู่ระบบ", "Continue to sign in")}</button>}
             </div>
           ) : mode === "profile" && account ? (
             <div className="space-y-5">
@@ -492,11 +495,11 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
 
   if (embedded === "security") return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
-      <h2 className="mb-3 font-semibold text-slate-900">Session security</h2>
+      <h2 className="mb-3 font-semibold text-slate-900">{t("ความปลอดภัยในการเข้าสู่ระบบ", "Session security")}</h2>
       <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={busy} onClick={() => void logout()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 font-semibold text-slate-700 hover:border-slate-300 hover:underline disabled:opacity-50"><LogOut className="h-4 w-4" /> Sign out</button>
-                <button type="button" disabled={busy} onClick={() => void revokeSessions()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">Revoke all sessions</button>
-                <button type="button" disabled={busy} onClick={() => void disableAccount()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">Disable account</button>
+                <button type="button" disabled={busy} onClick={() => void logout()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 font-semibold text-slate-700 hover:border-slate-300 hover:underline disabled:opacity-50"><LogOut className="h-4 w-4" /> {t("ออกจากระบบ", "Sign out")}</button>
+                <button type="button" disabled={busy} onClick={() => void revokeSessions()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">{t("ออกจากระบบทุกอุปกรณ์", "Revoke all sessions")}</button>
+                <button type="button" disabled={busy} onClick={() => void disableAccount()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">{t("ปิดใช้งานบัญชี", "Disable account")}</button>
       </div>
       {errorMessage && <p role="alert" className="mt-3 text-rose-700">{errorMessage}</p>}
     </section>
@@ -523,7 +526,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           )}
         </div>
 
-        <nav aria-label="Account navigation" className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold">
+        <nav aria-label={t("เมนูบัญชี", "Account navigation")} className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold">
           <a href="/events" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><CalendarDays className="h-4 w-4" /> {t("งานทั้งหมด", "All events")}</a>
           <a href={returnTo} className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" /> {t("กลับบัญชีของฉัน", "Back to my account")}</a>
           <a href="/app/orders" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ShoppingBag className="h-4 w-4" /> {t("การจองของฉัน", "My bookings")}</a>
@@ -537,7 +540,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
 
           {accountContent}
         </div>
-        <p className="mt-6 flex items-center justify-center gap-2 text-center text-xs text-slate-600"><LockKeyhole className="h-3.5 w-3.5" /> Customer credentials are stored separately from organizer accounts.</p>
+        <p className="mt-6 flex items-center justify-center gap-2 text-center text-xs text-slate-600"><LockKeyhole className="h-3.5 w-3.5" /> {t("ข้อมูลเข้าสู่ระบบของผู้เข้าร่วมแยกจากบัญชีผู้จัดงาน", "Customer credentials are stored separately from organizer accounts.")}</p>
       </div>
     </div>
   );

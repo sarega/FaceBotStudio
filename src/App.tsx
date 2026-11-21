@@ -1,6 +1,7 @@
+import { NotificationInbox, type InboxEntry, type NotificationFilter } from "./features/notifications/NotificationInbox";
+import type { AdminNotificationMutation } from "../backend/db/types";
 import {
-  archiveNotifications, blankNotificationState, markNotificationRead,
-  notificationIsArchived, notificationIsUnread, parseNotificationState, restoreNotifications,
+  blankNotificationState, notificationIsArchived, notificationIsDeleted, notificationIsUnread, parseNotificationState,
   type NotificationState,
 } from "./features/notifications/notificationState";
 import { Bell } from "lucide-react";
@@ -3163,9 +3164,8 @@ export default function App() {
   const [notificationStateError,setNotificationStateError]=useState("");
   const [notificationMutationBusy,setNotificationMutationBusy]=useState(false);
   const notificationStateEpoch=useRef(0);
-  const [notificationFilter,setNotificationFilter]=useState<"active"|"unread"|"archived">("active");
+  const [notificationFilter,setNotificationFilter]=useState<NotificationFilter>("active");
   const [notificationLoading,setNotificationLoading]=useState(false);
-  const [notificationUpdatedAt,setNotificationUpdatedAt]=useState<number|null>(null);
   const [notificationHistory,setNotificationHistory]=useState<{key:string;nextOffset:number;hasMore:boolean}>({
     key:"",nextOffset:0,hasMore:false,
   });
@@ -4798,42 +4798,56 @@ export default function App() {
     canOpenNotifications;
   const eventNotificationData = canViewNotifications && notificationData?.eventId === selectedEventId && notificationData.userId === authUser?.id ? notificationData : undefined;
   const notificationSummary = eventNotificationData?.summary;
-  const notificationActivity = (notificationSummary?.activity ?? []) as {
-    id: string; reference: string; action: string; occurred_ms: number;
-    first_name?: string; last_name?: string; booking_state?: string; total_minor?: number; attendee_count?: number;
-  }[];
+  const notificationActivity = (notificationSummary?.activity ?? []) as InboxEntry[];
   const notificationKey = `meetrix-notifications:${authUser?.id}:${selectedEventId}`;
-  const notificationHistoryKey=notificationKey;
+  const notificationHistoryKey = notificationKey;
   const seen = notificationSeen?.key === notificationKey ? notificationSeen : blankNotificationState(notificationKey);
-  const visibleNotifications=notificationActivity.filter(item=>!notificationIsArchived(seen,item));
-  const archivedNotifications=notificationActivity.filter(item=>notificationIsArchived(seen,item));
-  const filteredNotifications=notificationFilter==="archived" ? archivedNotifications :
-    notificationFilter==="unread" ? visibleNotifications.filter(item=>notificationIsUnread(seen,item)) :
-    visibleNotifications;
-  const unreadNotifications=visibleNotifications.filter(item=>notificationIsUnread(seen,item)).length;
+  const trash = notificationActivity.filter((item) => notificationIsDeleted(seen, item));
+  const currentNotifications = notificationActivity.filter((item) => !notificationIsDeleted(seen, item));
+  const groups = {
+    active: currentNotifications.filter((item) => !notificationIsArchived(seen, item)),
+    archived: currentNotifications.filter((item) => notificationIsArchived(seen, item)),
+    trash,
+  };
+  const unread = groups.active.filter((item) => notificationIsUnread(seen, item));
+  const filteredNotifications = notificationFilter === "unread" ? unread : groups[notificationFilter];
+  const unreadNotifications = unread.length;
   const notifyLabel = (th: string, en: string) => language === "th" ? th : en;
-  const notificationMoney = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
+  const notificationMutation = useRef(false);
+  const activeNotificationKey = useRef(notificationKey);
+  activeNotificationKey.current = notificationKey;
   const notificationStatePath="/api/events/"+encodeURIComponent(selectedEventId)+"/admin-notifications/state";
-  async function mutateNotificationState(action:"read"|"read_all"|"archive"|"restore"|"restore_all",
-    ids:string[]=[]){
-    if(notificationMutationBusy || seen.key!==notificationKey ||
-      notificationSeen?.key!==notificationKey)return;
-    notificationStateEpoch.current+=1;
+  async function mutateNotificationState(action: Exclude<AdminNotificationMutation["action"], "import">, ids: string[] = []) {
+    if (notificationMutation.current || notificationSeen?.key !== notificationKey) return false;
+    notificationMutation.current = true;
+    notificationStateEpoch.current += 1;
     setNotificationMutationBusy(true);
     setNotificationStateError("");
-    try{
-      const response=await apiFetch(notificationStatePath,{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action,ids}),
-      });
-      if(!response.ok)throw new Error("notification_state_write_failed");
-      const {state}=await response.json();
-      setNotificationSeen({...state,key:notificationKey});
-    }catch{
-      setNotificationStateError(notifyLabel(
-        "บันทึกการอ่าน/ซ่อนไม่สำเร็จ กรุณาลองอีกครั้ง",
-        "Could not save notification state. Please retry."));
-    }finally{setNotificationMutationBusy(false);}
+    try {
+      for (let offset = 0; offset < Math.max(1, ids.length); offset += 2000) {
+        if (activeNotificationKey.current !== notificationKey) return false;
+        const response = await apiFetch(notificationStatePath, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, ids: ids.slice(offset, offset + 2000) }),
+        });
+        if (!response.ok) throw new Error("notification_state_write_failed");
+        const { state } = await response.json();
+        if (activeNotificationKey.current !== notificationKey) return false;
+        setNotificationSeen({ ...state, key: notificationKey });
+      }
+      return true;
+    } catch {
+      if (activeNotificationKey.current === notificationKey) {
+        setNotificationStateError(notifyLabel(
+          "บันทึกการแจ้งเตือนไม่สำเร็จ กรุณาลองอีกครั้ง",
+          "Could not save notification changes. Please retry."));
+      }
+      return false;
+    } finally {
+      notificationStateEpoch.current += 1;
+      notificationMutation.current = false;
+      setNotificationMutationBusy(false);
+    }
   }
   useEffect(()=>{
     notificationStateEpoch.current+=1;
@@ -4875,7 +4889,7 @@ export default function App() {
               state=(await imported.json()).state;
             }
           }
-          if(!request.signal.aborted && notificationStateEpoch.current===expectedStateEpoch){
+          if(!request.signal.aborted && !notificationMutation.current && notificationStateEpoch.current===expectedStateEpoch){
             setNotificationSeen({...state,key:notificationKey});
             setNotificationStateError("");
           }
@@ -4902,7 +4916,6 @@ export default function App() {
             nextOffset:Number(summary?.activity_next_offset??firstPage.length),
             hasMore:Boolean(summary?.activity_has_more),
           });
-          setNotificationUpdatedAt(Date.now());
         }
       } catch {
         if (!request.signal.aborted) setNotificationData((current) => ({
@@ -11135,128 +11148,30 @@ export default function App() {
           )}
 
           {activeTab === "notifications" && canViewNotifications && (
-            <section className="surface-panel space-y-4 rounded-2xl p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div><h1 className="text-xl font-bold text-slate-900">{notifyLabel("การแจ้งเตือน", "Notifications")}</h1>
-                  <p className="text-sm text-slate-600">{selectedEvent?.name}</p></div>
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" disabled={notificationLoading}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
-                    onClick={()=>setNotificationRefresh(n=>n+1)}>
-                    <RefreshCw className={"mr-1 inline h-4 w-4"+(notificationLoading?" animate-spin":"")}/>
-                    {notifyLabel("รีเฟรช", "Refresh")}
-                  </button>
-                  <button type="button" disabled={!notificationActivity.length || notificationMutationBusy || notificationSeen?.key!==notificationKey}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
-                    onClick={()=>void mutateNotificationState("read_all")}>
-                    {notifyLabel("อ่านแล้วทั้งหมด", "Mark all read")}
-                  </button>
-                </div>
-              </div>
-              {notificationStateError && <p role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">
-                {notificationStateError}
-              </p>}
-              {notificationStateLoading && <p role="status" className="text-xs text-slate-600">
-                {notifyLabel("กำลังซิงก์สถานะการอ่าน...","Syncing notification state...")}
-              </p>}
-              {eventNotificationData?.failed && <p role="alert" className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-800">
-                {notifyLabel("รีเฟรชไม่สำเร็จ กำลังแสดงรายการล่าสุดที่โหลดได้ กดรีเฟรชเพื่อลองอีกครั้ง",
-                  "Refresh failed. Showing previously loaded items. Press Refresh to retry.")}
-              </p>}
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" aria-pressed={notificationFilter==="active"} onClick={()=>setNotificationFilter("active")}
-                  className={"rounded-lg border px-3 py-2 text-sm font-semibold "+(notificationFilter==="active"?"border-blue-500 bg-blue-600 text-white":"border-slate-300 text-slate-700")}>
-                  {notifyLabel("รายการทั้งหมด", "Inbox")} ({visibleNotifications.length})
-                </button>
-                <button type="button" aria-pressed={notificationFilter==="unread"} onClick={()=>setNotificationFilter("unread")}
-                  className={"rounded-lg border px-3 py-2 text-sm font-semibold "+(notificationFilter==="unread"?"border-blue-500 bg-blue-600 text-white":"border-slate-300 text-slate-700")}>
-                  {notifyLabel("ยังไม่อ่าน", "Unread")} ({unreadNotifications})
-                </button>
-                <button type="button" aria-pressed={notificationFilter==="archived"} onClick={()=>setNotificationFilter("archived")}
-                  className={"rounded-lg border px-3 py-2 text-sm font-semibold "+(notificationFilter==="archived"?"border-blue-500 bg-blue-600 text-white":"border-slate-300 text-slate-700")}>
-                  {notifyLabel("รายการที่ซ่อน", "Archived")} ({archivedNotifications.length})
-                </button>
-                {notificationFilter==="archived" ?
-                  <button type="button" disabled={!seen.dismissedIds.length || notificationMutationBusy || notificationSeen?.key!==notificationKey} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
-                    onClick={()=>void mutateNotificationState("restore_all")}>
-                    {notifyLabel("คืนรายการที่ซ่อนทั้งหมด", "Restore all")}
-                  </button> :
-                  <button type="button" disabled={!visibleNotifications.some(x=>!notificationIsUnread(seen,x)) || notificationMutationBusy || notificationSeen?.key!==notificationKey}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50"
-                    onClick={()=>void mutateNotificationState("archive",
-                      visibleNotifications.filter(x=>!notificationIsUnread(seen,x)).map(x=>x.id))}>
-                    {notifyLabel("เก็บรายการที่อ่านแล้ว", "Archive read")}
-                  </button>}
-              </div>
-              <p className="text-xs text-slate-600">
-                {notifyLabel("สถานะอ่านและซ่อนซิงก์ผ่าน Database ข้ามเครื่อง · ไม่ลบ Booking หรือสลิปต้นทาง",
-                  "Read and archive states sync across devices via the database · Bookings and slips are never deleted")}
-                {notificationUpdatedAt && " · "+new Date(notificationUpdatedAt).toLocaleTimeString(language==="th"?"th-TH":"en-GB")}
-              </p>
-              {notificationSummary && <button type="button" className="rounded-xl bg-blue-700 px-3 py-2 text-sm font-semibold text-white"
-                onClick={() => { setReviewFocus({ eventId: selectedEventId, reference: "" }); setActiveTab("registrations"); }}>
-                {notifyLabel(`รอตรวจสลิป ${Number(notificationSummary.pending_review_bookings)} ใบจอง · ยังไม่ส่งสลิป ${Number(notificationSummary.awaiting_payment_attendees)} คน`,
-                  `${Number(notificationSummary.pending_review_bookings)} bookings to review · ${Number(notificationSummary.awaiting_payment_attendees)} attendees awaiting payment`)}
-              </button>}
-              {eventNotificationData && !eventNotificationData.failed && !filteredNotifications.length &&
-                <p className="text-sm text-slate-600">{notifyLabel("ยังไม่มีกิจกรรมการจอง", "No booking activity yet.")}</p>}
-              <ul className="max-h-[65vh] divide-y divide-slate-200 overflow-y-auto">
-                {filteredNotifications.map((entry) => <li key={entry.id} className="flex items-center gap-2">
-                  <button type="button" className="flex w-full flex-wrap items-center justify-between gap-2 py-3 text-left text-sm"
-                    onClick={() => {
-                      if (notificationIsUnread(seen,entry))void mutateNotificationState("read",[entry.id]);
-                      setReviewFocus({ eventId: selectedEventId, reference: entry.reference });
-                      setActiveTab("registrations");
-                    }}>
-                    <span className="min-w-0 break-all text-slate-900">
-                      {notificationIsUnread(seen,entry) && <span className="mr-2 text-blue-700">●</span>}
-                      {({
-                        create:notifyLabel("ใบจองใหม่","New booking"),
-                        submit_proof:notifyLabel("ส่งสลิปแล้ว","Payment slip submitted"),
-                        review_verified:notifyLabel("ตรวจสลิปผ่าน","Payment approved"),
-                        review_rejected:notifyLabel("สลิปไม่ผ่าน","Payment rejected"),
-                        review_exception:notifyLabel("ตรวจสอบยอดผิดปกติ","Payment exception"),
-                        customer_reinstate:notifyLabel("ต่ออายุการจอง","Booking renewed"),
-                        admin_extend:notifyLabel("ขยายเวลาชำระ","Payment deadline extended"),
-                        admin_cancel:notifyLabel("ยกเลิกการจอง","Booking cancelled"),
-                        admin_reinstate:notifyLabel("เปิดการจองอีกครั้ง","Booking reinstated"),
-                        admin_refund:notifyLabel("คืนเงิน","Refund recorded"),
-                        expire:notifyLabel("การจองหมดเวลา","Booking expired")
-                      } as Record<string,string>)[entry.action]||entry.action}
-                      <span className="mt-1 block break-words text-sm font-semibold">
-                        {[entry.first_name, entry.last_name].filter(Boolean).join(" ") || notifyLabel("ผู้จอง", "Booker")}
-                        {entry.attendee_count != null && ` · ${entry.attendee_count} ${notifyLabel("คน", "attendees")}`}
-                        {entry.total_minor != null && ` · ${notificationMoney.format(Number(entry.total_minor) / 100)}`}
-                      </span>
-                      <span className="block text-xs text-slate-600">
-                        {({
-                          awaiting_payment: notifyLabel("รอชำระ", "Awaiting payment"),
-                          verification_pending: notifyLabel("รอตรวจสลิป", "Awaiting review"),
-                          confirmed: notifyLabel("ยืนยันแล้ว", "Confirmed"),
-                          expired: notifyLabel("หมดอายุ", "Expired"),
-                          cancelled: notifyLabel("ยกเลิก", "Cancelled"),
-                        } as Record<string, string>)[entry.booking_state ?? ""]} · {entry.reference}
-                      </span>
-                    </span>
-                    <time className="text-xs text-slate-600">{new Date(entry.occurred_ms).toLocaleString(language === "th" ? "th-TH" : "en-GB", { timeZone: "Asia/Bangkok" })}</time>
-                  </button>
-                  <button type="button" disabled={notificationMutationBusy || notificationSeen?.key!==notificationKey}
-                    className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
-                    aria-label={notificationFilter==="archived"?notifyLabel("คืนการแจ้งเตือน","Restore notification"):notifyLabel("ซ่อนการแจ้งเตือน","Archive notification")}
-                    onClick={()=>void mutateNotificationState(
-                      notificationFilter==="archived"?"restore":"archive",[entry.id])}>
-                    {notificationFilter==="archived"?notifyLabel("คืนรายการ","Restore"):notifyLabel("ซ่อน","Archive")}
-                  </button>
-                </li>)}
-              </ul>
-              {notificationHistoryError && <p role="alert" className="text-sm text-rose-700">{notificationHistoryError}</p>}
-              {notificationHistory.key===notificationHistoryKey && notificationHistory.hasMore &&
-                <button type="button" disabled={notificationHistoryLoading}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-3 text-sm font-semibold text-blue-700 disabled:opacity-50"
-                  onClick={()=>void loadOlderNotifications()}>
-                  {notificationHistoryLoading?notifyLabel("กำลังโหลด…","Loading…"):notifyLabel("โหลดรายการเก่าเพิ่มเติม","Load older notifications")}
-                </button>}
-            </section>
+            <NotificationInbox key={notificationKey} language={language} filter={notificationFilter}
+              onFilter={setNotificationFilter} rows={filteredNotifications} state={seen}
+              counts={{ active: groups.active.length, unread: unreadNotifications, archived: groups.archived.length, trash: groups.trash.length }}
+              busy={notificationMutationBusy || notificationSeen?.key !== notificationKey}
+              loading={notificationLoading} syncing={notificationStateLoading}
+              summary={notificationSummary ? {
+                pending: Number(notificationSummary.pending_review_bookings),
+                awaiting: Number(notificationSummary.awaiting_payment_attendees),
+              } : undefined}
+              onReview={() => { setReviewFocus({ eventId: selectedEventId, reference: "" }); setActiveTab("registrations"); }}
+              onRefresh={() => setNotificationRefresh((value) => value + 1)}
+              onAction={mutateNotificationState}
+              onOpen={(entry) => {
+                if (notificationFilter !== "trash" && notificationIsUnread(seen, entry)) {
+                  void mutateNotificationState("read", [entry.id]);
+                }
+                setReviewFocus({ eventId: selectedEventId, reference: entry.reference });
+                setActiveTab("registrations");
+              }}
+              hasMore={notificationHistory.key === notificationHistoryKey && notificationHistory.hasMore}
+              historyLoading={notificationHistoryLoading} onLoadOlder={() => void loadOlderNotifications()}
+              error={notificationStateError || notificationHistoryError || (eventNotificationData?.failed
+                ? notifyLabel("รีเฟรชไม่สำเร็จ กดรีเฟรชเพื่อลองอีกครั้ง", "Refresh failed. Press Refresh to retry.") : "")}
+            />
           )}
 
           {activeTab === "registrations" && (

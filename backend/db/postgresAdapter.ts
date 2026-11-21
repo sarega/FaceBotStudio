@@ -788,13 +788,15 @@ export class PostgresAppDatabase implements AppDatabase {
       this.pool.query<{read_before_ms:string|number;imported_at_ms:string|number|null}>(
         "SELECT read_before_ms,imported_at_ms FROM admin_notification_preferences WHERE organization_id=$1 AND user_id=$2 AND event_id=$3",
         [organizationId,userId,eventId]),
-      this.pool.query<{audit_id:string;read_ms:string|number|null;archived_ms:string|number|null}>(
-        "SELECT audit_id,read_ms,archived_ms FROM admin_notification_items WHERE organization_id=$1 AND user_id=$2 AND event_id=$3",
+      this.pool.query<{audit_id:string;read_ms:string|number|null;archived_ms:string|number|null;unread_ms:string|number|null;deleted_ms:string|number|null}>(
+        "SELECT audit_id,read_ms,archived_ms,unread_ms,deleted_ms FROM admin_notification_items WHERE organization_id=$1 AND user_id=$2 AND event_id=$3",
         [organizationId,userId,eventId]),
     ]);
     return {time:Number(prefs.rows[0]?.read_before_ms??0),imported:prefs.rows[0]?.imported_at_ms!=null,
       readIds:rows.rows.filter(x=>x.read_ms!=null).map(x=>x.audit_id),
-      dismissedIds:rows.rows.filter(x=>x.archived_ms!=null).map(x=>x.audit_id)};
+      dismissedIds:rows.rows.filter(x=>x.archived_ms!=null).map(x=>x.audit_id),
+      unreadIds:rows.rows.filter(x=>x.unread_ms!=null).map(x=>x.audit_id),
+      deletedIds:rows.rows.filter(x=>x.deleted_ms!=null).map(x=>x.audit_id)};
   }
 
   async mutateAdminNotificationState(organizationId:string,userId:string,eventId:string,
@@ -828,26 +830,34 @@ export class PostgresAppDatabase implements AppDatabase {
             (SELECT COALESCE(MAX(occurred_ms),0) FROM paid_audit_events WHERE event_id=$3))
             WHERE organization_id=$1 AND user_id=$2 AND event_id=$3`,
           [organizationId,userId,eventId]);
+        await client.query(
+          "UPDATE admin_notification_items SET unread_ms=NULL WHERE organization_id=$1 AND user_id=$2 AND event_id=$3 AND unread_ms IS NOT NULL",
+          [organizationId,userId,eventId]);
       }else if(input.action==="restore_all"){
         await client.query(
           "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=$1 AND user_id=$2 AND event_id=$3",
           [organizationId,userId,eventId]);
-      }else if(input.action==="restore"){
+      }else if(input.action==="restore" || input.action==="restore_deleted"){
+        const column = input.action==="restore" ? "archived_ms" : "deleted_ms";
         if(ids.length)await client.query(
-          "UPDATE admin_notification_items SET archived_ms=NULL WHERE organization_id=$1 AND user_id=$2 AND event_id=$3 AND audit_id=ANY($4::text[])",
+          `UPDATE admin_notification_items SET ${column}=NULL WHERE organization_id=$1 AND user_id=$2 AND event_id=$3 AND audit_id=ANY($4::text[])`,
           [organizationId,userId,eventId,ids]);
       }else if(input.action!=="import" || !alreadyImported){
-        const upsert=async(id:string,read:boolean)=>{
+        const upsert=async(id:string,action: "read"|"unread"|"archive"|"delete")=>{
           await client.query(
-            `INSERT INTO admin_notification_items (organization_id,user_id,event_id,audit_id,read_ms,archived_ms)
-             SELECT $1,$2,$3,a.id,$4,$5 FROM paid_audit_events a WHERE a.id=$6 AND a.event_id=$3
+            `INSERT INTO admin_notification_items (organization_id,user_id,event_id,audit_id,read_ms,archived_ms,unread_ms,deleted_ms)
+             SELECT $1,$2,$3,a.id,$4,$5,$6,$7 FROM paid_audit_events a WHERE a.id=$8 AND a.event_id=$3
              ON CONFLICT(organization_id,user_id,event_id,audit_id) DO UPDATE SET
                read_ms=COALESCE(admin_notification_items.read_ms,EXCLUDED.read_ms),
-               archived_ms=COALESCE(admin_notification_items.archived_ms,EXCLUDED.archived_ms)`,
-            [organizationId,userId,eventId,read?now:null,read?null:now,id]);
+               archived_ms=COALESCE(admin_notification_items.archived_ms,EXCLUDED.archived_ms),
+               unread_ms=CASE WHEN EXCLUDED.read_ms IS NOT NULL THEN NULL
+                 ELSE COALESCE(EXCLUDED.unread_ms,admin_notification_items.unread_ms) END,
+               deleted_ms=COALESCE(admin_notification_items.deleted_ms,EXCLUDED.deleted_ms)`,
+            [organizationId,userId,eventId,action==="read"?now:null,action==="archive"?now:null,
+              action==="unread"?now:null,action==="delete"?now:null,id]);
         };
-        for(const id of ids)await upsert(id,input.action!=="archive");
-        if(input.action==="import")for(const id of archivedIds)await upsert(id,false);
+        for(const id of ids)await upsert(id,input.action==="import"?"read":input.action);
+        if(input.action==="import")for(const id of archivedIds)await upsert(id,"archive");
       }
       await client.query("COMMIT");
     }catch(error){await client.query("ROLLBACK");throw error;}

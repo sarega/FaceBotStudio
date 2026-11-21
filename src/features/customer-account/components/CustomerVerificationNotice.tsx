@@ -13,7 +13,7 @@ export function CustomerVerificationNotice({
   deliveryFailed?: boolean;
 }) {
   const t = (th: string, en: string) => locale === "th" ? th : en;
-  return <section role="alert" aria-label="Email verification required"
+  return <section role="alert" aria-label={t("ต้องยืนยันอีเมล", "Email verification required")}
     className="customer-verification-notice rounded-2xl border p-4 sm:p-6">
     <div className="flex items-start gap-3">
       <div className="customer-verification-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-xl">
