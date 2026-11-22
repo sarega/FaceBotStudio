@@ -2768,6 +2768,7 @@ const TRUSTED_CSRF_ORIGINS = resolveTrustedCsrfOrigins();
 const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "cashier", "checker", "viewer"];
 const EVENT_ASSIGNMENT_ROLES = new Set<UserRole>(["operator", "cashier", "checker", "viewer"]);
+const REGISTRATION_ROSTER_ROLES: UserRole[] = ["owner", "admin", "operator", "checker"];
 const SENSITIVE_SETTINGS_KEYS = new Set([
   "verify_token",
   "admin_agent_telegram_bot_token",
@@ -17855,7 +17856,7 @@ async function startServer() {
   // Canonical event roster for paid registrations. One row per attendee;
   // the original free-registration rows remain in the legacy table.
   app.get("/api/events/:eventId/paid-registration/attendees",
-    requireRoles(["owner","admin","operator"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
+    requireRoles(REGISTRATION_ROSTER_ROLES),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
       try {
         const eventId=req.eventScope!.eventId;
         const org=req.auth!.user.organization_id;
@@ -18682,7 +18683,7 @@ async function startServer() {
 
   app.get(
     "/api/registrations",
-    requireRoles(["owner", "admin", "operator", "checker"]),
+    requireRoles(REGISTRATION_ROSTER_ROLES),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     async (req, res) => {
     try {
@@ -20002,7 +20003,7 @@ async function startServer() {
 
   app.get(
     "/api/registrations/export",
-    requireRoles(["owner", "admin", "operator", "checker"]),
+    requireRoles(REGISTRATION_ROSTER_ROLES),
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     registrationsExportRateLimit,
     async (req: AuthenticatedRequest, res) => {

@@ -690,6 +690,36 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(attendeeRosterResponse.status,200);
     const attendeeRoster=await attendeeRosterResponse.json();
     assert.equal(attendeeRoster.attendees.length,5);
+
+    const staffSession = async (role: "owner" | "operator" | "checker" | "cashier" | "viewer", eventIds: string[] = []) => {
+      const username = `paid-access-${role}-${eventIds.length}`;
+      const user = await db.createUser({ username, display_name: username, password_hash: "fixture", role, assigned_event_ids: eventIds });
+      await db.createSession(user.id, hashSessionToken(username), new Date(Date.now() + 60_000));
+      return { Cookie: `fbs_session=${username}` };
+    };
+    const ownerAccess = await staffSession("owner");
+    const operatorAccess = await staffSession("operator", [event.id]);
+    const checkerAccess = await staffSession("checker", [event.id]);
+    const unassignedChecker = await staffSession("checker");
+    const cashierAccess = await staffSession("cashier", [event.id]);
+    const viewerAccess = await staffSession("viewer", [event.id]);
+    for (const access of [ownerAccess, operatorAccess, checkerAccess]) {
+      const paidRoster = await fetch(`${eventPrefix}/attendees`, { headers: access });
+      assert.equal(paidRoster.status, 200, await paidRoster.clone().text());
+      assert.deepEqual(await paidRoster.json(), attendeeRoster);
+    }
+    for (const access of [unassignedChecker, cashierAccess, viewerAccess]) {
+      assert.equal((await fetch(`${eventPrefix}/attendees`, { headers: access })).status, 403);
+    }
+    for (const suffix of ["settings", "readiness", "coupons", "summary?activity=1", "review-queue"]) {
+      assert.equal((await fetch(`${eventPrefix}/${suffix}`, { headers: ownerAccess })).status, 200, `Owner: ${suffix}`);
+      assert.equal((await fetch(`${eventPrefix}/${suffix}`, { headers: staffHeaders })).status, 200, `Admin: ${suffix}`);
+      assert.equal((await fetch(`${eventPrefix}/${suffix}`, { headers: checkerAccess })).status, 403, `Gatekeeper: ${suffix}`);
+    }
+    assert.equal((await fetch(notificationPath, { headers: ownerAccess })).status, 200);
+    assert.equal((await fetch(notificationPath, { headers: checkerAccess })).status, 403);
+    assert.equal((await fetch(`${origin}/api/registrations/export?event_id=${event.id}`, { headers: checkerAccess })).status, 200);
+
     const legacyRosterEvent=await db.createEvent({
       name:"Free Legacy Registration Event",organizer_id:"org_default",
     });

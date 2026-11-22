@@ -178,7 +178,7 @@ export function RegistrationsScreen({
 }: RegistrationsScreenProps) {
   const [paidPeople,setPaidPeople]=useState<PaidRosterPerson[]>([]);
   const [paidSummary,setPaidSummary]=useState<PaidRosterSummary|null>(null);
-  const [paidError,setPaidError]=useState("");
+  const [paidError,setPaidError]=useState<"access" | "request" | null>(null);
   const [paidRevision,setPaidRevision]=useState(0);
   useEffect(()=>{
     const update=()=>setPaidRevision(n=>n+1);
@@ -191,12 +191,16 @@ export function RegistrationsScreen({
     const controller=new AbortController();
     apiFetch("/api/events/"+encodeURIComponent(selectedEventId)+"/paid-registration/attendees",
       {signal:controller.signal}).then(async res=>{
+      if (res.status === 403) {
+        if (mounted) { setPaidPeople([]); setPaidSummary(null); setPaidError("access"); }
+        return null;
+      }
       if(!res.ok)throw new Error("Could not load paid attendees");
       return res.json();
     }).then(result=>{
-      if(mounted){setPaidPeople(result.attendees??[]);setPaidSummary(result.summary??null);setPaidError("");}
+      if(mounted && result){setPaidPeople(result.attendees??[]);setPaidSummary(result.summary??null);setPaidError(null);}
     }).catch(()=>{
-      if(mounted){setPaidPeople([]);setPaidSummary(null);setPaidError("ไม่สามารถโหลดรายชื่อ Paid Booking ได้");}
+      if(mounted){setPaidPeople([]);setPaidSummary(null);setPaidError("request");}
     });
     return ()=>{mounted=false;controller.abort();};
   },[apiFetch,selectedEventId,paidRevision]);
@@ -352,9 +356,14 @@ export function RegistrationsScreen({
               </span>
             </div>
           )}
-          {paidError && <p role="alert" className="p-3 text-xs text-red-700">
-            {paidError} · โปรดตรวจสอบก่อน Export รายชื่อ
-          </p>}
+          {paidError && <div role="alert" className="flex flex-wrap items-center gap-2 p-3 text-xs text-red-700">
+            <p>{paidError === "access"
+              ? (language === "th" ? "บัญชีนี้ไม่มีสิทธิ์ดูรายชื่อ Paid Booking ของงานนี้" : "This account cannot view the paid roster for this event.")
+              : (language === "th" ? "โหลดรายชื่อ Paid Booking ไม่สำเร็จ" : "Could not load the paid roster.")}</p>
+            {paidError === "request" && <button type="button" className="font-semibold underline" onClick={() => setPaidRevision((value) => value + 1)}>
+              {language === "th" ? "ลองอีกครั้ง" : "Retry"}
+            </button>}
+          </div>}
           <PaidAttendeeRoster people={filteredPaid} total={paidPeople.length}
             onRefresh={()=>setPaidRevision(n=>n+1)}/>
           <div className={paidPeople.length>0 && registrationsCount===0 ?
@@ -639,6 +648,9 @@ export function RegistrationsScreen({
             </div>
             <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
           </div>
+          {paidError && <p className="mb-3 text-xs text-amber-700">{language === "th"
+            ? "ยอดด้านล่างมาจากระบบลงทะเบียนเดิมเท่านั้น เพราะยังโหลดข้อมูล Paid Booking ไม่ได้"
+            : "These totals show legacy registrations only because paid booking data could not be loaded."}</p>}
           {paidSummary && <dl className="mb-3 grid grid-cols-2 gap-2">
             {[
               { label: language === "th" ? "ยอดรวมตามใบจอง" : "Total booking value",
