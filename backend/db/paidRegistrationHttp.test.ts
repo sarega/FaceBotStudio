@@ -62,13 +62,28 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     await new Promise<void>((done) => socket.close(() => done()));
     const origin = `http://127.0.0.1:${port}`;
     const server = fileURLToPath(new URL("../../server.ts", import.meta.url));
-    child = spawn(process.execPath, ["--import", resolve("node_modules/tsx/dist/loader.mjs"), server], {
+    const mockVision = join(directory, "mock-slip-vision.cjs");
+    writeFileSync(mockVision, `
+      const fetch = globalThis.fetch;
+      globalThis.fetch = (input, options) => {
+        if (String(input) !== "https://openrouter.ai/api/v1/chat/completions") return fetch(input, options);
+        const request = JSON.parse(options.body);
+        if (request.provider?.zdr !== true || request.provider?.data_collection !== "deny" ||
+            !request.messages[0].content[1].image_url.url.startsWith("data:image/")) {
+          return Promise.resolve(Response.json({}, { status: 400 }));
+        }
+        return Promise.resolve(Response.json({ choices: [{ message: { content: JSON.stringify({
+          amount_minor: 50000, transfer_at: "2025-11-21T13:45:12", payer_name: "สมใจ ทดสอบ",
+        }) } }] }));
+      };
+    `);
+    child = spawn(process.execPath, ["--require", mockVision, "--import", resolve("node_modules/tsx/dist/loader.mjs"), server], {
       cwd: directory,
       env: {
         PATH: process.env.PATH, APP_RUNTIME: "web", NODE_ENV: "development", PORT: String(port),
         APP_URL: origin, DB_PATH: database, PUBLIC_UPLOADS_DIR: join(directory, "uploads"),
         CUSTOMER_APP_ENABLED: "1", PAID_REGISTRATION_PUBLIC_ENABLED: "1",
-        FACEBOOK_APP_SECRET: "fixture-webhook-secret", PAID_PROOF_ENCRYPTION_KEY: "01".repeat(32),
+        OPENROUTER_API_KEY: "mock-key", FACEBOOK_APP_SECRET: "fixture-webhook-secret", PAID_PROOF_ENCRYPTION_KEY: "01".repeat(32),
       },
       stdio: ["ignore", "ignore", "inherit"],
     });
@@ -406,12 +421,22 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(paymentQr.headers.get("content-type"), "image/png");
     assert.equal((await fetch(`${ownedPath}/payment-qr`, { headers: headers("test-other") })).status, 404);
     const image = await sharp({ create: { width: 96, height: 144, channels: 3, background: "#dce8f5" } }).png().toBuffer();
+    const analyze = (token: string, bytes: Buffer) => fetch(`${ownedPath}/proof-analysis`, {
+      method: "POST", body: Uint8Array.from(bytes),
+      headers: { ...headers(token), "Content-Type": "application/octet-stream", "x-csrf-token": "fixture-csrf" },
+    });
+    assert.equal((await analyze("test-other", image)).status, 404);
+    assert.equal((await analyze("test-owner", Buffer.from("<svg/>"))).status, 415);
+    const slipAnalysis = await analyze("test-owner", image);
+    assert.equal(slipAnalysis.status, 200, await slipAnalysis.clone().text());
+    assert.deepEqual(await slipAnalysis.json(), { amountMinor: 50000, transferAt: "2025-11-21T13:45:12", payerName: "สมใจ ทดสอบ" });
     const proof = (token: string, bytes: Buffer) => fetch(`${ownedPath}/proofs`, {
       method: "POST", body: Uint8Array.from(bytes),
       headers: {
         ...headers(token), "Content-Type": "application/octet-stream", "Idempotency-Key": "upload",
         "x-csrf-token": "fixture-csrf", "x-booking-version": "1", "x-claimed-minor": "50000",
         "x-claimed-transfer-at": new Date(0 + 1000).toISOString(), "x-payment-method": "promptpay",
+        "x-claimed-payer-name": encodeURIComponent("สมใจ ทดสอบ"),
         "x-proof-mime": "image/png",
       },
     });
@@ -534,7 +559,12 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       item.action === "create" && item.reference === booking.reference));
     const queue = await fetch(`${eventPrefix}/review-queue`, { headers: staffHeaders });
     assert.equal(queue.status, 200);
-    assert.equal((await queue.json()).reviews[0].attempt_id, pending.attempt_id);
+    const [queuedSlip] = (await queue.json()).reviews;
+    assert.equal(queuedSlip.attempt_id, pending.attempt_id);
+    assert.equal(queuedSlip.claimed_payer_name, "สมใจ ทดสอบ");
+    const storedAnalysis = await fetch(staffUrl + "/analyze", { method: "POST", headers: staffHeaders });
+    assert.equal(storedAnalysis.status, 200);
+    assert.equal((await storedAnalysis.json()).payerName, "สมใจ ทดสอบ");
     const verifiedTransferAt = new Date().toISOString();
     const approve = (receiver: string) => fetch(`${eventPrefix}/bookings/${booking.id}/review`, {
       method: "POST", headers: { ...staffHeaders, "Content-Type": "application/json", "Idempotency-Key": "verify" },
@@ -1115,16 +1145,48 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const paymentActions = () => fetch(origin + "/api/customer/paid-bookings?awaiting_payment=1&reference=" + assisted.reference,
       { headers: headers("test-owner") }).then((response) => response.json());
     assert.equal((await paymentActions()).bookings[0].id, assisted.id);
-    const staffProofPath = externalPrefix + "/bookings/" + assisted.id + "/proofs";
+    const assistedPath = externalPrefix + "/bookings/" + assisted.id;
+    const staffProofPath = assistedPath + "/proofs";
+    const assistedImage = await sharp({ create: { width: 107, height: 151, channels: 3, background: "#daedf0" } }).png().toBuffer();
     const proofHeaders = { "Content-Type": "application/octet-stream", "Idempotency-Key": "staff-assisted-slip",
-      "x-booking-version": "1", "x-claimed-minor": "250000", "x-claimed-transfer-at": new Date().toISOString(),
-      "x-payment-method": "bank_transfer", "x-proof-mime": "image/png" };
+      "x-booking-version": "1", "x-payment-method": "bank_transfer", "x-proof-mime": "image/png" };
+    const staffAnalysis = await fetch(assistedPath + "/proof-analysis", { method: "POST",
+      headers: { ...staffCreateHeaders, ...proofHeaders, "x-booking-reference": assisted.reference }, body: Uint8Array.from(assistedImage) });
+    assert.equal(staffAnalysis.status, 200, await staffAnalysis.clone().text());
+    assert.equal((await staffAnalysis.json()).amountMinor, 50000);
     assert.equal((await fetch(staffProofPath, { method: "POST", headers: { ...headers("test-owner"), ...proofHeaders,
-      "x-csrf-token": "fixture-csrf" }, body: Uint8Array.from(qrFixture) })).status, 401);
-    const assistedUpload = await fetch(staffProofPath, { method: "POST", headers: { ...staffCreateHeaders, ...proofHeaders }, body: Uint8Array.from(qrFixture) });
+      "x-csrf-token": "fixture-csrf" }, body: Uint8Array.from(assistedImage) })).status, 401);
+    const assistedUpload = await fetch(staffProofPath, { method: "POST", headers: { ...staffCreateHeaders, ...proofHeaders }, body: Uint8Array.from(assistedImage) });
     assert.equal(assistedUpload.status, 202, await assistedUpload.clone().text());
-    assert.equal((await assistedUpload.json()).status, "verification_pending");
+    const assistedReceipt = await assistedUpload.json();
+    assert.equal(assistedReceipt.status, "verification_pending");
     assert.deepEqual((await paymentActions()).bookings, []);
+    const assistedQueue = await fetch(externalPrefix + "/review-queue?reference=" + assisted.reference, { headers: staffHeaders });
+    const [assistedReview] = (await assistedQueue.json()).reviews;
+    assert.equal(assistedReview.claimed_minor, null);
+    assert.equal(assistedReview.claimed_transfer_ms, null);
+    const earlyMs = assistedReview.booking_created_ms - 86_400_000;
+    const reviewEarly = (confirm_early_transfer: boolean, timestamp = earlyMs) => fetch(assistedPath + "/review", {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "accept-early-transfer" },
+      body: JSON.stringify({
+        decision: "approve", attempt_id: assistedReceipt.attempt_id, version: assistedReceipt.version,
+        confirm_early_transfer, reason: "Matched the earlier transaction in the bank statement",
+        observed: { currency: "THB", amount_minor: 250000, paid_at: new Date(timestamp).toISOString(), reference: "assisted-early-payment", receiver_id: "EXTERNAL_MANUAL" },
+      }),
+    });
+    const refusedEarly = await reviewEarly(false);
+    assert.equal(refusedEarly.status, 409);
+    assert.equal((await refusedEarly.json()).error, "early_transfer_confirmation_required");
+    const refusedFuture = await reviewEarly(true, Date.now() + 60_000);
+    assert.equal(refusedFuture.status, 400);
+    const approvedEarly = await reviewEarly(true);
+    assert.equal(approvedEarly.status, 200, await approvedEarly.clone().text());
+    assert.equal((await approvedEarly.json()).status, "confirmed");
+    const evidence = new Database(database, { readonly: true });
+    try {
+      assert.equal(evidence.prepare("SELECT observed_transfer_ms FROM paid_payment_attempts WHERE id=?").pluck().get(assistedReceipt.attempt_id), earlyMs);
+      assert.match(String(evidence.prepare("SELECT reason FROM paid_audit_events WHERE booking_id=? AND action='review_verified'").pluck().get(assisted.id)), /^Verified pre-booking transfer:/);
+    } finally { evidence.close(); }
 
     const pendingEmail = "unverified-cleanup@example.com";
     const pendingAccount = await db.createCustomerAccount({

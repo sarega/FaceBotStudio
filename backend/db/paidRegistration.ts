@@ -574,8 +574,9 @@ export type PaidProofInput = {
   key: string;
   version: number;
   method: "promptpay" | "bank_transfer";
-  claimedMinor: number;
-  claimedTransferMs: number;
+  claimedMinor: number | null;
+  claimedTransferMs: number | null;
+  claimedPayerName?: string | null;
   reference: string | null;
   mime: "image/png" | "image/jpeg" | "image/webp";
   content: Buffer;
@@ -589,9 +590,10 @@ export interface PaidProofReceipt {
 }
 
 export function* submitPaidProof(input: PaidProofInput): PaidCommand<PaidProofReceipt> {
-  const { eventId, bookingId, customerId, staff, key, version, method, claimedMinor, claimedTransferMs, reference, mime, content } = input;
-  if (!key || key.length > 128 || !Number.isSafeInteger(claimedMinor) || claimedMinor < 1 ||
-      !Number.isSafeInteger(claimedTransferMs) || claimedTransferMs < 1 || !content.length || content.length > 4 * 1024 * 1024) {
+  const { eventId, bookingId, customerId, staff, key, version, method, claimedMinor, claimedTransferMs, claimedPayerName = null, reference, mime, content } = input;
+  if (!key || key.length > 128 ||
+      (claimedMinor != null && (!Number.isSafeInteger(claimedMinor) || claimedMinor < 1)) ||
+      (claimedTransferMs != null && (!Number.isSafeInteger(claimedTransferMs) || claimedTransferMs < 1)) || !content.length || content.length > 4 * 1024 * 1024) {
     throw new PaidBookingError("invalid_proof");
   }
   const [booking] = yield query(
@@ -604,6 +606,7 @@ export function* submitPaidProof(input: PaidProofInput): PaidCommand<PaidProofRe
   const checksum = createHash("sha256").update(content).digest("hex");
   const digest = createHash("sha256").update(JSON.stringify([
     bookingId, version, method, claimedMinor, claimedTransferMs, reference, mime, checksum,
+    ...(claimedPayerName ? [claimedPayerName] : []),
   ])).digest("hex");
   const [replay] = yield query(
     "SELECT digest,result_json FROM paid_command_keys WHERE principal=? AND event_id=? AND operation='proof' AND command_key=?",
@@ -624,10 +627,10 @@ export function* submitPaidProof(input: PaidProofInput): PaidCommand<PaidProofRe
   const encrypted = encryptPaidProof(content, JSON.stringify([eventId, bookingId, attemptId, mime]));
   yield query(
     `INSERT INTO paid_payment_attempts
-       (id,event_id,booking_id,sequence,method,status,claimed_minor,claimed_transfer_ms,claimed_reference,created_ms)
+       (id,event_id,booking_id,sequence,method,status,claimed_minor,claimed_transfer_ms,claimed_reference,created_ms,claimed_payer_name)
      VALUES (?,?,?,(SELECT COALESCE(MAX(sequence),0)+1 FROM paid_payment_attempts WHERE booking_id=?),
-       ?,'proof_submitted',?,?,?,?)`,
-    attemptId,eventId,bookingId,bookingId,method,claimedMinor,claimedTransferMs,reference,now,
+       ?,'proof_submitted',?,?,?,?,?)`,
+    attemptId,eventId,bookingId,bookingId,method,claimedMinor,claimedTransferMs,reference,now,claimedPayerName,
   );
   yield query(
     "INSERT INTO paid_proofs (id,attempt_id,mime,byte_length,content,checksum,uploader_id,created_ms) VALUES (?,?,?,?,?,?,?,?)",
@@ -667,6 +670,7 @@ export interface PaidReviewInput {
   key: string;
   version: number;
   decision: "approve" | "reject" | "flag";
+  confirmEarlyTransfer?: boolean;
   reason: string;
   observed?: { amountMinor: number; transferMs: number; reference: string; receiverNamespace: string };
 }
@@ -678,7 +682,7 @@ export interface PaidReviewReceipt {
 }
 
 export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReviewReceipt> {
-  const { eventId, bookingId, attemptId, organizationId, reviewerId, key, version, decision, reason, observed } = input;
+  const { eventId, bookingId, attemptId, organizationId, reviewerId, key, version, decision, reason, observed, confirmEarlyTransfer } = input;
   const now = Date.now();
   const reference = observed?.reference.trim().normalize("NFKC").toUpperCase();
   const namespace = observed?.receiverNamespace === "EXTERNAL_MANUAL"
@@ -697,6 +701,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   const principal = `staff:${reviewerId}`;
   const digest = createHash("sha256").update(JSON.stringify([
     bookingId, attemptId, version, decision, reason, observed?.amountMinor, observed?.transferMs, reference, namespace,
+    ...(confirmEarlyTransfer ? [true] : []),
   ])).digest("hex");
   const [replay] = yield query(
     "SELECT digest,result_json FROM paid_command_keys WHERE principal=? AND event_id=? AND operation='review' AND command_key=?",
@@ -734,15 +739,16 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   let status: PaidReviewReceipt["status"] = "verification_pending";
   let paymentStatus: PaidReviewReceipt["payment_status"] = "proof_submitted";
   let attemptStatus = "exception";
+  let earlyTransfer = false;
   if (decision === "approve" && observed) {
     // Receiver snapshots are immutable per booking even if an event switches payment mode later.
     const [receiver] = yield query("SELECT receiver_id FROM paid_booking_receivers WHERE booking_id=?", bookingId);
     if (receiver ? receiver.receiver_id !== namespace : namespace !== "EXTERNAL_MANUAL") {
       throw new PaidBookingError("receiver_mismatch");
     }
-    if (observed.transferMs < Number(booking.created_ms) || observed.transferMs >= Number(booking.due_ms)) {
-      throw new PaidBookingError("transfer_outside_hold");
-    }
+    earlyTransfer = observed.transferMs < Number(booking.created_ms);
+    if (earlyTransfer && !confirmEarlyTransfer) throw new PaidBookingError("early_transfer_confirmation_required");
+    if (observed.transferMs >= Number(booking.due_ms)) throw new PaidBookingError("transfer_outside_hold");
     if (observed.amountMinor === Number(booking.total_minor)) {
       const [duplicate] = yield query(
         `SELECT id FROM paid_payment_attempts WHERE receiver_namespace=? AND trusted_reference=?
@@ -773,12 +779,13 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
     attemptStatus = "rejected";
   }
 
+  const reviewReason = earlyTransfer ? "Verified pre-booking transfer: " + reason : reason;
   yield query(
     `UPDATE paid_payment_attempts SET status=?,observed_minor=?,observed_transfer_ms=?,trusted_reference=?,
        receiver_namespace=?,reviewed_by=?,reviewed_ms=?,reason=? WHERE id=?`,
     attemptStatus, observed?.amountMinor ?? null, observed?.transferMs ?? null,
     status === "confirmed" ? reference! : null, status === "confirmed" ? namespace! : null,
-    reviewerId, now, reason, paymentAttemptId,
+    reviewerId, now, reviewReason, paymentAttemptId,
   );
   yield query("UPDATE paid_bookings SET state=?,payment_state=?,updated_ms=?,version=version+1 WHERE id=?",
     status, paymentStatus, now, bookingId);
@@ -813,7 +820,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   yield query(
     `INSERT INTO paid_audit_events (id,event_id,booking_id,actor,action,previous_state,next_state,reason,occurred_ms)
      VALUES (?,?,?,?,?,?,?,?,?)`,
-    randomUUID(), eventId, bookingId, principal, `review_${attemptStatus}`, String(booking.state), status, reason, now,
+    randomUUID(), eventId, bookingId, principal, `review_${attemptStatus}`, String(booking.state), status, reviewReason, now,
   );
   const receipt = { status, payment_status: paymentStatus, version: version + 1 };
   yield query(
@@ -918,7 +925,7 @@ export function* listPaidReviewQueue(
        b.event_id,b.customer_id,b.created_ms AS booking_created_ms,b.due_ms,
        e.name AS event_name,c.first_name AS customer_first_name,c.last_name AS customer_last_name,
        c.email AS customer_email,c.phone AS customer_phone,
-       a.id AS attempt_id,a.status,a.claimed_minor,a.claimed_transfer_ms,a.claimed_reference,a.created_ms,
+       a.id AS attempt_id,a.status,a.claimed_minor,a.claimed_transfer_ms,a.claimed_reference,a.claimed_payer_name,a.created_ms,
        a.observed_minor,a.reason,r.receiver_name,r.receiver_id,es.payment_mode,p.id AS proof_id,
        (SELECT COUNT(*) FROM paid_proofs other WHERE other.checksum=p.checksum AND other.attempt_id<>a.id) AS matching_proofs
      FROM paid_bookings b JOIN events e ON e.id=b.event_id

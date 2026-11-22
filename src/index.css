@@ -2657,3 +2657,17 @@ html.theme-dark .room-type-card { background: #17263b; }
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+
+.paid-slip-staff-picker,
+.registration-admin-control.paid-slip-staff-submit,
+html.theme-dark .registration-admin-control.paid-slip-staff-submit {
+  background: #1d4ed8;
+  border-color: #3b82f6;
+  color: #fff;
+}
+.paid-slip-staff-picker:hover,
+.registration-admin-control.paid-slip-staff-submit:not(:disabled):hover,
+html.theme-dark .registration-admin-control.paid-slip-staff-submit:not(:disabled):hover {
+  background: #1e40af;
+  color: #fff;
+}
