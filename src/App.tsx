@@ -1,3 +1,4 @@
+import { PaidCarpoolPanel } from "./features/registrations/components/PaidCarpoolPanel";
 import { NotificationInbox, type InboxEntry, type NotificationFilter } from "./features/notifications/NotificationInbox";
 import type { AdminNotificationMutation } from "../backend/db/types";
 import {
@@ -11269,6 +11270,9 @@ export default function App() {
                 registrationTicketResendMessage={registrationTicketResendMessage}
                 onResendRegistrationTicket={resendRegistrationTicket}
               />
+              {selectedEventId && canReviewPaidSlips && (
+                <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+              )}
               {selectedEventId && canReviewPaidSlips && (
                 <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
               )}

@@ -20,7 +20,7 @@ export type PaidSeminarField = {
 
 export const foodPreferencePresets = ["Vegetarian", "Non-vegetarian"] as const;
 
-export const transportPreferencePresets = ["Self-arranged", "Need transport"] as const;
+export const transportPreferencePresets = ["มีรถและรับผู้โดยสาร / Driver offering seats", "ต้องการติดรถ / Need a ride", "เดินทางเอง / Self-arranged"] as const;
 
 export type EditableSeminarKey = Exclude<PaidSeminarKey, "accommodation">;
 

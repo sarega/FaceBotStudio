@@ -261,6 +261,10 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
                       <option value="select">{t("เลือกจากรายการ", "Dropdown choices")}</option>
                     </select>
                   </label>
+                  {key === "transport" && configured.options && <button type="button" className="registration-admin-control"
+                    onClick={() => updateSeminar(key,{ options: [...transportPreferencePresets], defaultValue: undefined })}>
+                    {t("ใช้ 3 ตัวเลือกสำหรับจัดรถ", "Use the three carpool choices")}
+                  </button>}
                   {configured.options && <label className="block text-xs font-medium">
                     {t("ตัวเลือก (บรรทัดละหนึ่งข้อ 2–20 ข้อ ห้ามซ้ำ)", "Choices (one per line, 2–20 unique values)")}
                     <textarea className={field} rows={3} value={configured.options.join("\n")}

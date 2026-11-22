@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { BedDouble, BedSingle, Download, Plus, Sofa, GripVertical, Lock, RefreshCw, Save, Unlock, WandSparkles } from "lucide-react";
 import { ROOM_BED_COUNTS, draftRoomingPlan, moveRoomingGuest, type RoomingRoom } from "../../../../backend/roomingPlan";
 import type { PaidRoomingPlan } from "../../../../backend/db/paidRegistration";
+import { downloadRegistrationCsv } from "./registrationCsv";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { RegistrationStatusTag, getRosterStatus, rosterStatusLabel } from "./RegistrationStatusTag";
 
@@ -18,11 +19,6 @@ function roomTypeForBeds(beds: number) {
 }
 
 const roomIcons = { single: BedSingle, twin: BedDouble, suite: Sofa };
-
-function csvCell(value: string) {
-  const safe = /^[\s\uFEFF]*[=+@-]|^[\t\r\n]/.test(value) ? "'" + value : value;
-  return '"' + safe.replaceAll('"', '""') + '"';
-}
 
 export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
   const t = (th: string, en: string) => language === "th" ? th : en;
@@ -142,12 +138,7 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
           : room.locked ? t("ล็อกแล้ว", "Locked") : t("ร่าง", "Draft"), guest ? labelStatus(guest) : ""]);
     }));
     for (const guest of unassigned) rows.push(["", "", guest.name, guest.category, guest.preference, t("ยังไม่ได้จัดห้อง", "Unassigned"), labelStatus(guest)]);
-    const url = URL.createObjectURL(new Blob(["\uFEFF", rows.map(row => row.map(csvCell).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `rooming-${eventId.replace(/[^\w-]/g, "-")}.csv`;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadRegistrationCsv(`rooming-${eventId.replace(/[^\w-]/g, "-")}.csv`, rows);
   }
 
   const button = "registration-admin-control";

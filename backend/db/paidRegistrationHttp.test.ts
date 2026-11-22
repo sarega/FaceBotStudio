@@ -741,6 +741,27 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(persistedPlan.rooms[0].number, "301");
     assert.equal(persistedPlan.rooms[0].slots[0], draftPlan.guests[0].id);
 
+    const carpoolPath = `${eventPrefix}/carpool`;
+    const initialCarpool = await fetch(carpoolPath, { headers: staffHeaders });
+    assert.equal(initialCarpool.status, 200);
+    const { plan: carpool } = await initialCarpool.json();
+    assert.equal(carpool.version, 0);
+    const [{ id: driverId }, { id: passengerId }, { id: otherId }] = carpool.attendees;
+    const roles = { [driverId]: "driver", [passengerId]: "passenger", [otherId]: "driver" };
+    const car = { driverId, seats: 1, pickup: "Bangkok", passengers: [passengerId] };
+    const saveCarpool = (cars: unknown[], version = 0) => fetch(carpoolPath, {
+      method: "PUT", headers: staffCreateHeaders, body: JSON.stringify({ version, roles, cars }),
+    });
+    assert.equal((await saveCarpool([{ ...car, seats: 0 }])).status, 400);
+    assert.equal((await saveCarpool([car, { ...car, driverId: otherId }])).status, 400);
+    assert.equal((await saveCarpool([{ ...car, passengers: ["another-event"] }])).status, 409);
+    assert.equal((await saveCarpool([car])).status, 200);
+    assert.equal((await saveCarpool([car])).status, 409);
+    const { plan: persistedCarpool } = await (await fetch(carpoolPath, { headers: staffHeaders })).json();
+    assert.deepEqual(persistedCarpool.cars, [car]);
+    const movedCar = { ...car, driverId: otherId };
+    assert.equal((await saveCarpool([{ ...car, passengers: [] }, movedCar], 1)).status, 200);
+
     const staffSession = async (role: "owner" | "operator" | "checker" | "cashier" | "viewer", eventIds: string[] = []) => {
       const username = `paid-access-${role}-${eventIds.length}`;
       const user = await db.createUser({ username, display_name: username, password_hash: "fixture", role, assigned_event_ids: eventIds });
@@ -755,6 +776,9 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const viewerAccess = await staffSession("viewer", [event.id]);
     assert.equal((await fetch(roomsPath, { headers: ownerAccess })).status, 200);
     assert.equal((await fetch(roomsPath, { headers: operatorAccess })).status, 403);
+    assert.equal((await fetch(carpoolPath, { headers: ownerAccess })).status, 200);
+    assert.equal((await fetch(carpoolPath, { headers: operatorAccess })).status, 403);
+    assert.equal((await fetch(carpoolPath, { headers: headers("test-owner") })).status, 401);
     for (const access of [ownerAccess, operatorAccess, checkerAccess]) {
       const paidRoster = await fetch(`${eventPrefix}/attendees`, { headers: access });
       assert.equal(paidRoster.status, 200, await paidRoster.clone().text());

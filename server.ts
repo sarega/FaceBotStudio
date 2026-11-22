@@ -1,3 +1,4 @@
+import { parseCarpoolUpdate } from "./backend/carpoolPlan";
 import { parseRoomingPlan } from "./backend/roomingPlan";
 import { isValidCouponCode } from "./backend/db/paidCoupons";
 import sharp from "sharp";
@@ -17399,6 +17400,28 @@ async function startServer() {
 
   const paidSettingsPath = "/api/events/:eventId/paid-registration/settings";
   const paidSettingsScope = requireEventScope({ paramKey: "eventId", queryKey: null, bodyKey: null, allowDefault: false, allowCheckinAccess: false });
+
+  const carpoolPath = "/api/events/:eventId/paid-registration/carpool";
+  app.get(carpoolPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+    try {
+      const plan = await appDb.paidCarpoolPlan(req.eventScope!.eventId, req.auth!.user.organization_id);
+      return res.set("Cache-Control", "private, no-store").json({ plan });
+    } catch (error) {
+      return res.status(error instanceof PaidBookingError ? 404 : 500).json({ error: "carpool_unavailable" });
+    }
+  });
+  app.put(carpoolPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+    const update = parseCarpoolUpdate(readObjectBody(req));
+    if (!update) return res.status(400).json({ error: "carpool_invalid_plan" });
+    try {
+      const plan = await appDb.paidCarpoolPlan(req.eventScope!.eventId, req.auth!.user.organization_id, update);
+      if (!plan) return res.status(404).json({ error: "carpool_unavailable" });
+      return res.set("Cache-Control", "private, no-store").json({ plan });
+    } catch (error) {
+      if (error instanceof PaidBookingError) return res.status(error.code === "event_not_found" ? 404 : 409).json({ error: error.code });
+      return res.status(500).json({ error: "carpool_save_failed" });
+    }
+  });
 
   const roomingPath = "/api/events/:eventId/paid-registration/rooms";
   app.get(roomingPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {

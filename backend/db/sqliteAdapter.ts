@@ -1,5 +1,6 @@
+import type { PaidCarpoolUpdate } from "../carpoolPlan";
 import { listCoupons, upsertCoupon, deleteCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
-import { paidRoomingPlan, type PaidRoomingUpdate, readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, readPaidCreditBalance, cancelOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
+import { paidCarpoolPlan, paidRoomingPlan, type PaidRoomingUpdate, readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, readPaidCreditBalance, cancelOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
@@ -1504,6 +1505,7 @@ export class SqliteAppDatabase implements AppDatabase {
       this.ensureColumn("admin_notification_items", "unread_ms", "INTEGER");
       this.ensureColumn("admin_notification_items", "deleted_ms", "INTEGER");
       this.db.exec(readFileSync(new URL("./migrations/059_paid_rooming_plans.sql", import.meta.url), "utf8"));
+      this.db.exec(readFileSync(new URL("./migrations/063_paid_carpool_plans.sql", import.meta.url), "utf8"));
       this.db.exec(readFileSync(new URL("./migrations/061_paid_booking_credits.sql", import.meta.url), "utf8"));
       for (const table of ["registrations", "event_performances"]) {
         this.db.exec(`
@@ -1671,6 +1673,13 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.runPaidCommand(input.eventId, (ownerId) => {
       if (ownerId !== input.organizationId) throw new PaidBookingError("event_not_found");
       return managePaidBooking(input);
+    });
+  }
+
+  async paidCarpoolPlan(eventId: string, organizationId: string, update?: PaidCarpoolUpdate) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (ownerId !== organizationId) throw new PaidBookingError("event_not_found");
+      return paidCarpoolPlan(eventId, update);
     });
   }
 

@@ -726,3 +726,53 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("carpool maps booking answers by attendee and excludes cancellations", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  try {
+    await db.initialize();
+    const organizationId = "org_default";
+    const event = await db.createEvent({ name: "Carpool workshop", organizer_id: organizationId });
+    await db.updateEvent(event.id, { status: "active" });
+    const customer = await db.createCustomerAccount({
+      email: "carpool@example.com", normalized_email: "carpool@example.com", password_hash: "fixture",
+      first_name: "Buyer", last_name: "Guest", phone: "", normalized_phone: "",
+      accepted_terms_at: new Date(), accepted_privacy_at: new Date(),
+    });
+    await db.savePaidSettings(event.id, {
+      organizationId, version: 0, capacity: 8, holdMinutes: 30, cutoffMs: null, published: true,
+      categories: [{ id: "adult", label: "Adult", unitMinor: 25000, quota: null }],
+      fields: [{ key: "transport", scope: "booking", required: true }],
+    });
+    async function book(key: string, transport: string, names: string[]) {
+      return db.createPaidBooking({
+        eventId: event.id, customerId: customer.id, key, pricingVersion: 1,
+        contact: { name: "Buyer" }, receiver: { id: "0812345678", name: "Organizer", profileVersion: 1 },
+        answers: { transport },
+        attendees: names.map(firstName => ({ categoryId: "adult", firstName, lastName: "Guest" })),
+      });
+    }
+    await book("carpool-driver", "มีรถและรับผู้โดยสาร", ["Driver", "Companion"]);
+    const passengerBooking = await book("carpool-passenger", "ต้องการติดรถ", ["Passenger"]);
+    await book("carpool-independent", "Self-arranged", ["Independent"]);
+    const plan = (await db.paidCarpoolPlan(event.id, organizationId))!;
+    assert.deepEqual(Object.fromEntries(plan.attendees.map(attendee => [attendee.name, attendee.defaultRole])), {
+      "Driver Guest": "driver",
+      "Companion Guest": "unspecified",
+      "Passenger Guest": "passenger",
+      "Independent Guest": "independent",
+    });
+    assert.ok(plan.attendees.every(attendee => attendee.bookingState === "awaiting_payment"));
+    const driver = plan.attendees.find(attendee => attendee.defaultRole === "driver")!;
+    const passenger = plan.attendees.find(attendee => attendee.defaultRole === "passenger")!;
+    const car = { driverId: driver.id, seats: 1, pickup: "Station", passengers: [passenger.id] };
+    await db.paidCarpoolPlan(event.id, organizationId, { version: 0, cars: [car], roles: {} });
+    await db.cancelOwnedPaidBooking(event.id, passengerBooking.id, customer.id);
+    const afterCancel = (await db.paidCarpoolPlan(event.id, organizationId))!;
+    assert.ok(!afterCancel.attendees.some(attendee => attendee.id === passenger.id));
+    assert.deepEqual(afterCancel.cars, [{ ...car, passengers: [] }]);
+    await assert.rejects(db.paidCarpoolPlan(event.id, "another-org"), /event_not_found/);
+  } finally {
+    db.close();
+  }
+});

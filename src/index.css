@@ -2676,3 +2676,33 @@ html.theme-dark .registration-admin-control.paid-slip-staff-submit:not(:disabled
 html.theme-dark .paid-attendee-roster .registration-cancel-link { color: #fda4af !important; }
 .paid-attendee-roster .registration-cancel-confirm { background: #be123c; color: #fff; }
 html.theme-dark .paid-attendee-roster .registration-cancel-confirm { color: #fff !important; }
+
+.registration-admin-section.registration-admin-carpool {
+  --registration-accent: #0e7490;
+  --registration-accent-soft: #ecfeff;
+  --registration-accent-border: #a5f3fc;
+  --registration-accent-ink: #155e75;
+}
+html.theme-dark .registration-admin-section.registration-admin-carpool {
+  --registration-accent: #22d3ee;
+  --registration-accent-soft: #123040;
+  --registration-accent-border: #245d72;
+  --registration-accent-ink: #a5f3fc;
+}
+.carpool-group { --carpool-color: #64748b; }
+.carpool-group[data-carpool-role="driver"] { --carpool-color: #0e7490; }
+.carpool-group[data-carpool-role="passenger"] { --carpool-color: #b45309; }
+.carpool-group[data-carpool-role="independent"] { --carpool-color: #047857; }
+.carpool-group, .carpool-attendee {
+  border-color: color-mix(in srgb, var(--carpool-color) 30%, transparent);
+}
+.carpool-group-heading {
+  border-inline-start: 4px solid var(--carpool-color);
+  background: color-mix(in srgb, var(--carpool-color) 12%, transparent);
+}
+.registration-admin-carpool .registration-section-actions { gap: 4px; }
+@media (max-width: 480px) {
+  .registration-admin-carpool .registration-section-heading { flex-wrap: wrap; gap: 0; }
+  .registration-admin-carpool .registration-section-toggle { flex-basis: 100%; }
+  .registration-admin-carpool .registration-section-actions { flex-wrap: wrap; padding: 0 0 6px; }
+}

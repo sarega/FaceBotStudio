@@ -1,7 +1,7 @@
-import { BedDouble, ChevronDown, ClipboardCheck, Settings2, Tags } from "lucide-react";
+import { BedDouble, CarFront, ChevronDown, ClipboardCheck, Settings2, Tags } from "lucide-react";
 import type { ReactNode } from "react";
 
-export type RegistrationSectionTone = "settings" | "coupons" | "review" | "rooming";
+export type RegistrationSectionTone = "settings" | "coupons" | "review" | "rooming" | "carpool";
 type Props = {
   tone: RegistrationSectionTone;
   title: string;
@@ -16,6 +16,7 @@ const icons = {
   coupons: Tags,
   review: ClipboardCheck,
   rooming: BedDouble,
+  carpool: CarFront,
 } as const;
 
 /** A single keyboard-accessible section header for paid-registration administration. */

@@ -1,3 +1,4 @@
+import { attendeeCarpoolRole, carpoolRoleFromAnswer, type CarpoolAttendee, type CarpoolLayout, type PaidCarpoolPlan, type PaidCarpoolUpdate } from "../carpoolPlan";
 import { applyCoupon, recordCouponRedemption } from "./paidCoupons";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { decryptPaidProof, encryptPaidProof, paidProofEncryptionConfigured } from "../paidProofEncryption";
@@ -1355,6 +1356,57 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<
       attendee_email:String(contact.email||""),attendee_phone:String(contact.phone||""),
       answers,booking_answers:bookingAnswers};
   });
+}
+
+export function* paidCarpoolPlan(eventId: string, update?: PaidCarpoolUpdate): PaidCommand<PaidCarpoolPlan | null> {
+  const [settings] = yield query("SELECT 1 FROM paid_event_settings WHERE event_id=?", eventId);
+  if (!settings) return null;
+  const [stored] = yield query("SELECT version,layout_json FROM paid_carpool_plans WHERE event_id=?", eventId);
+  const version = Number(stored?.version ?? 0);
+  if (update && update.version !== version) throw new PaidBookingError("carpool_version_conflict");
+
+  const roster = (yield* listPaidAttendeeRoster(eventId, 10001)).filter(row => row.booking_state !== "cancelled");
+  const explicitDrivers = new Set(roster.filter(row =>
+    carpoolRoleFromAnswer((row.answers as Record<string, string>).transport ?? "") === "driver",
+  ).map(row => row.booking_id));
+  const bookingDrivers = new Set(explicitDrivers);
+  const attendees: CarpoolAttendee[] = roster.map(row => {
+    const attendeeAnswer = (row.answers as Record<string, string>).transport?.trim();
+    const answer = attendeeAnswer || (row.booking_answers as Record<string, string>).transport?.trim() || "";
+    let defaultRole = carpoolRoleFromAnswer(answer);
+    // A group answer can offer one car. Individual answers identify each driver directly.
+    if (!attendeeAnswer && defaultRole === "driver") {
+      if (bookingDrivers.has(row.booking_id)) defaultRole = "unspecified";
+      else bookingDrivers.add(row.booking_id);
+    }
+    return {
+      id: String(row.attendee_id), name: [row.first_name, row.last_name].join(" ").trim(),
+      reference: String(row.booking_reference), bookingState: String(row.booking_state),
+      checkedIn: row.checked_in_ms != null, answer, defaultRole,
+    };
+  });
+
+  const layout = update ?? JSON.parse(String(stored?.layout_json ?? '{"roles":{},"cars":[]}')) as CarpoolLayout;
+  const byId = new Map(attendees.map(attendee => [attendee.id, attendee]));
+  const roles = Object.fromEntries(Object.entries(layout.roles).filter(([id]) => byId.has(id)));
+  function matchesRole(id: string, role: "driver" | "passenger") {
+    const attendee = byId.get(id);
+    return attendee && attendeeCarpoolRole(attendee, roles) === role;
+  }
+  const cars = layout.cars.filter(car => matchesRole(car.driverId, "driver"))
+    .map(car => ({ ...car, passengers: car.passengers.filter(id => matchesRole(id, "passenger")) }));
+  if (!update) return { version, attendees, roles, cars };
+  if (Object.keys(roles).length !== Object.keys(update.roles).length || cars.length !== update.cars.length ||
+      cars.some((car, index) => car.passengers.length !== update.cars[index].passengers.length)) {
+    throw new PaidBookingError("carpool_attendee_unavailable");
+  }
+
+  yield query(
+    "INSERT INTO paid_carpool_plans (event_id,version,layout_json) VALUES (?,?,?) " +
+    "ON CONFLICT(event_id) DO UPDATE SET version=excluded.version,layout_json=excluded.layout_json",
+    eventId, version + 1, JSON.stringify({ roles, cars }),
+  );
+  return { version: version + 1, attendees, roles, cars };
 }
 
 export type PaidRoomingPlan = { version: number; rooms: RoomingRoom[]; guests: RoomingGuest[] };
