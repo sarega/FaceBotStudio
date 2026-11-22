@@ -11190,13 +11190,12 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-6"
+              className="grid gap-2"
             >
               {selectedEventId && canReviewPaidSlips && (
                 <>
                   <PaidRegistrationSettings language={language} key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
-                  <PaidCouponManager key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
-                  <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+                  <PaidCouponManager language={language} key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
                   <PaidReviewQueue summary={notificationSummary} summaryError={!!eventNotificationData?.failed}
                     onSummaryRefresh={() => setNotificationRefresh((value) => value + 1)} language={language} key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
                     focusBookingReference={reviewFocus?.eventId===selectedEventId?reviewFocus.reference:undefined}
@@ -11267,6 +11266,9 @@ export default function App() {
                 registrationTicketResendMessage={registrationTicketResendMessage}
                 onResendRegistrationTicket={resendRegistrationTicket}
               />
+              {selectedEventId && canReviewPaidSlips && (
+                <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+              )}
             </motion.div>
           )}
           {activeTab === "customers" && (

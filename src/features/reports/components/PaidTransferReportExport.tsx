@@ -59,7 +59,7 @@ export function PaidTransferReportExport({ eventId, apiFetch, language }: {
             value={reportEnd} onChange={(event) => setReportEnd(event.target.value)} />
         </label>}
         <button type="button" disabled={reportBusy || !reportReady} onClick={() => void downloadReport()}
-          className="rounded-lg bg-blue-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
+          className="registration-admin-control registration-admin-control-primary">
           {reportBusy ? t("กำลังสร้างรายงาน…", "Generating report…") : t("สร้าง PDF ตรวจยอดโอน", "Download transfer report PDF")}
         </button>
       </div>

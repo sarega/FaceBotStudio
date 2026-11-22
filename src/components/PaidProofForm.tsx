@@ -72,8 +72,8 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
   return (
     <form onSubmit={submit} className="space-y-3">
       {!staff && paymentMode==="promptpay" && <p className="text-xs text-slate-700">{t("ตรวจสอบ QR ในขั้นตอนที่ 2 ก่อนโอน", "Check the QR code in step 2 before transferring.")}</p>}
-      <label htmlFor={fileId} className="relative flex min-h-24 cursor-pointer focus-within:ring-2 focus-within:ring-blue-600 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-blue-400 bg-blue-500/10 px-4 py-3 text-center font-semibold text-blue-700 hover:bg-blue-500/20">
-        <UploadCloud className="h-7 w-7"/>
+      <label htmlFor={fileId} className={`relative flex cursor-pointer flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-500/10 text-center font-semibold text-blue-700 hover:bg-blue-500/20 focus-within:ring-2 focus-within:ring-blue-600 ${staff ? "min-h-16 gap-0.5 rounded-lg px-3 py-1.5" : "min-h-24 gap-2 rounded-xl px-4 py-3"}`}>
+        <UploadCloud className={staff ? "h-4 w-4" : "h-7 w-7"} aria-hidden="true" />
         <span>{file ? file.name : t("เลือกภาพสลิป", "Choose payment slip")}</span>
         <span className="text-xs font-normal text-slate-700">{t("รูปภาพ JPG, PNG หรือ WebP ไม่เกิน 4 MB", "JPG, PNG or WebP, up to 4 MB")}</span>
         <input id={fileId} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" type="file" accept="image/*"
@@ -111,7 +111,7 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
         </fieldset>
       </details>
       <button type="submit" disabled={busy||!file}
-        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-3 text-base font-bold text-white hover:bg-blue-400 disabled:cursor-not-allowed disabled:bg-slate-600">
+        className={staff ? "registration-admin-control registration-admin-control-primary" : "flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-3 text-base font-bold text-white hover:bg-blue-400 disabled:cursor-not-allowed disabled:bg-slate-600"}>
         <UploadCloud className="h-5 w-5"/>
         {busy ? t("กำลังส่งสลิป…", "Submitting slip…") : staff ? t("แนบสลิปเข้าคิวรอตรวจ", "Submit slip for review") : t("ส่งสลิปให้ผู้จัดงาน", "Submit slip")}
       </button>

@@ -2206,9 +2206,9 @@ html.theme-dark .public-customer-signin { background: #60a5fa; color: #0f172a; }
 .registration-section-heading {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  padding: 0 12px;
+  padding: 0 10px;
   background: var(--registration-accent-soft);
   border-left: 4px solid var(--registration-accent);
   border-bottom: 1px solid var(--registration-accent-border);
@@ -2217,25 +2217,25 @@ html.theme-dark .public-customer-signin { background: #60a5fa; color: #0f172a; }
   display: flex;
   flex: 1 1 auto;
   align-items: center;
-  min-height: 58px;
+  min-height: 44px;
   min-width: 0;
-  gap: 12px;
+  gap: 8px;
   border: 0;
   background: transparent;
-  padding: 8px 0;
+  padding: 4px 0;
   text-align: left;
   color: #0f172a;
   cursor: pointer;
 }
 .registration-section-icon {
   display: flex;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
-  flex: 0 0 34px;
+  flex: 0 0 28px;
   border: 1px solid var(--registration-accent-border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: white;
   color: var(--registration-accent-ink);
 }
@@ -2244,7 +2244,7 @@ html.theme-dark .public-customer-signin { background: #60a5fa; color: #0f172a; }
   flex: 1 1 auto;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 .registration-section-heading-title {
   font-size: 14px;
@@ -2259,7 +2259,7 @@ html.theme-dark .public-customer-signin { background: #60a5fa; color: #0f172a; }
   font-weight: 400;
 }
 .registration-section-chevron {
-  flex: 0 0 18px;
+  flex: 0 0 16px;
   color: var(--registration-accent-ink);
   transition: transform .16s ease;
 }
@@ -2277,19 +2277,45 @@ html.theme-dark .public-customer-signin { background: #60a5fa; color: #0f172a; }
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  padding: 8px 0;
+  padding: 4px 0;
 }
-.registration-section-refresh {
+.registration-admin-control {
+  display: inline-flex;
   min-height: 34px;
-  border: 1px solid var(--registration-accent-border);
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #cbd5e1;
   border-radius: 8px;
-  padding: 5px 10px;
-  background: #ffffff;
-  color: var(--registration-accent-ink);
-  font-size: 12px;
-  font-weight: 700;
+  background: #fff;
+  padding: 4px 9px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
 }
-.registration-section-content { padding: 14px; }
+.registration-admin-control:is(button, a, select):not(:disabled) { cursor: pointer; }
+.registration-admin-control:is(button, a, select):not(:disabled):hover { border-color: var(--registration-accent, #2563eb); }
+.registration-admin-control:is([aria-pressed="true"], [aria-expanded="true"]) {
+  border-color: var(--registration-accent-border);
+  background: var(--registration-accent-soft);
+  color: var(--registration-accent-ink);
+}
+.registration-admin-control-primary {
+  border-color: transparent;
+  background: #1d4ed8;
+  color: #fff;
+}
+.registration-admin-control.registration-admin-control-danger { color: #b91c1c; }
+.registration-admin-control:disabled { cursor: not-allowed; opacity: .55; }
+.registration-admin-control:focus-visible { outline: 2px solid var(--registration-accent, #2563eb); outline-offset: 2px; }
+.registration-section-content { padding: 8px; }
+.paid-review-item { container-type: inline-size; }
+.paid-review-details { display: grid; gap: 10px; }
+@container (min-width: 640px) {
+  .paid-review-details { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
 .registration-admin-settings .registration-section-content { display: flex; flex-direction: column; gap: 12px; }
 .registration-admin-review .registration-section-content > :first-child { margin-top: 0; }
 
@@ -2315,20 +2341,29 @@ html.theme-dark .registration-admin-section.registration-admin-review {
   --registration-accent-ink: #6ee7b7;
 }
 html.theme-dark .registration-section-toggle { color: #f1f5f9; }
-html.theme-dark .registration-section-icon,
-html.theme-dark .registration-section-refresh {
+html.theme-dark .registration-section-icon {
   background: #1e293b;
   color: var(--registration-accent-ink);
   border-color: var(--registration-accent-border);
 }
+html.theme-dark .registration-admin-control {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+html.theme-dark .registration-admin-control:is([aria-pressed="true"], [aria-expanded="true"]) {
+  border-color: var(--registration-accent-border);
+  background: var(--registration-accent-soft);
+  color: var(--registration-accent-ink);
+}
+html.theme-dark .registration-admin-control.registration-admin-control-danger { color: #fda4af; }
+html.theme-dark .registration-admin-control-primary { background: #1d4ed8; color: #fff; }
 html.theme-dark .registration-section-heading-subtitle { color: #cbd5e1; }
 html.theme-dark .registration-section-chevron { color: var(--registration-accent-ink); }
 
 @media (max-width: 640px) {
   .registration-section-heading { padding: 0 10px; gap: 6px; }
-  .registration-section-toggle { gap: 9px; min-height: 54px; }
-  .registration-section-icon { width: 32px; height: 32px; flex-basis: 32px; }
-  .registration-section-content { padding: 10px; }
+  .registration-admin-control { min-height: 40px; }
   .registration-section-heading-title { font-size: 13px; }
   .registration-section-heading-subtitle { font-size: 11px; }
 }

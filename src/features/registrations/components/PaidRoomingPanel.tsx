@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { BedDouble, Download, GripVertical, Lock, RefreshCw, Save, Unlock, WandSparkles } from "lucide-react";
+import { Download, GripVertical, Lock, RefreshCw, Save, Unlock, WandSparkles } from "lucide-react";
 import { draftRoomingPlan, moveRoomingGuest, type RoomingRoom } from "../../../../backend/roomingPlan";
 import type { PaidRoomingPlan } from "../../../../backend/db/paidRegistration";
+import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 
 type Props = {
   eventId: string;
@@ -123,7 +124,7 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  const button = "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 disabled:opacity-50";
+  const button = "registration-admin-control";
   const errors: Record<string, string> = {
     rooming_version_conflict: t("มีการบันทึกจากเครื่องอื่นแล้ว กดโหลดใหม่เพื่อดูผังล่าสุด", "Another session saved a newer plan. Reload to see it."),
     rooming_locked: t("บันทึกการปลดล็อกห้องก่อนย้ายผู้พัก", "Save the unlocked room before moving guests."),
@@ -155,16 +156,13 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
     </button>;
   }
 
-  return <section className="rounded-2xl border border-slate-200 bg-white">
-    <button type="button" aria-expanded={open} onClick={() => {
+  return <section className="registration-admin-section">
+    <RegistrationSectionHeader tone="rooming" title={t("จัดห้องพัก", "Room assignments")} open={open} onToggle={() => {
       if (busy) return;
       setHasOpened(true);
       setOpen(!open);
-    }} className="flex w-full items-center gap-2 px-4 py-3 text-left font-bold text-slate-900">
-      <BedDouble className="h-5 w-5 text-blue-600" aria-hidden="true" /> {t("จัดห้องพัก", "Room assignments")}
-      <span className="ml-auto text-sm font-normal text-slate-600">{open ? t("ซ่อน", "Hide") : t("เปิด", "Open")}</span>
-    </button>
-    <div hidden={!open} className="space-y-3 border-t border-slate-200 p-4">
+    }} />
+    <div hidden={!open} className="registration-section-content space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         {plan && <>
           <button type="button" className={button} disabled={busy || !unassigned.length} onClick={() => {
@@ -175,8 +173,8 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
           }}><WandSparkles className="h-4 w-4" aria-hidden="true" /> {t("จัดร่างอัตโนมัติ", "Draft rooms")}</button>
           <button type="button" className={button} disabled={busy} onClick={() => setRooms([...rooms, { id: crypto.randomUUID(), number: "", locked: false, slots: [null, null] }])}>{t("เพิ่มห้องคู่", "Add twin room")}</button>
           <button type="button" className={button} disabled={busy} onClick={() => setRooms([...rooms, { id: crypto.randomUUID(), number: "", locked: false, slots: [null] }])}>{t("เพิ่มห้องเดี่ยว", "Add single room")}</button>
-          <button type="button" className={button} disabled={busy || (!rooms.length && !unassigned.length)} onClick={exportRooms}><Download className="h-4 w-4" aria-hidden="true" /> {t("Export CSV", "Export CSV")}</button>
-          <button type="button" className={`${button} border-blue-200 bg-blue-50 text-blue-700`} disabled={busy || !dirty} onClick={() => void save()}><Save className="h-4 w-4" aria-hidden="true" /> {t("บันทึกผัง", "Save plan")}</button>
+          <button type="button" className={button} disabled={busy || (!rooms.length && !unassigned.length)} onClick={exportRooms}><Download className="h-4 w-4" aria-hidden="true" /> {t("ส่งออก CSV", "Export CSV")}</button>
+          <button type="button" className={`${button} registration-admin-control-primary`} disabled={busy || !dirty} onClick={() => void save()}><Save className="h-4 w-4" aria-hidden="true" /> {t("บันทึกผัง", "Save plan")}</button>
         </>}
         <button type="button" className={button} disabled={busy} onClick={() => {
           if (!dirty || window.confirm(t("โหลดผังที่บันทึกไว้ และทิ้งการแก้ไขที่ยังไม่ได้บันทึกหรือไม่", "Reload the saved plan and discard unsaved changes?"))) {

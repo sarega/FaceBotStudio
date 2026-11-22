@@ -22,7 +22,7 @@ function blank(): Coupon {
   return {code:"",kind:"percent",value_minor:2000,max_uses:null,per_customer_limit:1,
     starts_ms:null,ends_ms:null,enabled:1,uses:0};
 }
-export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:ApiFetch}) {
+export function PaidCouponManager({eventId,apiFetch,language}:{eventId:string;apiFetch:ApiFetch;language:"th"|"en"}) {
   const [open,setOpen]=useState(false);
   const [coupons,setCoupons]=useState<Coupon[]>([]);
   const [configuredEvent,setConfiguredEvent]=useState<{id:string;slug:string;name:string;publicPageEnabled:boolean}|null>(null);
@@ -100,9 +100,9 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
   }
   const input="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900";
   return <section className="registration-admin-section registration-admin-coupons">
-    <RegistrationSectionHeader tone="coupons" title="Coupons & Promotions"
-      subtitle="คูปอง · โปรโมชันและส่วนลด" open={open} onToggle={()=>setOpen(!open)} />
-    {open && <div className="registration-section-content space-y-4">
+    <RegistrationSectionHeader tone="coupons" title={language === "th" ? "คูปองและโปรโมชัน" : "Coupons & Promotions"}
+      subtitle={language === "th" ? "รหัสส่วนลดและโควตา" : "Discount codes and usage limits"} open={open} onToggle={()=>setOpen(!open)} />
+    {open && <div className="registration-section-content space-y-2">
       <p className="text-sm text-slate-600">One coupon per booking. Discounts apply after accommodation adjustments.
         Expired unpaid bookings release their usage quota automatically.</p>
       {configuredEvent&&<div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
@@ -142,21 +142,21 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
             Ended {new Date(Number(c.ends_ms)).toLocaleString("th-TH",{timeZone:"Asia/Bangkok"})} Bangkok
           </p>}
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={()=>edit(c)} className="rounded-md border border-blue-300 px-2.5 py-2 font-semibold text-blue-700">
+            <button type="button" onClick={()=>edit(c)} className="registration-admin-control">
               Edit
             </button>
-            <button type="button" onClick={()=>duplicate(c)} className="rounded-md border border-slate-300 px-2.5 py-2 font-semibold text-slate-700">
+            <button type="button" onClick={()=>duplicate(c)} className="registration-admin-control">
               Duplicate
             </button>
             <button type="button" disabled={!!deleting||busy} onClick={()=>void removeCoupon(c)}
-              className="rounded-md border border-red-300 px-2.5 py-2 font-semibold text-red-700 disabled:opacity-50">
+              className="registration-admin-control registration-admin-control-danger">
               {deleting===c.code?"Deleting…":"Delete"}
             </button>
           </div>
         </div>)}
       </div>
       <button type="button" onClick={()=>{setEditing(blank());setEditingCode(null);setError("");setMessage("");}}
-        className="rounded-lg border border-blue-300 px-3 py-2 text-sm font-semibold text-blue-700">
+        className="registration-admin-control">
         + New coupon / เพิ่มคูปอง
       </button>
       {editingCode&&<p className="text-sm font-semibold text-blue-700">
@@ -206,7 +206,7 @@ export function PaidCouponManager({eventId,apiFetch}:{eventId:string;apiFetch:Ap
           Active / เปิดใช้งาน
         </label>
         <div className="flex items-center gap-3 sm:col-span-2">
-          <button disabled={busy} className="min-h-10 rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white disabled:opacity-50">
+          <button disabled={busy} className="registration-admin-control registration-admin-control-primary">
             {busy?"Saving…":editingCode?"Save changes / บันทึกการแก้ไข":"Create coupon / สร้างคูปอง"}
           </button>
           {message&&<span role="status" className="text-sm text-emerald-700">{message}</span>}

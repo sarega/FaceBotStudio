@@ -1,7 +1,7 @@
-import { ChevronDown, ClipboardCheck, Settings2, Tags } from "lucide-react";
+import { BedDouble, ChevronDown, ClipboardCheck, Settings2, Tags } from "lucide-react";
 import type { ReactNode } from "react";
 
-export type RegistrationSectionTone = "settings" | "coupons" | "review";
+export type RegistrationSectionTone = "settings" | "coupons" | "review" | "rooming";
 type Props = {
   tone: RegistrationSectionTone;
   title: string;
@@ -15,6 +15,7 @@ const icons = {
   settings: Settings2,
   coupons: Tags,
   review: ClipboardCheck,
+  rooming: BedDouble,
 } as const;
 
 /** A single keyboard-accessible section header for paid-registration administration. */
@@ -26,13 +27,13 @@ export function RegistrationSectionHeader({
     <div className="registration-section-heading">
       <button type="button" aria-expanded={open} onClick={onToggle}
         className="registration-section-toggle">
-        <span className="registration-section-icon" aria-hidden="true"><Icon size={18} strokeWidth={2}/></span>
+        <span className="registration-section-icon" aria-hidden="true"><Icon size={16} strokeWidth={2}/></span>
         <span className="registration-section-heading-label">
           <span className="registration-section-heading-title">{title}</span>
           {subtitle && <span className="registration-section-heading-subtitle">{subtitle}</span>}
         </span>
-        <ChevronDown size={18} strokeWidth={2}
-          className={"registration-section-chevron"+(open?" is-open":"")} aria-hidden="true"/>
+        <ChevronDown size={16} strokeWidth={2}
+          className={`registration-section-chevron${open ? " is-open" : ""}`} aria-hidden="true"/>
       </button>
       {actions && open && <div className="registration-section-actions">{actions}</div>}
     </div>

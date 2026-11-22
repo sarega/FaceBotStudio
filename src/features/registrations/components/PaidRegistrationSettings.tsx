@@ -313,11 +313,11 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
             </div>;
           })}
         </fieldset>
-        <div className="flex flex-wrap gap-2 border-t pt-4">
-          <button type="submit" name="action" value="publish" className="rounded-xl bg-blue-700 px-5 py-3 text-base font-bold text-white disabled:opacity-50">
+        <div className="flex flex-wrap gap-1.5 border-t pt-2">
+          <button type="submit" name="action" value="publish" className="registration-admin-control registration-admin-control-primary">
             {busy ? t("กำลังบันทึก…", "Saving…") : t("บันทึกและเปิดรับสมัคร", "Save and publish")}
           </button>
-          <button type="submit" name="action" value="draft" className="rounded-xl border px-4 py-3 font-semibold">
+          <button type="submit" name="action" value="draft" className="registration-admin-control">
             {t("บันทึกแบบร่าง", "Save draft")}
           </button>
         </div>
