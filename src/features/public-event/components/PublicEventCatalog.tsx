@@ -10,45 +10,48 @@ function formatStartingPrice(value: number) {
 function CatalogCard({ event, locale }: { event: PublicEventCatalogEntry; locale: "th" | "en" }) {
   const t = (th: string, en: string) => locale === "th" ? th : en;
   const eventUrl = `/events/${encodeURIComponent(event.slug)}`;
+  const venue = event.location.venue_name || event.location.compact;
   return (
-    <article className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:grid-cols-[11rem_minmax(0,1fr)] sm:gap-x-5 sm:p-4 md:grid-cols-[13rem_minmax(0,1fr)]">
-      <div className="relative aspect-square self-start overflow-hidden rounded-lg bg-slate-100 sm:row-span-2 sm:aspect-[4/3]">
+    <article className="grid min-h-44 grid-cols-[38%_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-56 sm:grid-cols-[13rem_minmax(0,1fr)] md:grid-cols-[15rem_minmax(0,1fr)]">
+      <div className="relative bg-slate-100">
         {event.poster_url ? (
-          <img src={event.poster_url} alt="" className="absolute inset-0 h-full w-full object-contain" loading="lazy" />
+          <img src={event.poster_url} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-blue-600">
             <Ticket className="h-6 w-6 sm:h-9 sm:w-9" />
           </div>
         )}
       </div>
-      <div className="min-w-0 wrap-break-word">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          {event.organizer.name && <p className="text-xs font-semibold text-slate-600">{event.organizer.name}</p>}
-          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">{event.availability.label}</span>
+      <div className="flex min-w-0 flex-col gap-2.5 p-2.5 wrap-break-word sm:gap-3 sm:p-4">
+        <div className="space-y-2">
+          <h2 className="text-sm font-bold leading-snug text-slate-900 sm:text-xl">{event.name}</h2>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">{event.availability.label}</span>
+            {event.organizer.name && <p className="hidden text-xs font-semibold text-slate-600 sm:block">{event.organizer.name}</p>}
+          </div>
+          <div className="flex flex-col gap-y-1 text-xs leading-snug text-slate-600 sm:flex-row sm:flex-wrap sm:gap-x-4 sm:text-sm">
+            <p className="flex min-w-0 items-start gap-1.5"><CalendarDays aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500 sm:h-4 sm:w-4" /> <span>{event.date_label || t("รอประกาศวันจัดงาน", "Date to be announced")}</span></p>
+            {venue && <p className="flex min-w-0 items-start gap-1.5"><MapPin aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500 sm:h-4 sm:w-4" /> <span>{venue}</span></p>}
+          </div>
+          {event.summary && <p className="hidden text-sm leading-5 text-slate-600 sm:line-clamp-2">{event.summary}</p>}
         </div>
-        <h2 className="mt-1.5 text-base font-bold leading-snug text-slate-900 sm:text-xl">{event.name}</h2>
-        <div className="mt-2 flex flex-col gap-y-1 text-sm text-slate-600 sm:flex-row sm:flex-wrap sm:gap-x-4">
-          <p className="flex min-w-0 items-start gap-1.5"><CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" /> <span>{event.date_label || t("รอประกาศวันจัดงาน", "Date to be announced")}</span></p>
-          {event.location.compact && <p className="flex min-w-0 items-start gap-1.5"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" /> <span>{event.location.compact}</span></p>}
-        </div>
-        {event.summary && <p className="mt-2 line-clamp-2 text-sm leading-5 text-slate-600">{event.summary}</p>}
-      </div>
-      <div className="col-span-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 self-end border-t border-slate-200 pt-2.5 sm:col-span-1">
-        {event.starting_price != null && <span className="text-sm font-semibold text-slate-700">{t("เริ่มต้น", "From")} {formatStartingPrice(event.starting_price)}</span>}
-        <div className="ml-auto flex flex-wrap justify-end gap-2">
-          {event.availability.external_ticket_url && (
-            <a href={event.availability.external_ticket_url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:border-blue-300 hover:text-blue-700">
-              <ExternalLink className="h-4 w-4" /> {t("บัตรเข้างาน", "Tickets")}
+        <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-2">
+          {event.starting_price != null && <span className="text-xs font-semibold text-slate-700 sm:text-sm">{t("เริ่มต้น", "From")} {formatStartingPrice(event.starting_price)}</span>}
+          <div className="flex flex-wrap gap-1.5 sm:ml-auto">
+            {event.availability.external_ticket_url && (
+              <a href={event.availability.external_ticket_url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:border-blue-300 hover:text-blue-700 sm:px-3 sm:text-sm">
+                <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {t("บัตรเข้างาน", "Tickets")}
+              </a>
+            )}
+            {event.availability.customer_checkout_enabled && (
+              <a href={`${eventUrl}/checkout`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs font-semibold text-blue-700 hover:border-blue-300 hover:bg-blue-100 sm:px-3 sm:text-sm">
+                <Ticket className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {t("ซื้อบัตร", "Buy seats")}
+              </a>
+            )}
+            <a href={eventUrl} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 sm:px-3 sm:text-sm">
+              {t("ดูรายละเอียด", "View event")} <ArrowRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             </a>
-          )}
-          {event.availability.customer_checkout_enabled && (
-            <a href={`${eventUrl}/checkout`} className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 hover:border-blue-300 hover:bg-blue-100">
-              <Ticket className="h-4 w-4" /> {t("ซื้อบัตร", "Buy seats")}
-            </a>
-          )}
-          <a href={eventUrl} className="inline-flex min-h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700">
-            {t("ดูรายละเอียดงาน", "View event")} <ArrowRight className="h-4 w-4" />
-          </a>
+          </div>
         </div>
       </div>
     </article>
