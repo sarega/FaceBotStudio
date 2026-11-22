@@ -3,6 +3,7 @@ import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { decryptPaidProof, encryptPaidProof, paidProofEncryptionConfigured } from "../paidProofEncryption";
 import { roomSurchargeMinor, isEditableSeminarKey, type EditableSeminarKey, normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
 import { createHash, randomUUID } from "node:crypto";
+import type { RoomingGuest, RoomingRoom } from "../roomingPlan";
 
 export type PaidSql = { sql: string; params: (string | number | Buffer | null)[] };
 export type PaidRow = Record<string, unknown>;
@@ -1265,6 +1266,62 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<
       attendee_email:String(contact.email||""),attendee_phone:String(contact.phone||""),
       answers,booking_answers:bookingAnswers};
   });
+}
+
+export type PaidRoomingPlan = { version: number; rooms: RoomingRoom[]; guests: RoomingGuest[] };
+export type PaidRoomingUpdate = { version: number; rooms: RoomingRoom[] };
+
+export function* paidRoomingPlan(eventId: string, update?: PaidRoomingUpdate):
+  PaidCommand<PaidRoomingPlan | null> {
+  const [settings] = yield query("SELECT 1 FROM paid_event_settings WHERE event_id=?", eventId);
+  if (!settings) return null;
+  const [stored] = yield query("SELECT version,rooms_json FROM paid_rooming_plans WHERE event_id=?", eventId);
+  const version = Number(stored?.version ?? 0);
+  const rooms = JSON.parse(String(stored?.rooms_json ?? "[]")) as RoomingRoom[];
+  if (update && update.version !== version) throw new PaidBookingError("rooming_version_conflict");
+
+  const roster = yield* listPaidAttendeeRoster(eventId);
+  const guests: RoomingGuest[] = [];
+  for (const row of roster) {
+    if (row.booking_state !== "confirmed") continue;
+    const answers = { ...row.booking_answers as Record<string, string>, ...row.answers as Record<string, string> };
+    if (answers.accommodation === "no") continue;
+    const preference = answers.room_preference || "";
+    guests.push({
+      id: String(row.attendee_id), name: [row.first_name, row.last_name].join(" ").trim(),
+      bookingId: String(row.booking_id), category: String(row.category_label),
+      accommodation: answers.accommodation === "yes" ? "yes" : "unknown",
+      preference, single: /\bsingle\b|ห้องเดี่ยว|พักเดี่ยว/i.test(preference),
+      needsGuardianReview: /เด็ก|ทารก|\b(?:child(?:ren)?|kid(?:s)?|infant|toddler)\b/i.test(
+        `${row.category_id} ${row.category_label}`.replaceAll("_", " "),
+      ),
+    });
+  }
+  if (!update) return { version, rooms, guests };
+
+  const guestById = new Map(guests.map(guest => [guest.id, guest]));
+  const previousRooms = new Map(rooms.map(room => [room.id, room]));
+  const nextRooms = new Map(update.rooms.map(room => [room.id, room]));
+  for (const previous of rooms) {
+    if (previous.locked && JSON.stringify(nextRooms.get(previous.id)?.slots) !== JSON.stringify(previous.slots)) {
+      throw new PaidBookingError("rooming_locked");
+    }
+  }
+  for (const room of update.rooms) {
+    for (const [index, id] of room.slots.entries()) {
+      if (!id) continue;
+      const guest = guestById.get(id);
+      if ((!guest || guest.single && room.slots.length !== 1) && previousRooms.get(room.id)?.slots[index] !== id) {
+        throw new PaidBookingError("rooming_guest_unavailable");
+      }
+    }
+  }
+  yield query(
+    "INSERT INTO paid_rooming_plans (event_id,version,rooms_json) VALUES (?,?,?) " +
+    "ON CONFLICT(event_id) DO UPDATE SET version=excluded.version,rooms_json=excluded.rooms_json",
+    eventId, version + 1, JSON.stringify(update.rooms),
+  );
+  return { version: version + 1, rooms: update.rooms, guests };
 }
 
 export function* readPaidRegistrationReport(eventId: string): PaidCommand<PaidRow | undefined> {

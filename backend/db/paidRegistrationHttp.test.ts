@@ -690,6 +690,26 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(attendeeRosterResponse.status,200);
     const attendeeRoster=await attendeeRosterResponse.json();
     assert.equal(attendeeRoster.attendees.length,5);
+    const roomsPath = `${eventPrefix}/rooms`;
+    const firstRoomPlan = await fetch(roomsPath, { headers: staffHeaders });
+    assert.equal(firstRoomPlan.status, 200);
+    const { plan: draftPlan } = await firstRoomPlan.json();
+    assert.equal(draftPlan.version, 0);
+    assert.ok(draftPlan.guests.length > 0);
+    assert.ok(draftPlan.guests.every((guest: Record<string, unknown>) => !("customer_email" in guest)));
+    const roomFixture = { id: "room-one", locked: true, number: "", slots: [draftPlan.guests[0].id, null] };
+    const saveRooms = (version: number, rooms: unknown[]) => fetch(roomsPath, {
+      method: "PUT", headers: staffCreateHeaders, body: JSON.stringify({ version, rooms }),
+    });
+    assert.equal((await saveRooms(0, [{ ...roomFixture, slots: [draftPlan.guests[0].id, draftPlan.guests[0].id] }])).status, 400);
+    assert.equal((await saveRooms(0, [{ ...roomFixture, slots: ["not-an-attendee", null] }])).status, 409);
+    assert.equal((await saveRooms(0, [roomFixture])).status, 200);
+    assert.equal((await saveRooms(0, [])).status, 409);
+    assert.equal((await saveRooms(1, [{ ...roomFixture, slots: [null, draftPlan.guests[0].id] }])).status, 409);
+    assert.equal((await saveRooms(1, [{ ...roomFixture, number: "301" }])).status, 200);
+    const persistedPlan = (await (await fetch(roomsPath, { headers: staffHeaders })).json()).plan;
+    assert.equal(persistedPlan.rooms[0].number, "301");
+    assert.equal(persistedPlan.rooms[0].slots[0], draftPlan.guests[0].id);
 
     const staffSession = async (role: "owner" | "operator" | "checker" | "cashier" | "viewer", eventIds: string[] = []) => {
       const username = `paid-access-${role}-${eventIds.length}`;
@@ -703,6 +723,8 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const unassignedChecker = await staffSession("checker");
     const cashierAccess = await staffSession("cashier", [event.id]);
     const viewerAccess = await staffSession("viewer", [event.id]);
+    assert.equal((await fetch(roomsPath, { headers: ownerAccess })).status, 200);
+    assert.equal((await fetch(roomsPath, { headers: operatorAccess })).status, 403);
     for (const access of [ownerAccess, operatorAccess, checkerAccess]) {
       const paidRoster = await fetch(`${eventPrefix}/attendees`, { headers: access });
       assert.equal(paidRoster.status, 200, await paidRoster.clone().text());
@@ -719,6 +741,30 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await fetch(notificationPath, { headers: ownerAccess })).status, 200);
     assert.equal((await fetch(notificationPath, { headers: checkerAccess })).status, 403);
     assert.equal((await fetch(`${origin}/api/registrations/export?event_id=${event.id}`, { headers: checkerAccess })).status, 200);
+
+    const operatorFeed = await fetch(`${eventPrefix}/summary?activity=1`, { headers: operatorAccess });
+    assert.equal(operatorFeed.status, 200);
+    assert.ok((await operatorFeed.json()).summary.activity.some((entry: { id: string }) => entry.id === notificationId));
+    const otherNotificationPath = `${origin}/api/events/${paidEvent.id}/admin-notifications/state`;
+    assert.equal((await fetch(`${externalPrefix}/summary?activity=1`, { headers: operatorAccess })).status, 403);
+    assert.equal((await fetch(otherNotificationPath, { headers: operatorAccess })).status, 403);
+    const updateOperatorNotifications = (path: string) => fetch(path, {
+      method: "POST",
+      headers: { Cookie: `${operatorAccess.Cookie}; fbs_csrf=operator-csrf`, Origin: origin,
+        "x-csrf-token": "operator-csrf", "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "archive", ids: [notificationId] }),
+    });
+    assert.equal((await updateOperatorNotifications(otherNotificationPath)).status, 403);
+    const operatorState = await fetch(notificationPath, { headers: operatorAccess });
+    assert.equal(operatorState.status, 200);
+    assert.deepEqual((await operatorState.json()).state.dismissedIds, []);
+    const adminBefore = (await (await fetch(notificationPath, { headers: staffHeaders })).json()).state;
+    const operatorArchive = await updateOperatorNotifications(notificationPath);
+    assert.equal(operatorArchive.status, 200);
+    assert.deepEqual((await operatorArchive.json()).state.dismissedIds, [notificationId]);
+    assert.deepEqual((await (await fetch(notificationPath, { headers: operatorAccess })).json()).state.dismissedIds, [notificationId]);
+    assert.deepEqual((await (await fetch(notificationPath, { headers: staffHeaders })).json()).state, adminBefore);
+    assert.equal((await fetch(`${eventPrefix}/review-queue`, { headers: operatorAccess })).status, 403);
 
     const legacyRosterEvent=await db.createEvent({
       name:"Free Legacy Registration Event",organizer_id:"org_default",

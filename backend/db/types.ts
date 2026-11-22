@@ -1,6 +1,6 @@
 import type { CouponInput } from "./paidCoupons";
 import type { PaidAdminAction } from "./paidRegistration";
-import type { PaidMessengerDraftInput, PaidMessengerConfirmInput, PaidMessengerQuote, PaidMessengerStatus, PaidReviewInput, PaidReviewReceipt, PaidReviewSortOrder, PaidProofInput, PaidProofReceipt, PaidBookingInput, PaidBookingReceipt, PaidCatalog, PaidRow, PaidSettingsInput } from "./paidRegistration";
+import type { PaidMessengerDraftInput, PaidMessengerConfirmInput, PaidMessengerQuote, PaidMessengerStatus, PaidReviewInput, PaidReviewReceipt, PaidReviewSortOrder, PaidRoomingUpdate, PaidRoomingPlan, PaidProofInput, PaidProofReceipt, PaidBookingInput, PaidBookingReceipt, PaidCatalog, PaidRow, PaidSettingsInput } from "./paidRegistration";
 export interface AdminNotificationStateRow {
   time:number;readIds:string[];dismissedIds:string[];unreadIds:string[];deletedIds:string[];imported:boolean;
 }
@@ -1104,6 +1104,7 @@ export interface AppDatabase {
   readPaidRegistrationReport(eventId: string, organizationId: string): Promise<PaidRow | undefined>;
   readPaidEventSummary(eventId: string, organizationId: string, includeActivity?: boolean,
     activityLimit?:number, activityOffset?:number): Promise<PaidRow | undefined>;
+  paidRoomingPlan(eventId: string, organizationId: string, update?: PaidRoomingUpdate): Promise<PaidRoomingPlan | null>;
   listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number): Promise<PaidRow[]>;
   readPaidAdminBooking(eventId: string, organizationId: string, reference: string): Promise<PaidRow | undefined>;
   managePaidBooking(input: PaidAdminAction): Promise<{ status: string; payment_status: string; version: number; due_at: string }>;

@@ -9,6 +9,7 @@ import { AttendeeLanguageSelect } from "./components/AttendeeLanguageSelect";
 import { AttendeeThemeSelect, type ThemeMode } from "./components/AttendeeThemeSelect";
 import { PaidRegistrationSettings } from "./features/registrations/components/PaidRegistrationSettings";
 import { PaidCouponManager } from "./features/registrations/components/PaidCouponManager";
+import { PaidRoomingPanel } from "./features/registrations/components/PaidRoomingPanel";
 import { PaidReviewQueue } from "./features/registrations/components/PaidReviewQueue";
 import { lazy, Suspense, useDeferredValue, useState, useEffect, useRef, type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
@@ -899,7 +900,7 @@ function readWorkspaceSession() {
   if (typeof window === "undefined") return fallback;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
-    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "organizer", "logs", "settings", "team", "customers", "registrations", "direct_tickets", "reports", "checkin", "inbox", "outreach"];
+    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "organizer", "logs", "settings", "team", "customers", "registrations", "direct_tickets", "reports", "checkin", "inbox", "outreach", "notifications"];
     return {
       eventId: typeof parsed.eventId === "string" ? parsed.eventId : "",
       activeTab: validTabs.includes(parsed.activeTab as AppTab) ? parsed.activeTab as AppTab : fallback.activeTab,
@@ -3673,7 +3674,8 @@ export default function App() {
   const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
   const isSetupTab = activeTab === "settings" || activeTab === "team";
   const effectiveSidebarCollapsed = sidebarCollapsed;
-  const canOpenNotifications = (role === "owner" || role === "admin") && !!selectedEventId;
+  const canReviewPaidSlips = role === "owner" || role === "admin";
+  const canOpenNotifications = (canReviewPaidSlips || role === "operator") && !!selectedEventId;
   const primaryTabs = [
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: translate(language, "nav.event", "Event") }] : []),
     ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: translate(language, "nav.mail", "Mail") }] : []),
@@ -4817,6 +4819,15 @@ export default function App() {
   const activeNotificationKey = useRef(notificationKey);
   activeNotificationKey.current = notificationKey;
   const notificationStatePath="/api/events/"+encodeURIComponent(selectedEventId)+"/admin-notifications/state";
+  function openNotificationBooking(reference = "") {
+    if (canReviewPaidSlips) {
+      setReviewFocus({ eventId: selectedEventId, reference });
+    } else {
+      setRegistrationListQuery(reference);
+      setRegistrationStatusFilter("all");
+    }
+    setActiveTab("registrations");
+  }
   async function mutateNotificationState(action: Exclude<AdminNotificationMutation["action"], "import">, ids: string[] = []) {
     if (notificationMutation.current || notificationSeen?.key !== notificationKey) return false;
     notificationMutation.current = true;
@@ -11157,15 +11168,14 @@ export default function App() {
                 pending: Number(notificationSummary.pending_review_bookings),
                 awaiting: Number(notificationSummary.awaiting_payment_attendees),
               } : undefined}
-              onReview={() => { setReviewFocus({ eventId: selectedEventId, reference: "" }); setActiveTab("registrations"); }}
+              onReview={() => openNotificationBooking()}
               onRefresh={() => setNotificationRefresh((value) => value + 1)}
               onAction={mutateNotificationState}
               onOpen={(entry) => {
                 if (notificationFilter !== "trash" && notificationIsUnread(seen, entry)) {
                   void mutateNotificationState("read", [entry.id]);
                 }
-                setReviewFocus({ eventId: selectedEventId, reference: entry.reference });
-                setActiveTab("registrations");
+                openNotificationBooking(entry.reference);
               }}
               hasMore={notificationHistory.key === notificationHistoryKey && notificationHistory.hasMore}
               historyLoading={notificationHistoryLoading} onLoadOlder={() => void loadOlderNotifications()}
@@ -11182,10 +11192,11 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              {selectedEventId && (role === "owner" || role === "admin") && (
+              {selectedEventId && canReviewPaidSlips && (
                 <>
                   <PaidRegistrationSettings language={language} key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
                   <PaidCouponManager key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
+                  <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
                   <PaidReviewQueue summary={notificationSummary} summaryError={!!eventNotificationData?.failed}
                     onSummaryRefresh={() => setNotificationRefresh((value) => value + 1)} language={language} key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
                     focusBookingReference={reviewFocus?.eventId===selectedEventId?reviewFocus.reference:undefined}

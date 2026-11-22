@@ -1,3 +1,4 @@
+import { parseRoomingPlan } from "./backend/roomingPlan";
 import { isValidCouponCode } from "./backend/db/paidCoupons";
 import sharp from "sharp";
 import { paidProofEncryptionConfigured } from "./backend/paidProofEncryption";
@@ -2769,6 +2770,7 @@ const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "cashier", "checker", "viewer"];
 const EVENT_ASSIGNMENT_ROLES = new Set<UserRole>(["operator", "cashier", "checker", "viewer"]);
 const REGISTRATION_ROSTER_ROLES: UserRole[] = ["owner", "admin", "operator", "checker"];
+const PAID_NOTIFICATION_ROLES: UserRole[] = ["owner", "admin", "operator"];
 const SENSITIVE_SETTINGS_KEYS = new Set([
   "verify_token",
   "admin_agent_telegram_bot_token",
@@ -17327,6 +17329,31 @@ async function startServer() {
   const paidSettingsPath = "/api/events/:eventId/paid-registration/settings";
   const paidSettingsScope = requireEventScope({ paramKey: "eventId", queryKey: null, bodyKey: null, allowDefault: false, allowCheckinAccess: false });
 
+  const roomingPath = "/api/events/:eventId/paid-registration/rooms";
+  app.get(roomingPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+    try {
+      const plan = await appDb.paidRoomingPlan(req.eventScope!.eventId, req.auth!.user.organization_id);
+      return res.set("Cache-Control", "private, no-store").json({ plan });
+    } catch (error) {
+      return res.status(error instanceof PaidBookingError ? 404 : 500).json({ error: "rooming_unavailable" });
+    }
+  });
+  app.put(roomingPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+    const { version, rooms } = readObjectBody(req);
+    const parsed = parseRoomingPlan(rooms);
+    if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0 || !parsed) {
+      return res.status(400).json({ error: "rooming_invalid_plan" });
+    }
+    try {
+      const plan = await appDb.paidRoomingPlan(req.eventScope!.eventId, req.auth!.user.organization_id, { version, rooms: parsed });
+      if (!plan) return res.status(404).json({ error: "rooming_unavailable" });
+      return res.set("Cache-Control", "private, no-store").json({ plan });
+    } catch (error) {
+      if (error instanceof PaidBookingError) return res.status(error.code === "event_not_found" ? 404 : 409).json({ error: error.code });
+      return res.status(500).json({ error: "rooming_save_failed" });
+    }
+  });
+
   app.get("/api/events/:eventId/paid-registration/coupons",
     requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
       try {
@@ -17877,7 +17904,7 @@ async function startServer() {
   // Admin inbox acknowledgement is per individual user, organizer and event.
   // Never delete the underlying paid audit events, bookings or proof images.
   app.get("/api/events/:eventId/admin-notifications/state",
-    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res:Response)=>{
+    requireRoles(PAID_NOTIFICATION_ROLES),paidSettingsScope,async(req:AuthenticatedRequest,res:Response)=>{
       try{
         const state=await appDb.getAdminNotificationState(
           req.auth!.user.organization_id,req.auth!.user.id,req.eventScope!.eventId);
@@ -17888,7 +17915,7 @@ async function startServer() {
       }
     });
   app.post("/api/events/:eventId/admin-notifications/state",
-    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res:Response)=>{
+    requireRoles(PAID_NOTIFICATION_ROLES),paidSettingsScope,async(req:AuthenticatedRequest,res:Response)=>{
       const body=req.body??{};
       const actions=["read","read_all","unread","archive","restore","restore_all","delete","restore_deleted","import"];
       const validIds=(value:unknown)=>Array.isArray(value)&&value.length<=2000&&
@@ -17914,7 +17941,7 @@ async function startServer() {
     });
 
   app.get("/api/events/:eventId/paid-registration/summary",
-    requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+    requireRoles(PAID_NOTIFICATION_ROLES), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       try {
         const includeActivity=req.query.activity==="1";
         const limit=Number(req.query.activity_limit??100);

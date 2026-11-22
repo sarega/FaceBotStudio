@@ -1,5 +1,5 @@
 import { listCoupons, upsertCoupon, deleteCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
-import { readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
+import { paidRoomingPlan, type PaidRoomingUpdate, readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
@@ -1497,6 +1497,7 @@ export class SqliteAppDatabase implements AppDatabase {
       this.db.exec(readFileSync(new URL("./migrations/056_admin_notification_state.sql",import.meta.url),"utf8"));
       this.ensureColumn("admin_notification_items", "unread_ms", "INTEGER");
       this.ensureColumn("admin_notification_items", "deleted_ms", "INTEGER");
+      this.db.exec(readFileSync(new URL("./migrations/059_paid_rooming_plans.sql", import.meta.url), "utf8"));
       for (const table of ["registrations", "event_performances"]) {
         this.db.exec(`
           CREATE TRIGGER IF NOT EXISTS trg_paid_${table}_legacy_guard BEFORE INSERT ON ${table}
@@ -1663,6 +1664,13 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.runPaidCommand(input.eventId, (ownerId) => {
       if (ownerId !== input.organizationId) throw new PaidBookingError("event_not_found");
       return managePaidBooking(input);
+    });
+  }
+
+  async paidRoomingPlan(eventId: string, organizationId: string, update?: PaidRoomingUpdate) {
+    return this.runPaidCommand(eventId, (ownerId) => {
+      if (ownerId !== organizationId) throw new PaidBookingError("event_not_found");
+      return paidRoomingPlan(eventId, update);
     });
   }
 
