@@ -1917,7 +1917,7 @@ export class PostgresAppDatabase implements AppDatabase {
          WHERE t.token_hash = $1 AND t.kind = 'password_reset' AND t.used_at IS NULL
            AND t.expires_at > CURRENT_TIMESTAMP AND c.status <> 'disabled'
            AND (NOT $2::boolean OR EXISTS (SELECT 1 FROM users u WHERE u.staff_customer_account_id = c.id
-             AND u.is_active = 1 AND u.staff_email IS NOT NULL AND (u.staff_email_purpose IS NULL OR u.staff_email_purpose <> 'invite')))
+             AND u.is_active AND u.staff_email IS NOT NULL AND (u.staff_email_purpose IS NULL OR u.staff_email_purpose <> 'invite')))
          FOR UPDATE OF c`, [tokenHash, staffOnly],
       );
       const accountId = account.rows[0]?.id;
@@ -4010,7 +4010,7 @@ export class PostgresAppDatabase implements AppDatabase {
   async stageStaffPasswordReset(userId: string, email: string, tokenHash: string, expiresAt: Date, now: Date) {
     const result = await this.pool.query(
       `UPDATE users SET staff_reset_token_hash = $3, staff_reset_expires_at = $4, staff_reset_email = $2
-       WHERE id = $1 AND staff_email = $2 AND is_active = 1 AND staff_customer_account_id IS NULL
+       WHERE id = $1 AND staff_email = $2 AND is_active AND staff_customer_account_id IS NULL
          AND (staff_email_purpose IS NULL OR staff_email_purpose <> 'invite')
          AND (staff_reset_expires_at IS NULL OR staff_reset_expires_at <= $5 OR staff_reset_email <> $2
            OR staff_reset_expires_at <= $6)`,
@@ -4024,7 +4024,7 @@ export class PostgresAppDatabase implements AppDatabase {
       `WITH reset AS (
          UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP,
            staff_reset_token_hash = NULL, staff_reset_expires_at = NULL, staff_reset_email = NULL
-         WHERE staff_reset_token_hash = $2 AND staff_reset_expires_at > $3 AND is_active = 1
+         WHERE staff_reset_token_hash = $2 AND staff_reset_expires_at > $3 AND is_active
            AND staff_email = staff_reset_email AND staff_customer_account_id IS NULL
            AND (staff_email_purpose IS NULL OR staff_email_purpose <> 'invite') RETURNING id
        ), revoked AS (DELETE FROM sessions WHERE user_id IN (SELECT id FROM reset))

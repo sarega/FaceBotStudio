@@ -50,6 +50,15 @@ async function checkStaffEmailLinks(db: AppDatabase) {
     assert.equal(await db.getUserPasswordHash(legacy.username), "legacy");
     assert.equal((await db.getUserById(legacy.id))?.staff_email, "legacy@example.com");
 
+    const resetRequestedAt = new Date();
+    const resetExpiresAt = new Date(resetRequestedAt.getTime() + 600_000);
+    await db.createSession(legacy.id, "old-staff-session", resetExpiresAt);
+    assert.equal(await db.stageStaffPasswordReset(legacy.id, "legacy@example.com", "staff-reset", resetExpiresAt, resetRequestedAt), true);
+    assert.equal(await db.resetStaffPassword("staff-reset", "reset-staff-password", resetRequestedAt), legacy.id);
+    assert.equal(await db.resetStaffPassword("staff-reset", "other-password", resetRequestedAt), undefined);
+    assert.equal(await db.getUserPasswordHash(legacy.username), "reset-staff-password");
+    assert.equal(await db.getSessionWithUser("old-staff-session"), undefined);
+
     const attendee = await db.createCustomerAccount({
       email: "member@example.com", normalized_email: "member@example.com", password_hash: "original-password",
       first_name: "Member", last_name: "Example", phone: "", normalized_phone: "",
@@ -76,8 +85,16 @@ async function checkStaffEmailLinks(db: AppDatabase) {
     assert.equal(await db.updateCustomerPasswordHash(attendee.id, "changed-password"), true);
     assert.equal(await db.updateCustomerPasswordHash(attendee.id, "stale-rehash", "original-password"), false);
     await assert.rejects(db.createSession(dual.id, "stale-staff-session", expires, proof), /staff_login_state_changed/);
-    await db.setCustomerAccountStatus(attendee.id, "disabled");
+    await db.createCustomerAccountToken({
+      customer_account_id: attendee.id, kind: "password_reset", token_hash: "linked-staff-reset", expires_at: expires,
+    });
+    assert.equal(await db.resetCustomerPassword("linked-staff-reset", "shared-reset-password", true), attendee.id);
+    assert.equal(await db.resetCustomerPassword("linked-staff-reset", "other-password", true), undefined);
+    assert.equal((await db.getCustomerAccountById(attendee.id))?.password_hash, "shared-reset-password");
     assert.equal(await db.getSessionWithUser("valid-staff-session"), undefined);
+    await db.createSession(dual.id, "fresh-staff-session", expires, { id: attendee.id, passwordHash: "shared-reset-password" });
+    await db.setCustomerAccountStatus(attendee.id, "disabled");
+    assert.equal(await db.getSessionWithUser("fresh-staff-session"), undefined);
   } finally {
     await db.close();
   }
