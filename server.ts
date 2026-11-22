@@ -3675,6 +3675,7 @@ async function queueCustomerAccountEmail(
   kind: "email_verification" | "password_reset",
   rawToken: string,
   tokenId: string,
+  staffReset = false,
 ) {
   const emailConfig = getEmailConfig();
   if (!emailConfig.ready) {
@@ -3686,6 +3687,7 @@ async function queueCustomerAccountEmail(
     rawToken,
     firstName: account.first_name,
     supportEmail: emailConfig.replyToAddress,
+    staffReset,
   });
   return appDb.enqueueNotificationDelivery({
     channel: "email",
@@ -14844,6 +14846,13 @@ async function startServer() {
     keyFn: (req) => getCustomerLoginIpRateLimitScope(req),
     errorMessage: "Too many customer account requests. Please wait and try again.",
   });
+  const passwordRecoveryIpRateLimit = createRateLimitMiddleware({
+    name: "password-recovery-ip",
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    keyFn: (req) => buildRateLimitKey(req.path, getCustomerLoginIpRateLimitScope(req)),
+    errorMessage: "Too many password reset requests. Please wait and try again.",
+  });
   const customerAccountEmailRateLimit = createRateLimitMiddleware({
     name: CUSTOMER_ACCOUNT_EMAIL_RATE_LIMIT_NAME,
     windowMs: 10 * 60 * 1000,
@@ -15286,64 +15295,97 @@ async function startServer() {
     }
   });
 
-  app.post("/api/customer/account/forgot-password", customerAccountIpRateLimit, customerAccountEmailRateLimit, async (req: AuthenticatedRequest, res) => {
-    if (!isCustomerAppEnabled()) {
-      return res.status(404).json({ error: "Not found" });
-    }
+  app.post("/api/customer/account/forgot-password", passwordRecoveryIpRateLimit, customerAccountEmailRateLimit, async (req: AuthenticatedRequest, res) => {
     const body = readObjectBody(req);
+    const staffOnly = body.scope === "staff";
+    if (!staffOnly && !isCustomerAppEnabled()) return res.status(404).json({ error: "Not found" });
     const issues: ValidationIssue[] = [];
-    const email = readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 });
+    const email = normalizeCustomerEmail(readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 }));
     if (email && !isValidCustomerEmail(email)) issues.push({ field: "email", message: "Enter a valid email address" });
     if (issues.length > 0) return respondValidationError(res, issues);
 
+    const config = getEmailConfig();
+    if (!config.ready) return res.status(503).json({ error: "Password reset email is temporarily unavailable" });
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + getCustomerAccountTokenTtlMs("password_reset"));
+    const token = createCustomerAccountToken();
+    let customer: CustomerAccountRow | undefined;
+    let staff: AuthUserRow | undefined;
+    let tokenId: string | undefined;
     try {
-      const account = await appDb.getCustomerAccountByNormalizedEmail(normalizeCustomerEmail(email));
-      if (account && account.status !== "disabled") {
-        const token = createCustomerAccountToken();
-        const tokenRow = await appDb.createCustomerAccountToken({
-          customer_account_id: account.id,
-          kind: "password_reset",
-          token_hash: token.tokenHash,
-          expires_at: new Date(Date.now() + getCustomerAccountTokenTtlMs("password_reset")),
-        });
-        try {
-          await queueCustomerAccountEmail(account, "password_reset", token.rawToken, tokenRow.id);
-        } catch (error) {
-          console.error("Failed to queue customer password reset email:", error);
+      if (staffOnly) {
+        const match = await appDb.getUserByStaffEmail(email);
+        if (canSignInAsStaff(match)) {
+          if (match.staff_customer_account_id) {
+            const linked = await appDb.getCustomerAccountById(match.staff_customer_account_id);
+            if (isVerifiedCustomer(linked)) customer = linked;
+          } else if (await appDb.stageStaffPasswordReset(match.id, email, token.tokenHash, expiresAt, now)) {
+            staff = match;
+          }
         }
-        await recordCustomerAudit(req, "customer.password_reset_requested", "customer_account", account.id, account.id);
+      } else {
+        const account = await appDb.getCustomerAccountByNormalizedEmail(email);
+        if (account && account.status !== "disabled") customer = account;
       }
-    } catch (error) {
-      console.error("Customer password reset request failed:", error);
+      if (customer) {
+        const row = await appDb.createCustomerAccountToken({
+          customer_account_id: customer.id, kind: "password_reset", token_hash: token.tokenHash, expires_at: expiresAt,
+        });
+        tokenId = row.id;
+      }
+    } catch {
+      console.error("Could not prepare password reset");
+      return res.status(503).json({ error: "Password reset email is temporarily unavailable" });
     }
-    return res.status(202).json({ status: "ok" });
+
+    // Keep the response independent of account existence and provider latency.
+    res.status(202).json({ status: "ok" });
+    if (!customer && !staff) return;
+    if (customer) {
+      await recordCustomerAudit(req, "customer.password_reset_requested", "customer_account", customer.id, customer.id)
+        .catch(() => console.error("Could not audit attendee password reset request"));
+    }
+    try {
+      const payload = renderCustomerAccountEmail({
+        kind: "password_reset", appUrl: config.appUrl, rawToken: token.rawToken,
+        firstName: customer?.first_name ?? staff?.display_name ?? "", supportEmail: config.replyToAddress, staffReset: staffOnly,
+      });
+      await sendProviderEmail({ to: customer?.email ?? email, ...payload }, config);
+    } catch {
+      console.error("Password reset email delivery failed");
+      if (customer && tokenId) {
+        await queueCustomerAccountEmail(customer, "password_reset", token.rawToken, tokenId, staffOnly)
+          .catch(() => console.error("Could not queue password reset retry"));
+      }
+    }
   });
 
-  app.post("/api/customer/account/reset-password", customerAccountIpRateLimit, async (req: AuthenticatedRequest, res) => {
-    if (!isCustomerAppEnabled()) {
-      return res.status(404).json({ error: "Not found" });
-    }
+  app.post("/api/customer/account/reset-password", passwordRecoveryIpRateLimit, async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const staffOnly = body.scope === "staff";
+    if (!staffOnly && !isCustomerAppEnabled()) return res.status(404).json({ error: "Not found" });
     try {
-      const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
       const token = readRequiredString(body, "token", issues, { label: "Reset token", maxLength: 512 });
       const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
       if (password && password.length < 8) issues.push({ field: "password", message: "Password must be at least 8 characters" });
       if (issues.length > 0) return respondValidationError(res, issues);
-      const consumed = await appDb.consumeCustomerAccountToken(hashSessionToken(token), "password_reset");
-      if (!consumed) return res.status(400).json({ error: "Reset link is invalid or expired" });
-      const updated = await appDb.updateCustomerPasswordHash(consumed.customer_account_id, hashPassword(password));
-      if (!updated) return res.status(400).json({ error: "Reset link is invalid or expired" });
-      await appDb.deleteCustomerSessions(consumed.customer_account_id);
-      const staff = await appDb.getUserByStaffCustomerAccount(consumed.customer_account_id);
-      if (staff) await appDb.deleteSessionsForUser(staff.id);
-      const account = await appDb.getCustomerAccountById(consumed.customer_account_id);
-      if (account) {
-        await recordCustomerAudit(req, "customer.password_reset", "customer_account", account.id, account.id);
+      const tokenHash = hashSessionToken(token);
+      const passwordHash = hashPassword(password);
+      const staffId = staffOnly ? await appDb.resetStaffPassword(tokenHash, passwordHash, new Date()) : undefined;
+      if (staffId) {
+        await appDb.recordAuditLog({ actor_user_id: staffId, action: "auth.staff_password_reset", target_type: "user", target_id: staffId })
+          .catch(() => console.error("Could not audit staff password reset"));
+        return res.json({ status: "ok" });
       }
+      const customerId = await appDb.resetCustomerPassword(tokenHash, passwordHash, staffOnly);
+      if (!customerId) return res.status(400).json({ error: "Reset link is invalid or expired" });
+      await recordCustomerAudit(req, "customer.password_reset", "customer_account", customerId, customerId)
+        .catch(() => console.error("Could not audit attendee password reset"));
       return res.json({ status: "ok" });
-    } catch (error) {
-      console.error("Customer password reset failed:", error);
+    } catch {
+      console.error("Password reset failed");
       return res.status(500).json({ error: "Failed to reset password" });
     }
   });

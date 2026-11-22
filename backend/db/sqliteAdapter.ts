@@ -1271,6 +1271,9 @@ export class SqliteAppDatabase implements AppDatabase {
       if (!(this.db.pragma("table_info(users)") as { name: string }[]).some(column => column.name === "staff_customer_account_id")) {
         this.db.exec(readFileSync(new URL("./migrations/062_staff_customer_identity.sql", import.meta.url), "utf8"));
       }
+      if (!(this.db.pragma("table_info(users)") as { name: string }[]).some(column => column.name === "staff_reset_token_hash")) {
+        this.db.exec(readFileSync(new URL("./migrations/064_staff_password_reset.sql", import.meta.url), "utf8"));
+      }
     }).immediate();
     this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_staff_email_unique ON users (staff_email);
       CREATE UNIQUE INDEX IF NOT EXISTS users_staff_email_token_unique ON users (staff_email_token_hash);`);
@@ -2695,6 +2698,24 @@ export class SqliteAppDatabase implements AppDatabase {
     const token = mapCustomerAccountTokenRow(row);
     if (!token) throw new Error("Failed to create customer account token");
     return token;
+  }
+
+  async resetCustomerPassword(tokenHash: string, passwordHash: string, staffOnly: boolean) {
+    return this.db.transaction(() => {
+      const accountId = this.db.prepare(
+        `SELECT c.id FROM customer_accounts c JOIN customer_account_tokens t ON t.customer_account_id = c.id
+         WHERE t.token_hash = ? AND t.kind = 'password_reset' AND t.used_at IS NULL
+           AND datetime(t.expires_at) > CURRENT_TIMESTAMP AND c.status <> 'disabled'
+           AND (? = 0 OR EXISTS (SELECT 1 FROM users u WHERE u.staff_customer_account_id = c.id
+             AND u.is_active = 1 AND u.staff_email IS NOT NULL AND (u.staff_email_purpose IS NULL OR u.staff_email_purpose <> 'invite')))`,
+      ).pluck().get(tokenHash, Number(staffOnly)) as string | undefined;
+      if (!accountId) return undefined;
+      this.db.prepare("UPDATE customer_accounts SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(passwordHash, accountId);
+      this.db.prepare("UPDATE customer_account_tokens SET used_at = CURRENT_TIMESTAMP WHERE customer_account_id = ? AND kind = 'password_reset' AND used_at IS NULL").run(accountId);
+      this.db.prepare("DELETE FROM customer_sessions WHERE customer_account_id = ?").run(accountId);
+      this.db.prepare("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE staff_customer_account_id = ?)").run(accountId);
+      return accountId;
+    }).immediate();
   }
 
   async consumeCustomerAccountToken(tokenHash: string, kind: CustomerAccountTokenKind) {
@@ -4565,6 +4586,32 @@ export class SqliteAppDatabase implements AppDatabase {
          AND (staff_email_expires_at IS NULL OR staff_email_expires_at <= @retryBefore)`,
     ).run({ userId, email, purpose, tokenHash, expiresAt, retryBefore });
     return result.changes > 0;
+  }
+
+  async stageStaffPasswordReset(userId: string, email: string, tokenHash: string, expiresAt: Date, now: Date) {
+    const result = this.db.prepare(
+      `UPDATE users SET staff_reset_token_hash = @tokenHash, staff_reset_expires_at = @expiresAt, staff_reset_email = @email
+       WHERE id = @userId AND staff_email = @email AND is_active = 1 AND staff_customer_account_id IS NULL
+         AND (staff_email_purpose IS NULL OR staff_email_purpose <> 'invite')
+         AND (staff_reset_expires_at IS NULL OR staff_reset_expires_at <= @now OR staff_reset_email <> @email
+           OR staff_reset_expires_at <= @retryBefore)`,
+    ).run({ userId, email, tokenHash, expiresAt: expiresAt.toISOString(), now: now.toISOString(),
+      retryBefore: new Date(expiresAt.getTime() - 60_000).toISOString() });
+    return result.changes > 0;
+  }
+
+  async resetStaffPassword(tokenHash: string, passwordHash: string, now: Date) {
+    return this.db.transaction(() => {
+      const userId = this.db.prepare(
+        `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP,
+           staff_reset_token_hash = NULL, staff_reset_expires_at = NULL, staff_reset_email = NULL
+         WHERE staff_reset_token_hash = ? AND staff_reset_expires_at > ? AND is_active = 1
+           AND staff_email = staff_reset_email AND staff_customer_account_id IS NULL
+           AND (staff_email_purpose IS NULL OR staff_email_purpose <> 'invite') RETURNING id`,
+      ).pluck().get(passwordHash, tokenHash, now.toISOString()) as string | undefined;
+      if (userId) this.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+      return userId;
+    }).immediate();
   }
 
   async getPendingStaffInviteEmail(tokenHash: string, now: string) {

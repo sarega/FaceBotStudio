@@ -1305,6 +1305,9 @@ export interface AppDatabase {
   getUserByUsername(username: string): Promise<AuthUserRow | undefined>;
   getUserByStaffEmail(email: string): Promise<AuthUserRow | undefined>;
   getUserByStaffCustomerAccount(customerId: string): Promise<AuthUserRow | undefined>;
+  stageStaffPasswordReset(userId: string, email: string, tokenHash: string, expiresAt: Date, now: Date): Promise<boolean>;
+  resetStaffPassword(tokenHash: string, passwordHash: string, now: Date): Promise<string | undefined>;
+  resetCustomerPassword(tokenHash: string, passwordHash: string, staffOnly: boolean): Promise<string | undefined>;
   getPendingStaffInviteEmail(tokenHash: string, now: string): Promise<string | undefined>;
   getUserById(userId: string): Promise<AuthUserRow | undefined>;
   isUserAssignedToEvent(userId: string, eventId: string): Promise<boolean>;

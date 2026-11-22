@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -62,10 +62,16 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     await new Promise<void>((done) => socket.close(() => done()));
     const origin = `http://127.0.0.1:${port}`;
     const server = fileURLToPath(new URL("../../server.ts", import.meta.url));
+    const sentEmail = join(directory, "sent-email.jsonl");
     const mockVision = join(directory, "mock-slip-vision.cjs");
     writeFileSync(mockVision, `
       const fetch = globalThis.fetch;
+      const { appendFileSync } = require("node:fs");
       globalThis.fetch = (input, options) => {
+        if (String(input) === "https://api.resend.com/emails") {
+          appendFileSync(${JSON.stringify(sentEmail)}, options.body + "\\n");
+          return Promise.resolve(Response.json({ id: "fixture-email" }));
+        }
         if (String(input) !== "https://openrouter.ai/api/v1/chat/completions") return fetch(input, options);
         const request = JSON.parse(options.body);
         if (request.provider?.zdr !== true || request.provider?.data_collection !== "deny" ||
@@ -83,6 +89,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
         PATH: process.env.PATH, APP_RUNTIME: "web", NODE_ENV: "development", PORT: String(port),
         APP_URL: origin, DB_PATH: database, PUBLIC_UPLOADS_DIR: join(directory, "uploads"),
         CUSTOMER_APP_ENABLED: "1", PAID_REGISTRATION_PUBLIC_ENABLED: "1",
+        RESEND_API_KEY: "fixture", EMAIL_FROM: "tickets@example.com", EMAIL_REPLY_TO: "help@example.com",
         OPENROUTER_API_KEY: "mock-key", FACEBOOK_APP_SECRET: "fixture-webhook-secret", PAID_PROOF_ENCRYPTION_KEY: "01".repeat(32),
       },
       stdio: ["ignore", "ignore", "inherit"],
@@ -1362,7 +1369,66 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await staffLogin(attendeeEmail, attendeePassword)).status, 401);
     assert.equal((await staffLogin(attendeeEmail, "NewAttendee1")).status, 200);
 
+    const requestReset = (email: string, scope: "staff" | "attendee") =>
+      jsonPost("/api/customer/account/forgot-password", { email, scope });
+    const finishReset = (token: string, password: string, scope: "staff" | "attendee") =>
+      jsonPost("/api/customer/account/reset-password", { token, password, scope });
+    async function getResetFromEmail(email: string, staff: boolean) {
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const messages = readFileSync(sentEmail, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+        const message = messages.reverse().find(message =>
+          message.to.includes(email) && /reset-password/.test(message.text));
+        if (message) {
+          const link = new URL(message.text.match(/Open link: (\S+)/)[1]);
+          assert.equal(link.origin, origin);
+          assert.equal(link.pathname, "/account/reset-password");
+          assert.equal(link.searchParams.has("token"), false);
+          assert.equal(link.searchParams.has("staff"), staff);
+          const token = new URLSearchParams(link.hash.slice(1)).get("token");
+          assert.ok(token);
+          return token;
+        }
+        await delay(25);
+      }
+      assert.fail("Reset email never reached provider");
+    }
+    writeFileSync(sentEmail, "");
+    const requested = await requestReset(attendeeEmail, "staff");
+    assert.equal(requested.status, 202);
+    const linkedToken = await getResetFromEmail(attendeeEmail, true);
+    const unknown = await requestReset("unknown@example.com", "staff");
+    assert.equal(unknown.status, requested.status);
+    assert.deepEqual(await unknown.json(), await requested.json());
+    assert.equal((await finishReset(linkedToken, "SharedReset123", "staff")).status, 200);
+    assert.equal((await finishReset(linkedToken, "ReplayPassword123", "staff")).status, 400);
+    assert.equal((await staffLogin(attendeeEmail, "SharedReset123")).status, 200);
+    assert.equal((await customerLogin("SharedReset123")).status, 200);
 
+    const staffOnlyEmail = "staff-only@example.com";
+    const staffOnly = await db.createUser({ username: "staff-only", display_name: "Staff only", role: "admin",
+      password_hash: hashPassword("OldStaffPassword123"), invite_email: staffOnlyEmail });
+    const staffOnlyInvite = hashSessionToken("staff-only-invite");
+    const fixtureNow = new Date();
+    await db.stageStaffEmail(staffOnly.id, staffOnlyEmail, "invite", staffOnlyInvite,
+      new Date(fixtureNow.getTime() + 60_000).toISOString(), fixtureNow.toISOString());
+    await db.consumeStaffEmail(staffOnlyInvite, fixtureNow.toISOString(), null, hashPassword("OldStaffPassword123"));
+    await db.createSession(staffOnly.id, hashSessionToken("staff-only-session"), new Date(Date.now() + 60_000));
+    const staffRequest = await requestReset(staffOnlyEmail, "staff");
+    assert.equal(staffRequest.status, 202);
+    const staffToken = await getResetFromEmail(staffOnlyEmail, true);
+    assert.equal((await finishReset(staffToken, "WrongScope123", "attendee")).status, 400);
+    assert.equal((await finishReset(staffToken, "NewStaffPassword123", "staff")).status, 200);
+    assert.equal((await staffLogin(staffOnlyEmail, "OldStaffPassword123")).status, 401);
+    assert.equal((await staffLogin(staffOnlyEmail, "NewStaffPassword123")).status, 200);
+    assert.equal((await fetch(origin + "/api/auth/me", { headers: { Cookie: "fbs_session=staff-only-session" } })).status, 401);
+
+    const attendeeOnlyEmail = "test-other@example.com";
+    const attendeeRequest = await requestReset(attendeeOnlyEmail, "attendee");
+    assert.equal(attendeeRequest.status, 202);
+    const attendeeToken = await getResetFromEmail(attendeeOnlyEmail, false);
+    assert.equal((await finishReset(attendeeToken, "WrongScope123", "staff")).status, 400);
+    assert.equal((await finishReset(attendeeToken, "NewAttendeePassword123", "attendee")).status, 200);
+    assert.equal((await jsonPost("/api/customer/account/login", { email: attendeeOnlyEmail, password: "NewAttendeePassword123" })).status, 200);
   } finally {
     if (child && child.exitCode === null) child.kill();
     await exited;

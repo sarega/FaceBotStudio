@@ -21,6 +21,8 @@ const customerErrors: Record<string, CustomerCopy> = {
   "Password must be at least 8 characters": ["รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร", "Password must be at least 8 characters."],
   "An account with this email already exists": ["มีบัญชีที่ใช้อีเมลนี้แล้ว", "An account with this email already exists."],
   "Verification link is invalid or expired": ["ลิงก์ยืนยันอีเมลไม่ถูกต้องหรือหมดอายุ", "The verification link is invalid or expired."],
+  "Too many password reset requests. Please wait and try again.": ["ขอรีเซ็ตรหัสผ่านหลายครั้งเกินไป กรุณารอสักครู่แล้วลองใหม่", "Too many password reset requests. Please wait and try again."],
+  "Password reset email is temporarily unavailable": ["ระบบส่งอีเมลรีเซ็ตรหัสผ่านยังไม่พร้อม กรุณาลองใหม่ภายหลัง", "Password reset email is temporarily unavailable. Please try again later."],
   "Reset link is invalid or expired": ["ลิงก์ตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุ", "The reset link is invalid or expired."],
   "Verified account contact does not match this record": ["ข้อมูลติดต่อที่ยืนยันแล้วไม่ตรงกับรายการนี้", "Your verified contact does not match this record."],
   "Record not found": ["ไม่พบรายการนี้", "Record not found."],

@@ -51,7 +51,9 @@ function buildAccountLink(appUrl: string, pathname: string, rawToken: string) {
   if (!base) return "";
   try {
     const url = new URL(pathname, base);
-    url.searchParams.set("token", rawToken);
+    const token = new URLSearchParams({ token: rawToken });
+    if (url.pathname === "/account/reset-password") url.hash = token.toString();
+    else url.searchParams.set("token", rawToken);
     return url.toString();
   } catch {
     return "";
@@ -64,17 +66,19 @@ export function renderCustomerAccountEmail(input: {
   rawToken: string;
   firstName: string;
   supportEmail?: string | null;
+  staffReset?: boolean;
 }) {
   const isReset = input.kind === "password_reset";
-  const link = buildAccountLink(input.appUrl, isReset ? "/account/reset-password" : "/account/verify-email", input.rawToken);
+  const resetPath = input.staffReset ? "/account/reset-password?staff=1" : "/account/reset-password";
+  const link = buildAccountLink(input.appUrl, isReset ? resetPath : "/account/verify-email", input.rawToken);
   const safeName = escapeHtml(input.firstName || "there");
   const safeLink = escapeHtml(link);
   const supportEmail = escapeHtml(input.supportEmail || "");
-  const subject = isReset ? "Reset your Meetrix password" : "Verify your Meetrix account";
+  const subject = isReset ? "ตั้งรหัสผ่าน Meetrix ใหม่ | Reset your Meetrix password" : "Verify your Meetrix account";
   const heading = isReset ? "Reset your password" : "Verify your account";
   const action = isReset ? "Reset password" : "Verify email";
   const description = isReset
-    ? "Use the secure link below to choose a new password. This link expires soon."
+    ? "กดลิงก์เพื่อตั้งรหัสผ่านใหม่ ลิงก์มีอายุจำกัด / Use this link to set a new password before it expires."
     : "Use the secure link below to verify your email address and activate your account.";
   const text = [
     heading,

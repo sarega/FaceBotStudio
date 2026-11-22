@@ -148,10 +148,14 @@ function customerFormDefaults(token = ""): CustomerForm {
 export function CustomerAccountScreen({ locale = "th", languageControl, themeControl, embedded }: { locale?: "th" | "en"; languageControl?: ReactNode; themeControl?: ReactNode; embedded?: "profile" | "security" }) {
   const t = (th: string, en: string) => locale === "th" ? th : en;
   const pathname = typeof window !== "undefined" ? window.location.pathname : "/account";
-  const queryToken = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("token") || "" : "";
+  const urlToken = typeof window !== "undefined"
+    ? new URLSearchParams(window.location.hash.slice(1)).get("token") || new URLSearchParams(window.location.search).get("token") || ""
+    : "";
+  const staffReset = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("staff") === "1";
   const [mode, setMode] = useState<CustomerScreenMode>(() => embedded ? "profile" : resolveCustomerMode(pathname));
   const [account, setAccount] = useState<CustomerAccount | null>(null);
-  const [form, setForm] = useState<CustomerForm>(() => customerFormDefaults(queryToken));
+  const [form, setForm] = useState<CustomerForm>(() => customerFormDefaults(urlToken));
+  const [resetComplete, setResetComplete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errorCopy, setErrorMessage] = useState<CustomerCopy>();
   const errorMessage = errorCopy ? t(...errorCopy) : "";
@@ -165,11 +169,17 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
   };
 
   const navigate = (nextMode: CustomerScreenMode) => {
+    if (staffReset && nextMode === "login") {
+      window.location.assign("/staff/login");
+      return;
+    }
     const nextPath = nextMode === "profile" ? "/account" : `/account/${nextMode === "reset" ? "reset-password" : nextMode === "verify" ? "verify-email" : nextMode === "forgot" ? "forgot-password" : nextMode}`;
+    const scopedPath = staffReset && nextMode === "forgot" ? nextPath + "?staff=1" : nextPath;
     if (embedded && nextMode !== "profile") { window.location.assign(nextPath); return; }
-    window.history.pushState({}, "", nextPath);
+    window.history.pushState({}, "", scopedPath);
     setMode(nextMode);
     setErrorMessage(undefined);
+    setNotice(undefined);
   };
 
   useEffect(() => {
@@ -284,7 +294,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         await customerApi("/api/customer/account/forgot-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: form.email }),
+          body: JSON.stringify({ email: form.email, scope: staffReset ? "staff" : "attendee" }),
         });
         setNotice(["หากอีเมลนี้มีบัญชีอยู่ ระบบจะส่งลิงก์ตั้งรหัสผ่านใหม่ให้", "If that email exists, a reset link has been sent."]);
         return;
@@ -293,9 +303,15 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         await customerApi("/api/customer/account/reset-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token: form.token, password: form.password }),
+          body: JSON.stringify({ token: form.token, password: form.password, scope: staffReset ? "staff" : "attendee" }),
         });
-        navigate("login");
+        setForm(current => ({ ...current, token: "", password: "" }));
+        if (staffReset) {
+          window.history.replaceState({}, "", "/account/reset-password?staff=1");
+          setResetComplete(true);
+        } else {
+          navigate("login");
+        }
         setNotice(["ตั้งรหัสผ่านใหม่แล้ว คุณเข้าสู่ระบบได้เลย", "Password reset. You can now sign in."]);
         return;
       }
@@ -405,7 +421,8 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
       : mode === "reset" ? t("ตั้งรหัสผ่านใหม่", "Choose a new password")
         : mode === "verify" ? t("ยืนยันอีเมล", "Verify your email")
           : mode === "profile" ? t("บัญชีของคุณ", "Your account") : t("เข้าสู่ระบบ", "Welcome back");
-  const subtitle = mode === "profile" ? t("จัดการข้อมูลบัญชีของคุณ", "Manage your customer details securely.")
+  const subtitle = staffReset ? t("ใช้สำหรับบัญชีทีมงาน Meetrix", "Meetrix staff account recovery.")
+    : mode === "profile" ? t("จัดการข้อมูลบัญชีของคุณ", "Manage your customer details securely.")
     : t("บัญชีสำหรับลงทะเบียนและซื้อตั๋ว", "Ticketing access for attendees and buyers.");
 
   const accountContent = <>
@@ -474,21 +491,28 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           ) : (
             <form className="space-y-5" onSubmit={(event) => void submit(event)}>
               {(mode === "register" || mode === "profile") && <div className="grid gap-4 sm:grid-cols-2"><CustomerField label={t("ชื่อ", "First name")} value={form.first_name} onChange={(value) => setField("first_name", value)} autoComplete="given-name" /><CustomerField label={t("นามสกุล", "Last name")} value={form.last_name} onChange={(value) => setField("last_name", value)} autoComplete="family-name" /></div>}
-              {mode !== "reset" && <CustomerField label={t("อีเมล", "Email")} value={form.email} onChange={(value) => setField("email", value)} type="email" autoComplete="email" />}
+              {mode !== "reset" && <CustomerField label={staffReset ? t("อีเมลทีมงานที่ยืนยันแล้ว", "Verified staff email") : t("อีเมล", "Email")} value={form.email} onChange={(value) => setField("email", value)} type="email" autoComplete="email" />}
+              {mode === "forgot" && staffReset && <p className="text-sm text-slate-600">
+                {t("ถ้ายังไม่ได้เปิดใช้สิทธิ์ทีมงาน ให้เปิดลิงก์คำเชิญในอีเมลก่อน", "If you have not activated staff access yet, open your invitation email first.")}
+              </p>}
               {(mode === "register" || mode === "login") && <CustomerField label={t("รหัสผ่าน", "Password")} value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} />}
               {mode === "register" && <CustomerField label={t("เบอร์โทรศัพท์", "Phone")} value={form.phone} onChange={(value) => setField("phone", value)} autoComplete="tel" />}
-              {(mode === "reset") && <CustomerField label={t("รหัสผ่านใหม่", "New password")} value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete="new-password" />}
+              {mode === "reset" && !resetComplete && <CustomerField label={t("รหัสผ่านใหม่", "New password")} value={form.password} onChange={(value) => setField("password", value)} type="password" autoComplete="new-password" />}
               {mode === "register" && <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><label className="flex gap-3"><input type="checkbox" checked={form.accept_terms} onChange={(event) => setField("accept_terms", event.target.checked)} className="mt-1 accent-blue-500" /> {t("ฉันยอมรับข้อกำหนดการใช้บริการ", "I accept the terms of service.")}</label><label className="flex gap-3"><input type="checkbox" checked={form.accept_privacy} onChange={(event) => setField("accept_privacy", event.target.checked)} className="mt-1 accent-blue-500" /> {t("ฉันยอมรับประกาศความเป็นส่วนตัว", "I accept the privacy notice.")}</label></div>}
               {mode === "login" && <div className="mb-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
                 {t("กรุณายืนยันอีเมลก่อนจองที่นั่ง", "Verify your email before booking a spot.")}
               </div>}
+              {mode === "reset" && !form.token && !resetComplete && <p role="alert" className="text-sm text-rose-700">
+                {t("ลิงก์ตั้งรหัสผ่านไม่สมบูรณ์ กรุณาขอลิงก์ใหม่", "This reset link is incomplete. Request a new link.")}
+              </p>}
               {errorMessage && <p className="text-sm text-rose-700">{errorMessage}</p>}
               {notice && <p className="flex items-start gap-2 text-sm text-emerald-700"><Mail className="mt-0.5 h-4 w-4 shrink-0" /> {notice}</p>}
-              <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? t("สร้างบัญชี", "Create account") : mode === "forgot" ? t("ส่งลิงก์รีเซ็ต", "Send reset link") : mode === "reset" ? t("รีเซ็ตรหัสผ่าน", "Reset password") : t("เข้าสู่ระบบ", "Sign in")}</button>
+              {!resetComplete && <button disabled={busy || (mode === "reset" && !form.token)} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{busy && <RefreshCw className="h-4 w-4 animate-spin" />}{mode === "register" ? t("สร้างบัญชี", "Create account") : mode === "forgot" ? t("ส่งลิงก์รีเซ็ต", "Send reset link") : mode === "reset" ? t("รีเซ็ตรหัสผ่าน", "Reset password") : t("เข้าสู่ระบบ", "Sign in")}</button>}
               <div className="flex flex-wrap justify-between gap-3 text-sm text-slate-600">
                 {mode === "login" && <><button type="button" onClick={() => navigate("register")} className="hover:underline">{t("สร้างบัญชี", "Create account")}</button><button type="button" onClick={() => void resendVerification()} disabled={busy} className="hover:underline disabled:opacity-50">{t("ส่งอีเมลยืนยันอีกครั้ง", "Resend verification")}</button><button type="button" onClick={() => navigate("forgot")} className="hover:underline">{t("ลืมรหัสผ่าน?", "Forgot password?")}</button></>}
                 {mode === "register" && <button type="button" onClick={() => navigate("login")} className="hover:underline">{t("มีบัญชีแล้ว? เข้าสู่ระบบ", "Already have an account? Sign in")}</button>}
-                {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => navigate("login")} className="hover:underline">{t("กลับไปเข้าสู่ระบบ", "Back to sign in")}</button>}
+                {mode === "reset" && !resetComplete && <button type="button" onClick={() => navigate("forgot")} className="hover:underline">{t("ขอลิงก์ใหม่", "Request a new link")}</button>}
+                {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => navigate("login")} className="hover:underline">{staffReset ? t("เข้าสู่ระบบทีมงาน", "Sign in as staff") : t("กลับไปเข้าสู่ระบบ", "Back to sign in")}</button>}
               </div>
             </form>
           )}

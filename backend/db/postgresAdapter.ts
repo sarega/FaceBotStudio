@@ -1908,6 +1908,46 @@ export class PostgresAppDatabase implements AppDatabase {
     return token;
   }
 
+  async resetCustomerPassword(tokenHash: string, passwordHash: string, staffOnly: boolean) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const account = await client.query<{ id: string }>(
+        `SELECT c.id FROM customer_accounts c JOIN customer_account_tokens t ON t.customer_account_id = c.id
+         WHERE t.token_hash = $1 AND t.kind = 'password_reset' AND t.used_at IS NULL
+           AND t.expires_at > CURRENT_TIMESTAMP AND c.status <> 'disabled'
+           AND (NOT $2::boolean OR EXISTS (SELECT 1 FROM users u WHERE u.staff_customer_account_id = c.id
+             AND u.is_active = 1 AND u.staff_email IS NOT NULL AND (u.staff_email_purpose IS NULL OR u.staff_email_purpose <> 'invite')))
+         FOR UPDATE OF c`, [tokenHash, staffOnly],
+      );
+      const accountId = account.rows[0]?.id;
+      if (!accountId) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      // Recheck the token after locking the account, in case another reset won the race.
+      const used = await client.query(
+        `UPDATE customer_account_tokens SET used_at = CURRENT_TIMESTAMP
+         WHERE token_hash = $1 AND kind = 'password_reset' AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP`, [tokenHash],
+      );
+      if (!used.rowCount) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query("UPDATE customer_accounts SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [passwordHash, accountId]);
+      await client.query("UPDATE customer_account_tokens SET used_at = CURRENT_TIMESTAMP WHERE customer_account_id = $1 AND kind = 'password_reset' AND used_at IS NULL", [accountId]);
+      await client.query("DELETE FROM customer_sessions WHERE customer_account_id = $1", [accountId]);
+      await client.query("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE staff_customer_account_id = $1)", [accountId]);
+      await client.query("COMMIT");
+      return accountId;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async consumeCustomerAccountToken(tokenHash: string, kind: CustomerAccountTokenKind) {
     const client = await this.pool.connect();
     try {
@@ -3965,6 +4005,32 @@ export class PostgresAppDatabase implements AppDatabase {
       [userId, email, purpose, tokenHash, expiresAt, retryBefore],
     );
     return result.rowCount > 0;
+  }
+
+  async stageStaffPasswordReset(userId: string, email: string, tokenHash: string, expiresAt: Date, now: Date) {
+    const result = await this.pool.query(
+      `UPDATE users SET staff_reset_token_hash = $3, staff_reset_expires_at = $4, staff_reset_email = $2
+       WHERE id = $1 AND staff_email = $2 AND is_active = 1 AND staff_customer_account_id IS NULL
+         AND (staff_email_purpose IS NULL OR staff_email_purpose <> 'invite')
+         AND (staff_reset_expires_at IS NULL OR staff_reset_expires_at <= $5 OR staff_reset_email <> $2
+           OR staff_reset_expires_at <= $6)`,
+      [userId, email, tokenHash, expiresAt.toISOString(), now.toISOString(), new Date(expiresAt.getTime() - 60_000).toISOString()],
+    );
+    return Boolean(result.rowCount);
+  }
+
+  async resetStaffPassword(tokenHash: string, passwordHash: string, now: Date) {
+    const result = await this.pool.query<{ id: string }>(
+      `WITH reset AS (
+         UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP,
+           staff_reset_token_hash = NULL, staff_reset_expires_at = NULL, staff_reset_email = NULL
+         WHERE staff_reset_token_hash = $2 AND staff_reset_expires_at > $3 AND is_active = 1
+           AND staff_email = staff_reset_email AND staff_customer_account_id IS NULL
+           AND (staff_email_purpose IS NULL OR staff_email_purpose <> 'invite') RETURNING id
+       ), revoked AS (DELETE FROM sessions WHERE user_id IN (SELECT id FROM reset))
+       SELECT id FROM reset`, [passwordHash, tokenHash, now.toISOString()],
+    );
+    return result.rows[0]?.id;
   }
 
   async getPendingStaffInviteEmail(tokenHash: string, now: string) {

@@ -65,7 +65,7 @@ export function AuthScreen({
         </form>
         <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2 border-t border-white/15 pt-4 text-sm text-blue-200">
           <a href="/account/login" className="underline underline-offset-2">{t("เข้าบัญชีผู้เข้าร่วม", "Attendee sign-in")}</a>
-          <a href="/account/forgot-password" className="underline underline-offset-2">{t("ลืมรหัสผ่านบัญชีที่เชื่อมแล้ว", "Reset a linked account password")}</a>
+          <a href="/account/forgot-password?staff=1" className="underline underline-offset-2">{t("ลืมรหัสผ่านทีมงาน", "Forgot staff password?")}</a>
         </div>
       </section>
     </main>
