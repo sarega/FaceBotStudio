@@ -1,4 +1,4 @@
-import { StaffEmailSettings } from "../../auth/components/StaffEmailScreen";
+import { StaffProfileCard } from "./StaffProfileCard";
 import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
@@ -15,7 +15,6 @@ import {
   Save,
   ShieldCheck,
   Settings as SettingsIcon,
-  UserCircle2,
 } from "lucide-react";
 
 import {
@@ -58,6 +57,9 @@ type SettingsScreenProps = {
   language: AppLanguage;
   onLanguageChange: (language: AppLanguage) => void;
   authUser: AuthUser | null;
+  onProfileSaved: (user: AuthUser) => void;
+  userTimezone: string;
+  onTimezoneSaved: (timezone: string) => void;
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   canEditSettings: boolean;
   canManageUsers: boolean;
@@ -119,6 +121,9 @@ export function SettingsScreen({
   language,
   onLanguageChange,
   authUser,
+  onProfileSaved,
+  userTimezone,
+  onTimezoneSaved,
   apiFetch,
   canEditSettings,
   canManageUsers,
@@ -176,11 +181,12 @@ export function SettingsScreen({
   onSaveWebhookSettings,
 }: SettingsScreenProps) {
   const [section, setSection] = useState<"general" | "bot" | "system">("general");
-  const [preferences, setPreferences] = useState({ language, timezone: "Asia/Bangkok" });
+  const [preferences, setPreferences] = useState({ language, timezone: userTimezone });
   const [preferencesSaving, setPreferencesSaving] = useState(false);
   const [preferencesMessage, setPreferencesMessage] = useState("");
   const [showCustomModelInput, setShowCustomModelInput] = useState(false);
   const label = (key: string, fallback: string) => translate(language, key, fallback);
+  const isAdmin = authUser?.role === "admin";
   useEffect(() => {
     setPreferences((current) => ({ ...current, language }));
   }, [language]);
@@ -209,7 +215,8 @@ export function SettingsScreen({
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Failed to save preferences");
-      setPreferencesMessage("Preferences saved");
+      onTimezoneSaved(String(data.timezone));
+      setPreferencesMessage(label("settings.preferencesSaved", "Preferences saved"));
     } catch (error) {
       setPreferencesMessage(error instanceof Error ? error.message : "Failed to save preferences");
     } finally {
@@ -251,15 +258,17 @@ export function SettingsScreen({
     >
       <div className="surface-panel rounded-2xl p-2">
         <div className="grid grid-cols-2 gap-2 sm:flex">
-          <button type="button" onClick={() => setSection("general")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "general" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.general", "General & Account")}</button>
+          <button type="button" onClick={() => setSection("general")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "general" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.profile", "My profile")}</button>
           {canEditSettings && <button type="button" onClick={() => setSection("bot")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "bot" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.bot", "Bot & Channels")}</button>}
-          <button type="button" onClick={() => setSection("system")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "system" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.system", "Version & Updates")}</button>
-          {canManageUsers && <button type="button" onClick={onOpenTeamAccess} className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">{label("settings.access", "Admin & Access")}</button>}
+          {(!isAdmin || section === "system") && <button type="button" onClick={() => setSection("system")} className={`rounded-xl px-4 py-2 text-sm font-semibold ${section === "system" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{label("settings.system", "Version & Updates")}</button>}
+          {!isAdmin && canManageUsers && <button type="button" onClick={onOpenTeamAccess} className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">{label("settings.access", "Admin & Access")}</button>}
         </div>
       </div>
 
       {section === "general" && (
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(20rem,.95fr)]">
+        <div className="grid items-start gap-4 xl:grid-cols-2">
+          {authUser && <StaffProfileCard key={authUser.id} user={authUser} language={language} timezone={userTimezone}
+            apiFetch={apiFetch} onSaved={onProfileSaved} />}
           <div className="surface-panel rounded-2xl p-4 sm:p-5">
             <div className="flex items-start justify-between gap-3">
               <div><h2 className="flex items-center gap-2 text-lg font-semibold"><Globe2 className="h-5 w-5 text-blue-600" />{label("settings.generalTitle", "General preferences")}</h2><p className="mt-1 text-sm text-slate-500">{label("settings.generalDescription", "Personal display preferences for this account.")}</p></div>
@@ -273,17 +282,12 @@ export function SettingsScreen({
             {preferencesMessage && <p className={`mt-4 text-sm ${/failed|valid/i.test(preferencesMessage) ? "text-rose-600" : "text-emerald-600"}`}>{preferencesMessage}</p>}
           </div>
 
-          <div className="space-y-5">
-            <div className="surface-panel rounded-2xl p-4 sm:p-5">
-              <h2 className="flex items-center gap-2 text-lg font-semibold"><UserCircle2 className="h-5 w-5 text-violet-600" />{label("settings.myAccount", "My account")}</h2>
-              <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm"><dt className="text-slate-500">{label("settings.name", "Name")}</dt><dd className="font-semibold text-slate-900">{authUser?.display_name || "—"}</dd><dt className="text-slate-500">{label("settings.username", "Username")}</dt><dd className="font-mono text-slate-700">{authUser?.username || "—"}</dd><dt className="text-slate-500">{label("settings.organization", "Organization")}</dt><dd className="text-slate-700">{authUser?.organization_name || "—"}</dd><dt className="text-slate-500">{label("settings.accountType", "Account type")}</dt><dd className="font-semibold capitalize text-blue-700">{authUser?.role || "—"}</dd><dt className="text-slate-500">{label("settings.lastLogin", "Last login")}</dt><dd className="text-slate-700">{authUser?.last_login_at ? new Date(authUser.last_login_at).toLocaleString(preferences.language === "th" ? "th-TH" : "en-US", { timeZone: preferences.timezone }) : "—"}</dd></dl>
-              {authUser && <StaffEmailSettings email={authUser.staff_email} apiFetch={apiFetch} />}
-            </div>
+          {!isAdmin && (
             <div className="surface-panel rounded-2xl p-4 sm:p-5">
               <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck className="h-5 w-5 text-emerald-600" />{label("settings.permissions", "Access & permissions")}</h2><p className="mt-1 text-sm text-slate-500">{label("settings.effectiveAccess", "Effective access for the current {role} account.").replace("{role}", authUser?.role || "user")}</p></div>{canManageUsers && <ActionButton onClick={onOpenTeamAccess} tone="neutral" className="text-sm">{label("settings.manageTeam", "Manage team")}</ActionButton>}</div>
               <ul className="mt-4 space-y-2">{roleAccess.map((item) => <li key={item} className="flex items-center gap-2 text-sm text-slate-700"><CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />{item}</li>)}</ul>
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -297,6 +301,11 @@ export function SettingsScreen({
           </div>
         </div>
       )}
+
+      {isAdmin && section !== "system" && <button type="button" onClick={() => setSection("system")}
+        className="text-sm text-slate-500 underline underline-offset-2 hover:text-blue-600">
+        {label("settings.system", "Version & Updates")}
+      </button>}
 
       {section === "bot" && <>
       <PageBanner tone="blue" icon={<SettingsIcon className="h-4 w-4" />}>

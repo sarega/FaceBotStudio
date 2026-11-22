@@ -3939,6 +3939,14 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows[0]?.password_hash;
   }
 
+  async updateUserDisplayName(userId: string, displayName: string) {
+    const result = await this.pool.query(
+      "UPDATE users SET display_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND is_active",
+      [displayName, userId],
+    );
+    return Boolean(result.rowCount);
+  }
+
   async updateUserPasswordHash(userId: string, passwordHash: string) {
     const normalizedUserId = String(userId || "").trim();
     const normalizedPasswordHash = String(passwordHash || "").trim();
@@ -4041,7 +4049,7 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rows[0]?.pending_staff_email;
   }
 
-  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }) {
+  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }, separatePassword = false) {
     const result = await this.pool.query<{ id: string }>(
       `UPDATE users SET staff_email = pending_staff_email, pending_staff_email = NULL,
          staff_email_purpose = NULL, staff_email_token_hash = NULL, staff_email_expires_at = NULL,
@@ -4050,12 +4058,12 @@ export class PostgresAppDatabase implements AppDatabase {
          AND (($5::text IS NOT NULL AND staff_email_purpose = 'invite' AND EXISTS (
               SELECT 1 FROM customer_accounts c WHERE c.id = $5 AND c.normalized_email = users.pending_staff_email
                 AND c.status = 'active' AND c.email_verified_at IS NOT NULL AND c.password_hash = $6))
-           OR ($5::text IS NULL AND $4::text IS NOT NULL AND staff_email_purpose = 'invite' AND NOT EXISTS (
+           OR ($5::text IS NULL AND $4::text IS NOT NULL AND staff_email_purpose = 'invite' AND ($7::boolean OR NOT EXISTS (
               SELECT 1 FROM customer_accounts c WHERE c.normalized_email = users.pending_staff_email
-                AND c.status = 'active' AND c.email_verified_at IS NOT NULL))
+                AND c.status = 'active' AND c.email_verified_at IS NOT NULL)))
            OR ($5::text IS NULL AND $4::text IS NULL AND staff_email_purpose = 'verify' AND id = $3))
        RETURNING id`,
-      [tokenHash, now, userId, passwordHash, customer?.id ?? null, customer?.passwordHash ?? null],
+      [tokenHash, now, userId, passwordHash, customer?.id ?? null, customer?.passwordHash ?? null, separatePassword],
     );
     return result.rows[0]?.id ?? null;
   }

@@ -58,6 +58,8 @@ const THAI_LABELS: Record<string, string> = {
   "user.system": "ตามระบบ",
   "user.logout": "ออกจากระบบ",
   "settings.general": "ทั่วไปและบัญชี",
+  "settings.profile": "โปรไฟล์ของฉัน",
+  "settings.preferencesSaved": "บันทึกการตั้งค่าเรียบร้อยแล้ว",
   "settings.bot": "บอตและช่องทาง",
   "settings.system": "เวอร์ชันและอัปเดต",
   "settings.access": "ผู้ดูแลและสิทธิ์",

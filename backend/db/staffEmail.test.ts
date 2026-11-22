@@ -59,6 +59,22 @@ async function checkStaffEmailLinks(db: AppDatabase) {
     assert.equal(await db.getUserPasswordHash(legacy.username), "reset-staff-password");
     assert.equal(await db.getSessionWithUser("old-staff-session"), undefined);
 
+    const applicant = await db.createCustomerAccount({
+      email: "applicant@example.com", normalized_email: "applicant@example.com", password_hash: "previous-password",
+      first_name: "Applicant", last_name: "Example", phone: "", normalized_phone: "",
+      accepted_terms_at: new Date(), accepted_privacy_at: new Date(),
+    });
+    await db.verifyCustomerAccountEmail(applicant.id);
+    await db.createCustomerSession(applicant.id, "applicant-session", resetExpiresAt);
+    await db.createCustomerAccountToken({
+      customer_account_id: applicant.id, kind: "password_reset", token_hash: "applicant-reset", expires_at: resetExpiresAt,
+    });
+    assert.equal(await db.resetCustomerPassword("applicant-reset", "wrong-scope", true), undefined);
+    assert.equal(await db.resetCustomerPassword("applicant-reset", "applicant-new-password", false), applicant.id);
+    assert.equal((await db.getCustomerAccountByNormalizedEmail("applicant@example.com"))?.password_hash, "applicant-new-password");
+    assert.equal(await db.resetCustomerPassword("applicant-reset", "other-password", false), undefined);
+    assert.equal(await db.getCustomerSessionWithAccount("applicant-session"), undefined);
+
     const attendee = await db.createCustomerAccount({
       email: "member@example.com", normalized_email: "member@example.com", password_hash: "original-password",
       first_name: "Member", last_name: "Example", phone: "", normalized_phone: "",

@@ -3656,7 +3656,7 @@ async function sendStaffEmail(user: AuthUserRow, email: string, purpose: "invite
   link.hash = new URLSearchParams({ token, purpose }).toString();
   const subject = purpose === "invite" ? "เปิดใช้สิทธิ์ทีมงาน Meetrix | Activate Meetrix staff access" : "Verify your Meetrix staff email";
   const instructions = purpose === "invite"
-    ? "ถ้าอีเมลนี้มีบัญชีผู้เข้าร่วมที่ยืนยันแล้ว ให้ใช้รหัสผ่านของบัญชีนั้นเพื่อเปิดใช้สิทธิ์ทีมงาน / If this email already has a verified attendee account, use that password to activate staff access."
+    ? "เปิดลิงก์เพื่อตั้งรหัสผ่านทีมงานใหม่ หรือใช้รหัสเดิมถ้าต้องการเชื่อมบัญชีผู้เข้าร่วม / Open the link to set a new staff password or connect your attendee account using its current password."
     : "Sign in to the matching staff account before opening this link.";
   const username = normalizeUsername(user.username).replace(/[^a-z0-9._-]/g, "");
   try {
@@ -15682,6 +15682,10 @@ async function startServer() {
     const body = readObjectBody(req);
     const token = readRequiredString(body, "token", issues, { label: "Email token", maxLength: 128 });
     const purpose = readEnumValue(body, "purpose", ["invite", "verify"], issues, { required: true, label: "Purpose" });
+    const inviteMode = purpose === "invite"
+      ? readEnumValue(body, "invite_mode", ["new_password", "link_attendee"], issues, { label: "Activation mode" })
+      : undefined;
+    const separatePassword = inviteMode === "new_password";
     const password = purpose === "invite"
       ? readRequiredString(body, "password", issues, { label: "New password", maxLength: 512 })
       : null;
@@ -15696,7 +15700,10 @@ async function startServer() {
       if (purpose === "invite" && password !== null) {
         const email = await appDb.getPendingStaffInviteEmail(tokenHash, new Date().toISOString());
         if (!email) return res.status(400).json({ error: "This link is invalid, expired, or belongs to another account." });
-        const account = await appDb.getCustomerAccountByNormalizedEmail(email);
+        const account = separatePassword ? undefined : await appDb.getCustomerAccountByNormalizedEmail(email);
+        if (inviteMode === "link_attendee" && !account) {
+          return res.status(403).json({ error: "No attendee account is available to link. Set a new staff password." });
+        }
         if (account?.status === "disabled") {
           return res.status(403).json({ error: "Your attendee account is disabled. Contact the organizer." });
         }
@@ -15714,7 +15721,7 @@ async function startServer() {
         }
       }
       const userId = await appDb.consumeStaffEmail(
-        tokenHash, new Date().toISOString(), req.auth?.user.id ?? null, newStaffPasswordHash, customer,
+        tokenHash, new Date().toISOString(), req.auth?.user.id ?? null, newStaffPasswordHash, customer, separatePassword,
       );
       if (!userId) return res.status(400).json({ error: "This link is invalid, expired, or belongs to another account." });
       await appDb.recordAuditLog({ actor_user_id: userId, action: purpose === "invite" ? "auth.staff_invite_accepted" : "auth.staff_email_verified", target_type: "user", target_id: userId }).catch(() => {
@@ -15826,6 +15833,28 @@ async function startServer() {
       return res.status(401).json({ error: "Not authenticated" });
     }
     return res.json({ user: toPublicAuthUser(req.auth.user) });
+  });
+
+  app.patch("/api/auth/profile", requireAuth, async (req: AuthenticatedRequest, res) => {
+    const body = readObjectBody(req);
+    const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
+    if (!displayName || displayName.length > 120 || /[\u0000-\u001f\u007f]/.test(displayName)) {
+      return res.status(400).json({ error: "Enter a valid display name between 1 and 120 characters" });
+    }
+    const userId = req.auth!.user.id;
+    try {
+      if (!(await appDb.updateUserDisplayName(userId, displayName))) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const user = await appDb.getUserById(userId);
+      if (!user?.is_active) return res.status(401).json({ error: "Not authenticated" });
+      await recordAudit(req, "auth.profile_updated", "user", userId)
+        .catch(() => console.error("Could not audit staff profile update"));
+      return res.json({ user: toPublicAuthUser(user) });
+    } catch {
+      console.error("Could not update staff profile");
+      return res.status(500).json({ error: "Failed to update profile" });
+    }
   });
 
   app.get("/api/auth/preferences", requireAuth, async (req: AuthenticatedRequest, res) => {

@@ -106,6 +106,21 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       Cookie: "fbs_session=test-reviewer; fbs_csrf=staff-csrf", Origin: origin,
       "x-csrf-token": "staff-csrf", "Content-Type": "application/json",
     };
+    const profileUrl = origin + "/api/auth/profile";
+    const patchProfile = (input: object, headers: Record<string, string>) =>
+      fetch(profileUrl, { method: "PATCH", headers, body: JSON.stringify(input) });
+    const profilePayload = { display_name: "  ผู้ดูแลทีม  ", id: "another-user", username: "changed", role: "owner" };
+    assert.equal((await patchProfile(profilePayload, { "Content-Type": "application/json" })).status, 401);
+    assert.equal((await patchProfile(profilePayload, { ...staffCreateHeaders, "x-csrf-token": "wrong" })).status, 403);
+    assert.equal((await patchProfile({ display_name: " " }, staffCreateHeaders)).status, 400);
+    const profileResponse = await patchProfile(profilePayload, staffCreateHeaders);
+    assert.equal(profileResponse.status, 200, await profileResponse.clone().text());
+    const { user: profile } = await profileResponse.json();
+    assert.equal(profile.id, reviewer.id);
+    assert.equal(profile.display_name, "ผู้ดูแลทีม");
+    assert.equal(profile.username, reviewer.username);
+    assert.equal(profile.role, "admin");
+    assert.equal((await db.getUserById(reviewer.id))?.display_name, "ผู้ดูแลทีม");
     const freeCreated = await fetch(origin + "/api/events", {
       method: "POST", headers: staffCreateHeaders,
       body: JSON.stringify({ name:"Web only internal session", registration_mode:"free",
@@ -1340,7 +1355,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     });
     const customerLogin = (password: string) => jsonPost("/api/customer/account/login", { email: attendeeEmail, password });
     const staffLogin = (username: string, password: string) => jsonPost("/api/auth/login", { username, password });
-    const activate = (password: string) => jsonPost("/api/auth/staff-email/confirm", { purpose: "invite", token: invite, password });
+    const activate = (password: string) => jsonPost("/api/auth/staff-email/confirm", { purpose: "invite", token: invite, password, invite_mode: "link_attendee" });
     assert.equal((await (await customerLogin(attendeePassword)).json()).account.has_staff_access, false);
     assert.equal((await staffLogin(attendeeEmail, attendeePassword)).status, 401);
     assert.equal((await activate("WrongSeparatePassword")).status, 403);
@@ -1429,6 +1444,27 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await finishReset(attendeeToken, "WrongScope123", "staff")).status, 400);
     assert.equal((await finishReset(attendeeToken, "NewAttendeePassword123", "attendee")).status, 200);
     assert.equal((await jsonPost("/api/customer/account/login", { email: attendeeOnlyEmail, password: "NewAttendeePassword123" })).status, 200);
+
+    const independentStaff = await db.createUser({ username: "independent-admin", display_name: "Independent staff",
+      password_hash: hashPassword("InitialPassword123"), invite_email: attendeeOnlyEmail, role: "admin" });
+    const independentInvite = "independent-staff-invite";
+    const independentToken = hashSessionToken(independentInvite);
+    const invitedAt = new Date();
+    assert.equal(await db.stageStaffEmail(independentStaff.id, attendeeOnlyEmail, "invite", independentToken,
+      new Date(invitedAt.getTime() + 60_000).toISOString(), invitedAt.toISOString()), true);
+    const activateIndependent = (password: string, token = independentInvite) => jsonPost("/api/auth/staff-email/confirm",
+      { purpose: "invite", token, password, invite_mode: "new_password" });
+    assert.equal((await activateIndependent("NewIndependent123", "invalid-token")).status, 400);
+    assert.equal((await activateIndependent("short")).status, 400);
+    assert.equal((await activateIndependent("NewIndependent123")).status, 200);
+    assert.equal((await activateIndependent("AnotherPassword123")).status, 400);
+    assert.equal((await staffLogin(attendeeOnlyEmail, "NewAttendeePassword123")).status, 401);
+    const independentLogin = await staffLogin(attendeeOnlyEmail, "NewIndependent123");
+    assert.equal(independentLogin.status, 200);
+    assert.equal((await independentLogin.json()).user.has_customer_account, false);
+    const originalAttendeeLogin = await jsonPost("/api/customer/account/login", { email: attendeeOnlyEmail, password: "NewAttendeePassword123" });
+    assert.equal(originalAttendeeLogin.status, 200);
+    assert.equal((await originalAttendeeLogin.json()).account.has_staff_access, false);
   } finally {
     if (child && child.exitCode === null) child.kill();
     await exited;

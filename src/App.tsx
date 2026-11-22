@@ -11478,6 +11478,9 @@ export default function App() {
               language={language}
               onLanguageChange={setLanguage}
               authUser={authUser}
+              onProfileSaved={(user) => setAuthUser(current => current?.id === user.id ? { ...current, display_name: user.display_name } : current)}
+              userTimezone={userTimezone}
+              onTimezoneSaved={setUserTimezone}
               apiFetch={apiFetch}
               canEditSettings={canEditSettings}
               canManageUsers={canManageUsers}

@@ -34,8 +34,8 @@ export function AuthScreen({
           <h1 className="text-xl font-bold">{t("เข้าสู่ระบบทีมงาน Meetrix", "Meetrix staff sign-in")}</h1>
         </div>
         <p className="mb-4 text-sm text-slate-300">
-          {t("ถ้าเปิดใช้คำเชิญด้วยอีเมลเดียวกับบัญชีผู้เข้าร่วม ให้ใช้อีเมลและรหัสผ่านเดิมได้เลย",
-            "If you activated an invitation with your attendee account, use the same email and password here.")}
+          {t("ใช้รหัสผ่านที่ตั้งตอนเปิดใช้สิทธิ์ทีมงาน หากเลือกเชื่อมบัญชีผู้เข้าร่วม ให้ใช้รหัสผ่านของบัญชีนั้น",
+            "Use the password you set when activating staff access. If you linked your attendee account, use that account’s password.")}
         </p>
         <form className="space-y-4" onSubmit={(event) => {
           event.preventDefault();

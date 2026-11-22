@@ -1314,12 +1314,13 @@ export interface AppDatabase {
   listUserEventIds(userId: string): Promise<string[]>;
   setUserEventAssignments(userId: string, eventIds: string[]): Promise<void>;
   getUserPasswordHash(username: string): Promise<string | undefined>;
+  updateUserDisplayName(userId: string, displayName: string): Promise<boolean>;
   updateUserPasswordHash(userId: string, passwordHash: string): Promise<boolean>;
   getUserPreferences(userId: string): Promise<UserPreferencesRow | undefined>;
   upsertUserPreferences(userId: string, input: { language: "th" | "en"; timezone: string }): Promise<UserPreferencesRow>;
   listUsers(): Promise<AuthUserRow[]>;
   stageStaffEmail(userId: string, email: string, purpose: "invite" | "verify", tokenHash: string, expiresAt: string, retryBefore: string): Promise<boolean>;
-  consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }): Promise<string | null>;
+  consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }, separatePassword?: boolean): Promise<string | null>;
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;
   setUserActive(userId: string, isActive: boolean): Promise<boolean>;

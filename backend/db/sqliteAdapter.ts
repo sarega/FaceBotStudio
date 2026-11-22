@@ -4525,6 +4525,13 @@ export class SqliteAppDatabase implements AppDatabase {
     return row?.password_hash;
   }
 
+  async updateUserDisplayName(userId: string, displayName: string) {
+    const result = this.db.prepare(
+      "UPDATE users SET display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active = 1",
+    ).run(displayName, userId);
+    return result.changes > 0;
+  }
+
   async updateUserPasswordHash(userId: string, passwordHash: string) {
     const normalizedUserId = String(userId || "").trim();
     const normalizedPasswordHash = String(passwordHash || "").trim();
@@ -4620,7 +4627,7 @@ export class SqliteAppDatabase implements AppDatabase {
     ).pluck().get(tokenHash, now) as string | undefined;
   }
 
-  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }) {
+  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }, separatePassword = false) {
     const row = this.db.prepare(
       `UPDATE users SET staff_email = pending_staff_email, pending_staff_email = NULL,
          staff_email_purpose = NULL, staff_email_token_hash = NULL, staff_email_expires_at = NULL,
@@ -4630,13 +4637,13 @@ export class SqliteAppDatabase implements AppDatabase {
          AND ((@customerId IS NOT NULL AND staff_email_purpose = 'invite' AND EXISTS (
               SELECT 1 FROM customer_accounts c WHERE c.id = @customerId AND c.normalized_email = users.pending_staff_email
                 AND c.status = 'active' AND c.email_verified_at IS NOT NULL AND c.password_hash = @customerPasswordHash))
-           OR (@customerId IS NULL AND @passwordHash IS NOT NULL AND staff_email_purpose = 'invite' AND NOT EXISTS (
+           OR (@customerId IS NULL AND @passwordHash IS NOT NULL AND staff_email_purpose = 'invite' AND (@separatePassword = 1 OR NOT EXISTS (
               SELECT 1 FROM customer_accounts c WHERE c.normalized_email = users.pending_staff_email
-                AND c.status = 'active' AND c.email_verified_at IS NOT NULL))
+                AND c.status = 'active' AND c.email_verified_at IS NOT NULL)))
            OR (@customerId IS NULL AND @passwordHash IS NULL AND staff_email_purpose = 'verify' AND id = @userId))
        RETURNING id`,
     ).get({ tokenHash, now, userId, passwordHash, customerId: customer?.id ?? null,
-      customerPasswordHash: customer?.passwordHash ?? null }) as { id: string } | undefined;
+      customerPasswordHash: customer?.passwordHash ?? null, separatePassword: Number(separatePassword) }) as { id: string } | undefined;
     return row?.id ?? null;
   }
 
