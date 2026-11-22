@@ -164,6 +164,15 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       pricing_version: 1, fields: [], categories: [{ id: "adult", label: "Adult", unit_minor: 25000, accommodation_discount_minor: 0 }],
     });
     const receipt = await db.createPaidBooking(command);
+    const unconfirmedRooming = (await db.paidRoomingPlan(event.id, "org_default"))!;
+    assert.deepEqual(unconfirmedRooming.guests.map(({ name, bookingState }) => [name, bookingState]), [
+      ["One Guest", "awaiting_payment"], ["Two Guest", "awaiting_payment"],
+    ]);
+    const reservedRooms = [{
+      id: "draft-room", number: "", locked: false, slots: [...unconfirmedRooming.guests.map(({ id }) => id), null, null],
+    }];
+    assert.deepEqual((await db.paidRoomingPlan(event.id, "org_default", { version: 0, rooms: reservedRooms }))?.rooms, reservedRooms);
+
     const adminA=await db.createUser({username:"notif-admin-a",display_name:"Notification Admin A",
       password_hash:"fixture",role:"admin"});
     const adminB=await db.createUser({username:"notif-admin-b",display_name:"Notification Admin B",
@@ -252,6 +261,10 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.deepEqual(await db.listDuePaidEvents(Date.now()), [event.id]);
     assert.equal(await second.expirePaidBookings(event.id), 1);
     assert.equal(await db.expirePaidBookings(event.id), 0);
+    const expiredRooming = (await second.paidRoomingPlan(event.id, "org_default"))!;
+    assert.deepEqual(expiredRooming.guests.map(({ bookingState }) => bookingState), ["expired", "expired"]);
+    assert.deepEqual(expiredRooming.rooms, reservedRooms);
+
     assert.deepEqual(await raceGroups(file, command), ["booked", "capacity_exhausted"]);
     assert.equal((fixture.prepare("SELECT COUNT(*) AS count FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id WHERE b.state='awaiting_payment'").get() as { count: number }).count, 2);
     assert.equal((await db.listOwnedPaidBookings(customer.id, 20, 0)).length, 2);
@@ -266,6 +279,10 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     await assert.rejects(db.submitPaidProof({ ...proof, bookingId: receipt.id }), /hold_expired/);
     const submitted = await db.submitPaidProof(proof);
     assert.equal(submitted.status, "verification_pending");
+    const reviewRooming = (await db.paidRoomingPlan(event.id, "org_default"))!;
+    assert.deepEqual(reviewRooming.guests.filter(guest => guest.bookingId === active.id).map(guest => guest.bookingState),
+      ["verification_pending", "verification_pending"]);
+
     const [queued] = await db.listPaidReviewQueue(event.id, "org_default", 0);
     assert.equal(queued.attempt_id, submitted.attempt_id);
     assert.equal(queued.attendee_count, 2);
@@ -307,6 +324,10 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.ok(await db.readPaidProof(event.id, String(active.id), submitted.attempt_id, "org_default"));
     const confirmed = await db.reviewPaidProof(approval);
     assert.equal(confirmed.status, "confirmed");
+    const confirmedRooming = (await db.paidRoomingPlan(event.id, "org_default"))!;
+    assert.deepEqual(confirmedRooming.guests.filter(guest => guest.bookingId === active.id).map(guest => guest.bookingState),
+      ["confirmed", "confirmed"]);
+
     // Simulate 181-day-old completed booking and uploaded evidence.
     fixture.prepare("UPDATE paid_proofs SET created_ms=1 WHERE attempt_id=?").run(submitted.attempt_id);
     fixture.prepare("UPDATE paid_bookings SET updated_ms=1 WHERE id=?").run(active.id);

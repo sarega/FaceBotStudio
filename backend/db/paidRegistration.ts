@@ -1283,13 +1283,15 @@ export function* paidRoomingPlan(eventId: string, update?: PaidRoomingUpdate):
   const roster = yield* listPaidAttendeeRoster(eventId);
   const guests: RoomingGuest[] = [];
   for (const row of roster) {
-    if (row.booking_state !== "confirmed") continue;
+    const bookingState = String(row.booking_state);
+    if (bookingState === "cancelled") continue;
     const answers = { ...row.booking_answers as Record<string, string>, ...row.answers as Record<string, string> };
     if (answers.accommodation === "no") continue;
     const preference = answers.room_preference || "";
     guests.push({
       id: String(row.attendee_id), name: [row.first_name, row.last_name].join(" ").trim(),
       bookingId: String(row.booking_id), category: String(row.category_label),
+      bookingState, checkedIn: row.checked_in_ms != null,
       accommodation: answers.accommodation === "yes" ? "yes" : "unknown",
       preference, single: /\bsingle\b|ห้องเดี่ยว|พักเดี่ยว/i.test(preference),
       needsGuardianReview: /เด็ก|ทารก|\b(?:child(?:ren)?|kid(?:s)?|infant|toddler)\b/i.test(

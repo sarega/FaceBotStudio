@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import { PaidAttendeeRoster } from "./PaidAttendeeRoster";
 import type { PaidRosterPerson,PaidRosterSummary } from "./paidRosterTypes";
 import type { ReactNode } from "react";
@@ -214,7 +215,7 @@ export function RegistrationsScreen({
        registrationStatusFilter==="checked-in" && person.checked_in_ms!=null ||
        registrationStatusFilter==="cancelled" && ["expired","cancelled"].includes(person.booking_state) ||
        registrationStatusFilter==="registered" && person.checked_in_ms==null &&
-         ["confirmed","awaiting_payment","verification_pending"].includes(person.booking_state)));
+         ["confirmed","awaiting_payment","verification_pending","payment_exception"].includes(person.booking_state)));
   },[paidPeople,registrationListQuery,registrationStatusFilter]);
   const baht = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
   const paidReserved=paidSummary?Number(paidSummary.confirmed_attendees)+Number(paidSummary.held_attendees):0;
@@ -364,7 +365,7 @@ export function RegistrationsScreen({
               {language === "th" ? "ลองอีกครั้ง" : "Retry"}
             </button>}
           </div>}
-          <PaidAttendeeRoster people={filteredPaid} total={paidPeople.length}
+          <PaidAttendeeRoster language={language} people={filteredPaid} total={paidPeople.length}
             onRefresh={()=>setPaidRevision(n=>n+1)}/>
           <div className={paidPeople.length>0 && registrationsCount===0 ?
             "hidden" : "max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden"}>
@@ -389,7 +390,8 @@ export function RegistrationsScreen({
                   }}
                   role="button"
                   tabIndex={0}
-                  className={`w-full rounded-2xl border px-3 py-2.5 text-left transition-colors ${
+                  data-registration-status={getRosterStatus(registration.status)}
+                  className={`registration-status-card w-full rounded-2xl border px-3 py-2.5 text-left transition-colors ${
                     selectedRegistrationId === registration.id
                       ? "border-blue-200 bg-blue-50"
                       : "border-slate-200 bg-white hover:bg-slate-50"
@@ -406,7 +408,7 @@ export function RegistrationsScreen({
                       {registration.sms_opt_in_at && !registration.sms_opt_out_at && <p className="mt-0.5 text-[10px] font-medium text-emerald-600">SMS consent</p>}
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                      <StatusBadge tone={getRegistrationStatusTone(registration.status)}>{statusLabel(registration.status)}</StatusBadge>
+                      <RegistrationStatusTag status={getRosterStatus(registration.status)} language={language} />
                       {selectedRegistrationId === registration.id && <SelectionMarker />}
                     </div>
                   </div>
@@ -456,14 +458,13 @@ export function RegistrationsScreen({
                   <th className="px-4 py-2.5">{t("contact", "Contact")}</th>
                   <th className="px-4 py-2.5">{t("channel", "Channel")}</th>
                   <th className="px-4 py-2.5">SMS</th>
-                  <th className="px-4 py-2.5">{t("status", "Status")}</th>
                   <th className="px-4 py-2.5">{t("ticket", "Ticket")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRegistrations.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-slate-400 italic">
+                    <td colSpan={7} className="px-4 py-10 text-center text-slate-400 italic">
                       {deferredRegistrationListQuery || registrationStatusFilter !== "all"
                         ? t("noMatch", "No attendees match this filter.")
                         : paidPeople.length>0?"ไม่มีรายชื่อจากระบบเดิม (Legacy)":t("noRegistrations", "No registrations yet.")}
@@ -475,6 +476,7 @@ export function RegistrationsScreen({
                       key={registration.id}
                       id={getSearchTargetDomId("registration", registration.id)}
                       onClick={() => onSelectRegistration(registration.id)}
+                      data-registration-status={getRosterStatus(registration.status)}
                       className={`registration-row hover:bg-slate-50 transition-colors cursor-pointer ${
                         selectedRegistrationId === registration.id ? "registration-row-selected bg-blue-50" : ""
                       } ${
@@ -485,7 +487,13 @@ export function RegistrationsScreen({
                         {registration.id}
                       </td>
                       <td className="px-4 py-2.5">
-                        <p className="text-sm font-medium">{registration.first_name} {registration.last_name}</p>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="text-sm font-medium">{registration.first_name} {registration.last_name}</span>
+                          <RegistrationStatusTag status={getRosterStatus(registration.status)} language={language} />
+                        </div>
+                        {selectedRegistrationId === registration.id && (
+                          <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-blue-600">{t("selected", "Selected")}</p>
+                        )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-[11px] text-slate-600">
                         {formatDate(registration.timestamp)}
@@ -506,14 +514,6 @@ export function RegistrationsScreen({
                           onChange={(event) => void onUpdateRegistrationSmsConsent(registration.id, event.target.checked)}
                           aria-label={`SMS consent for ${registration.first_name} ${registration.last_name}`}
                         />
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <StatusBadge tone={getRegistrationStatusTone(registration.status)}>
-                          {statusLabel(registration.status)}
-                        </StatusBadge>
-                        {selectedRegistrationId === registration.id && (
-                          <p className="mt-1 text-[10px] font-semibold text-blue-600 uppercase tracking-wider">{t("selected", "Selected")}</p>
-                        )}
                       </td>
                       <td className="px-4 py-2.5">
                         <ActionButton
