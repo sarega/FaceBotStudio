@@ -13,9 +13,10 @@ function CatalogCard({ event, locale }: { event: PublicEventCatalogEntry; locale
   const venue = event.location.venue_name || event.location.compact;
   return (
     <article className="grid min-h-44 grid-cols-[38%_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:min-h-56 sm:grid-cols-[13rem_minmax(0,1fr)] md:grid-cols-[15rem_minmax(0,1fr)]">
-      <div className="relative bg-slate-100">
+      <div className="relative bg-slate-100 sm:flex sm:items-center sm:justify-center">
         {event.poster_url ? (
-          <img src={event.poster_url} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
+          <img src={event.poster_url} alt="" loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover sm:static sm:h-auto sm:max-h-96 sm:object-contain" />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-blue-600">
             <Ticket className="h-6 w-6 sm:h-9 sm:w-9" />
