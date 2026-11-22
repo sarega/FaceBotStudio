@@ -39,6 +39,7 @@ test("the review queue orders slip submissions before pagination in both directi
       paymentMode: "external_manual", categories: [{ id: "adult", label: "Adult", unitMinor: 25000, quota: null }],
     });
     const attemptIds: string[] = [];
+    let unpaidBookingId = "";
     const setSubmissionTime = fixture.prepare("UPDATE paid_payment_attempts SET created_ms=? WHERE id=?");
     const now = Date.now();
     for (let index = 0; index < 22; index++) {
@@ -46,7 +47,10 @@ test("the review queue orders slip submissions before pagination in both directi
         eventId: event.id, customerId: customer.id, key: `booking-${index}`, pricingVersion: Number(settings.version),
         contact: { name: "Test Buyer" }, attendees: [{ categoryId: "adult", firstName: "Guest", lastName: String(index) }],
       });
-      if (index === 21) break;
+      if (index === 21) {
+        unpaidBookingId = booking.id;
+        break;
+      }
       const proof = await db.submitPaidProof({
         eventId: event.id, bookingId: booking.id, customerId: customer.id, key: `proof-${index}`, version: 1,
         method: "bank_transfer", claimedMinor: 25000, claimedTransferMs: Date.now(), reference: null,
@@ -65,6 +69,20 @@ test("the review queue orders slip submissions before pagination in both directi
       assert.deepEqual(secondPage[1].attendee_names, ["Guest 21"]);
       assert.equal(secondPage[1].customer_first_name, "Test");
     }
+    assert.deepEqual((await db.listOwnedPaidBookings(customer.id, 20, 0, "", false, true)).map((row) => row.id), [unpaidBookingId]);
+    assert.equal(await db.deleteUnverifiedCustomerAccount(customer.id), false);
+    const staffProof = {
+      eventId: event.id, bookingId: unpaidBookingId, version: 1, key: "staff-proof", method: "bank_transfer" as const,
+      claimedMinor: 25000, claimedTransferMs: Date.now(), reference: null, mime: "image/png" as const, content: Buffer.from("staff proof"),
+    };
+    await assert.rejects(db.submitPaidProof({ ...staffProof, staff: { organizationId: "other", actorId: "wrong-admin" } }), /event_not_found/);
+    const staffInput = { ...staffProof, staff: { organizationId, actorId: "admin-uploader" } };
+    const staffReceipt = await db.submitPaidProof(staffInput);
+    assert.equal(staffReceipt.status, "verification_pending");
+    assert.deepEqual(await db.submitPaidProof(staffInput), staffReceipt);
+    assert.equal((await db.listPaidReviewQueue(event.id, organizationId, 0, undefined, "desc"))[0].booking_id, unpaidBookingId);
+    assert.deepEqual(await db.listOwnedPaidBookings(customer.id, 20, 0, "", false, true), []);
+    assert.equal(fixture.prepare("SELECT actor FROM paid_audit_events WHERE booking_id=? AND action='staff_submit_proof'").pluck().get(unpaidBookingId), "admin-uploader");
   } finally {
     fixture.close();
     await db.close();

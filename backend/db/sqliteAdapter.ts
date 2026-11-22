@@ -1795,7 +1795,10 @@ export class SqliteAppDatabase implements AppDatabase {
   }
 
   async submitPaidProof(input: PaidProofInput) {
-    return this.runPaidCommand(input.eventId, () => submitPaidProof(input));
+    return this.runPaidCommand(input.eventId, (ownerId) => {
+      if (input.staff && input.staff.organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return submitPaidProof(input);
+    });
   }
 
   async purgeExpiredPaidProofImages(cutoffMs: number, limit: number): Promise<number> {
@@ -1821,8 +1824,9 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.runPaidCommand(eventId, () => readPaidCatalog(eventId));
   }
 
-  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "", confirmedOnly = false) {
-    const rows = this.db.prepare(OWNED_BOOKING_LIST_SQL).all(Date.now(), customerId, reference, reference, confirmedOnly ? 1 : 0, limit, offset) as PaidRow[];
+  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "", confirmedOnly = false, awaitingPaymentOnly = false) {
+    const now = Date.now();
+    const rows = this.db.prepare(OWNED_BOOKING_LIST_SQL).all(now, customerId, reference, reference, confirmedOnly ? 1 : 0, awaitingPaymentOnly ? 1 : 0, now, limit, offset) as PaidRow[];
     return serializePaidBookingList(rows);
   }
 
@@ -2576,6 +2580,19 @@ export class SqliteAppDatabase implements AppDatabase {
       return result.changes > 0;
     });
     return update();
+  }
+
+  async deleteUnverifiedCustomerAccount(id: string) {
+    return this.db.transaction(() => {
+      const deleted = this.db.prepare(`DELETE FROM customer_accounts WHERE id = ? AND status = 'pending' AND email_verified_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM paid_bookings WHERE customer_id = customer_accounts.id)
+           AND NOT EXISTS (SELECT 1 FROM registrations WHERE customer_account_id = customer_accounts.id)
+           AND NOT EXISTS (SELECT 1 FROM direct_orders WHERE customer_account_id = customer_accounts.id)
+           AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE customer_account_id = customer_accounts.id)`).run(id);
+      if (!deleted.changes) return false;
+      this.db.prepare("DELETE FROM notification_deliveries WHERE related_type = 'customer_account' AND related_id = ?").run(id);
+      return true;
+    }).immediate();
   }
 
   async createCustomerSession(customerAccountId: string, tokenHash: string, expiresAt: Date) {

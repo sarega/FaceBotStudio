@@ -1,6 +1,7 @@
 import { PaidTransferReportExport } from "../../reports/components/PaidTransferReportExport";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidBookingOperations } from "./PaidBookingOperations";
+import { PaidProofForm } from "../../../components/PaidProofForm";
 import { useEffect, useId, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, Search, SlidersHorizontal, XCircle } from "lucide-react";
 
@@ -187,6 +188,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const [rows, setRows] = useState<Review[]>();
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(0);
+  const [uploadedBooking, setUploadedBooking] = useState("");
   const [reference, setReference] = useState("");
   const [referenceDraft, setReferenceDraft] = useState("");
   const [next, setNext] = useState<number | null>(null);
@@ -207,11 +209,18 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const prefix = `/api/events/${encodeURIComponent(eventId)}/paid-registration`;
 
   function showFullQueue() {
+    setUploadedBooking("");
     setReference("");
     setReferenceDraft("");
     setOffset(0);
     onFocusConsumed();
     setRefresh((value) => value + 1);
+  }
+
+  function refreshAfterUpdate() {
+    setOffset(0);
+    setRefresh((value) => value + 1);
+    window.dispatchEvent(new Event("meetrix:paid-booking-updated"));
   }
 
   useEffect(() => {
@@ -309,6 +318,9 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           </button>
         </div>}
         {error && <p role="alert" className="text-red-700">{error}</p>}
+        {uploadedBooking && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {t("แนบสลิปแล้ว ใบจองเข้าคิวรอตรวจ", "Slip uploaded. The booking is awaiting review.")} {uploadedBooking}
+        </p>}
         {!rows && !error && <p role="status">Loading reviews…</p>}
         {rows?.length === 0 && <p>{reference ? "No payable or pending booking found for this reference." : "No payment proofs awaiting review."}</p>}
         {rows && rows.length > 0 && <div className="grid gap-1.5">{rows.map((review) => {
@@ -389,9 +401,25 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   </p>}
                 </div>
               </div>
-              <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch}
-                onUpdated={()=>{setOffset(0);setRefresh(v=>v+1);
-                  window.dispatchEvent(new Event("meetrix:paid-booking-updated"));}}/>
+              {review.attempt_id ? <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch}
+                onUpdated={refreshAfterUpdate}/> : <details className="rounded-lg border border-slate-200 p-3">
+                <summary className="cursor-pointer font-semibold text-blue-700">{t("อัปโหลดสลิปแทนลูกค้า", "Upload slip for customer")}</summary>
+                <div className="mt-3 space-y-2">
+                  <p className="text-sm text-slate-600">{t("แนบภาพที่ลูกค้าส่งมาและกรอกยอดกับเวลาโอนตามสลิป รายการจะเข้าคิวรอตรวจ", "Attach the customer's slip and enter the amount and transfer time shown. The booking will enter the review queue.")}</p>
+                  <PaidProofForm key={review.version} staff locale={language} path={path} version={review.version}
+                    paymentMode={review.payment_mode} totalMinor={review.total_minor} onSubmitted={() => {
+                      setUploadedBooking(review.booking_reference);
+                      refreshAfterUpdate();
+                    }}
+                    submitRequest={async (url, init) => {
+                      const response = await apiFetch(url, init);
+                      if (!response.ok) {
+                        const result = await response.json().catch(() => ({}));
+                        throw new Error(result.error || "proof_unavailable");
+                      }
+                    }}/>
+                </div>
+              </details>}
             </div>
           </details>;
         })}</div>}

@@ -1027,6 +1027,39 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const closedPreferences = await (await fetch(ownerFreeUrl, { headers: headers("test-owner") })).json();
     assert.deepEqual(closedPreferences.preference_fields, []);
     assert.equal(closedPreferences.attendees[0].preference_answers.food, food.value);
+
+    const assistedPlacement = await fetch(externalPublic + "/paid-bookings", {
+      method: "POST", headers: { ...headers("test-owner"), "Content-Type": "application/json",
+        "Idempotency-Key": "staff-assisted-booking", "x-csrf-token": "fixture-csrf" },
+      body: JSON.stringify({ pricing_version: 2, contact: { name: "Assisted Buyer" },
+        attendees: [{ category_id: "general", first_name: "Assisted", last_name: "Guest" }] }),
+    });
+    assert.equal(assistedPlacement.status, 201, await assistedPlacement.clone().text());
+    const assisted = await assistedPlacement.json();
+    const paymentActions = () => fetch(origin + "/api/customer/paid-bookings?awaiting_payment=1&reference=" + assisted.reference,
+      { headers: headers("test-owner") }).then((response) => response.json());
+    assert.equal((await paymentActions()).bookings[0].id, assisted.id);
+    const staffProofPath = externalPrefix + "/bookings/" + assisted.id + "/proofs";
+    const proofHeaders = { "Content-Type": "application/octet-stream", "Idempotency-Key": "staff-assisted-slip",
+      "x-booking-version": "1", "x-claimed-minor": "250000", "x-claimed-transfer-at": new Date().toISOString(),
+      "x-payment-method": "bank_transfer", "x-proof-mime": "image/png" };
+    assert.equal((await fetch(staffProofPath, { method: "POST", headers: { ...headers("test-owner"), ...proofHeaders,
+      "x-csrf-token": "fixture-csrf" }, body: Uint8Array.from(qrFixture) })).status, 401);
+    const assistedUpload = await fetch(staffProofPath, { method: "POST", headers: { ...staffCreateHeaders, ...proofHeaders }, body: Uint8Array.from(qrFixture) });
+    assert.equal(assistedUpload.status, 202, await assistedUpload.clone().text());
+    assert.equal((await assistedUpload.json()).status, "verification_pending");
+    assert.deepEqual((await paymentActions()).bookings, []);
+
+    const pendingEmail = "unverified-cleanup@example.com";
+    const pendingAccount = await db.createCustomerAccount({
+      email: pendingEmail, normalized_email: pendingEmail, password_hash: "fixture", first_name: "Test", last_name: "Pending",
+      phone: "", normalized_phone: "", accepted_terms_at: new Date(), accepted_privacy_at: new Date(),
+    });
+    const deleteAccountPath = `${origin}/api/admin/customers/${pendingAccount.id}`;
+    assert.equal((await fetch(deleteAccountPath, { method: "DELETE", headers: { ...staffCreateHeaders, "x-csrf-token": "wrong" } })).status, 403);
+    assert.equal((await fetch(deleteAccountPath, { method: "DELETE", headers: staffCreateHeaders })).status, 204);
+    assert.equal(await db.getCustomerAccountById(pendingAccount.id), undefined);
+
     await db.updateEvent(event.id, { status: "cancelled" });
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 404);

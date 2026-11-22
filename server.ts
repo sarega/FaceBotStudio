@@ -12750,6 +12750,12 @@ async function sendFacebookNotificationDelivery(delivery: NotificationDeliveryRo
 }
 
 async function sendCurrentNotificationDelivery(delivery: NotificationDeliveryRow): Promise<NotificationSendResult> {
+  if (delivery.kind === "customer.email_verification" || delivery.kind === "customer.password_reset") {
+    const account = delivery.related_id ? await appDb.getCustomerAccountById(delivery.related_id) : undefined;
+    if (!account || account.status === "disabled" || (delivery.kind === "customer.email_verification" && account.email_verified_at)) {
+      throw new NotificationDeliveryError("Customer email is no longer eligible for delivery", false);
+    }
+  }
   if (delivery.kind === "paid_booking.messenger_confirmed") {
     const payload = JSON.parse(delivery.payload_json) as {
       eventId: string; customerId: string; pageId: string; senderId: string; language: string; inboundMs: number;
@@ -17745,7 +17751,8 @@ async function startServer() {
     }
     try {
       const pageSize = 20;
-      const bookings = await appDb.listOwnedPaidBookings(req.customer!.account.id, pageSize + 1, offset, reference, req.query.confirmed === "1");
+      const bookings = await appDb.listOwnedPaidBookings(req.customer!.account.id, pageSize + 1, offset, reference,
+        req.query.confirmed === "1", req.query.awaiting_payment === "1");
       const visible = bookings.slice(0, pageSize);
       const slugs = new Map(await Promise.all([...new Set(visible.map((booking) => String(booking.event_id)))].map(async (eventId) => {
         const event = await appDb.getEventById(eventId);
@@ -18129,40 +18136,47 @@ async function startServer() {
     },
   );
 
+  const paidProofBody = express.raw({ type: "application/octet-stream", limit: "4mb", inflate: false });
+  const handlePaidProofUpload = (byStaff: boolean) => async (req: AuthenticatedRequest, res: Response) => {
+    const key = req.get("Idempotency-Key")?.trim() || "";
+    const version = Number(req.get("x-booking-version"));
+    const claimedMinor = Number(req.get("x-claimed-minor"));
+    const claimedTransferMs = Date.parse(req.get("x-claimed-transfer-at") || "");
+    const method = req.get("x-payment-method");
+    const reference = req.get("x-payment-reference")?.trim() || null;
+    if (!key || key.length > 128 || !Number.isSafeInteger(version) || version < 1 ||
+        !Number.isSafeInteger(claimedMinor) || claimedMinor < 1 || !Number.isSafeInteger(claimedTransferMs) ||
+        claimedTransferMs < 1 || (reference?.length ?? 0) > 255 || (method !== "promptpay" && method !== "bank_transfer")) {
+      return res.status(400).json({ error: "invalid_proof_metadata" });
+    }
+    const bytes = Buffer.isBuffer(req.body) ? req.body : undefined;
+    if (!paidProofEncryptionConfigured()) return res.status(503).json({ error: "proof_storage_unavailable" });
+    const mime = bytes && await detectPaidProofImage(bytes);
+    if (!bytes || !mime || mime !== req.get("x-proof-mime")) return res.status(415).json({ error: "invalid_proof_image" });
+    const optimized = await optimizePaidProofImage(bytes, mime);
+    try {
+      const result = await appDb.submitPaidProof({
+        eventId: req.eventScope?.eventId ?? req.params.eventId, bookingId: req.params.id,
+        ...(byStaff
+          ? { staff: { organizationId: req.auth!.user.organization_id, actorId: req.auth!.user.id } }
+          : { customerId: req.customer!.account.id }),
+        key, version, method, claimedMinor, claimedTransferMs, reference,
+        mime: optimized.mime, content: optimized.content,
+      });
+      return res.status(202).set("Cache-Control", "private, no-store").json(result);
+    } catch (error) {
+      if (error instanceof PaidBookingError) {
+        const missing = ["booking_not_found", "event_not_found"].includes(error.code);
+        return res.status(missing ? 404 : error.code === "proof_storage_unavailable" ? 503 : 409).json({ error: missing ? "booking_not_found" : error.code });
+      }
+      return res.status(500).json({ error: "proof_unavailable" });
+    }
+  };
   app.post("/api/customer/paid-bookings/:eventId/:id/proofs", publicRegistrationRateLimit, requireVerifiedCustomer,
-    express.raw({ type: "application/octet-stream", limit: "4mb", inflate: false }),
-    async (req: AuthenticatedRequest, res) => {
-      const key = req.get("Idempotency-Key")?.trim() || "";
-      const version = Number(req.get("x-booking-version"));
-      const claimedMinor = Number(req.get("x-claimed-minor"));
-      const claimedTransferMs = Date.parse(req.get("x-claimed-transfer-at") || "");
-      const method = req.get("x-payment-method");
-      const reference = req.get("x-payment-reference")?.trim() || null;
-      if (!key || key.length > 128 || !Number.isSafeInteger(version) || version < 1 ||
-          !Number.isSafeInteger(claimedMinor) || claimedMinor < 1 || !Number.isSafeInteger(claimedTransferMs) ||
-          claimedTransferMs < 1 || (reference?.length ?? 0) > 255 || (method !== "promptpay" && method !== "bank_transfer")) {
-        return res.status(400).json({ error: "invalid_proof_metadata" });
-      }
-      const bytes = Buffer.isBuffer(req.body) ? req.body : undefined;
-      if (!paidProofEncryptionConfigured()) return res.status(503).json({ error: "proof_storage_unavailable" });
-      const mime = bytes && await detectPaidProofImage(bytes);
-      if (!bytes || !mime || mime !== req.get("x-proof-mime")) return res.status(415).json({ error: "invalid_proof_image" });
-      const optimized = await optimizePaidProofImage(bytes, mime);
-      try {
-        const result = await appDb.submitPaidProof({
-          eventId: req.params.eventId, bookingId: req.params.id, customerId: req.customer!.account.id,
-          key, version, method, claimedMinor, claimedTransferMs, reference,
-          mime: optimized.mime, content: optimized.content,
-        });
-        return res.status(202).set("Cache-Control", "private, no-store").json(result);
-      } catch (error) {
-        if (error instanceof PaidBookingError) {
-          const missing = ["booking_not_found", "event_not_found"].includes(error.code);
-          return res.status(missing ? 404 : error.code === "proof_storage_unavailable" ? 503 : 409).json({ error: missing ? "booking_not_found" : error.code });
-        }
-        return res.status(500).json({ error: "proof_unavailable" });
-      }
-    },
+    paidProofBody, handlePaidProofUpload(false),
+  );
+  app.post("/api/events/:eventId/paid-registration/bookings/:id/proofs",
+    requireRoles(["owner", "admin"]), paidSettingsScope, publicRegistrationRateLimit, paidProofBody, handlePaidProofUpload(true),
   );
 
   app.get("/api/events/:eventId/paid-registration/bookings/:id/proofs/:attemptId",
@@ -20632,6 +20646,7 @@ async function startServer() {
       return res.json({
         generated_at: new Date().toISOString(),
         scope: { organization_id: organizationId, organization_name: req.auth?.user.organization_name || "" },
+        can_delete_unverified: organizationId === DEFAULT_ORGANIZATION_ID,
         email: {
           provider: getEmailConfig().provider,
           worker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
@@ -20734,6 +20749,21 @@ async function startServer() {
         return res.status(500).json({error:"bookings_export_failed"});
       }
     });
+
+  app.delete("/api/admin/customers/:id", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res: Response) => {
+    if (req.auth!.user.organization_id !== DEFAULT_ORGANIZATION_ID) {
+      return res.status(403).json({ error: "customer_delete_not_allowed" });
+    }
+    const id = req.params.id.trim();
+    try {
+      const deleted = await appDb.deleteUnverifiedCustomerAccount(id);
+      if (!deleted) return res.status(409).json({ error: "customer_delete_not_eligible" });
+      await recordAudit(req, "customer.unverified_account_deleted", "customer_account", id);
+      return res.status(204).end();
+    } catch {
+      return res.status(500).json({ error: "customer_delete_unavailable" });
+    }
+  });
 
   app.post("/api/admin/customers/:id/resend-verification", requireRoles(["owner", "admin"]), manualOutboundActionRateLimit, async (req: AuthenticatedRequest, res: Response) => {
     try {

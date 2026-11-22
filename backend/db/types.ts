@@ -1123,7 +1123,7 @@ export interface AppDatabase {
   savePaidSettings(eventId: string, input: PaidSettingsInput): Promise<PaidRow>;
   listDuePaidEvents(now: number): Promise<string[]>;
   readPaidCatalog(eventId: string): Promise<PaidCatalog | undefined>;
-  listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference?: string, confirmedOnly?: boolean): Promise<PaidRow[]>;
+  listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference?: string, confirmedOnly?: boolean, awaitingPaymentOnly?: boolean): Promise<PaidRow[]>;
   readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: import("./paidRegistration").PaidPreferenceEdit): Promise<PaidRow | undefined>;
   reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<{
     status: "awaiting_payment"; payment_status: "unpaid"; due_at: string; version: number;
@@ -1163,6 +1163,7 @@ export interface AppDatabase {
   verifyCustomerAccountEmail(id: string): Promise<boolean>;
   updateCustomerAccountLastLogin(id: string): Promise<void>;
   setCustomerAccountStatus(id: string, status: CustomerAccountStatus): Promise<boolean>;
+  deleteUnverifiedCustomerAccount(id: string): Promise<boolean>;
   createCustomerSession(customerAccountId: string, tokenHash: string, expiresAt: Date): Promise<void>;
   getCustomerSessionWithAccount(tokenHash: string): Promise<CustomerAccountSessionRow | undefined>;
   touchCustomerSession(sessionId: string): Promise<void>;

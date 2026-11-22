@@ -556,7 +556,9 @@ export const OWNED_BOOKING_LIST_SQL = `
     b.payment_state AS payment_status,
     (SELECT COUNT(*) FROM paid_attendees a WHERE a.booking_id=b.id AND a.cancelled_ms IS NULL) AS attendee_count
   FROM paid_bookings b JOIN events e ON e.id=b.event_id JOIN paid_event_settings s ON s.event_id=b.event_id
-  WHERE b.customer_id=? AND (b.reference=? OR ?='') AND (?=0 OR b.state='confirmed') ORDER BY b.created_ms DESC,b.id DESC LIMIT ? OFFSET ?
+  WHERE b.customer_id=? AND (b.reference=? OR ?='') AND (?=0 OR b.state='confirmed')
+    AND (?=0 OR (b.state='awaiting_payment' AND b.due_ms>? AND b.total_minor>0))
+  ORDER BY b.created_ms DESC,b.id DESC LIMIT ? OFFSET ?
 `;
 
 export function serializePaidBookingList(rows: PaidRow[]): PaidRow[] {
@@ -565,10 +567,9 @@ export function serializePaidBookingList(rows: PaidRow[]): PaidRow[] {
   }));
 }
 
-export interface PaidProofInput {
+export type PaidProofInput = {
   eventId: string;
   bookingId: string;
-  customerId: string;
   key: string;
   version: number;
   method: "promptpay" | "bank_transfer";
@@ -577,7 +578,7 @@ export interface PaidProofInput {
   reference: string | null;
   mime: "image/png" | "image/jpeg" | "image/webp";
   content: Buffer;
-}
+} & ({ customerId: string; staff?: never } | { customerId?: never; staff: { organizationId: string; actorId: string } });
 
 export interface PaidProofReceipt {
   attempt_id: string;
@@ -587,23 +588,25 @@ export interface PaidProofReceipt {
 }
 
 export function* submitPaidProof(input: PaidProofInput): PaidCommand<PaidProofReceipt> {
-  const { eventId, bookingId, customerId, key, version, method, claimedMinor, claimedTransferMs, reference, mime, content } = input;
+  const { eventId, bookingId, customerId, staff, key, version, method, claimedMinor, claimedTransferMs, reference, mime, content } = input;
   if (!key || key.length > 128 || !Number.isSafeInteger(claimedMinor) || claimedMinor < 1 ||
       !Number.isSafeInteger(claimedTransferMs) || claimedTransferMs < 1 || !content.length || content.length > 4 * 1024 * 1024) {
     throw new PaidBookingError("invalid_proof");
   }
   const [booking] = yield query(
-    "SELECT state,due_ms,version FROM paid_bookings WHERE event_id=? AND id=? AND customer_id=?",
-    eventId, bookingId, customerId,
+    `SELECT customer_id,state,due_ms,version FROM paid_bookings WHERE event_id=? AND id=?${staff ? "" : " AND customer_id=?"}`,
+    eventId, bookingId, ...(staff ? [] : [customerId!]),
   );
   if (!booking) throw new PaidBookingError("booking_not_found");
+  const bookingCustomerId = String(booking.customer_id);
+  const principal = staff ? `staff:${staff.actorId}` : bookingCustomerId;
   const checksum = createHash("sha256").update(content).digest("hex");
   const digest = createHash("sha256").update(JSON.stringify([
     bookingId, version, method, claimedMinor, claimedTransferMs, reference, mime, checksum,
   ])).digest("hex");
   const [replay] = yield query(
     "SELECT digest,result_json FROM paid_command_keys WHERE principal=? AND event_id=? AND operation='proof' AND command_key=?",
-    customerId, eventId, key,
+    principal, eventId, key,
   );
   if (replay) {
     if (replay.digest !== digest) throw new PaidBookingError("idempotency_conflict");
@@ -627,19 +630,19 @@ export function* submitPaidProof(input: PaidProofInput): PaidCommand<PaidProofRe
   );
   yield query(
     "INSERT INTO paid_proofs (id,attempt_id,mime,byte_length,content,checksum,uploader_id,created_ms) VALUES (?,?,?,?,?,?,?,?)",
-    randomUUID(),attemptId,mime,content.length,encrypted,checksum,customerId,now,
+    randomUUID(),attemptId,mime,content.length,encrypted,checksum,bookingCustomerId,now,
   );
   yield query(
     "UPDATE paid_bookings SET state='verification_pending',payment_state='proof_submitted',updated_ms=?,version=version+1 WHERE event_id=? AND id=?",
     now,eventId,bookingId,
   );
-  yield audit(eventId,bookingId,customerId,"submit_proof","awaiting_payment","verification_pending",now);
+  yield audit(eventId,bookingId,staff?.actorId ?? bookingCustomerId,staff ? "staff_submit_proof" : "submit_proof","awaiting_payment","verification_pending",now);
   const receipt: PaidProofReceipt = {
     attempt_id: attemptId, status: "verification_pending", payment_status: "proof_submitted", version: version + 1,
   };
   yield query(
     "INSERT INTO paid_command_keys (principal,event_id,operation,command_key,digest,booking_id,result_json,created_ms) VALUES (?,?,'proof',?,?,?,?,?)",
-    customerId,eventId,key,digest,bookingId,JSON.stringify(receipt),now,
+    principal,eventId,key,digest,bookingId,JSON.stringify(receipt),now,
   );
   return receipt;
 }
@@ -1345,7 +1348,7 @@ export function* readPaidEventSummary(
      FROM paid_audit_events a JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
      JOIN customer_accounts c ON c.id=b.customer_id
      WHERE a.event_id=? AND a.action IN (
-       'create','submit_proof','review_verified','review_rejected','review_exception',
+       'create','submit_proof','staff_submit_proof','review_verified','review_rejected','review_exception',
        'customer_reinstate','admin_extend','admin_cancel','admin_reinstate','admin_refund','expire')
      ORDER BY a.occurred_ms DESC,a.id DESC LIMIT ? OFFSET ?`, Date.now(), eventId,limit+1,offset,
   );

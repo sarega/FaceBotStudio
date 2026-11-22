@@ -101,3 +101,25 @@ test("customer profile changes preserve account history fields and disabling rev
   assert.equal(await db.setCustomerAccountStatus(account.id, "disabled"), true);
   assert.equal(await db.getCustomerSessionWithAccount(sessionHash), undefined);
 });
+
+test("customer cleanup deletes unverified signups and their queued verification, while keeping verified accounts", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  try {
+    await db.initialize();
+    const pending = await db.createCustomerAccount(customerInput("unverified@example.com"));
+    const verified = await db.createCustomerAccount(customerInput("verified@example.com"));
+    await db.verifyCustomerAccountEmail(verified.id);
+    await db.enqueueNotificationDelivery({
+      channel: "email", kind: "customer.email_verification", recipient: pending.email,
+      recipient_snapshot: "{}", payload_json: "{}", related_type: "customer_account", related_id: pending.id,
+      idempotency_key: "verify-unwanted-registration",
+    });
+    assert.equal(await db.deleteUnverifiedCustomerAccount(verified.id), false);
+    assert.equal(await db.deleteUnverifiedCustomerAccount(pending.id), true);
+    assert.equal(await db.getCustomerAccountById(pending.id), undefined);
+    assert.deepEqual(await db.listNotificationDeliveries({ related_type: "customer_account", related_id: pending.id }), []);
+    assert.notEqual((await db.createCustomerAccount(customerInput(pending.email))).id, pending.id);
+  } finally {
+    await db.close();
+  }
+});

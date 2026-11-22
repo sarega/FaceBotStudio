@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Mail, RefreshCw, Search, ShoppingBag, UserRound, XCircle } from "lucide-react";
+import { Mail, RefreshCw, Search, ShoppingBag, Trash2, UserRound, XCircle } from "lucide-react";
 
 type CustomerEmailDelivery = {
   status: "queued" | "processing" | "sent" | "failed";
@@ -72,6 +72,7 @@ type CustomerRecord = {
 };
 
 type CustomerResponse = {
+  can_delete_unverified?: boolean;
   email: { provider: string; worker: "embedded" | "external" };
   summary: {
     total: number;
@@ -140,7 +141,7 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
   const t = (th: string, en: string) => language === "th" ? th : en;
   const [data, setData] = useState<CustomerResponse | null>(null);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | CustomerRecord["status"]>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "email_failed" | CustomerRecord["status"]>("all");
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
@@ -182,7 +183,9 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
   const filteredCustomers = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return (data?.customers || []).filter((customer) => {
-      if (statusFilter !== "all" && customer.status !== statusFilter) return false;
+      if (statusFilter === "email_failed") {
+        if (customer.status !== "pending" || customer.email_delivery?.status !== "failed") return false;
+      } else if (statusFilter !== "all" && customer.status !== statusFilter) return false;
       if (!normalizedQuery) return true;
       return [customer.first_name, customer.last_name, customer.email, customer.phone]
         .join(" ")
@@ -197,6 +200,27 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
   }, [filteredCustomers, selectedId]);
 
   const selectedCustomer = filteredCustomers.find((customer) => customer.id === selectedId) || null;
+
+  async function deleteUnverified(customer: CustomerRecord) {
+    if (busyId || !window.confirm(t(`ลบบัญชีที่ยังไม่ยืนยัน ${customer.email}? เจ้าของอีเมลจะต้องสมัครใหม่`, `Delete the unverified account ${customer.email}? The email owner will need to register again.`))) return;
+    setBusyId(customer.id);
+    setMessage("");
+    try {
+      const response = await apiFetch(`/api/admin/customers/${encodeURIComponent(customer.id)}`, { method: "DELETE" });
+      if (!response.ok) {
+        setMessage(response.status === 409
+          ? t("ลบไม่ได้ บัญชีอาจมีการยืนยันแล้วหรือมีรายการจอง ลงทะเบียน หรือบัตรผูกอยู่", "The account may already be verified or linked to a booking, registration or ticket.")
+          : t("ลบบัญชีไม่สำเร็จ", "Could not delete the account."));
+        return;
+      }
+      await load();
+      setMessage(t("ลบบัญชีที่ยังไม่ยืนยันแล้ว", "Unverified account deleted."));
+    } catch {
+      setMessage(t("ลบบัญชีไม่สำเร็จ", "Could not delete the account."));
+    } finally {
+      setBusyId("");
+    }
+  }
 
   const resendVerification = async (customer: CustomerRecord) => {
     setBusyId(customer.id);
@@ -359,6 +383,7 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
               <div className="relative min-w-[220px] flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, email, phone" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" /></div>
               <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-400">
                 <option value="all">All statuses</option><option value="pending">Pending</option><option value="active">Active</option><option value="disabled">Disabled</option>
+                <option value="email_failed">{t("อีเมลยืนยันส่งไม่สำเร็จ", "Verification email failed")}</option>
               </select>
               <span className="text-xs text-slate-500">{filteredCustomers.length} shown</span>
             </div>
@@ -380,7 +405,18 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
               <div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600"><UserRound className="h-5 w-5" /></span><div className="min-w-0"><h2 className="truncate font-semibold text-slate-950">{selectedCustomer.first_name} {selectedCustomer.last_name}</h2><p className="truncate text-xs text-slate-500">{selectedCustomer.email}</p></div></div><span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${badgeClass(selectedCustomer.status === "active" ? "green" : selectedCustomer.status === "pending" ? "amber" : "rose")}`}>{statusLabel(selectedCustomer.status)}</span></div>
               <div className="mt-4 grid grid-cols-2 gap-2 text-xs"><div className="rounded-xl bg-slate-50 p-2.5"><p className="text-slate-500">Phone</p><p className="mt-1 font-semibold text-slate-800">{selectedCustomer.phone || "—"}</p></div><div className="rounded-xl bg-slate-50 p-2.5"><p className="text-slate-500">Last login</p><p className="mt-1 font-semibold text-slate-800">{formatDate(selectedCustomer.last_login_at)}</p></div></div>
               <div className={`mt-3 rounded-xl border p-3 text-xs ${badgeClass(deliveryTone(selectedCustomer.email_delivery))}`}><div className="flex items-center justify-between gap-2"><p className="font-semibold">Verification email</p><span className="font-bold uppercase">{selectedCustomer.email_delivery?.status || "none"}</span></div><p className="mt-1">{deliveryLabel(selectedCustomer.email_delivery)}</p>{selectedCustomer.email_delivery?.sent_at && <p className="mt-1 text-[11px] opacity-75">Provider accepted at {formatDate(selectedCustomer.email_delivery.sent_at)}</p>}{selectedCustomer.email_delivery?.last_error && <p className="mt-1 break-words text-[11px]">{selectedCustomer.email_delivery.last_error}</p>}</div>
-              {selectedCustomer.status === "pending" && <button type="button" onClick={() => void resendVerification(selectedCustomer)} disabled={busyId === selectedCustomer.id} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Mail className="h-4 w-4" />{busyId === selectedCustomer.id ? "Queueing…" : "Resend verification email"}</button>}
+              {selectedCustomer.status === "pending" && <button type="button" onClick={() => void resendVerification(selectedCustomer)} disabled={!!busyId} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Mail className="h-4 w-4" />{busyId === selectedCustomer.id ? "Queueing…" : "Resend verification email"}</button>}
+              {selectedCustomer.email_delivery && <p className="mt-2 text-xs text-slate-600">
+                {t("จำนวนครั้งที่พยายามส่งอีเมลล่าสุด", "Delivery attempts for the latest email")} {selectedCustomer.email_delivery.attempt_count}
+              </p>}
+              {data?.can_delete_unverified && selectedCustomer.status === "pending" && !selectedCustomer.email_verified_at &&
+                selectedCustomer.booking_count === 0 && selectedCustomer.order_count === 0 && (
+                  <button type="button" disabled={!!busyId} onClick={() => void deleteUnverified(selectedCustomer)}
+                    className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700 disabled:opacity-50">
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />{t("ลบบัญชีที่ยังไม่ยืนยัน", "Delete unverified account")}
+                  </button>
+                )}
+
               <section className="mt-5 space-y-2">
                 <h3 className="font-bold text-slate-900">การจองสัมมนา · Event bookings ({selectedCustomer.booking_count})</h3>
                 {selectedCustomer.paid_bookings.length===0 ?

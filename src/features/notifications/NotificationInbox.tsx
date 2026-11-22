@@ -138,6 +138,7 @@ export function NotificationInbox({
           const person = [entry.first_name, entry.last_name].filter(Boolean).join(" ") || t("ผู้จอง", "Booker");
           const title = ({
             create:t("ใบจองใหม่","New booking"), submit_proof:t("ส่งสลิปแล้ว","Payment slip submitted"),
+            staff_submit_proof:t("แอดมินแนบสลิปแทนลูกค้า","Staff uploaded a payment slip"),
             review_verified:t("ตรวจสลิปผ่าน","Payment approved"), review_rejected:t("สลิปไม่ผ่าน","Payment rejected"),
             review_exception:t("ตรวจสอบยอดผิดปกติ","Payment exception"), customer_reinstate:t("ต่ออายุการจอง","Booking renewed"),
             admin_extend:t("ขยายเวลาชำระ","Payment deadline extended"), admin_cancel:t("ยกเลิกการจอง","Booking cancelled"),

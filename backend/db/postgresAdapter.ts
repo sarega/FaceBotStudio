@@ -915,7 +915,10 @@ export class PostgresAppDatabase implements AppDatabase {
   }
 
   async submitPaidProof(input: PaidProofInput) {
-    return this.runPaidCommand(input.eventId, () => submitPaidProof(input));
+    return this.runPaidCommand(input.eventId, (ownerId) => {
+      if (input.staff && input.staff.organizationId !== ownerId) throw new PaidBookingError("event_not_found");
+      return submitPaidProof(input);
+    });
   }
 
   async purgeExpiredPaidProofImages(cutoffMs: number, limit: number): Promise<number> {
@@ -944,10 +947,11 @@ export class PostgresAppDatabase implements AppDatabase {
     return this.runPaidCommand(eventId, () => readPaidCatalog(eventId));
   }
 
-  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "", confirmedOnly = false) {
+  async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "", confirmedOnly = false, awaitingPaymentOnly = false) {
+    const now = Date.now();
     let index = 0;
     const sql = OWNED_BOOKING_LIST_SQL.replace(/\?/g, () => `$${++index}`);
-    const { rows } = await this.pool.query<Record<string, unknown>>(sql, [Date.now(), customerId, reference, reference, confirmedOnly ? 1 : 0, limit, offset]);
+    const { rows } = await this.pool.query<Record<string, unknown>>(sql, [now, customerId, reference, reference, confirmedOnly ? 1 : 0, awaitingPaymentOnly ? 1 : 0, now, limit, offset]);
     return serializePaidBookingList(rows);
   }
 
@@ -1772,6 +1776,30 @@ export class PostgresAppDatabase implements AppDatabase {
       }
       await client.query("COMMIT");
       return result.rowCount > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteUnverifiedCustomerAccount(id: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const deleted = await client.query(
+        `DELETE FROM customer_accounts WHERE id = $1 AND status = 'pending' AND email_verified_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM paid_bookings WHERE customer_id = customer_accounts.id)
+           AND NOT EXISTS (SELECT 1 FROM registrations WHERE customer_account_id = customer_accounts.id)
+           AND NOT EXISTS (SELECT 1 FROM direct_orders WHERE customer_account_id = customer_accounts.id)
+           AND NOT EXISTS (SELECT 1 FROM direct_tickets WHERE customer_account_id = customer_accounts.id)`, [id],
+      );
+      if (deleted.rowCount) await client.query(
+        "DELETE FROM notification_deliveries WHERE related_type = 'customer_account' AND related_id = $1", [id],
+      );
+      await client.query("COMMIT");
+      return Boolean(deleted.rowCount);
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
