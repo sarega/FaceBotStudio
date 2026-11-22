@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { WorkspaceSwitchLink } from "../shared/WorkspaceSwitchLink";
 import { StatusBadge, type BadgeTone } from "../shared/AppUi";
 import type { AuthUser, EventRecord } from "../../types";
 import { translate, type AppLanguage } from "../../lib/i18n";
@@ -647,6 +648,9 @@ export function AdminWorkspaceSidebar({
               <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
               <p className="mt-2 text-[11px] text-slate-500">System v{authUser?.system_version || "-"} · {(authUser?.system_revision || "-").slice(0, 7)}</p>
             </div>
+            {authUser?.has_customer_account && (
+              <div className="mt-3"><WorkspaceSwitchLink language={language} destination="attendee" /></div>
+            )}
             <div className="mt-3">
               <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
                 {label("settings.language", "Language")}

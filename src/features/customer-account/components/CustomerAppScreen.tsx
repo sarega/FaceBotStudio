@@ -1,7 +1,8 @@
+import { WorkspaceSwitchLink } from "../../../components/shared/WorkspaceSwitchLink";
 import { customerErrorCopy, formatCustomerDate, type CustomerCopy, type CustomerLocale } from "../customerLocale";
 import { CustomerVerificationNotice } from "./CustomerVerificationNotice";
 import { CustomerPaidBookings } from "./CustomerPaidBookings";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Bell, CalendarDays, CheckCircle2, ChevronRight, ClipboardList, FileImage, LayoutDashboard, LogOut, Menu, Shield, Ticket, UserRound, X } from "lucide-react";
 import { CustomerAccountScreen, customerApi, type CustomerAccount } from "./CustomerAccountScreen";
 
@@ -45,12 +46,45 @@ type CustomerOrder = {
   total_amount: number;
   payment_reference: string | null;
   payment_proof_submitted_at: string | null;
+  updated_at?: string;
   rejection_reason: string | null;
   hold_expires_at: string | null;
   performance_title?: string;
   performance_starts_at?: string;
   tickets: CustomerTicket[];
 };
+
+type PaidNotificationBooking = {
+  reference: string;
+  event_name: string;
+  status: string;
+  due_at: string;
+  updated_at: string;
+  refunded_minor?: number;
+  credit_issued_minor?: number;
+  credit_used_minor?: number;
+};
+type CustomerNotification = { id: string; title: string; event: string; at?: string; href: string; needsPayment: boolean };
+
+function CustomerNotificationList({ entries, locale, onSelect }: {
+  entries: CustomerNotification[]; locale: CustomerLocale; onSelect?: () => void;
+}) {
+  const th = locale === "th";
+  if (entries.length === 0) return <p className="px-3 py-5 text-sm text-slate-600">{th ? "ยังไม่มีการแจ้งเตือน" : "No notifications yet"}</p>;
+  return <ul className="divide-y divide-slate-200">
+    {entries.map(entry => <li key={entry.id}>
+      <a href={entry.href} onClick={onSelect} className="flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-slate-100/60">
+        <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${entry.needsPayment ? "bg-rose-600" : "bg-blue-600"}`} />
+        <span className="min-w-0 flex-1">
+          <span className="block font-semibold text-slate-900">{entry.title}</span>
+          {entry.event && <span className="block break-words text-xs text-slate-600">{entry.event}</span>}
+          {entry.at && <time dateTime={entry.at} className="text-xs text-slate-500">{formatCustomerDate(entry.at, locale)}</time>}
+        </span>
+        <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+      </a>
+    </li>)}
+  </ul>;
+}
 
 type CustomerPreferences = {
   email_transactional_enabled: boolean;
@@ -195,7 +229,29 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
   const [dataLoading, setDataLoading] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<CustomerCopy>();
-  const [pendingBooking, setPendingBooking] = useState<{ reference: string; due_at: string }>();
+  const [pendingBookings, setPendingBookings] = useState<PaidNotificationBooking[]>([]);
+  const [recentBookings, setRecentBookings] = useState<PaidNotificationBooking[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const notificationMenu = useRef<HTMLDivElement>(null);
+  const bell = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const clickOutside = (event: PointerEvent) => {
+      if (!notificationMenu.current?.contains(event.target as Node)) setNotificationsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setNotificationsOpen(false);
+      bell.current?.focus();
+    };
+    document.addEventListener("pointerdown", clickOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", clickOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [notificationsOpen]);
   const [paymentRevision, setPaymentRevision] = useState(0);
 
   useEffect(() => {
@@ -205,11 +261,11 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
       request?.abort();
       const controller = new AbortController();
       request = controller;
-      void customerApi<{ bookings: Array<{ reference: string; due_at: string }> }>(
-        "/api/customer/paid-bookings?awaiting_payment=1", { signal: controller.signal },
-      ).then(({ bookings }) => {
-        if (!controller.signal.aborted) setPendingBooking(bookings[0]);
-      }).catch(() => {});
+      const load = (query: string, save: (bookings: PaidNotificationBooking[]) => void) =>
+        customerApi<{ bookings: PaidNotificationBooking[] }>(`/api/customer/paid-bookings${query}`, { signal: controller.signal })
+          .then(({ bookings }) => { if (!controller.signal.aborted) save(bookings); }).catch(() => {});
+      void load("?awaiting_payment=1", setPendingBookings);
+      void load("", setRecentBookings);
     };
     refreshPayment();
     window.addEventListener("focus", refreshPayment);
@@ -220,15 +276,16 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
   }, [account?.email_verified_at, paymentRevision]);
 
   useEffect(() => {
-    if (!pendingBooking) return;
-    const delay = Math.max(0, Date.parse(pendingBooking.due_at) - Date.now());
+    if (!pendingBookings.length) return;
+    const nextDue = Math.min(...pendingBookings.map(booking => Date.parse(booking.due_at)));
+    const delay = Math.max(0, nextDue - Date.now());
     if (!Number.isFinite(delay) || delay > 2_147_483_647) return;
     const timer = window.setTimeout(() => {
-      setPendingBooking(undefined);
-      setPaymentRevision((value) => value + 1);
+      setPendingBookings(current => current.filter(booking => Date.parse(booking.due_at) > Date.now()));
+      setPaymentRevision(value => value + 1);
     }, delay + 100);
     return () => window.clearTimeout(timer);
-  }, [pendingBooking]);
+  }, [pendingBookings]);
 
   const loadCustomerData = async () => {
     setDataLoading(true);
@@ -292,6 +349,7 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
   const navigate = (nextSection: CustomerAppSection) => {
     window.history.pushState({}, "", sectionPath(nextSection));
     setSection(nextSection);
+    setNotificationsOpen(false);
     setMobileNavOpen(false);
   };
 
@@ -313,11 +371,31 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
   if (loading) return <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-600">{t("กำลังโหลดบัญชีผู้เข้าร่วม…", "Loading customer app…")}</div>;
   if (!account) return <div className="flex min-h-screen items-center justify-center bg-slate-50 px-5 text-center text-sm text-amber-800">{errorMessage ? t(...errorMessage) : t("เปิดบัญชีผู้เข้าร่วมไม่ได้", "Customer account unavailable")}</div>;
 
-  const pendingOrder = account.email_verified_at && orders.find((order) => order.status === "pending_payment" &&
-    (!order.hold_expires_at || Date.parse(order.hold_expires_at) > Date.now()));
-  const paymentLink = pendingBooking
-    ? `/app/orders?paid_booking=${encodeURIComponent(pendingBooking.reference)}&upload_slip=1`
-    : pendingOrder ? `/app/orders#order-proof-${encodeURIComponent(pendingOrder.id)}` : "";
+  const validPending = (dueAt?: string | null) => !dueAt || Date.parse(dueAt) > Date.now();
+  const bookingItems = new Map([...recentBookings, ...pendingBookings].map(booking => [booking.reference, booking]));
+  const paidItems: CustomerNotification[] = [...bookingItems.values()].map(booking => {
+    const needsPayment = booking.status === "awaiting_payment" && validPending(booking.due_at);
+    const expired = booking.status === "expired" || (booking.status === "awaiting_payment" && !needsPayment);
+    const title = booking.refunded_minor ? t("บันทึกคืนเงินแล้ว", "Refund recorded")
+      : booking.credit_issued_minor ? t("ออกเครดิตสำหรับงานนี้", "Credit issued for this event")
+        : (expired || booking.status === "cancelled") && booking.credit_used_minor
+          ? t("คืนเครดิตที่ใช้กับใบจอง", "Booking credit returned")
+        : needsPayment ? t("รอชำระเงินหรือส่งสลิป", "Payment or slip upload needed")
+          : expired ? t("หมดเวลาชำระเงิน", "Payment deadline passed")
+          : booking.status === "verification_pending" ? t("ส่งสลิปแล้ว รอตรวจสอบ", "Slip submitted for review")
+          : booking.status === "confirmed" ? t("ยืนยันใบจองแล้ว", "Booking confirmed")
+          : booking.status === "cancelled" ? t("ยกเลิกใบจองแล้ว", "Booking cancelled")
+          : t("อัปเดตสถานะใบจอง", "Booking status updated");
+    return { id: booking.reference, title, event: booking.event_name, at: expired ? booking.due_at : booking.updated_at,
+      href: `/app/orders?paid_booking=${encodeURIComponent(booking.reference)}${needsPayment ? "&upload_slip=1" : ""}`, needsPayment };
+  });
+  const orderItems: CustomerNotification[] = account.email_verified_at ? orders
+    .filter(order => order.status === "pending_payment" && validPending(order.hold_expires_at))
+    .map(order => ({ id: order.id, title: t("รอชำระเงินหรือส่งสลิป", "Payment or slip upload needed"),
+      event: order.event_name ?? "", at: order.updated_at, href: `/app/orders#order-proof-${encodeURIComponent(order.id)}`, needsPayment: true })) : [];
+  const notifications = [...paidItems, ...orderItems].sort((left, right) =>
+    (Date.parse(right.at ?? "") || 0) - (Date.parse(left.at ?? "") || 0));
+  const paymentLink = notifications.find(entry => entry.needsPayment)?.href ?? "";
   const paymentLabel = t("มีรายการรอชำระเงินหรือส่งสลิป", "Payment or slip upload needed");
 
   const content = section === "tickets" ? (
@@ -332,7 +410,13 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
       )}
       {account.email_verified_at && <CustomerPaidBookings key={section} locale={locale} onPaymentChanged={() => setPaymentRevision((value) => value + 1)} />}{orders.length ? <div className="space-y-4">{orders.map((order) => <OrderCard key={order.id} locale={locale} order={order} onUpdated={(updated) => setOrders((current) => current.map((item) => item.id === updated.id ? updated : item))} />)}</div> : !account.email_verified_at ? <EmptyState locale={locale} title={t("ยืนยันอีเมลของคุณ", "Verify your email")} body={t("ยืนยันอีเมลเพื่อดูรายการจองแบบชำระเงิน", "Verify your email to view paid registrations.")} /> : null}</div>
   ) : section === "notifications" ? (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6"><h2 className="text-lg font-semibold text-slate-900">{t("การตั้งค่าการแจ้งเตือน", "Notification preferences")}</h2><p className="mt-2 text-sm leading-6 text-slate-600">{t("ระบบเปิดอีเมลแจ้งสถานะไว้ตามค่าเริ่มต้น ส่วน SMS ส่งเมื่อคุณเลือกเปิดและระบบตั้งค่าผู้ให้บริการแล้ว", "Transactional email stays on by default. SMS remains opt-in and is only sent when the provider is configured.")}</p>{preferences && <div className="mt-6 space-y-3">{([ ["email_transactional_enabled", t("อีเมลแจ้งสถานะ", "Transactional email")], ["sms_transactional_enabled", t("SMS แจ้งสถานะ", "Transactional SMS")], ["sms_marketing_enabled", t("SMS ข่าวสารและโปรโมชัน", "Marketing SMS")] ] as Array<[keyof CustomerPreferences, string]>).map(([field, label]) => <label key={field} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700"><span>{label}</span><input type="checkbox" checked={preferences[field]} onChange={(event) => void updatePreference(field, event.target.checked)} className="h-4 w-4 rounded border-slate-600 bg-white text-blue-600" /></label>)}</div>}</div>
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-slate-200 bg-white">
+        <h2 className="border-b border-slate-200 px-3 py-3 font-semibold">{t("รายการแจ้งเตือนล่าสุด", "Recent notifications")}</h2>
+        <CustomerNotificationList entries={notifications} locale={locale} />
+      </section>
+      <div className="rounded-3xl border border-slate-200 bg-white p-6"><h2 className="text-lg font-semibold text-slate-900">{t("การตั้งค่าการแจ้งเตือน", "Notification preferences")}</h2><p className="mt-2 text-sm leading-6 text-slate-600">{t("ระบบเปิดอีเมลแจ้งสถานะไว้ตามค่าเริ่มต้น ส่วน SMS ส่งเมื่อคุณเลือกเปิดและระบบตั้งค่าผู้ให้บริการแล้ว", "Transactional email stays on by default. SMS remains opt-in and is only sent when the provider is configured.")}</p>{preferences && <div className="mt-6 space-y-3">{([ ["email_transactional_enabled", t("อีเมลแจ้งสถานะ", "Transactional email")], ["sms_transactional_enabled", t("SMS แจ้งสถานะ", "Transactional SMS")], ["sms_marketing_enabled", t("SMS ข่าวสารและโปรโมชัน", "Marketing SMS")] ] as Array<[keyof CustomerPreferences, string]>).map(([field, label]) => <label key={field} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700"><span>{label}</span><input type="checkbox" checked={preferences[field]} onChange={(event) => void updatePreference(field, event.target.checked)} className="h-4 w-4 rounded border-slate-600 bg-white text-blue-600" /></label>)}</div>}</div>
+    </div>
   ) : section === "security" || section === "profile" ? (
     <CustomerAccountScreen key={section} embedded={section} locale={locale} />
   ) : (
@@ -364,11 +448,30 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
   );
 
   return <div className="min-h-screen bg-slate-50 text-slate-900"><header className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm"><div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-2 sm:px-8"><a href="/app" className="flex min-w-0 items-center gap-2"><span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-600 text-white"><Ticket className="h-5 w-5" /></span><span><span className="block text-sm font-bold tracking-wide text-slate-900">Meetrix</span><span className="hidden text-xs text-slate-500 sm:block">{t("บัญชีผู้เข้าร่วม", "Customer app")}</span></span></a><div className="flex shrink-0 items-center gap-1.5 sm:gap-2">{languageControl}{themeControl}
-    <a href={paymentLink || "/app/notifications"} aria-label={paymentLink ? paymentLabel : t("การแจ้งเตือน", "Notifications")}
-      className={`relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-slate-200/40 ${paymentLink ? "bg-rose-50 text-rose-700" : "text-slate-700"}`}>
-      <Bell className="h-5 w-5" aria-hidden="true" />
-      {paymentLink && <span aria-hidden="true" className="absolute right-1.5 top-1 h-2.5 w-2.5 rounded-full border border-white bg-rose-600" />}
-    </a><a href="/events" aria-label={t("งานทั้งหมด", "All events")} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-blue-700 hover:bg-slate-200/40 sm:text-sm"><CalendarDays className="h-4 w-4" /> <span className="hidden sm:inline">{t("งาน", "Events")}</span></a><span className="hidden text-sm text-slate-600 sm:block">{account.first_name} {account.last_name}</span><button type="button" onClick={() => void logout()} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:underline sm:inline-flex"><LogOut className="h-4 w-4" /> {t("ออกจากระบบ", "Sign out")}</button><button type="button" onClick={() => setMobileNavOpen((value) => !value)} className="rounded-xl border border-slate-200 p-2 text-slate-700 sm:hidden" aria-label={t("เปิดหรือปิดเมนู", "Toggle navigation")}>{mobileNavOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}</button></div></div></header><div className="mx-auto flex max-w-7xl gap-6 px-5 py-6 sm:px-8"><aside className={`${mobileNavOpen ? "block" : "hidden"} fixed inset-x-5 top-16 z-40 rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl sm:static sm:block sm:w-56 sm:shrink-0 sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none`}><nav className="space-y-1" aria-label={t("เมนูบัญชีผู้เข้าร่วม", "Customer navigation")}><a href="/events" className="mb-3 flex min-h-11 items-center gap-2 rounded-xl border border-blue-400/30 px-3 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-600/15"><ArrowLeft className="h-4 w-4" /> {t("งานทั้งหมด", "All events")}</a>{navigation.map(({ id, label, icon: Icon }) => <a key={id} href={sectionPath(id)} onClick={(event) => { event.preventDefault(); navigate(id); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${section === id ? "bg-blue-600/15 text-blue-700" : "text-slate-600 hover:bg-slate-200/40 hover:underline"}`}><Icon className="h-4 w-4" /> {label}</a>)}<button type="button" onClick={() => void logout()} className="mt-4 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-200/40 hover:underline sm:hidden"><LogOut className="h-4 w-4" /> {t("ออกจากระบบ", "Sign out")}</button></nav></aside><main className="min-w-0 flex-1"><div className="mb-6"><nav aria-label={t("เส้นทางหน้า", "Breadcrumb")} className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"><a href="/events" className="text-blue-700 hover:underline">{t("งานทั้งหมด", "All Events")}</a><ChevronRight className="h-3.5 w-3.5 text-slate-600" /><a href="/app" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }} className="text-blue-700 hover:underline">{t("บัญชีของฉัน", "My Account")}</a>{section !== "dashboard" && <><ChevronRight className="h-3.5 w-3.5 text-slate-600" /><span className="text-slate-700">{navigation.find(item => item.id === section)?.label}</span></>}</nav><p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">{t("บัญชีผู้เข้าร่วม", "Customer area")}</p><h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{navigation.find((item) => item.id === section)?.label || t("ภาพรวม", "Overview")}</h1><p className="mt-2 text-sm text-slate-600">{t("ยินดีต้อนรับ", "Welcome back,")} {account.first_name}{dataLoading && t(" กำลังอัปเดต…", " Updating…")}</p>{errorMessage && <p className="mt-2 text-sm text-rose-700">{t(...errorMessage)}</p>}</div>
+    <div ref={notificationMenu} className="relative">
+      <button ref={bell} type="button" onClick={() => setNotificationsOpen(value => !value)}
+        aria-expanded={notificationsOpen} aria-controls="customer-notifications-list"
+        aria-label={t("การแจ้งเตือน", "Notifications")}
+        className={`relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-slate-200/40 ${paymentLink ? "bg-rose-50 text-rose-700" : "text-slate-700"}`}>
+        <Bell className="h-5 w-5" aria-hidden="true" />
+        {paymentLink && <span aria-hidden="true" className="absolute right-1.5 top-1 h-2.5 w-2.5 rounded-full border border-white bg-rose-600" />}
+      </button>
+      {notificationsOpen && <section id="customer-notifications-list" aria-label={t("รายการแจ้งเตือน", "Notifications list")}
+        className="fixed inset-x-3 top-14 z-40 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-96">
+        <h2 className="border-b border-slate-200 px-3 py-2.5 text-sm font-semibold">{t("การแจ้งเตือน", "Notifications")}</h2>
+        <div className="max-h-[min(24rem,60vh)] overflow-auto">
+          <CustomerNotificationList entries={notifications.slice(0, 8)} locale={locale} onSelect={() => setNotificationsOpen(false)} />
+        </div>
+        <a href="/app/notifications" onClick={event => { event.preventDefault(); navigate("notifications"); }}
+          className="block border-t border-slate-200 px-3 py-2.5 text-center text-sm font-semibold text-blue-700 hover:underline">
+          {t("ดูรายการทั้งหมด", "View all")}
+        </a>
+      </section>}
+    </div><a href="/events" aria-label={t("งานทั้งหมด", "All events")} className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-blue-700 hover:bg-slate-200/40 sm:text-sm"><CalendarDays className="h-4 w-4" /> <span className="hidden sm:inline">{t("งาน", "Events")}</span></a><span className="hidden text-sm text-slate-600 sm:block">{account.first_name} {account.last_name}</span><button type="button" onClick={() => void logout()} className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:underline sm:inline-flex"><LogOut className="h-4 w-4" /> {t("ออกจากระบบ", "Sign out")}</button><button type="button" onClick={() => setMobileNavOpen((value) => !value)} className="rounded-xl border border-slate-200 p-2 text-slate-700 sm:hidden" aria-label={t("เปิดหรือปิดเมนู", "Toggle navigation")}>{mobileNavOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}</button></div></div></header><div className="mx-auto flex max-w-7xl gap-6 px-5 py-6 sm:px-8"><aside className={`${mobileNavOpen ? "block" : "hidden"} fixed inset-x-5 top-16 z-40 rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl sm:static sm:block sm:w-56 sm:shrink-0 sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none`}><nav className="space-y-1" aria-label={t("เมนูบัญชีผู้เข้าร่วม", "Customer navigation")}>
+      {account.has_staff_access && (
+        <div className="mb-3"><WorkspaceSwitchLink language={locale} destination="staff" /></div>
+      )}
+      <a href="/events" className="mb-3 flex min-h-11 items-center gap-2 rounded-xl border border-blue-400/30 px-3 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-600/15"><ArrowLeft className="h-4 w-4" /> {t("งานทั้งหมด", "All events")}</a>{navigation.map(({ id, label, icon: Icon }) => <a key={id} href={sectionPath(id)} onClick={(event) => { event.preventDefault(); navigate(id); }} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${section === id ? "bg-blue-600/15 text-blue-700" : "text-slate-600 hover:bg-slate-200/40 hover:underline"}`}><Icon className="h-4 w-4" /> {label}</a>)}<button type="button" onClick={() => void logout()} className="mt-4 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-200/40 hover:underline sm:hidden"><LogOut className="h-4 w-4" /> {t("ออกจากระบบ", "Sign out")}</button></nav></aside><main className="min-w-0 flex-1"><div className="mb-6"><nav aria-label={t("เส้นทางหน้า", "Breadcrumb")} className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"><a href="/events" className="text-blue-700 hover:underline">{t("งานทั้งหมด", "All Events")}</a><ChevronRight className="h-3.5 w-3.5 text-slate-600" /><a href="/app" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }} className="text-blue-700 hover:underline">{t("บัญชีของฉัน", "My Account")}</a>{section !== "dashboard" && <><ChevronRight className="h-3.5 w-3.5 text-slate-600" /><span className="text-slate-700">{navigation.find(item => item.id === section)?.label}</span></>}</nav><p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">{t("บัญชีผู้เข้าร่วม", "Customer area")}</p><h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{navigation.find((item) => item.id === section)?.label || t("ภาพรวม", "Overview")}</h1><p className="mt-2 text-sm text-slate-600">{t("ยินดีต้อนรับ", "Welcome back,")} {account.first_name}{dataLoading && t(" กำลังอัปเดต…", " Updating…")}</p>{errorMessage && <p className="mt-2 text-sm text-rose-700">{t(...errorMessage)}</p>}</div>
     {!account.email_verified_at && <div className="mb-6">
       <CustomerVerificationNotice locale={locale} email={account.email}/>
       <a href="/account" className="mt-3 inline-flex min-h-11 items-center rounded-xl border border-amber-400 px-4 py-2 text-sm font-bold text-blue-700 hover:underline">

@@ -722,6 +722,7 @@ export interface AuthUserRow {
   username: string;
   display_name: string;
   staff_email?: string | null;
+  staff_customer_account_id?: string | null;
   pending_staff_email?: string | null;
   staff_email_purpose?: string | null;
   role: UserRole;
@@ -1126,6 +1127,8 @@ export interface AppDatabase {
   readPaidCatalog(eventId: string): Promise<PaidCatalog | undefined>;
   listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference?: string, confirmedOnly?: boolean, awaitingPaymentOnly?: boolean): Promise<PaidRow[]>;
   readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: import("./paidRegistration").PaidPreferenceEdit): Promise<PaidRow | undefined>;
+  readPaidCreditBalance(eventId: string, customerId: string): Promise<number>;
+  cancelOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<{ status: "cancelled" }>;
   reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string): Promise<{
     status: "awaiting_payment"; payment_status: "unpaid"; due_at: string; version: number;
   }>;
@@ -1160,7 +1163,7 @@ export interface AppDatabase {
   listOrganizationPaidBookings(organizationId: string, limit?: number): Promise<PaidRow[]>;
   createCustomerAccount(input: CreateCustomerAccountInput): Promise<CustomerAccountRow>;
   updateCustomerProfile(id: string, input: UpdateCustomerProfileInput): Promise<CustomerAccountRow | undefined>;
-  updateCustomerPasswordHash(id: string, passwordHash: string): Promise<boolean>;
+  updateCustomerPasswordHash(id: string, passwordHash: string, expectedHash?: string): Promise<boolean>;
   verifyCustomerAccountEmail(id: string): Promise<boolean>;
   updateCustomerAccountLastLogin(id: string): Promise<void>;
   setCustomerAccountStatus(id: string, status: CustomerAccountStatus): Promise<boolean>;
@@ -1298,6 +1301,9 @@ export interface AppDatabase {
   upsertFacebookPage(input: UpsertFacebookPageInput): Promise<FacebookPageRow>;
   resolveEventIdForPage(pageId: string): Promise<string | undefined>;
   getUserByUsername(username: string): Promise<AuthUserRow | undefined>;
+  getUserByStaffEmail(email: string): Promise<AuthUserRow | undefined>;
+  getUserByStaffCustomerAccount(customerId: string): Promise<AuthUserRow | undefined>;
+  getPendingStaffInviteEmail(tokenHash: string, now: string): Promise<string | undefined>;
   getUserById(userId: string): Promise<AuthUserRow | undefined>;
   isUserAssignedToEvent(userId: string, eventId: string): Promise<boolean>;
   listUserEventIds(userId: string): Promise<string[]>;
@@ -1308,12 +1314,12 @@ export interface AppDatabase {
   upsertUserPreferences(userId: string, input: { language: "th" | "en"; timezone: string }): Promise<UserPreferencesRow>;
   listUsers(): Promise<AuthUserRow[]>;
   stageStaffEmail(userId: string, email: string, purpose: "invite" | "verify", tokenHash: string, expiresAt: string, retryBefore: string): Promise<boolean>;
-  consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null): Promise<string | null>;
+  consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }): Promise<string | null>;
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;
   setUserActive(userId: string, isActive: boolean): Promise<boolean>;
   removeUser(userId: string): Promise<boolean>;
-  createSession(userId: string, tokenHash: string, expiresAt: Date): Promise<void>;
+  createSession(userId: string, tokenHash: string, expiresAt: Date, customerProof?: { id: string; passwordHash: string }): Promise<void>;
   getSessionWithUser(tokenHash: string): Promise<AuthSessionRow | undefined>;
   touchSession(sessionId: string): Promise<void>;
   deleteSession(tokenHash: string): Promise<void>;

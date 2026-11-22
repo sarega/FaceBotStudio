@@ -9153,6 +9153,7 @@ export default function App() {
       }
 
       const loggedInUser = data.user as AuthUser;
+      if (currentPathname === "/staff/login") window.history.replaceState(null, "", "/");
       setAuthUser(loggedInUser);
       setAuthStatus("authenticated");
       void loadUserPreferences();
@@ -9987,12 +9988,13 @@ export default function App() {
   }
 
   if (currentPathname === "/staff/email") {
-    return <Suspense fallback={<LoadingScreen />}><StaffEmailScreen apiFetch={apiFetch} /></Suspense>;
+    return <Suspense fallback={<LoadingScreen />}><StaffEmailScreen apiFetch={apiFetch} language={language} /></Suspense>;
   }
 
   if (!isPublicEventRoute && authStatus === "unauthenticated") {
     return (
       <AuthScreen
+        language={language}
         errorMessage={authError}
         username={loginUsername}
         password={loginPassword}
@@ -11205,6 +11207,7 @@ export default function App() {
               )}
               <RegistrationsScreen
                 apiFetch={apiFetch}
+                onPaidBookingCancelled={canReviewPaidSlips ? () => setNotificationRefresh(value => value + 1) : undefined}
                 language={language}
                 filteredRegistrations={filteredRegistrations}
                 registrationAvailability={registrationAvailability}

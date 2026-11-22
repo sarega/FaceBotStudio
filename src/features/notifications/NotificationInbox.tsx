@@ -141,8 +141,9 @@ export function NotificationInbox({
             staff_submit_proof:t("แอดมินแนบสลิปแทนลูกค้า","Staff uploaded a payment slip"),
             review_verified:t("ตรวจสลิปผ่าน","Payment approved"), review_rejected:t("สลิปไม่ผ่าน","Payment rejected"),
             review_exception:t("ตรวจสอบยอดผิดปกติ","Payment exception"), customer_reinstate:t("ต่ออายุการจอง","Booking renewed"),
+            customer_cancel:t("ผู้จองยกเลิกใบจอง","Customer cancelled booking"),
             admin_extend:t("ขยายเวลาชำระ","Payment deadline extended"), admin_cancel:t("ยกเลิกการจอง","Booking cancelled"),
-            admin_reinstate:t("เปิดการจองอีกครั้ง","Booking reinstated"), admin_refund:t("คืนเงิน","Refund recorded"),
+            admin_reinstate:t("เปิดการจองอีกครั้ง","Booking reinstated"), admin_refund:t("คืนเงิน","Refund recorded"), admin_credit:t("ยกเลิกและออกเครดิต","Booking cancelled and credited"),
             expire:t("การจองหมดเวลา","Booking expired"),
           } as Record<string, string>)[entry.action] || entry.action;
           const status = ({

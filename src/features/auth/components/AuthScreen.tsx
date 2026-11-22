@@ -1,6 +1,8 @@
 import { RefreshCw, Shield } from "lucide-react";
+import type { AppLanguage } from "../../../lib/i18n";
 
 type AuthScreenProps = {
+  language: AppLanguage;
   errorMessage: string;
   username: string;
   password: string;
@@ -11,6 +13,7 @@ type AuthScreenProps = {
 };
 
 export function AuthScreen({
+  language,
   errorMessage,
   username,
   password,
@@ -19,54 +22,52 @@ export function AuthScreen({
   onPasswordChange,
   onSubmit,
 }: AuthScreenProps) {
+  const t = (th: string, en: string) => language === "th" ? th : en;
+  const inputClass = "w-full rounded-xl border border-white/15 bg-slate-900 px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500";
   return (
-    <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-4">
-      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 backdrop-blur p-8 shadow-2xl">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center">
-            <Shield className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold">FaceBotStudio Admin</h1>
-            <p className="text-sm text-slate-300">Sign in to access registrations, logs, and event settings.</p>
-          </div>
+    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-white">
+      <section className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl sm:p-8">
+        <div className="mb-5 flex items-center gap-3">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600">
+            <Shield className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <h1 className="text-xl font-bold">{t("เข้าสู่ระบบทีมงาน Meetrix", "Meetrix staff sign-in")}</h1>
         </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Username</label>
-            <input
-              value={username}
-              onChange={(event) => onUsernameChange(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && !submitting && void onSubmit()}
-              className="w-full rounded-2xl bg-slate-900 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="owner"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => onPasswordChange(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && !submitting && void onSubmit()}
-              className="w-full rounded-2xl bg-slate-900 border border-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="••••••••"
-            />
-          </div>
-          {errorMessage && (
-            <p className="text-sm text-rose-300">{errorMessage}</p>
-          )}
-          <button
-            onClick={() => void onSubmit()}
-            disabled={!username.trim() || !password || submitting}
-            className="w-full flex items-center justify-center gap-2 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-4 py-3 font-semibold transition-colors"
-          >
-            {submitting && <RefreshCw className="w-4 h-4 animate-spin" />}
-            Sign In
+        <p className="mb-4 text-sm text-slate-300">
+          {t("ถ้าเปิดใช้คำเชิญด้วยอีเมลเดียวกับบัญชีผู้เข้าร่วม ให้ใช้อีเมลและรหัสผ่านเดิมได้เลย",
+            "If you activated an invitation with your attendee account, use the same email and password here.")}
+        </p>
+        <form className="space-y-4" onSubmit={(event) => {
+          event.preventDefault();
+          if (!submitting && username.trim() && password) void onSubmit();
+        }}>
+          <label className="block space-y-1.5 text-sm font-semibold">
+            <span>{t("อีเมลหรือชื่อผู้ใช้ทีมงาน", "Staff email or username")}</span>
+            <input value={username} onChange={(event) => onUsernameChange(event.target.value)}
+              className={inputClass} autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={254} required />
+          </label>
+          <label className="block space-y-1.5 text-sm font-semibold">
+            <span>{t("รหัสผ่าน", "Password")}</span>
+            <input type="password" value={password} onChange={(event) => onPasswordChange(event.target.value)}
+              className={inputClass} autoComplete="current-password" maxLength={512} required />
+          </label>
+          {errorMessage && <p role="alert" className="text-sm text-rose-300">
+            {errorMessage === "Invalid staff credentials" || errorMessage === "Invalid username or password"
+              ? t("อีเมล ชื่อผู้ใช้ หรือรหัสผ่านไม่ถูกต้อง หากเพิ่งได้รับเชิญ ให้เปิดใช้สิทธิ์จากอีเมลก่อน",
+                "The email, username, or password was not accepted. Activate your invitation before signing in.")
+              : errorMessage}
+          </p>}
+          <button type="submit" disabled={!username.trim() || !password || submitting}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 font-semibold hover:bg-blue-700 disabled:opacity-50">
+            {submitting && <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />}
+            {t("เข้าสู่ระบบทีมงาน", "Sign in as staff")}
           </button>
+        </form>
+        <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2 border-t border-white/15 pt-4 text-sm text-blue-200">
+          <a href="/account/login" className="underline underline-offset-2">{t("เข้าบัญชีผู้เข้าร่วม", "Attendee sign-in")}</a>
+          <a href="/account/forgot-password" className="underline underline-offset-2">{t("ลืมรหัสผ่านบัญชีที่เชื่อมแล้ว", "Reset a linked account password")}</a>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }

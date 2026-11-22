@@ -1,5 +1,5 @@
 import { listCoupons, upsertCoupon, deleteCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
-import { paidRoomingPlan, type PaidRoomingUpdate, readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
+import { paidRoomingPlan, type PaidRoomingUpdate, readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, readPaidCreditBalance, cancelOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
@@ -966,6 +966,14 @@ export class PostgresAppDatabase implements AppDatabase {
     return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId, edit));
   }
 
+  async readPaidCreditBalance(eventId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readPaidCreditBalance(eventId, customerId));
+  }
+
+  async cancelOwnedPaidBooking(eventId: string, id: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => cancelOwnedPaidBooking(eventId, id, customerId));
+  }
+
   async reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string) {
     return this.runPaidCommand(eventId, () => reinstateOwnedPaidBooking(eventId, id, customerId));
   }
@@ -1742,10 +1750,10 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0 ? this.getCustomerAccountById(normalizedId) : undefined;
   }
 
-  async updateCustomerPasswordHash(id: string, passwordHash: string) {
+  async updateCustomerPasswordHash(id: string, passwordHash: string, expectedHash?: string) {
     const result = await this.pool.query(
-      "UPDATE customer_accounts SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status != 'disabled'",
-      [String(passwordHash || "").trim(), String(id || "").trim()],
+      `UPDATE customer_accounts SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status != 'disabled'${expectedHash !== undefined ? " AND password_hash = $3" : ""}`,
+      [String(passwordHash || "").trim(), String(id || "").trim(), ...(expectedHash === undefined ? [] : [expectedHash])],
     );
     return result.rowCount > 0;
   }
@@ -3815,6 +3823,14 @@ export class PostgresAppDatabase implements AppDatabase {
     return this.queryAuthUser("u.username = $1", [normalizeUsername(username)]);
   }
 
+  async getUserByStaffEmail(email: string) {
+    return this.queryAuthUser("u.staff_email = $1", [email.trim().toLowerCase()]);
+  }
+
+  async getUserByStaffCustomerAccount(customerId: string) {
+    return this.queryAuthUser("u.staff_customer_account_id = $1", [customerId]);
+  }
+
   async getUserById(userId: string) {
     return this.queryAuthUser("u.id = $1", [String(userId || "").trim()]);
   }
@@ -3914,6 +3930,7 @@ export class PostgresAppDatabase implements AppDatabase {
         u.username,
         u.display_name,
         u.staff_email,
+        u.staff_customer_account_id,
         u.pending_staff_email,
         u.staff_email_purpose,
         u.is_active,
@@ -3942,16 +3959,29 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
-  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null) {
+  async getPendingStaffInviteEmail(tokenHash: string, now: string) {
+    const result = await this.pool.query<{ pending_staff_email: string }>(
+      "SELECT pending_staff_email FROM users WHERE staff_email_token_hash = $1 AND staff_email_expires_at > $2 AND is_active AND staff_email_purpose = 'invite'",
+      [tokenHash, now],
+    );
+    return result.rows[0]?.pending_staff_email;
+  }
+
+  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }) {
     const result = await this.pool.query<{ id: string }>(
       `UPDATE users SET staff_email = pending_staff_email, pending_staff_email = NULL,
          staff_email_purpose = NULL, staff_email_token_hash = NULL, staff_email_expires_at = NULL,
-         password_hash = COALESCE($4, password_hash)
+         password_hash = COALESCE($4, password_hash), staff_customer_account_id = COALESCE($5, staff_customer_account_id)
        WHERE staff_email_token_hash = $1 AND staff_email_expires_at > $2 AND is_active
-         AND (($4::text IS NOT NULL AND staff_email_purpose = 'invite')
-           OR ($4::text IS NULL AND staff_email_purpose = 'verify' AND id = $3))
+         AND (($5::text IS NOT NULL AND staff_email_purpose = 'invite' AND EXISTS (
+              SELECT 1 FROM customer_accounts c WHERE c.id = $5 AND c.normalized_email = users.pending_staff_email
+                AND c.status = 'active' AND c.email_verified_at IS NOT NULL AND c.password_hash = $6))
+           OR ($5::text IS NULL AND $4::text IS NOT NULL AND staff_email_purpose = 'invite' AND NOT EXISTS (
+              SELECT 1 FROM customer_accounts c WHERE c.normalized_email = users.pending_staff_email
+                AND c.status = 'active' AND c.email_verified_at IS NOT NULL))
+           OR ($5::text IS NULL AND $4::text IS NULL AND staff_email_purpose = 'verify' AND id = $3))
        RETURNING id`,
-      [tokenHash, now, userId, passwordHash],
+      [tokenHash, now, userId, passwordHash, customer?.id ?? null, customer?.passwordHash ?? null],
     );
     return result.rows[0]?.id ?? null;
   }
@@ -4018,7 +4048,19 @@ export class PostgresAppDatabase implements AppDatabase {
     return result.rowCount > 0;
   }
 
-  async createSession(userId: string, tokenHash: string, expiresAt: Date) {
+  async createSession(userId: string, tokenHash: string, expiresAt: Date, customerProof?: { id: string; passwordHash: string }) {
+    if (customerProof) {
+      const result = await this.pool.query(
+        `INSERT INTO sessions (id, user_id, token_hash, expires_at)
+         SELECT $1, u.id, $2, $3 FROM users u JOIN customer_accounts c ON c.id = u.staff_customer_account_id
+         WHERE u.id = $4 AND u.is_active AND u.staff_email_purpose IS NULL
+           AND c.id = $5 AND c.password_hash = $6 AND c.status = 'active' AND c.email_verified_at IS NOT NULL
+         FOR SHARE OF u, c`,
+        [generateEntityId("ses"), tokenHash, expiresAt.toISOString(), userId, customerProof.id, customerProof.passwordHash],
+      );
+      if (!result.rowCount) throw new Error("staff_login_state_changed");
+      return;
+    }
     await this.pool.query(
       `INSERT INTO sessions (id, user_id, token_hash, expires_at)
        VALUES ($1, $2, $3, $4)`,
@@ -4037,6 +4079,7 @@ export class PostgresAppDatabase implements AppDatabase {
         u.username,
         u.display_name,
         u.staff_email,
+        u.staff_customer_account_id,
         u.pending_staff_email,
         u.staff_email_purpose,
         u.is_active,
@@ -4050,6 +4093,9 @@ export class PostgresAppDatabase implements AppDatabase {
        JOIN memberships m ON m.user_id = u.id
        JOIN organizations o ON o.id = m.organization_id
        WHERE s.token_hash = $1 AND s.expires_at > CURRENT_TIMESTAMP
+         AND (u.staff_customer_account_id IS NULL OR EXISTS (
+           SELECT 1 FROM customer_accounts c WHERE c.id = u.staff_customer_account_id AND c.status = 'active' AND c.email_verified_at IS NOT NULL
+         ))
        LIMIT 1`,
       [tokenHash],
     );
@@ -4678,6 +4724,7 @@ export class PostgresAppDatabase implements AppDatabase {
         u.username,
         u.display_name,
         u.staff_email,
+        u.staff_customer_account_id,
         u.pending_staff_email,
         u.staff_email_purpose,
         u.is_active,
@@ -4702,6 +4749,7 @@ export class PostgresAppDatabase implements AppDatabase {
       id: String(row.id),
       username: String(row.username),
       staff_email: row.staff_email == null ? null : String(row.staff_email),
+      staff_customer_account_id: row.staff_customer_account_id == null ? null : String(row.staff_customer_account_id),
       pending_staff_email: row.pending_staff_email == null ? null : String(row.pending_staff_email),
       staff_email_purpose: row.staff_email_purpose == null ? null : String(row.staff_email_purpose),
       display_name: String(row.display_name),

@@ -2671,3 +2671,8 @@ html.theme-dark .registration-admin-control.paid-slip-staff-submit:not(:disabled
   background: #1e40af;
   color: #fff;
 }
+
+.paid-attendee-roster .registration-cancel-link { color: #be123c; }
+html.theme-dark .paid-attendee-roster .registration-cancel-link { color: #fda4af !important; }
+.paid-attendee-roster .registration-cancel-confirm { background: #be123c; color: #fff; }
+html.theme-dark .paid-attendee-roster .registration-cancel-confirm { color: #fff !important; }

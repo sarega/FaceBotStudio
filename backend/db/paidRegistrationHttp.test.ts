@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import Database from "better-sqlite3";
-import { hashSessionToken } from "../auth";
+import { hashPassword, hashSessionToken } from "../auth";
 import { SqliteAppDatabase } from "./sqliteAdapter";
 
 test("paid booking HTTP covers group capacity, proof review and admission", { timeout: 25_000 }, async () => {
@@ -1145,6 +1145,10 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const paymentActions = () => fetch(origin + "/api/customer/paid-bookings?awaiting_payment=1&reference=" + assisted.reference,
       { headers: headers("test-owner") }).then((response) => response.json());
     assert.equal((await paymentActions()).bookings[0].id, assisted.id);
+    const cancelOwned = (id: string, token = "test-owner") => fetch(
+      `${origin}/api/customer/paid-bookings/${paidEvent.id}/${id}/cancel`,
+      { method: "POST", headers: { ...headers(token), "x-csrf-token": "fixture-csrf" } },
+    );
     const assistedPath = externalPrefix + "/bookings/" + assisted.id;
     const staffProofPath = assistedPath + "/proofs";
     const assistedImage = await sharp({ create: { width: 107, height: 151, channels: 3, background: "#daedf0" } }).png().toBuffer();
@@ -1160,6 +1164,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(assistedUpload.status, 202, await assistedUpload.clone().text());
     const assistedReceipt = await assistedUpload.json();
     assert.equal(assistedReceipt.status, "verification_pending");
+    assert.equal((await cancelOwned(assisted.id)).status, 409);
     assert.deepEqual((await paymentActions()).bookings, []);
     const assistedQueue = await fetch(externalPrefix + "/review-queue?reference=" + assisted.reference, { headers: staffHeaders });
     const [assistedReview] = (await assistedQueue.json()).reviews;
@@ -1188,6 +1193,90 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       assert.match(String(evidence.prepare("SELECT reason FROM paid_audit_events WHERE booking_id=? AND action='review_verified'").pluck().get(assisted.id)), /^Verified pre-booking transfer:/);
     } finally { evidence.close(); }
 
+    assert.equal((await cancelOwned(assisted.id)).status, 409);
+    const placeUnpaid = async (key: string) => {
+      const result = await fetch(externalPublic + "/paid-bookings", {
+        method: "POST", headers: { ...headers("test-owner"), "Content-Type": "application/json",
+          "Idempotency-Key": key, "x-csrf-token": "fixture-csrf" },
+        body: JSON.stringify({ pricing_version: 2, contact: { name: "Cancellation test" },
+          attendees: [{ category_id: "general", first_name: "Cancel", last_name: "Guest" }] }),
+      });
+      assert.equal(result.status, 201, await result.clone().text());
+      return result.json();
+    };
+    const heldAttendees = async () => (await (await fetch(externalPrefix + "/summary", { headers: staffHeaders })).json()).summary.held_attendees;
+    const customerCancellation = await placeUnpaid("cancel-owned");
+    assert.equal((await cancelOwned(customerCancellation.id, "test-other")).status, 404);
+    const heldBefore = await heldAttendees();
+    for (let retry = 0; retry < 2; retry++) {
+      const cancelled = await cancelOwned(customerCancellation.id);
+      assert.equal(cancelled.status, 200);
+      assert.deepEqual(await cancelled.json(), { status: "cancelled" });
+    }
+    assert.equal(await heldAttendees(), heldBefore - 1);
+    const customerActivity = (await (await fetch(externalPrefix + "/summary?activity=1", { headers: staffHeaders })).json()).summary.activity;
+    assert.equal(customerActivity.filter((entry: { action: string; reference: string }) =>
+      entry.action === "customer_cancel" && entry.reference === customerCancellation.reference).length, 1);
+    const adminCancellation = await placeUnpaid("cancel-by-staff");
+    const rosterAfterCancel = await (await fetch(externalPrefix + "/attendees", { headers: staffHeaders })).json();
+    const adminRow = rosterAfterCancel.attendees.find((row: { booking_id: string }) => row.booking_id === adminCancellation.id);
+    assert.equal(adminRow.booking_version, 1);
+    const adminCancelled = await fetch(externalPrefix + "/bookings/" + adminCancellation.id + "/manage", {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "cancel-from-roster" },
+      body: JSON.stringify({ action: "cancel", version: adminRow.booking_version, reason: "Requested by the booker" }),
+    });
+    assert.equal(adminCancelled.status, 200, await adminCancelled.clone().text());
+    assert.equal((await adminCancelled.json()).status, "cancelled");
+
+    const balance = async (token: string, eventId = paidEvent.id) => {
+      const response = await fetch(`${origin}/api/customer/paid-bookings/${eventId}/credit`, { headers: headers(token) });
+      assert.equal(response.status, 200);
+      return (await response.json()).available_minor;
+    };
+    const settle = (id: string, version: number, action: "credit" | "refund", key: string) => fetch(
+      `${externalPrefix}/bookings/${id}/manage`,
+      { method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": key },
+        body: JSON.stringify({ action, version, reason: "Booking moved at the customer’s request",
+          ...(action === "refund" ? { refund_reference: "external-refund-test" } : {}) }) },
+    );
+    assert.equal(await balance("test-owner"), 0);
+    const credited = await settle(assisted.id, assistedReceipt.version + 1, "credit", "issue-booking-credit");
+    assert.equal(credited.status, 200, await credited.clone().text());
+    const creditReceipt = await credited.json();
+    assert.equal(creditReceipt.status, "cancelled");
+    assert.deepEqual(await (await settle(assisted.id, assistedReceipt.version + 1, "credit", "issue-booking-credit")).json(), creditReceipt);
+    assert.equal((await settle(assisted.id, creditReceipt.version, "refund", "no-refund-after-credit")).status, 409);
+    assert.equal(await balance("test-owner"), 250000);
+    assert.equal(await balance("test-other"), 0);
+    assert.equal(await balance("test-owner", event.id), 0);
+
+    const bookWithCredit = (credit_minor: number, key: string, token = "test-owner") => fetch(externalPublic + "/paid-bookings", {
+      method: "POST", headers: { ...headers(token), "Content-Type": "application/json", "Idempotency-Key": key, "x-csrf-token": "fixture-csrf" },
+      body: JSON.stringify({ pricing_version: 2, credit_minor, contact: { name: "Credit test" },
+        attendees: [{ category_id: "general", first_name: "Credit", last_name: "Guest" }] }),
+    });
+    assert.equal((await bookWithCredit(250000, "cannot-spend-other-accounts-credit", "test-other")).status, 409);
+    const part = await bookWithCredit(100000, "partial-credit");
+    assert.equal(part.status, 201, await part.clone().text());
+    const partialBooking = await part.json();
+    assert.equal(partialBooking.total_due_minor, 150000);
+    assert.equal(await balance("test-owner"), 150000);
+    const refusedOverspend = await bookWithCredit(250000, "cannot-spend-held-credit");
+    assert.equal(refusedOverspend.status, 409);
+    assert.equal((await refusedOverspend.json()).error, "credit_changed");
+    assert.equal((await cancelOwned(partialBooking.id)).status, 200);
+    assert.equal(await balance("test-owner"), 250000);
+
+    // Simultaneous bookings cannot both spend the same balance.
+    const concurrent = await Promise.all([bookWithCredit(250000, "full-credit-one"), bookWithCredit(250000, "full-credit-two")]);
+    assert.deepEqual(concurrent.map(response => response.status).sort(), [201, 409]);
+    const supported = await concurrent.find(response => response.status === 201)!.json();
+    assert.equal(supported.status, "confirmed");
+    assert.equal(supported.total_due_minor, 0);
+    assert.equal(await balance("test-owner"), 0);
+    assert.equal((await settle(supported.id, supported.version, "credit", "restore-used-credit")).status, 200);
+    assert.equal(await balance("test-owner"), 250000);
+
     const pendingEmail = "unverified-cleanup@example.com";
     const pendingAccount = await db.createCustomerAccount({
       email: pendingEmail, normalized_email: pendingEmail, password_hash: "fixture", first_name: "Test", last_name: "Pending",
@@ -1202,6 +1291,54 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     assert.equal((await fetch(`${prefix}/paid-registration`)).status, 404);
     assert.equal((await fetch(`${eventPrefix}/summary`, { headers: headers("test-owner") })).status, 401);
+
+    // A verified attendee uses the existing password to activate staff access and can open either workspace.
+    const attendeeEmail = "test-owner@example.com";
+    const attendeePassword = "Attendee1";
+    const dualAccount = (await db.getCustomerAccountByNormalizedEmail(attendeeEmail))!;
+    await db.updateCustomerPasswordHash(dualAccount.id, hashPassword(attendeePassword));
+    const dualStaff = await db.createUser({
+      username: "promoted-attendee", display_name: "Promoted attendee", role: "admin",
+      password_hash: hashPassword("OldStaffCredential"), invite_email: attendeeEmail,
+    });
+    const invite = "fixture-staff-activation";
+    assert.equal(await db.stageStaffEmail(dualStaff.id, attendeeEmail, "invite", hashSessionToken(invite),
+      new Date(Date.now() + 600_000).toISOString(), new Date().toISOString()), true);
+    const jsonPost = (path: string, payload: object) => fetch(origin + path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const customerLogin = (password: string) => jsonPost("/api/customer/account/login", { email: attendeeEmail, password });
+    const staffLogin = (username: string, password: string) => jsonPost("/api/auth/login", { username, password });
+    const activate = (password: string) => jsonPost("/api/auth/staff-email/confirm", { purpose: "invite", token: invite, password });
+    assert.equal((await (await customerLogin(attendeePassword)).json()).account.has_staff_access, false);
+    assert.equal((await staffLogin(attendeeEmail, attendeePassword)).status, 401);
+    assert.equal((await activate("WrongSeparatePassword")).status, 403);
+    assert.equal((await activate(attendeePassword)).status, 200);
+    assert.equal((await activate(attendeePassword)).status, 400);
+    assert.equal((await staffLogin("promoted-attendee", "OldStaffCredential")).status, 401);
+    const byEmail = await staffLogin(" TEST-OWNER@EXAMPLE.COM ", attendeePassword);
+    assert.equal(byEmail.status, 200, await byEmail.clone().text());
+    assert.equal((await byEmail.json()).user.id, dualStaff.id);
+    assert.equal((await staffLogin("promoted-attendee", attendeePassword)).status, 200);
+    const unified = await customerLogin(attendeePassword);
+    assert.equal(unified.status, 200, await unified.clone().text());
+    assert.equal((await unified.json()).account.has_staff_access, true);
+    const cookies = unified.headers.getSetCookie().map(cookie => cookie.split(";")[0]).join("; ");
+    const staffMe = await fetch(origin + "/api/auth/me", { headers: { Cookie: cookies } });
+    assert.equal(staffMe.status, 200);
+    assert.equal((await staffMe.json()).user.role, "admin");
+    const attendeeMe = await fetch(origin + "/api/customer/account/me", { headers: { Cookie: cookies } });
+    assert.equal((await attendeeMe.json()).account.id, dualAccount.id);
+
+    const reset = "fixture-unified-password-reset";
+    await db.createCustomerAccountToken({ customer_account_id: dualAccount.id, kind: "password_reset",
+      token_hash: hashSessionToken(reset), expires_at: new Date(Date.now() + 60_000) });
+    assert.equal((await jsonPost("/api/customer/account/reset-password", { token: reset, password: "NewAttendee1" })).status, 200);
+    assert.equal((await fetch(origin + "/api/auth/me", { headers: { Cookie: cookies } })).status, 401);
+    assert.equal((await staffLogin(attendeeEmail, attendeePassword)).status, 401);
+    assert.equal((await staffLogin(attendeeEmail, "NewAttendee1")).status, 200);
+
+
   } finally {
     if (child && child.exitCode === null) child.kill();
     await exited;

@@ -1,5 +1,5 @@
 import { listCoupons, upsertCoupon, deleteCoupon, applyCoupon, type CouponInput } from "./paidCoupons";
-import { paidRoomingPlan, type PaidRoomingUpdate, readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
+import { paidRoomingPlan, type PaidRoomingUpdate, readPaidAdminBooking, managePaidBooking, type PaidAdminAction, readPaidEventSummary, readPaidRegistrationReport, listPaidAttendeeRoster, createPaidMessengerDraft, confirmPaidMessengerDraft, type PaidMessengerDraftInput, type PaidMessengerConfirmInput, readPaidMessengerStatus, createPaidMessengerLinkToken, exchangePaidMessengerLinkToken, unlinkPaidMessenger, readPaidMessengerCustomer, listPaidReviewQueue, listDailyPaidTransfers, readPaidCredential, checkInPaidCredential, readPaidPaymentInstructions, reviewPaidProof, type PaidReviewInput, type PaidReviewSortOrder, readPaidProof, submitPaidProof, type PaidProofInput, OWNED_BOOKING_LIST_SQL, serializePaidBookingList, createPaidBooking, expirePaidBookings, readPaidCatalog, readOwnedPaidBooking, readPaidCreditBalance, cancelOwnedPaidBooking, reinstateOwnedPaidBooking, readPaidSettings, savePaidSettings, PaidBookingError, type PaidSettingsInput, type PaidBookingInput, type PaidCommand, type PaidRow } from "./paidRegistration";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
@@ -1266,6 +1266,11 @@ export class SqliteAppDatabase implements AppDatabase {
     this.ensureColumn("users", "staff_email_token_hash", "TEXT");
     this.ensureColumn("users", "staff_email_expires_at", "TEXT");
     this.ensureColumn("users", "staff_email_purpose", "TEXT");
+    this.db.transaction(() => {
+      if (!(this.db.pragma("table_info(users)") as { name: string }[]).some(column => column.name === "staff_customer_account_id")) {
+        this.db.exec(readFileSync(new URL("./migrations/062_staff_customer_identity.sql", import.meta.url), "utf8"));
+      }
+    }).immediate();
     this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_staff_email_unique ON users (staff_email);
       CREATE UNIQUE INDEX IF NOT EXISTS users_staff_email_token_unique ON users (staff_email_token_hash);`);
     this.ensureColumn("registrations", "event_id", "TEXT");
@@ -1499,6 +1504,7 @@ export class SqliteAppDatabase implements AppDatabase {
       this.ensureColumn("admin_notification_items", "unread_ms", "INTEGER");
       this.ensureColumn("admin_notification_items", "deleted_ms", "INTEGER");
       this.db.exec(readFileSync(new URL("./migrations/059_paid_rooming_plans.sql", import.meta.url), "utf8"));
+      this.db.exec(readFileSync(new URL("./migrations/061_paid_booking_credits.sql", import.meta.url), "utf8"));
       for (const table of ["registrations", "event_performances"]) {
         this.db.exec(`
           CREATE TRIGGER IF NOT EXISTS trg_paid_${table}_legacy_guard BEFORE INSERT ON ${table}
@@ -1841,6 +1847,14 @@ export class SqliteAppDatabase implements AppDatabase {
 
   async readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: import("./paidRegistration").PaidPreferenceEdit) {
     return this.runPaidCommand(eventId, () => readOwnedPaidBooking(eventId, id, customerId, edit));
+  }
+
+  async readPaidCreditBalance(eventId: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => readPaidCreditBalance(eventId, customerId));
+  }
+
+  async cancelOwnedPaidBooking(eventId: string, id: string, customerId: string) {
+    return this.runPaidCommand(eventId, () => cancelOwnedPaidBooking(eventId, id, customerId));
   }
 
   async reinstateOwnedPaidBooking(eventId: string, id: string, customerId: string) {
@@ -2554,10 +2568,10 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0 ? this.getCustomerAccountById(normalizedId) : undefined;
   }
 
-  async updateCustomerPasswordHash(id: string, passwordHash: string) {
+  async updateCustomerPasswordHash(id: string, passwordHash: string, expectedHash?: string) {
     const result = this.db.prepare(
-      "UPDATE customer_accounts SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'disabled'",
-    ).run(String(passwordHash || "").trim(), String(id || "").trim());
+      `UPDATE customer_accounts SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'disabled'${expectedHash !== undefined ? " AND password_hash = ?" : ""}`,
+    ).run(String(passwordHash || "").trim(), String(id || "").trim(), ...(expectedHash === undefined ? [] : [expectedHash]));
     return result.changes > 0;
   }
 
@@ -4423,6 +4437,14 @@ export class SqliteAppDatabase implements AppDatabase {
     return this.queryAuthUser("u.username = ?", [normalizeUsername(username)]);
   }
 
+  async getUserByStaffEmail(email: string) {
+    return this.queryAuthUser("u.staff_email = ?", [email.trim().toLowerCase()]);
+  }
+
+  async getUserByStaffCustomerAccount(customerId: string) {
+    return this.queryAuthUser("u.staff_customer_account_id = ?", [customerId]);
+  }
+
   async getUserById(userId: string) {
     return this.queryAuthUser("u.id = ?", [String(userId || "").trim()]);
   }
@@ -4508,6 +4530,7 @@ export class SqliteAppDatabase implements AppDatabase {
         u.username,
         u.display_name,
         u.staff_email,
+        u.staff_customer_account_id,
         u.pending_staff_email,
         u.staff_email_purpose,
         u.is_active,
@@ -4535,16 +4558,29 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
-  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null) {
+  async getPendingStaffInviteEmail(tokenHash: string, now: string) {
+    return this.db.prepare(
+      "SELECT pending_staff_email FROM users WHERE staff_email_token_hash = ? AND staff_email_expires_at > ? AND is_active = 1 AND staff_email_purpose = 'invite'",
+    ).pluck().get(tokenHash, now) as string | undefined;
+  }
+
+  async consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }) {
     const row = this.db.prepare(
       `UPDATE users SET staff_email = pending_staff_email, pending_staff_email = NULL,
          staff_email_purpose = NULL, staff_email_token_hash = NULL, staff_email_expires_at = NULL,
-         password_hash = COALESCE(@passwordHash, password_hash)
+         password_hash = COALESCE(@passwordHash, password_hash),
+         staff_customer_account_id = COALESCE(@customerId, staff_customer_account_id)
        WHERE staff_email_token_hash = @tokenHash AND staff_email_expires_at > @now AND is_active = 1
-         AND ((@passwordHash IS NOT NULL AND staff_email_purpose = 'invite')
-           OR (@passwordHash IS NULL AND staff_email_purpose = 'verify' AND id = @userId))
+         AND ((@customerId IS NOT NULL AND staff_email_purpose = 'invite' AND EXISTS (
+              SELECT 1 FROM customer_accounts c WHERE c.id = @customerId AND c.normalized_email = users.pending_staff_email
+                AND c.status = 'active' AND c.email_verified_at IS NOT NULL AND c.password_hash = @customerPasswordHash))
+           OR (@customerId IS NULL AND @passwordHash IS NOT NULL AND staff_email_purpose = 'invite' AND NOT EXISTS (
+              SELECT 1 FROM customer_accounts c WHERE c.normalized_email = users.pending_staff_email
+                AND c.status = 'active' AND c.email_verified_at IS NOT NULL))
+           OR (@customerId IS NULL AND @passwordHash IS NULL AND staff_email_purpose = 'verify' AND id = @userId))
        RETURNING id`,
-    ).get({ tokenHash, now, userId, passwordHash }) as { id: string } | undefined;
+    ).get({ tokenHash, now, userId, passwordHash, customerId: customer?.id ?? null,
+      customerPasswordHash: customer?.passwordHash ?? null }) as { id: string } | undefined;
     return row?.id ?? null;
   }
 
@@ -4598,7 +4634,17 @@ export class SqliteAppDatabase implements AppDatabase {
     return result.changes > 0;
   }
 
-  async createSession(userId: string, tokenHash: string, expiresAt: Date) {
+  async createSession(userId: string, tokenHash: string, expiresAt: Date, customerProof?: { id: string; passwordHash: string }) {
+    if (customerProof) {
+      const result = this.db.prepare(
+        `INSERT INTO sessions (id, user_id, token_hash, expires_at)
+         SELECT ?, u.id, ?, ? FROM users u JOIN customer_accounts c ON c.id = u.staff_customer_account_id
+         WHERE u.id = ? AND u.is_active = 1 AND u.staff_email_purpose IS NULL
+           AND c.id = ? AND c.password_hash = ? AND c.status = 'active' AND c.email_verified_at IS NOT NULL`,
+      ).run(generateEntityId("ses"), tokenHash, expiresAt.toISOString(), userId, customerProof.id, customerProof.passwordHash);
+      if (!result.changes) throw new Error("staff_login_state_changed");
+      return;
+    }
     this.db.prepare(
       `INSERT INTO sessions (id, user_id, token_hash, expires_at)
        VALUES (?, ?, ?, ?)`,
@@ -4616,6 +4662,7 @@ export class SqliteAppDatabase implements AppDatabase {
         u.username,
         u.display_name,
         u.staff_email,
+        u.staff_customer_account_id,
         u.pending_staff_email,
         u.staff_email_purpose,
         u.is_active,
@@ -4629,6 +4676,9 @@ export class SqliteAppDatabase implements AppDatabase {
        JOIN memberships m ON m.user_id = u.id
        JOIN organizations o ON o.id = m.organization_id
        WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP
+         AND (u.staff_customer_account_id IS NULL OR EXISTS (
+           SELECT 1 FROM customer_accounts c WHERE c.id = u.staff_customer_account_id AND c.status = 'active' AND c.email_verified_at IS NOT NULL
+         ))
        LIMIT 1`,
     ).get(tokenHash) as Record<string, unknown> | undefined;
 
@@ -5293,6 +5343,7 @@ export class SqliteAppDatabase implements AppDatabase {
         u.username,
         u.display_name,
         u.staff_email,
+        u.staff_customer_account_id,
         u.pending_staff_email,
         u.staff_email_purpose,
         u.is_active,
@@ -5317,6 +5368,7 @@ export class SqliteAppDatabase implements AppDatabase {
       id: String(row.id),
       username: String(row.username),
       staff_email: row.staff_email == null ? null : String(row.staff_email),
+      staff_customer_account_id: row.staff_customer_account_id == null ? null : String(row.staff_customer_account_id),
       pending_staff_email: row.pending_staff_email == null ? null : String(row.pending_staff_email),
       staff_email_purpose: row.staff_email_purpose == null ? null : String(row.staff_email_purpose),
       display_name: String(row.display_name),

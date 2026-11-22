@@ -38,6 +38,7 @@ export type OrganizerVerificationStatus = "draft" | "pending_review" | "verified
 
 export interface AuthUser {
   staff_email?: string | null;
+  has_customer_account?: boolean;
   pending_invite_email?: string | null;
   id: string;
   username: string;

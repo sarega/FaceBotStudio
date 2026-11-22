@@ -11,6 +11,7 @@ export type CustomerAccount = {
   last_name: string;
   phone: string;
   email_verified_at: string | null;
+  has_staff_access?: boolean;
   address_line1: string | null;
   address_line2: string | null;
   district: string | null;
@@ -247,6 +248,10 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         const reference = new URLSearchParams(window.location.search).get("paid_booking") || "";
         if (data.account.email_verified_at && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(reference)) {
           window.location.assign(`/app/orders?paid_booking=${encodeURIComponent(reference)}`);
+          return;
+        }
+        if (data.account.has_staff_access) {
+          window.location.assign("/");
           return;
         }
         setAccount(data.account);
@@ -529,6 +534,9 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         <nav aria-label={t("เมนูบัญชี", "Account navigation")} className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold">
           <a href="/events" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><CalendarDays className="h-4 w-4" /> {t("งานทั้งหมด", "All events")}</a>
           <a href={returnTo} className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" /> {t("กลับบัญชีของฉัน", "Back to my account")}</a>
+          <a href="/staff/login" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline">
+            <ShieldCheck className="h-4 w-4" /> {t("เข้าสู่ระบบทีมงาน", "Staff sign-in")}
+          </a>
           <a href="/app/orders" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ShoppingBag className="h-4 w-4" /> {t("การจองของฉัน", "My bookings")}</a>
         </nav>
         <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl shadow-slate-900/10 sm:p-9">

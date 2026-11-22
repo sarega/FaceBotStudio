@@ -14,6 +14,10 @@ type Booking = {
   reference: string;
   attendee_count?: number;
   status: string;
+  payment_status: string;
+  credit_used_minor?: number;
+  credit_issued_minor?: number;
+  refunded_minor?: number;
   total_due_minor: number;
   due_at: string;
 };
@@ -163,6 +167,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState<CustomerCopy>();
   const [reactivating, setReactivating] = useState<string>();
+  const [cancelling, setCancelling] = useState<string>();
   const paymentAnchorRef = useRef<HTMLDivElement>(null);
   const slipAnchorRef = useRef<HTMLDivElement>(null);
   const revealSlip = useRef(reference !== "" && new URLSearchParams(window.location.search).get("upload_slip") === "1");
@@ -197,7 +202,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
       if (request.signal.aborted) return;
       setDetail(result);
       setPage((current) => current && { ...current, bookings: current.bookings.map((booking) =>
-        booking.id === selected.id ? { ...booking, status: result.status, due_at: result.due_at, total_due_minor: result.total_due_minor } : booking) });
+        booking.id === selected.id ? { ...booking, status: result.status, payment_status: result.payment_state, due_at: result.due_at, total_due_minor: result.total_due_minor } : booking) });
     }).catch(() => { if (!request.signal.aborted) setError(["โหลดรายละเอียดการจองไม่สำเร็จ", "Could not load booking details."]); });
     return () => request.abort();
   }, [selected]);
@@ -222,7 +227,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
         "/api/customer/paid-bookings/" + encodeURIComponent(booking.event_id) + "/" +
         encodeURIComponent(booking.id) + "/reinstate", { method: "POST" },
       );
-      const updated = { ...booking, status: result.status, due_at: result.due_at };
+      const updated = { ...booking, status: result.status, payment_status: "unpaid", due_at: result.due_at };
       setPage((previous) => previous && { ...previous,
         bookings: previous.bookings.map((entry) => entry.id === booking.id ? updated : entry) });
       setSelected(updated);
@@ -232,7 +237,9 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
       onPaymentChanged?.();
     } catch (failure) {
       const code = failure instanceof Error ? failure.message : "";
-      setError(code === "coupon_exhausted" || code === "coupon_unavailable"
+      setError(code === "credit_changed"
+        ? ["เครดิตเดิมถูกใช้แล้ว กรุณาสร้างใบจองใหม่", "The original credit was used. Create a new booking."]
+        : code === "coupon_exhausted" || code === "coupon_unavailable"
         ? ["คูปองของรายการเดิมไม่สามารถใช้ได้แล้ว กรุณาทำรายการใหม่", "Original coupon unavailable. Create a new booking."]
         : code === "capacity_exhausted"
         ? ["ที่นั่งเต็มแล้ว กรุณาติดต่อผู้จัดงาน", "No capacity available for this booking."]
@@ -243,6 +250,29 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
             : ["เปิดรายการอีกครั้งไม่สำเร็จ", "Could not reactivate this booking."]);
     } finally {
       setReactivating(undefined);
+    }
+  }
+
+  async function cancelBooking(booking: Booking) {
+    if (cancelling || !window.confirm(t(
+      `ยกเลิกใบจอง ${booking.reference} และคืนที่นั่งทั้งหมดในใบจองนี้หรือไม่? หากโอนเงินแล้ว ให้ติดต่อผู้จัดงานก่อน`,
+      `Cancel booking ${booking.reference} and release all its places? If you already transferred money, contact the organizer first.`,
+    ))) return;
+    setCancelling(booking.id);
+    setError(undefined);
+    try {
+      const path = `/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}`;
+      await customerApi(`${path}/cancel`, { method: "POST" });
+      setPage(current => current && { ...current, bookings: current.bookings.map(entry =>
+        entry.id === booking.id ? { ...entry, status: "cancelled" } : entry) });
+      setSelected(current => current?.id === booking.id ? undefined : current);
+      onPaymentChanged?.();
+    } catch (failure) {
+      setError(failure instanceof Error && failure.message === "state_conflict"
+        ? ["สถานะใบจองเปลี่ยนแล้ว กรุณาโหลดหน้าใหม่ก่อนทำรายการ", "The booking status has changed. Reload before trying again."]
+        : ["ยกเลิกใบจองไม่สำเร็จ กรุณาลองใหม่", "Could not cancel the booking. Try again."]);
+    } finally {
+      setCancelling(undefined);
     }
   }
 
@@ -264,7 +294,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
           <h3 className="font-semibold">{booking.event_name}</h3>
           <p className="break-all text-xs text-slate-600">{t("เลขใบจอง", "Booking")} {booking.reference}
             {booking.attendee_count != null && ` · ${booking.attendee_count} ${t("คน", booking.attendee_count === 1 ? "attendee" : "attendees")}`}</p>
-          <p className="font-semibold">{baht(booking.total_due_minor, locale)} · {
+          <p className="font-semibold" aria-live="polite">{baht(booking.total_due_minor, locale)} · {
             ({
               awaiting_payment: t("รอชำระเงิน", "Awaiting payment"),
               verification_pending: t("ส่งสลิปแล้ว รอตรวจสอบ", "Under review"),
@@ -273,6 +303,9 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
               cancelled: t("ยกเลิกแล้ว", "Cancelled"),
             } as Record<string, string>)[booking.status] || booking.status
           }</p>
+          {!!booking.refunded_minor && <p className="font-semibold text-emerald-700">{t("ผู้จัดงานบันทึกคืนเงินแล้ว", "Organizer recorded a refund")} · {baht(booking.refunded_minor, locale)}</p>}
+          {!!booking.credit_issued_minor && <p className="font-semibold text-emerald-700">{t("ออกเครดิตสำหรับงานนี้", "Credit issued for this event")} · {baht(booking.credit_issued_minor, locale)}</p>}
+          {!!booking.credit_used_minor && <p className="text-emerald-700">{booking.status === "cancelled" || booking.status === "expired" ? t("เครดิตคืนเข้าบัญชี", "Credit returned") : t("เครดิตที่ใช้", "Credit applied")} · {baht(booking.credit_used_minor, locale)}</p>}
           {booking.status === "awaiting_payment" && <p className="text-slate-600">
             {t("ชำระภายใน", "Due")} {formatCustomerDate(booking.due_at, locale)} {t("(เวลาไทย)", "(Thailand time)")}
           </p>}
@@ -321,6 +354,12 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
               onClick={() => { setError(undefined); setDetail(undefined); revealSlip.current = false; didScrollToInvoice.current = false; setSelected(selected?.id === booking.id ? undefined : booking); }}>
               {selected?.id === booking.id ? t("ซ่อนรายละเอียด", "Hide details") : booking.status === "awaiting_payment" ? t("ดูวิธีชำระเงิน", "View payment instructions") : t("ดูหรือแก้ไขใบจอง", "View or edit booking")}
             </button>
+            {!tickets && booking.status === "awaiting_payment" && ["unpaid", "rejected"].includes(booking.payment_status) && (
+              <button type="button" disabled={!!cancelling} onClick={() => void cancelBooking(booking)}
+                className="min-h-11 rounded-xl border border-rose-300 px-4 py-2 font-semibold text-rose-700 disabled:opacity-50">
+                {cancelling === booking.id ? t("กำลังยกเลิก…", "Cancelling…") : t("ยกเลิกใบจอง", "Cancel booking")}
+              </button>
+            )}
             {!tickets && booking.event_slug && <a href={`/events/${encodeURIComponent(booking.event_slug)}#public-registration`}
               className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 px-4 font-semibold text-blue-700">
               {t("ลงทะเบียนเพิ่ม", "Book more attendees")}
@@ -383,6 +422,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                 <span>{baht(detail.coupon.subtotal_minor, locale)}</span></div>
               <div className="flex justify-between text-emerald-700"><span>{t("ส่วนลด", "Discount")}</span>
                 <span>−{baht(detail.coupon.discount_minor, locale)}</span></div>
+              {!!booking.credit_used_minor && <div className="flex justify-between"><span>{t("หักเครดิต", "Booking credit")}</span><span>−{baht(booking.credit_used_minor, locale)}</span></div>}
               <div className="flex justify-between font-semibold"><span>{t("ยอดที่ต้องชำระ", "Total due")}</span>
                 <span>{baht(booking.total_due_minor, locale)}</span></div>
             </div>}
@@ -410,7 +450,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
               <div ref={slipAnchorRef} className="scroll-mt-24"><Step n={3} title={t("อัปโหลดสลิปหลังโอน", "Upload slip")} emphasis>
                 <PaidProofForm locale={locale} key={booking.id} path={"/api/customer/paid-bookings/" + encodeURIComponent(booking.event_id) + "/" + encodeURIComponent(booking.id)}
                   paymentMode={detail.payment_mode} submitRequest={customerApi} version={detail.version} totalMinor={booking.total_due_minor} onSubmitted={() => {
-                    const updated = { ...booking, status: "verification_pending" };
+                    const updated = { ...booking, status: "verification_pending", payment_status: "proof_submitted" };
                     setDetail(undefined);setSelected(updated);
                     setPage((current) => current && { ...current, bookings: current.bookings.map((row) => row.id === booking.id ? updated : row) });
                     onPaymentChanged?.();

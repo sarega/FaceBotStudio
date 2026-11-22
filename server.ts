@@ -460,6 +460,7 @@ type EventScopeOptions = {
 
 type AuthenticatedRequest = Request & {
   auth?: AuthContext;
+  staffLogin?: { password: string; user?: AuthUserRow };
   customer?: CustomerAuthContext;
   checkinAccess?: CheckinAccessContext;
   eventScope?: EventScopeContext;
@@ -2657,7 +2658,7 @@ function getRequesterRateLimitScope(req: Request) {
 
 function getLoginUsernameFromRequest(req: Request) {
   const body = readObjectBody(req);
-  return normalizeUsername(body.username) || "unknown";
+  return (req as AuthenticatedRequest).staffLogin?.user?.username || normalizeUsername(body.username) || "unknown";
 }
 
 function getLoginIpRateLimitScope(req: Request) {
@@ -3189,6 +3190,7 @@ function toPublicAuthUser(user: AuthUserRow) {
     is_active: user.is_active,
     assigned_event_ids: user.assigned_event_ids || [],
     staff_email: user.staff_email ?? null,
+    has_customer_account: Boolean(user.staff_customer_account_id),
     pending_invite_email: user.staff_email_purpose === "invite" ? user.pending_staff_email : null,
     created_at: user.created_at,
     last_login_at: user.last_login_at,
@@ -3217,6 +3219,34 @@ function toPublicCustomerAccount(account: CustomerAccountRow) {
     created_at: account.created_at,
     updated_at: account.updated_at,
   };
+}
+
+async function openStaffLoginSession(req: AuthenticatedRequest, res: Response, user: AuthUserRow, customerProof?: { id: string; passwordHash: string }) {
+  const existing = parseCookies(req.headers.cookie).get(SESSION_COOKIE_NAME);
+  if (existing) await appDb.deleteSession(hashSessionToken(existing));
+  const token = createSessionToken();
+  await appDb.createSession(user.id, hashSessionToken(token), new Date(Date.now() + getSessionTtlMs()), customerProof);
+  await appDb.updateUserLastLogin(user.id);
+  setSessionCookie(res, token, req);
+  setCsrfCookie(res, createSessionToken(), req);
+  await appDb.recordAuditLog({
+    actor_user_id: user.id, action: "auth.login", target_type: "user", target_id: user.id,
+    metadata: { ip: getRequestIp(req), username: user.username },
+  });
+}
+
+async function openCustomerLoginSession(req: AuthenticatedRequest, res: Response, customerId: string) {
+  const existing = parseCookies(req.headers.cookie).get(CUSTOMER_SESSION_COOKIE_NAME);
+  if (existing) await appDb.deleteCustomerSession(hashSessionToken(existing));
+  const token = createSessionToken();
+  await appDb.createCustomerSession(customerId, hashSessionToken(token), new Date(Date.now() + getCustomerSessionTtlMs()));
+  await appDb.updateCustomerAccountLastLogin(customerId);
+  setCustomerSessionCookie(res, token, req);
+  setCustomerCsrfCookie(res, createSessionToken(), req);
+}
+
+function canSignInAsStaff(user?: AuthUserRow): user is AuthUserRow {
+  return !!user?.is_active && user.staff_email_purpose !== "invite";
 }
 
 async function attachSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -3623,12 +3653,15 @@ async function sendStaffEmail(user: AuthUserRow, email: string, purpose: "invite
   if (!staged) return "Email request unavailable. Wait one minute and try again.";
   const link = new URL("/staff/email", config.appUrl);
   link.hash = new URLSearchParams({ token, purpose }).toString();
-  const subject = purpose === "invite" ? "Activate your FaceBotStudio staff account" : "Verify your FaceBotStudio staff email";
+  const subject = purpose === "invite" ? "เปิดใช้สิทธิ์ทีมงาน Meetrix | Activate Meetrix staff access" : "Verify your Meetrix staff email";
+  const instructions = purpose === "invite"
+    ? "ถ้าอีเมลนี้มีบัญชีผู้เข้าร่วมที่ยืนยันแล้ว ให้ใช้รหัสผ่านของบัญชีนั้นเพื่อเปิดใช้สิทธิ์ทีมงาน / If this email already has a verified attendee account, use that password to activate staff access."
+    : "Sign in to the matching staff account before opening this link.";
   const username = normalizeUsername(user.username).replace(/[^a-z0-9._-]/g, "");
   try {
     await sendProviderEmail({
-      to: email, subject, text: `${subject}\nUsername: ${username}\n\n${link.href}\n\nThis link expires in 24 hours.`,
-      html: `<p>${subject}</p><p>Username: ${username}</p><p><a href="${link.href.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">Continue to FaceBotStudio</a></p><p>This link expires in 24 hours.</p>`,
+      to: email, subject, text: `${subject}\nUsername: ${username}\n\n${instructions}\n\n${link.href}\n\nThis link expires in 24 hours.`,
+      html: `<p>${subject}</p><p>Username: ${username}</p><p>${instructions}</p><p><a href="${link.href.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}">Continue to FaceBotStudio</a></p><p>This link expires in 24 hours.</p>`,
     }, config);
   } catch {
     return "Email delivery failed. Try again in one minute.";
@@ -15164,27 +15197,27 @@ async function startServer() {
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
-      const existingSessionToken = parseCookies(req.headers.cookie).get(CUSTOMER_SESSION_COOKIE_NAME);
-      if (existingSessionToken) {
-        await appDb.deleteCustomerSession(hashSessionToken(existingSessionToken));
-      }
-      const sessionToken = createSessionToken();
-      await appDb.createCustomerSession(
-        account.id,
-        hashSessionToken(sessionToken),
-        new Date(Date.now() + getCustomerSessionTtlMs()),
-      );
+      let currentPasswordHash = passwordHash;
       if (verification.needsRehash || passwordHashNeedsRehash(passwordHash)) {
-        await appDb.updateCustomerPasswordHash(account.id, hashPassword(password));
+        currentPasswordHash = hashPassword(password);
+        const updated = await appDb.updateCustomerPasswordHash(account.id, currentPasswordHash, passwordHash);
+        if (!updated) return res.status(401).json({ error: "Invalid email or password" });
       }
-      await appDb.updateCustomerAccountLastLogin(account.id);
-      setCustomerSessionCookie(res, sessionToken, req);
-      setCustomerCsrfCookie(res, createSessionToken(), req);
+      const staff = isVerifiedCustomer(account) ? await appDb.getUserByStaffCustomerAccount(account.id) : undefined;
+      const hasStaffAccess = canSignInAsStaff(staff);
+      if (hasStaffAccess) {
+        await openStaffLoginSession(req, res, staff, { id: account.id, passwordHash: currentPasswordHash });
+      } else if (req.auth) {
+        await appDb.deleteSession(req.auth.tokenHash);
+        clearSessionCookie(res, req);
+        clearCsrfCookie(res, req);
+      }
+      await openCustomerLoginSession(req, res, account.id);
       await resetRateLimitCounter(CUSTOMER_LOGIN_IP_RATE_LIMIT_NAME, getCustomerLoginIpRateLimitScope(req));
       await resetRateLimitCounter(CUSTOMER_LOGIN_EMAIL_RATE_LIMIT_NAME, getCustomerEmailRateLimitScope(req));
       await recordCustomerAudit(req, "customer.login", "customer_account", account.id, account.id);
       const refreshed = await appDb.getCustomerAccountById(account.id);
-      return res.json({ account: toPublicCustomerAccount(refreshed || account) });
+      return res.json({ account: { ...toPublicCustomerAccount(refreshed || account), has_staff_access: hasStaffAccess } });
     } catch (error) {
       console.error("Customer login failed:", error);
       return res.status(500).json({ error: "Failed to login" });
@@ -15301,6 +15334,8 @@ async function startServer() {
       const updated = await appDb.updateCustomerPasswordHash(consumed.customer_account_id, hashPassword(password));
       if (!updated) return res.status(400).json({ error: "Reset link is invalid or expired" });
       await appDb.deleteCustomerSessions(consumed.customer_account_id);
+      const staff = await appDb.getUserByStaffCustomerAccount(consumed.customer_account_id);
+      if (staff) await appDb.deleteSessionsForUser(staff.id);
       const account = await appDb.getCustomerAccountById(consumed.customer_account_id);
       if (account) {
         await recordCustomerAudit(req, "customer.password_reset", "customer_account", account.id, account.id);
@@ -15321,6 +15356,11 @@ async function startServer() {
         await appDb.deleteCustomerSession(req.customer.tokenHash);
         await recordCustomerAudit(req, "customer.logout", "customer_account", req.customer.account.id, req.customer.account.id);
       }
+      if (req.customer && req.auth?.user.staff_customer_account_id === req.customer.account.id) {
+        await appDb.deleteSession(req.auth.tokenHash);
+        clearSessionCookie(res, req);
+        clearCsrfCookie(res, req);
+      }
       clearCustomerSessionCookie(res, req);
       clearCustomerCsrfCookie(res, req);
       return res.json({ status: "ok" });
@@ -15332,7 +15372,16 @@ async function startServer() {
 
   app.get("/api/customer/account/me", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
     if (!isCustomerAppEnabled()) return res.status(404).json({ error: "Not found" });
-    return res.json({ account: toPublicCustomerAccount(req.customer!.account) });
+    try {
+      const account = req.customer!.account;
+      const staff = isVerifiedCustomer(account) ? await appDb.getUserByStaffCustomerAccount(account.id) : undefined;
+      return res.set("Cache-Control", "private, no-store").json({
+        account: { ...toPublicCustomerAccount(account), has_staff_access: canSignInAsStaff(staff) },
+      });
+    } catch (error) {
+      console.error("Could not load customer account:", error);
+      return res.status(500).json({ error: "Could not load customer account" });
+    }
   });
 
   app.get("/api/customer/account/profile", requireCustomerAuth, async (req: AuthenticatedRequest, res) => {
@@ -15390,6 +15439,8 @@ async function startServer() {
     try {
       const account = req.customer!.account;
       await appDb.deleteCustomerSessions(account.id);
+      const staff = await appDb.getUserByStaffCustomerAccount(account.id);
+      if (staff) await appDb.deleteSessionsForUser(staff.id);
       clearCustomerSessionCookie(res, req);
       clearCustomerCsrfCookie(res, req);
       await recordCustomerAudit(req, "customer.sessions_revoked", "customer_account", account.id, account.id);
@@ -15404,6 +15455,12 @@ async function startServer() {
     try {
       const account = req.customer!.account;
       await appDb.setCustomerAccountStatus(account.id, "disabled");
+      const staff = await appDb.getUserByStaffCustomerAccount(account.id);
+      if (staff) await appDb.deleteSessionsForUser(staff.id);
+      if (staff && req.auth?.user.id === staff.id) {
+        clearSessionCookie(res, req);
+        clearCsrfCookie(res, req);
+      }
       clearCustomerSessionCookie(res, req);
       clearCustomerCsrfCookie(res, req);
       await recordCustomerAudit(req, "customer.account_disabled", "customer_account", account.id, account.id);
@@ -15586,14 +15643,35 @@ async function startServer() {
       ? readRequiredString(body, "password", issues, { label: "New password", maxLength: 512 })
       : null;
     if (issues.length) return respondValidationError(res, issues);
-    if (password !== null && password.length < 12) return res.status(400).json({ error: "Use at least 12 characters" });
     if (purpose === "verify" && !req.auth?.user) {
       return res.status(403).json({ error: "Sign in to the matching staff account, then reopen this email link." });
     }
     try {
+      const tokenHash = hashSessionToken(token);
+      let customer: { id: string; passwordHash: string } | undefined;
+      let newStaffPasswordHash: string | null = null;
+      if (purpose === "invite" && password !== null) {
+        const email = await appDb.getPendingStaffInviteEmail(tokenHash, new Date().toISOString());
+        if (!email) return res.status(400).json({ error: "This link is invalid, expired, or belongs to another account." });
+        const account = await appDb.getCustomerAccountByNormalizedEmail(email);
+        if (account?.status === "disabled") {
+          return res.status(403).json({ error: "Your attendee account is disabled. Contact the organizer." });
+        }
+        if (account && !isVerifiedCustomer(account)) {
+          return res.status(403).json({ error: "Verify your attendee email before activating staff access." });
+        }
+        if (account && isVerifiedCustomer(account)) {
+          if (!verifyPasswordWithMetadata(password, account.password_hash).valid) {
+            return res.status(403).json({ error: "Use the password for your existing attendee account." });
+          }
+          customer = { id: account.id, passwordHash: account.password_hash };
+        } else {
+          if (password.length < 12) return res.status(400).json({ error: "Use at least 12 characters for a new staff password." });
+          newStaffPasswordHash = hashPassword(password);
+        }
+      }
       const userId = await appDb.consumeStaffEmail(
-        hashSessionToken(token), new Date().toISOString(),
-        req.auth?.user.id ?? null, password === null ? null : hashPassword(password),
+        tokenHash, new Date().toISOString(), req.auth?.user.id ?? null, newStaffPasswordHash, customer,
       );
       if (!userId) return res.status(400).json({ error: "This link is invalid, expired, or belongs to another account." });
       await appDb.recordAuditLog({ actor_user_id: userId, action: purpose === "invite" ? "auth.staff_invite_accepted" : "auth.staff_email_verified", target_type: "user", target_id: userId }).catch(() => {
@@ -15608,72 +15686,59 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/login", loginIpRateLimit, loginUsernameRateLimit, async (req, res) => {
+  app.post("/api/auth/login", loginIpRateLimit, async (req: AuthenticatedRequest, res, next) => {
     try {
       const body = readObjectBody(req);
       const issues: ValidationIssue[] = [];
-      const usernameRaw = readRequiredString(body, "username", issues, { label: "Username", maxLength: 128 });
+      const identifier = normalizeUsername(readRequiredString(body, "username", issues, { label: "Email or username", maxLength: 254 }));
       const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
-      if (issues.length > 0) {
-        return respondValidationError(res, issues);
-      }
-      const username = normalizeUsername(usernameRaw);
-
-      const user = await appDb.getUserByUsername(username);
-      if (!user || !user.is_active || user.staff_email_purpose === "invite") {
-        await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_failed", {
-          username,
-          reason: "invalid_user",
-        });
-        return res.status(401).json({ error: "Invalid username or password" });
-      }
-
-      const passwordHash = await appDb.getUserPasswordHash(username);
-      const passwordVerification = typeof passwordHash === "string"
-        ? verifyPasswordWithMetadata(password, passwordHash)
-        : { valid: false, needsRehash: false };
-      const valid = passwordVerification.valid;
-
-      if (!valid) {
-        await recordSecurityEvent(req as AuthenticatedRequest, "auth.login_failed", {
-          username,
-          reason: "invalid_password",
-        });
-        return res.status(401).json({ error: "Invalid username or password" });
+      if (issues.length) return respondValidationError(res, issues);
+      const byEmail = isValidCustomerEmail(identifier) ? await appDb.getUserByStaffEmail(identifier) : undefined;
+      const user = byEmail ?? await appDb.getUserByUsername(identifier);
+      req.staffLogin = { password, user };
+      return next();
+    } catch (error) {
+      console.error("Staff login lookup failed:", error);
+      return res.status(500).json({ error: "Failed to login" });
+    }
+  }, loginUsernameRateLimit, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { password, user } = req.staffLogin!;
+      if (!canSignInAsStaff(user)) {
+        await recordSecurityEvent(req, "auth.login_failed", { reason: "invalid_user" });
+        return res.status(401).json({ error: "Invalid staff credentials" });
       }
 
-      const existingSessionToken = parseCookies(req.headers.cookie).get(SESSION_COOKIE_NAME);
-      if (existingSessionToken) {
-        await appDb.deleteSession(hashSessionToken(existingSessionToken));
+      const linkedCustomer = user.staff_customer_account_id ? await appDb.getCustomerAccountById(user.staff_customer_account_id) : undefined;
+      const passwordHash = user.staff_customer_account_id
+        ? (isVerifiedCustomer(linkedCustomer) ? linkedCustomer?.password_hash : undefined)
+        : await appDb.getUserPasswordHash(user.username);
+      const verification = typeof passwordHash === "string"
+        ? verifyPasswordWithMetadata(password, passwordHash) : { valid: false, needsRehash: false };
+      if (!verification.valid) {
+        await recordSecurityEvent(req, "auth.login_failed", { username: user.username, reason: "invalid_password" });
+        return res.status(401).json({ error: "Invalid staff credentials" });
       }
 
-      const sessionToken = createSessionToken();
-      const tokenHash = hashSessionToken(sessionToken);
-      const expiresAt = new Date(Date.now() + getSessionTtlMs());
-      await appDb.createSession(user.id, tokenHash, expiresAt);
-      if (typeof passwordHash === "string" && (passwordVerification.needsRehash || passwordHashNeedsRehash(passwordHash))) {
-        await appDb.updateUserPasswordHash(user.id, hashPassword(password));
-        await recordSecurityEvent(req as AuthenticatedRequest, "auth.password_rehashed", {
-          username,
-          user_id: user.id,
-        });
+      let currentPasswordHash = passwordHash;
+      if (typeof passwordHash === "string" && (verification.needsRehash || passwordHashNeedsRehash(passwordHash))) {
+        currentPasswordHash = hashPassword(password);
+        if (linkedCustomer) {
+          const updated = await appDb.updateCustomerPasswordHash(linkedCustomer.id, currentPasswordHash, passwordHash);
+          if (!updated) return res.status(401).json({ error: "Invalid staff credentials" });
+        } else {
+          await appDb.updateUserPasswordHash(user.id, currentPasswordHash);
+        }
+        await recordSecurityEvent(req, "auth.password_rehashed", { username: user.username, user_id: user.id });
       }
-      await appDb.updateUserLastLogin(user.id);
-      setSessionCookie(res, sessionToken, req);
-      setCsrfCookie(res, createSessionToken(), req);
+      await openStaffLoginSession(req, res, user, linkedCustomer && currentPasswordHash
+        ? { id: linkedCustomer.id, passwordHash: currentPasswordHash }
+        : undefined);
+      if (linkedCustomer && isCustomerAppEnabled()) {
+        await openCustomerLoginSession(req, res, linkedCustomer.id);
+      }
       await resetRateLimitCounter(LOGIN_IP_RATE_LIMIT_NAME, getLoginIpRateLimitScope(req));
-      await resetRateLimitCounter(LOGIN_USERNAME_RATE_LIMIT_NAME, buildRateLimitKey(username));
-      await appDb.recordAuditLog({
-        actor_user_id: user.id,
-        action: "auth.login",
-        target_type: "user",
-        target_id: user.id,
-        metadata: {
-          ip: getRequestIp(req),
-          username: user.username,
-        },
-      });
-
+      await resetRateLimitCounter(LOGIN_USERNAME_RATE_LIMIT_NAME, buildRateLimitKey(user.username));
       const refreshedUser = await appDb.getUserById(user.id);
       return res.json({ user: toPublicAuthUser(refreshedUser || user) });
     } catch (error) {
@@ -15698,6 +15763,11 @@ async function startServer() {
         await recordSecurityEvent(req, "auth.logout_succeeded", {
           user_id: req.auth.user.id,
         });
+      }
+      if (req.customer && req.auth?.user.staff_customer_account_id === req.customer.account.id) {
+        await appDb.deleteCustomerSession(req.customer.tokenHash);
+        clearCustomerSessionCookie(res, req);
+        clearCustomerCsrfCookie(res, req);
       }
       clearSessionCookie(res, req);
       clearCsrfCookie(res, req);
@@ -17725,15 +17795,19 @@ async function startServer() {
       const receiver = payment.promptpay_ready && payment.source === "organizer_profile"
         ? { id: payment.receiver_id.replace(/[^0-9]/g, ""), name: payment.receiver_name, profileVersion: payment.profile_version }
         : undefined;
+      if (body.credit_minor !== undefined && (!Number.isSafeInteger(body.credit_minor) || Number(body.credit_minor) < 0)) {
+        return res.status(400).json({ error: "credit_changed" });
+      }
       const booking = await appDb.createPaidBooking({
         eventId: match.event.id, customerId: req.customer!.account.id, key, pricingVersion: Number(body.pricing_version),
         contact: { name, ...contactDetails }, attendees, answers: body.answers, receiver,
         couponCode: typeof body.coupon_code === "string" ? body.coupon_code : undefined,
+        creditMinor: body.credit_minor === undefined ? undefined : Number(body.credit_minor),
       });
       return res.status(201).json({
-        id: booking.id, event_id: match.event.id, reference: booking.reference, status: booking.state, payment_status: "unpaid",
+        id: booking.id, event_id: match.event.id, reference: booking.reference, status: booking.state, payment_status: booking.state === "confirmed" ? "verified" : "unpaid",
         currency: booking.currency, total_due_minor: booking.totalMinor, due_at: new Date(booking.dueMs).toISOString(), version: booking.version,
-        subtotal_minor:booking.subtotalMinor,discount_minor:booking.discountMinor,coupon_code:booking.couponCode,
+        subtotal_minor:booking.subtotalMinor,discount_minor:booking.discountMinor,coupon_code:booking.couponCode,credit_used_minor:booking.creditMinor ?? 0,
       });
     } catch (error) {
       if (error instanceof PaidBookingError) {
@@ -17804,6 +17878,33 @@ async function startServer() {
       return res.status(500).json({ error: "booking_unavailable" });
     }
   });
+
+  app.get("/api/customer/paid-bookings/:eventId/credit",
+    requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+      try {
+        const balance = await appDb.readPaidCreditBalance(req.params.eventId, req.customer!.account.id);
+        return res.set("Cache-Control", "private, no-store").json({ available_minor: balance });
+      } catch (error) {
+        return res.status(error instanceof PaidBookingError && error.code === "event_not_found" ? 404 : 500)
+          .json({ error: "credit_unavailable" });
+      }
+    },
+  );
+
+  app.post("/api/customer/paid-bookings/:eventId/:id/cancel",
+    publicRegistrationRateLimit, requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
+      try {
+        const result = await appDb.cancelOwnedPaidBooking(req.params.eventId, req.params.id, req.customer!.account.id);
+        return res.set("Cache-Control", "private, no-store").json(result);
+      } catch (error) {
+        if (error instanceof PaidBookingError) {
+          const missing = error.code === "booking_not_found" || error.code === "event_not_found";
+          return res.status(missing ? 404 : 409).json({ error: missing ? "booking_not_found" : error.code });
+        }
+        return res.status(500).json({ error: "booking_cancel_failed" });
+      }
+    },
+  );
 
   app.post("/api/customer/paid-bookings/:eventId/:id/reinstate",
     publicRegistrationRateLimit, requireVerifiedCustomer, async (req: AuthenticatedRequest, res) => {
@@ -18101,7 +18202,7 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
@@ -18113,7 +18214,7 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit",reason:body.reason.trim(),
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
           refundReference:typeof body.refund_reference === "string" ? body.refund_reference : undefined,
         });

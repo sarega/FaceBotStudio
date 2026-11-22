@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { paidSeminarFields } from "../../../../backend/paidSeminarFields";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import type { AppLanguage } from "../../../lib/i18n";
@@ -8,12 +9,63 @@ type Props = {
   total: number;
   language: AppLanguage;
   onRefresh: () => void;
+  onCancelBooking?: (person: PaidRosterPerson, reason: string, key: string) => Promise<void>;
 };
-export function PaidAttendeeRoster({people,total,onRefresh,language}:Props) {
+function CancelBookingForm({ person, language, onCancel }: {
+  person: PaidRosterPerson;
+  language: AppLanguage;
+  onCancel: NonNullable<Props["onCancelBooking"]>;
+}) {
+  const t = (th: string, en: string) => language === "th" ? th : en;
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const command = useRef<{ reason: string; key: string } | null>(null);
+  if (!open) return <button type="button" className="registration-cancel-link mt-1 font-semibold underline" onClick={() => setOpen(true)}>
+    {t("ยกเลิกใบจอง", "Cancel booking")}
+  </button>;
+  return <form className="mt-2 space-y-1 rounded-lg border border-rose-300 p-2" onSubmit={async event => {
+    event.preventDefault();
+    const note = reason.trim();
+    if (busy || !note) return;
+    setBusy(true);
+    setError("");
+    if (command.current?.reason !== note) command.current = { reason: note, key: crypto.randomUUID() };
+    try {
+      await onCancel(person, note, command.current.key);
+      setOpen(false);
+    } catch (failure) {
+      setError(failure instanceof Error && ["state_conflict", "version_conflict"].includes(failure.message)
+        ? t("สถานะใบจองเปลี่ยนแล้ว กรุณาโหลดรายชื่อใหม่", "Booking changed. Refresh the attendee list.")
+        : t("ยกเลิกไม่สำเร็จ กรุณาลองใหม่", "Could not cancel. Try again."));
+    } finally {
+      setBusy(false);
+    }
+  }}>
+    <p>{t("คืนที่นั่งทั้งหมดในใบจองนี้", "Release all places in this booking")}</p>
+    <label className="block">{t("เหตุผล", "Reason")}
+      <input value={reason} onChange={event => setReason(event.target.value)} required maxLength={1000} disabled={busy}
+        className="mt-0.5 w-full rounded border border-slate-300 px-1.5 py-1" />
+    </label>
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="submit" disabled={busy || !reason.trim()} className="registration-cancel-confirm rounded px-2 py-1 font-semibold disabled:opacity-50">
+        {busy ? t("กำลังยกเลิก…", "Cancelling…") : t("ยืนยันยกเลิก", "Confirm cancellation")}
+      </button>
+      <button type="button" disabled={busy} className="underline" onClick={() => { setOpen(false); setError(""); }}>
+        {t("กลับ", "Back")}
+      </button>
+    </div>
+    {error && <p role="alert" className="registration-cancel-link">{error}</p>}
+  </form>;
+}
+
+export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBooking}:Props) {
   if(!total)return null;
   const t = (th: string, en: string) => language === "th" ? th : en;
   const money = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
   const format = (minor: number) => money.format(minor / 100);
+  const shownBookings = new Set<string>();
   return <section className="paid-attendee-roster border-b border-emerald-200 p-3">
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-sm font-bold text-emerald-900">
@@ -32,12 +84,17 @@ export function PaidAttendeeRoster({people,total,onRefresh,language}:Props) {
         <tbody className="divide-y divide-slate-100">
           {people.map(person => {
             const status = getRosterStatus(person.booking_state, person.checked_in_ms != null);
+            const firstInBooking = !shownBookings.has(person.booking_id);
+            shownBookings.add(person.booking_id);
+            const canCancel = firstInBooking && status === "awaiting_payment" &&
+              ["unpaid", "rejected"].includes(person.payment_state) && Number.isSafeInteger(person.booking_version);
             return <tr key={person.attendee_id} data-registration-status={status}>
               <td className="w-44 px-3 py-2 font-semibold text-slate-900">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span>{person.first_name} {person.last_name}</span>
                   <RegistrationStatusTag status={status} language={language} />
                 </div>
+                {canCancel && onCancelBooking && <CancelBookingForm person={person} language={language} onCancel={onCancelBooking} />}
               </td>
               <td className="px-3 py-2">{person.category_label}</td>
               <td className="px-3 py-2">

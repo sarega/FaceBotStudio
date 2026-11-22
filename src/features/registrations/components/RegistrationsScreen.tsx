@@ -124,6 +124,7 @@ type RegistrationsScreenProps = {
   statusUpdateLoading: boolean;
   statusUpdateMessage: string;
   language: AppLanguage;
+  onPaidBookingCancelled?: () => void;
   apiFetch?: (input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 };
 
@@ -176,6 +177,7 @@ export function RegistrationsScreen({
   statusUpdateMessage,
   language,
   apiFetch,
+  onPaidBookingCancelled,
 }: RegistrationsScreenProps) {
   const [paidPeople,setPaidPeople]=useState<PaidRosterPerson[]>([]);
   const [paidSummary,setPaidSummary]=useState<PaidRosterSummary|null>(null);
@@ -366,7 +368,23 @@ export function RegistrationsScreen({
             </button>}
           </div>}
           <PaidAttendeeRoster language={language} people={filteredPaid} total={paidPeople.length}
-            onRefresh={()=>setPaidRevision(n=>n+1)}/>
+            onRefresh={() => setPaidRevision(n => n + 1)}
+            onCancelBooking={apiFetch && onPaidBookingCancelled ? async (person, reason, key) => {
+              const path = `/api/events/${encodeURIComponent(person.event_id)}/paid-registration/bookings/${encodeURIComponent(person.booking_id)}/manage`;
+              const response = await apiFetch(path, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+                body: JSON.stringify({ action: "cancel", version: person.booking_version, reason }),
+              });
+              if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                throw new Error(result.error || "booking_cancel_failed");
+              }
+              setPaidPeople(current => current.map(attendee => attendee.booking_id === person.booking_id
+                ? { ...attendee, booking_state: "cancelled" } : attendee));
+              window.dispatchEvent(new Event("meetrix:paid-booking-updated"));
+              onPaidBookingCancelled();
+            } : undefined} />
           <div className={paidPeople.length>0 && registrationsCount===0 ?
             "hidden" : "max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden"}>
             {filteredRegistrations.length === 0 ? (

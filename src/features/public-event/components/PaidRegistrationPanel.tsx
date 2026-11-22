@@ -98,6 +98,8 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [booking, setBooking] = useState<Booking>();
+  const [creditBalance, setCreditBalance] = useState(0);
+  const [useCredit, setUseCredit] = useState(false);
   const [couponCode,setCouponCode]=useState("");
   const [couponPreview,setCouponPreview]=useState<{
     code:string; subtotal_minor:number; discount_minor:number; total_minor:number; provisional?:boolean;
@@ -113,6 +115,18 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
   const command = useRef<{ request: string; key: string } | undefined>(undefined);
   const prefix = `/api/public/events/${encodeURIComponent(slug)}`;
   const recoveryKey = `paid-booking:${slug}`;
+
+  useEffect(() => {
+    setCreditBalance(0);
+    setUseCredit(false);
+    if (!enabled || !customerAccount?.email_verified_at) return;
+    const controller = new AbortController();
+    void customerApi<{ available_minor: number }>(`/api/customer/paid-bookings/${encodeURIComponent(eventId)}/credit`,
+      { signal: controller.signal }).then(({ available_minor }) => {
+      if (!controller.signal.aborted) setCreditBalance(available_minor);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [eventId, enabled, customerAccount?.id, customerAccount?.email_verified_at]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -213,7 +227,7 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
     setBusy(true);
     setError("");
     const request = JSON.stringify({ pricing_version: catalog.pricing_version, contact: { name: contact }, answers,
-      attendees, coupon_code:couponPreview?.code });
+      attendees, coupon_code:couponPreview?.code, ...(creditUsed ? { credit_minor: creditUsed } : {}) });
     if (command.current?.request !== request) command.current = { request, key: crypto.randomUUID() };
     try {
       const result = await customerApi<Booking>(`${prefix}/paid-bookings`, {
@@ -225,7 +239,15 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
       window.location.assign("/app/orders?paid_booking=" + encodeURIComponent(result.reference));
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : "";
-      setError(errors[message] || "The booking could not be completed. Retry to check the result.");
+      if (message === "credit_changed") {
+        try {
+          const { available_minor } = await customerApi<{ available_minor: number }>(`/api/customer/paid-bookings/${encodeURIComponent(eventId)}/credit`);
+          setCreditBalance(available_minor);
+        } catch { setCreditBalance(0); }
+        setError(locale === "th" ? "ยอดเครดิตเปลี่ยนแล้ว กรุณาตรวจยอดใหม่ก่อนยืนยัน" : "Credit changed. Review the updated total and confirm again.");
+      } else {
+        setError(errors[message] || "The booking could not be completed. Retry to check the result.");
+      }
     } finally {
       setBusy(false);
     }
@@ -257,6 +279,8 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
       roomSurchargeMinor(catalog?.fields ?? [], row.answers);
   };
   const total = attendees.reduce((sum, row) => sum + attendeePrice(row), 0);
+  const beforeCredit = couponPreview?.total_minor ?? total;
+  const creditUsed = useCredit ? Math.min(creditBalance, beforeCredit) : 0;
   return (
     <div className="surface-panel space-y-2.5 rounded-2xl p-3 sm:p-3.5">
       <h2 className="text-base font-semibold">{locale === "th" ? "ลงทะเบียน" : "Registration"}</h2>
@@ -390,12 +414,19 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
                 <span>{locale==="th"?"ส่วนลด":"Coupon discount"}</span>
                 <span>−{money.format(couponPreview.discount_minor/100)}</span>
               </div>}
+              {creditBalance > 0 && <label className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-50 p-2 font-semibold text-emerald-800">
+                <input type="checkbox" checked={useCredit} onChange={event => setUseCredit(event.target.checked)} />
+                {locale === "th" ? "ใช้เครดิตของงานนี้" : "Use credit for this event"} · {money.format(creditBalance / 100)}
+              </label>}
+              {creditUsed > 0 && <div className="flex justify-between text-emerald-700">
+                <span>{locale === "th" ? "หักเครดิต" : "Booking credit"}</span><span>−{money.format(creditUsed / 100)}</span>
+              </div>}
               <div className="flex items-center justify-between border-t pt-2 font-bold">
                 <span>{locale==="th"?"ยอดชำระ":"Total due"}</span>
-                <span>{money.format((couponPreview?.total_minor??total)/100)}</span>
+                <span>{money.format((beforeCredit - creditUsed) / 100)}</span>
               </div>
-              {couponPreview?.total_minor===0&&<p className="text-emerald-700">
-                {locale==="th"?"คูปองฟรี: ไม่ต้องชำระเงิน จะได้รับบัตรทันที":"Free coupon: no payment needed, tickets issued immediately"}
+              {beforeCredit === creditUsed && (creditUsed > 0 || couponPreview) &&<p className="text-emerald-700">
+                {locale === "th" ? "ยอดคงเหลือ 0 บาท ระบบออกบัตรทันที" : "No balance due. Tickets are issued immediately."}
               </p>}
             </div>
             <button className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white" type="submit">{busy ? (locale === "th" ? "กำลังจอง…" : "Reserving…") : (locale === "th" ? "ยืนยันการจอง" : "Reserve places")}</button>
