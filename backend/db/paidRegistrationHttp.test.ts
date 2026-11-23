@@ -1527,6 +1527,55 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(actualTransfers.filter(row => row.booking_id === externalSlipBooking.id)
       .reduce((total, row) => total + Number(row.amount_minor ?? 0), 0), 300000);
 
+    const moreDue = await fetch(manageCorrected, {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "correct-with-existing-supporting-slip" },
+      body: JSON.stringify({ action: "correct_price", reason: "Update price after the slip was archived",
+        attendee_id: afterSupporting.attendees[0].id, unit_minor: 301000, version: afterSupporting.version }),
+    });
+    assert.equal(moreDue.status, 200, await moreDue.clone().text());
+    const newCorrection = await moreDue.json();
+    const secondNotice = await fetch(manageCorrected, {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "reminder-before-supporting-slip-is-applied" },
+      body: JSON.stringify({ action: "payment_notice", reason: "Please confirm the additional transfer", version: newCorrection.version }),
+    });
+    assert.equal(secondNotice.status, 200, await secondNotice.clone().text());
+    const updatedVersion = (await secondNotice.json()).version;
+    const supportingReview = (await (await fetch(externalPrefix + "/review-queue?reference=" +
+      externalSlipBooking.reference, { headers: staffHeaders })).json()).reviews[0];
+    assert.equal(supportingReview.attempt_id, null);
+    assert.equal(supportingReview.balance_due_minor, 1000);
+    assert.equal(supportingReview.previous_proofs.find((proof: { attempt_id: string }) =>
+      proof.attempt_id === supportingReceipt.attempt_id).supporting, true);
+
+    const applySupporting = (attemptId: string, amount: number, version: number, key: string) =>
+      fetch(manageCorrected.replace(/manage$/, "review"), {
+        method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": key },
+        body: JSON.stringify({ decision: "apply_supporting", attempt_id: attemptId, balance_amount_minor: amount,
+          version, reason: "Verified the deposit in bank records" }),
+      });
+    const excess = await applySupporting(supportingReceipt.attempt_id, 1001, updatedVersion, "excess-supporting");
+    assert.equal(excess.status, 409);
+    assert.equal((await excess.json()).error, "amount_exceeds_balance");
+    const alreadyCounted = await applySupporting(verifiedBookingReview.previous_proofs[0].attempt_id, 1000, updatedVersion, "reuse-settled-slip");
+    assert.equal(alreadyCounted.status, 409);
+    assert.equal((await alreadyCounted.json()).error, "proof_not_applicable");
+    const applied = await applySupporting(supportingReceipt.attempt_id, 1000, updatedVersion, "apply-supporting");
+    assert.equal(applied.status, 200, await applied.clone().text());
+    const appliedReceipt = await applied.json();
+    assert.deepEqual(await (await applySupporting(supportingReceipt.attempt_id, 1000, updatedVersion, "apply-supporting")).json(), appliedReceipt);
+    const closedBalance = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
+    assert.equal(closedBalance.status, "confirmed");
+    assert.equal(closedBalance.balance_due_minor, 0);
+    const appliedTransfers = await db.listDailyPaidTransfers(paidEvent.id, "org_default", 0, Date.now() + 60_000);
+    assert.equal(appliedTransfers.filter(row => row.booking_id === externalSlipBooking.id)
+      .reduce((total, row) => total + Number(row.amount_minor ?? 0), 0), 301000);
+    const afterApplyQueue = (await (await fetch(externalPrefix + "/review-queue?reference=" +
+      externalSlipBooking.reference, { headers: staffHeaders })).json()).reviews[0];
+    const appliedProof = afterApplyQueue.previous_proofs.find((proof: { attempt_id: string }) =>
+      proof.attempt_id === supportingReceipt.attempt_id);
+    assert.equal(appliedProof.supporting, false);
+    assert.equal(appliedProof.observed_minor, 1000);
+
     const pendingEmail = "unverified-cleanup@example.com";
     const pendingAccount = await db.createCustomerAccount({
       email: pendingEmail, normalized_email: pendingEmail, password_hash: "fixture", first_name: "Test", last_name: "Pending",

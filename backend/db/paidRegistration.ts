@@ -818,7 +818,8 @@ export interface PaidReviewInput {
   reviewerId: string;
   key: string;
   version: number;
-  decision: "approve" | "reject" | "flag";
+  decision: "approve" | "reject" | "flag" | "apply_supporting";
+  balanceAmountMinor?: number;
   confirmEarlyTransfer?: boolean;
   reason: string;
   observed?: { amountMinor: number; transferMs: number; reference: string; receiverNamespace: string };
@@ -830,14 +831,33 @@ export interface PaidReviewReceipt {
   version: number;
 }
 
+const supportingProofReason = "Supporting evidence";
+
+function* recordPaidReview(input: PaidReviewInput, digest: string, previous: string, action: string,
+  reason: string, now: number, receipt: PaidReviewReceipt): PaidCommand<PaidReviewReceipt> {
+  const { eventId, bookingId, reviewerId, key } = input;
+  const principal = `staff:${reviewerId}`;
+  yield query(
+    `INSERT INTO paid_audit_events (id,event_id,booking_id,actor,action,previous_state,next_state,reason,occurred_ms)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    randomUUID(), eventId, bookingId, principal, action, previous, receipt.status, reason, now,
+  );
+  yield query(
+    "INSERT INTO paid_command_keys (principal,event_id,operation,command_key,digest,booking_id,result_json,created_ms) VALUES (?,?,'review',?,?,?,?,?)",
+    principal,eventId,key,digest,bookingId,JSON.stringify(receipt),now,
+  );
+  return receipt;
+}
+
 export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReviewReceipt> {
-  const { eventId, bookingId, attemptId, organizationId, reviewerId, key, version, decision, reason, observed, confirmEarlyTransfer } = input;
+  const { eventId, bookingId, attemptId, organizationId, reviewerId, key, version, decision, reason, observed, confirmEarlyTransfer, balanceAmountMinor } = input;
   const now = Date.now();
   const proofApproval = decision === "approve" && !!attemptId && !observed;
   let reference = observed?.reference.trim().normalize("NFKC").toUpperCase();
   let namespace = observed?.receiverNamespace === "EXTERNAL_MANUAL"
     ? "EXTERNAL_MANUAL" : observed?.receiverNamespace.replace(/[^0-9]/g, "");
   if ((!attemptId && decision !== "approve") || !key || key.length > 128 || !reason.trim() || reason.length > 1000 ||
+      (decision === "apply_supporting" && (!Number.isSafeInteger(balanceAmountMinor) || balanceAmountMinor! <= 0)) ||
       (decision === "approve" && !proofApproval && (!observed || !reference || !namespace || reference.length > 255 || namespace.length > 255 ||
         !Number.isSafeInteger(observed.amountMinor) || observed.amountMinor <= 0 ||
         !Number.isSafeInteger(observed.transferMs) || observed.transferMs <= 0 || observed.transferMs > now))) {
@@ -854,6 +874,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   const digest = createHash("sha256").update(JSON.stringify([
     bookingId, attemptId, version, decision, reason, observed?.amountMinor, observed?.transferMs, reference, namespace,
     ...(confirmEarlyTransfer ? [true] : []),
+    ...(decision === "apply_supporting" ? [balanceAmountMinor] : []),
   ])).digest("hex");
   const [replay] = yield query(
     "SELECT digest,result_json FROM paid_command_keys WHERE principal=? AND event_id=? AND operation='review' AND command_key=?",
@@ -862,6 +883,25 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   if (replay) {
     if (replay.digest !== digest) throw new PaidBookingError("idempotency_conflict");
     return JSON.parse(String(replay.result_json)) as PaidReviewReceipt;
+  }
+  if (decision === "apply_supporting") {
+    if (Number(booking.version) !== version) throw new PaidBookingError("version_conflict");
+    const balance = Number(booking.balance_due_minor);
+    if (booking.state !== "confirmed" || !balance) throw new PaidBookingError("state_conflict");
+    if (balanceAmountMinor! > balance) throw new PaidBookingError("amount_exceeds_balance");
+    const [applied] = yield query(
+      `UPDATE paid_payment_attempts SET observed_minor=?,reviewed_by=?,reviewed_ms=?,reason=?
+       WHERE id=? AND event_id=? AND booking_id=? AND status='verified' AND observed_minor IS NULL AND reason=?
+         AND EXISTS (SELECT 1 FROM paid_proofs p WHERE p.attempt_id=paid_payment_attempts.id AND p.deleted_ms IS NULL)
+         AND EXISTS (SELECT 1 FROM paid_verified_proof_checksums c WHERE c.attempt_id=paid_payment_attempts.id)
+       RETURNING id`,
+      balanceAmountMinor!, reviewerId, now, reason, attemptId!, eventId, bookingId, supportingProofReason,
+    );
+    if (!applied) throw new PaidBookingError("proof_not_applicable");
+    yield query("UPDATE paid_bookings SET updated_ms=?,version=version+1 WHERE id=?", now, bookingId);
+    return yield* recordPaidReview(input, digest, String(booking.state), "review_verified",
+      `Applied supporting slip ${attemptId}: ${balanceAmountMinor} THB minor units · ${reason.slice(0, 850)}`, now,
+      { status: "confirmed", payment_status: "verified", version: version + 1 });
   }
   const manual = !attemptId;
   const supplemental = Number(booking.pending_proofs) > 0 &&
@@ -947,7 +987,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
         else yield query(
           `UPDATE paid_payment_attempts SET status='verified',observed_minor=NULL,observed_transfer_ms=NULL,trusted_reference=?,
            receiver_namespace=?,reviewed_by=?,reviewed_ms=?,reason=? WHERE id=?`,
-          settlement.reference, namespace!, reviewerId, now, amountDue === 0 ? "Supporting evidence" : "Included in combined booking payment", settlement.id,
+          settlement.reference, namespace!, reviewerId, now, amountDue === 0 ? supportingProofReason : "Included in combined booking payment", settlement.id,
         );
       }
       status = "confirmed";
@@ -964,7 +1004,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
     }
   }
 
-  const reviewReason = proofApproval && amountDue === 0 ? "Supporting evidence" : earlyTransfer ? "Verified pre-booking transfer: " + reason : reason;
+  const reviewReason = proofApproval && amountDue === 0 ? supportingProofReason : earlyTransfer ? "Verified pre-booking transfer: " + reason : reason;
   yield query(
     `UPDATE paid_payment_attempts SET status=?,observed_minor=?,observed_transfer_ms=?,trusted_reference=?,
        receiver_namespace=?,reviewed_by=?,reviewed_ms=?,reason=? WHERE id=?`,
@@ -1002,17 +1042,8 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
       );
     }
   }
-  yield query(
-    `INSERT INTO paid_audit_events (id,event_id,booking_id,actor,action,previous_state,next_state,reason,occurred_ms)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
-    randomUUID(), eventId, bookingId, principal, `review_${attemptStatus}`, String(booking.state), status, reviewReason, now,
-  );
-  const receipt = { status, payment_status: paymentStatus, version: version + 1 };
-  yield query(
-    "INSERT INTO paid_command_keys (principal,event_id,operation,command_key,digest,booking_id,result_json,created_ms) VALUES (?,?,'review',?,?,?,?,?)",
-    principal,eventId,key,digest,bookingId,JSON.stringify(receipt),now,
-  );
-  return receipt;
+  return yield* recordPaidReview(input, digest, String(booking.state), `review_${attemptStatus}`, reviewReason, now,
+    { status, payment_status: paymentStatus, version: version + 1 });
 }
 
 
@@ -1172,16 +1203,19 @@ export function* listPaidReviewQueue(
   }
   const proofs = yield query(
     `SELECT a.booking_id,a.id AS attempt_id,a.status,a.claimed_minor,a.observed_minor,p.id AS proof_id,
+       CASE WHEN a.status='verified' AND a.observed_minor IS NULL AND a.reason=?
+         AND EXISTS (SELECT 1 FROM paid_verified_proof_checksums c WHERE c.attempt_id=a.id)
+         THEN 1 ELSE 0 END AS supporting,
        (SELECT COUNT(*) FROM paid_proofs other JOIN paid_payment_attempts check_attempt ON check_attempt.id=other.attempt_id
         WHERE other.checksum=p.checksum AND other.attempt_id<>a.id AND check_attempt.status<>'rejected') AS matching_proofs
      FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id
      WHERE a.event_id=? AND a.booking_id IN (${bookingIds.map(() => "?").join(",")})
        AND p.deleted_ms IS NULL ORDER BY a.sequence`,
-    eventId, ...bookingIds,
+    supportingProofReason, eventId, ...bookingIds,
   );
   const proofsByBooking = new Map(bookingIds.map(id => [id, [] as PaidRow[]]));
   for (const { booking_id, ...proof } of proofs) {
-    proofsByBooking.get(String(booking_id))?.push({ ...proof,
+    proofsByBooking.get(String(booking_id))?.push({ ...proof, supporting: Number(proof.supporting) === 1,
       claimed_minor: proof.claimed_minor == null ? null : Number(proof.claimed_minor),
       observed_minor: proof.observed_minor == null ? null : Number(proof.observed_minor),
       matching_proofs: Number(proof.matching_proofs) });

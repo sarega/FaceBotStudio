@@ -18365,26 +18365,28 @@ async function startServer() {
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       const body = readObjectBody(req);
       const key = req.get("Idempotency-Key")?.trim() || "";
-      const { decision, version, attempt_id, reason, confirm_early_transfer } = body;
+      const { decision, version, attempt_id, reason, confirm_early_transfer, balance_amount_minor } = body;
       const observed = body.observed as Record<string, unknown> | undefined;
       const invalidObservation = observed == null ? !attempt_id : (
         observed.currency !== "THB" || typeof observed.reference !== "string" ||
         typeof observed.receiver_id !== "string" || typeof observed.paid_at !== "string" ||
         !Number.isSafeInteger(observed.amount_minor)
       );
-      if (!key || key.length > 128 || (decision !== "approve" && decision !== "reject" && decision !== "flag") ||
+      if (!key || key.length > 128 || (decision !== "approve" && decision !== "reject" && decision !== "flag" && decision !== "apply_supporting") ||
           !Number.isSafeInteger(version) || Number(version) < 1 ||
           (confirm_early_transfer != null && typeof confirm_early_transfer !== "boolean") ||
           (attempt_id == null ? decision !== "approve" : typeof attempt_id !== "string" || !attempt_id || attempt_id.length > 128) ||
           typeof reason !== "string" || !reason.trim() || reason.length > 1000 ||
-          (decision === "approve" && invalidObservation)) {
+          (decision === "approve" && invalidObservation) ||
+          (decision === "apply_supporting" && (observed != null || !Number.isSafeInteger(balance_amount_minor) || Number(balance_amount_minor) <= 0))) {
         return res.status(400).json({ error: "invalid_review" });
       }
       try {
         const result = await appDb.reviewPaidProof({
           eventId: req.eventScope!.eventId, bookingId: req.params.id, attemptId: typeof attempt_id === "string" ? attempt_id : undefined,
           organizationId: req.auth!.user.organization_id, reviewerId: req.auth!.user.id,
-          key, version: Number(version), decision, reason: reason.trim(), confirmEarlyTransfer: confirm_early_transfer === true,
+          key, version: Number(version), decision, reason: reason.trim(),
+          balanceAmountMinor: decision === "apply_supporting" ? Number(balance_amount_minor) : undefined, confirmEarlyTransfer: confirm_early_transfer === true,
           observed: decision === "approve" && observed ? {
             amountMinor: Number(observed.amount_minor), transferMs: Date.parse(String(observed.paid_at)),
             reference: String(observed.reference), receiverNamespace: String(observed.receiver_id),

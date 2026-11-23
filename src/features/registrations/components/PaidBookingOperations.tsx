@@ -132,7 +132,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Booking update failed");
-      setChosenAction(action === "correct_price" ? "payment_notice" : "");
+      setChosenAction("");
       setNoticeSent(action === "payment_notice");
       setCouponApplied(action === "apply_coupon" ? { code: couponCode, totalMinor: result.total_minor } : undefined);
       onChange();

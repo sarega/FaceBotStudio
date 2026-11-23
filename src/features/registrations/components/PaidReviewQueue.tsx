@@ -2,7 +2,7 @@ import { PaidTransferReportExport } from "../../reports/components/PaidTransferR
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidBookingOperations, type BookingEditRequest } from "./PaidBookingOperations";
 import { PaidProofForm } from "../../../components/PaidProofForm";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, Flag, FlagOff, Send, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
 
 type Review = {
@@ -30,7 +30,7 @@ type Review = {
   coupon_discount_minor?: number | null;
   booking_state: string;
   cash_confirmed: boolean;
-  previous_proofs: { attempt_id: string; status: string; observed_minor: number | null; claimed_minor: number | null }[];
+  previous_proofs: { attempt_id: string; status: string; observed_minor: number | null; claimed_minor: number | null; supporting?: boolean }[];
   proofs: { attempt_id: string; proof_id: string; claimed_minor: number | null; matching_proofs: number }[];
   claimed_transfer_ms: number | null;
   claimed_reference: string | null;
@@ -137,6 +137,64 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
     </div>}
     {error&&<p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{t(...error)}</p>}
   </div>;
+}
+
+function ApplySupportingSlip({ attemptId, claimedMinor, balance, version, path, apiFetch, language, onUpdated }: {
+  attemptId: string; claimedMinor: number | null; balance: number; version: number; path: string;
+  apiFetch: ApiFetch; language: "th" | "en"; onUpdated: () => void;
+}) {
+  const t = (th: string, en: string) => language === "th" ? th : en;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const command = useRef<{ body: string; key: string } | undefined>(undefined);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const amountMinor = Math.round(Number(new FormData(event.currentTarget).get("amount")) * 100);
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || amountMinor > balance) return;
+    const body = JSON.stringify({ decision: "apply_supporting", attempt_id: attemptId, version, balance_amount_minor: amountMinor,
+      reason: "Confirmed transfer in bank records and applied it to the balance" });
+    if (command.current?.body !== body) command.current = { body, key: crypto.randomUUID() };
+    setBusy(true);
+    setError("");
+    try {
+      const response = await apiFetch(path + "/review", {
+        method: "POST", body, headers: { "Content-Type": "application/json", "Idempotency-Key": command.current.key },
+      });
+      if (response.ok) {
+        onUpdated();
+        return;
+      }
+      const result = await response.json().catch(() => ({}));
+      setError(result.error === "version_conflict"
+        ? t("ใบจองมีการเปลี่ยนแปลง กรุณากดโหลดใหม่", "The booking changed. Refresh and try again.")
+        : t("อนุมัติสลิปนี้ไม่ได้ กรุณาโหลดใบจองใหม่เพื่อตรวจยอดค้างและสถานะสลิป", "Could not apply this slip. Refresh to check its status and the current balance."));
+    } catch {
+      setError(t("ติดต่อระบบไม่สำเร็จ กรุณาลองใหม่", "Could not reach the server. Try again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <details className="mt-1 rounded-md border border-slate-200 p-2">
+    <summary className="cursor-pointer font-semibold text-blue-700">
+      {t("อนุมัติสลิปนี้เข้ายอดค้าง", "Approve this slip toward the balance")}
+    </summary>
+    <form onSubmit={submit} className="mt-2 space-y-2">
+      <label className="block max-w-64">{t("ยอดที่ตรวจแล้ว (บาท)", "Verified transfer amount (THB)")}
+        <input className={inputClass} type="number" name="amount" min="0.01" max={balance / 100} step="0.01" required
+          defaultValue={claimedMinor != null && claimedMinor > 0 && claimedMinor <= balance ? claimedMinor / 100 : undefined} />
+      </label>
+      <p className="text-xs text-slate-600">
+        {t("ตรวจว่ายอดเงินเข้าบัญชีแล้วก่อนกดอนุมัติ", "Confirm this transfer in the bank account before approving.")}
+      </p>
+      <button type="submit" disabled={busy} className={`${toolbarControl} registration-admin-control-primary`}>
+        {busy ? t("กำลังบันทึก…", "Saving…") : t("ยืนยันการอนุมัติ", "Confirm approval")}
+      </button>
+      {error && <p role="alert" className="text-rose-800">{error}</p>}
+    </form>
+  </details>;
 }
 
 export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, focusBookingEditor, onFocusConsumed, summary, summaryError, onSummaryRefresh }: {
@@ -511,7 +569,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   <ul className="grid gap-1.5">
                     {review.previous_proofs.map((proof, index) => {
                       const amount = proof.observed_minor ?? proof.claimed_minor;
-                      const status = proof.status === "verified" ? t("ตรวจแล้ว", "Reviewed") :
+                      const status = proof.supporting ? t("หลักฐานประกอบ", "Supporting evidence") : proof.status === "verified" ? t("ตรวจแล้ว", "Reviewed") :
                         proof.status === "rejected" ? t("ปฏิเสธแล้ว", "Rejected") : t("ส่งแล้ว", "Submitted");
                       return <li key={proof.attempt_id}>
                         <a className="flex flex-wrap items-center justify-between gap-x-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-blue-700 hover:underline"
@@ -522,6 +580,10 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                           <span>{t(`เปิดสลิป ${index + 1}`, `Open slip ${index + 1}`)} · {status}</span>
                           {amount != null && <span className="font-semibold tabular-nums">{money.format(amount / 100)}</span>}
                         </a>
+                        {proof.supporting && review.balance_due_minor > 0 && <ApplySupportingSlip
+                          key={review.version} attemptId={proof.attempt_id} claimedMinor={proof.claimed_minor}
+                          balance={review.balance_due_minor} version={review.version} path={path} apiFetch={apiFetch}
+                          language={language} onUpdated={() => refreshAfterUpdate(review.booking_reference)} />}
                       </li>;
                     })}
                   </ul>
