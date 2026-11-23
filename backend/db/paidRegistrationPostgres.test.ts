@@ -50,7 +50,7 @@ test("PostgreSQL paid migrations preserve legacy rows and serialize group holds,
     const accepted = contenders.find((result) => result.status === "fulfilled");
     const refused = contenders.find((result) => result.status === "rejected");
     assert.ok(accepted && refused);
-    assert.match(String(refused.reason), /capacity_exhausted/);
+    assert.match(String(refused.reason), /attendee_already_registered/);
     const booking = accepted.value;
     const detail = await db.readOwnedPaidBooking(event.id, booking.id, customer.id);
     const [first] = detail?.attendees as { id: string }[];

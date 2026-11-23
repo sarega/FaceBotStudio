@@ -37,6 +37,8 @@ const errorLabels: Record<string, Copy> = {
   version_conflict: ["ใบจองนี้มีการแก้ไข กรุณาค้นหาใหม่", "This booking has changed. Look it up again."],
   registration_unavailable: ["งานนี้ไม่ได้เปิดรับลงทะเบียน", "Registration is closed for this event."],
   capacity_exhausted: ["ที่ว่างไม่พอสำหรับเปิดใบจองใหม่", "There is insufficient capacity to reinstate the booking."],
+  attendee_already_registered: ["มีชื่อผู้เข้าร่วมซ้ำกับใบจองอื่นของงานนี้", "Another booking for this event has a matching attendee name."],
+  duplicate_attendee_in_booking: ["มีชื่อผู้เข้าร่วมซ้ำกันในใบจองนี้", "This booking contains a duplicate attendee name."],
   state_conflict: ["สถานะใบจองไม่รองรับการดำเนินการนี้", "This operation is unavailable for the current booking status."],
   hold_expired: ["หมดเวลาชำระเงินแล้ว", "The payment deadline has passed."],
   already_checked_in: ["มีผู้เข้าร่วมเช็กอินแล้ว", "An attendee has already checked in."],

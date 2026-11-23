@@ -187,14 +187,14 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     // produce a 24-hour renewed invoice without blocking later registrations.
     assert.equal(Number(newExternalSettings?.hold_minutes), 1440);
     const recoveryPrefix = origin + "/api/public/events/" + newExternalEvent.slug + "/paid-bookings";
-    const recoveryBody = JSON.stringify({ pricing_version: Number(newExternalSettings?.version),
+    const recoveryBookingInput = { pricing_version: Number(newExternalSettings?.version),
       contact: { name: "Returning attendee" },
-      attendees: [{ category_id: "general", first_name: "Return", last_name: "Guest" }] });
+      attendees: [{ category_id: "general", first_name: "Return", last_name: "Guest" }] };
     const recoveryCreate = await fetch(recoveryPrefix, {
       method: "POST",
       headers: { ...headers("test-owner"), "Content-Type": "application/json",
         "x-csrf-token": "fixture-csrf", "Idempotency-Key": "return-1" },
-      body: recoveryBody,
+      body: JSON.stringify(recoveryBookingInput),
     });
     assert.equal(recoveryCreate.status, 201, await recoveryCreate.clone().text());
     const recoveryBooking = await recoveryCreate.json();
@@ -226,7 +226,9 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       method: "POST",
       headers: { ...headers("test-owner"), "Content-Type": "application/json",
         "x-csrf-token": "fixture-csrf", "Idempotency-Key": "return-2" },
-      body: recoveryBody,
+      body: JSON.stringify({ ...recoveryBookingInput,
+        attendees: [{ ...recoveryBookingInput.attendees[0], first_name: "Additional" }],
+      }),
     });
     assert.equal(bookingMore.status, 201, await bookingMore.clone().text());
     assert.notEqual((await bookingMore.json()).id, recoveryBooking.id);
@@ -402,13 +404,13 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     });
     assert.equal(externalApproval.status, 200, await externalApproval.clone().text());
     assert.equal((await externalApproval.json()).status, "confirmed");
-    const body = JSON.stringify({
+    const groupInput = (names: string[]) => JSON.stringify({
       pricing_version: 1, contact: { name: "Test Customer" },
-      attendees: ["One", "Two"].map((name) => ({ category_id: "adult", first_name: name, last_name: "Guest" })),
+      attendees: names.map((name) => ({ category_id: "adult", first_name: name, last_name: "Guest" })),
     });
-    const create = (key: string, csrf = "fixture-csrf") => fetch(`${prefix}/paid-bookings`, {
-      method: "POST", body,
-      headers: { ...headers("test-owner"), "Content-Type": "application/json", "Idempotency-Key": key, "x-csrf-token": csrf },
+    const create = (key: string, csrf = "fixture-csrf", token = "test-owner", requestBody = groupInput(["One", "Two"])) => fetch(`${prefix}/paid-bookings`, {
+      method: "POST", body: requestBody,
+      headers: { ...headers(token), "Content-Type": "application/json", "Idempotency-Key": key, "x-csrf-token": csrf },
     });
     assert.equal((await create("group", "wrong")).status, 403);
     const placed = await create("group");
@@ -430,7 +432,10 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(otherList.status, 200);
     assert.deepEqual((await otherList.json()).bookings, []);
     assert.deepEqual(await (await create("group")).json(), booking);
-    const overflow = await create("overflow");
+    const duplicate = await create("duplicate-attendees", "fixture-csrf", "test-other");
+    assert.equal(duplicate.status, 409);
+    assert.deepEqual(await duplicate.json(), { error: "attendee_already_registered" });
+    const overflow = await create("overflow", "fixture-csrf", "test-owner", groupInput(["Three", "Four"]));
     assert.equal(overflow.status, 409);
     assert.equal((await overflow.json()).error, "capacity_exhausted");
     const ownedPath = `${origin}/api/customer/paid-bookings/${event.id}/${booking.id}`;
@@ -1101,7 +1106,8 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const overLimit=await fetch(couponPage+"/paid-bookings",{
       method:"POST",headers:{...headers("test-owner"),"Content-Type":"application/json",
         "x-csrf-token":"fixture-csrf","Idempotency-Key":"coupon-free-http-2"},
-      body:JSON.stringify({...couponPayload,contact:{name:"Coupon Test"}}),
+      body:JSON.stringify({...couponPayload,contact:{name:"Coupon Test"},
+        attendees:[{...couponPayload.attendees[0],first_name:"Another Coupon"}]}),
     });
     assert.equal(overLimit.status,409,await overLimit.clone().text());
     assert.equal((await overLimit.json()).error,"coupon_exhausted");
@@ -1361,7 +1367,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const bookWithCredit = (credit_minor: number, key: string, token = "test-owner") => fetch(externalPublic + "/paid-bookings", {
       method: "POST", headers: { ...headers(token), "Content-Type": "application/json", "Idempotency-Key": key, "x-csrf-token": "fixture-csrf" },
       body: JSON.stringify({ pricing_version: 2, credit_minor, contact: { name: "Credit test" },
-        attendees: [{ category_id: "general", first_name: "Credit", last_name: "Guest" }] }),
+        attendees: [{ category_id: "general", first_name: "Credit", last_name: key }] }),
     });
     assert.equal((await bookWithCredit(250000, "cannot-spend-other-accounts-credit", "test-other")).status, 409);
     const part = await bookWithCredit(100000, "partial-credit");

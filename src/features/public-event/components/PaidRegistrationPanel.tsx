@@ -245,6 +245,14 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
           setCreditBalance(available_minor);
         } catch { setCreditBalance(0); }
         setError(locale === "th" ? "ยอดเครดิตเปลี่ยนแล้ว กรุณาตรวจยอดใหม่ก่อนยืนยัน" : "Credit changed. Review the updated total and confirm again.");
+      } else if (message === "attendee_already_registered") {
+        setError(locale === "th"
+          ? "มีชื่อและนามสกุลของผู้เข้าร่วมในใบจองของงานนี้แล้ว กรุณาตรวจสอบกับผู้เข้าร่วมหรือติดต่อผู้จัดงานหากเป็นคนละคน"
+          : "An attendee with this full name already has a booking for this event. Check with the attendee or contact the organizer if this is a different person.");
+      } else if (message === "duplicate_attendee_in_booking") {
+        setError(locale === "th"
+          ? "มีชื่อและนามสกุลซ้ำกันในใบจองนี้ กรุณาตรวจรายชื่อผู้เข้าร่วม"
+          : "This booking contains the same full name more than once. Check the attendee list.");
       } else {
         setError(errors[message] || "The booking could not be completed. Retry to check the result.");
       }

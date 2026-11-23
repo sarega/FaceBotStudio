@@ -13615,6 +13615,12 @@ async function handleIncomingFacebookText(
             reply = thai ? "กรุณาเชื่อมบัญชีจากหน้ากิจกรรมก่อนจอง" : "Link your verified account from the event page before booking.";
           } else if (error.code === "capacity_exhausted") {
             reply = thai ? "ที่ว่างไม่พอสำหรับกลุ่มนี้" : "There is not enough capacity for this group.";
+          } else if (error.code === "attendee_already_registered") {
+            reply = thai ? "มีชื่อและนามสกุลของผู้เข้าร่วมในใบจองของงานนี้แล้ว กรุณาตรวจสอบกับผู้เข้าร่วมหรือติดต่อผู้จัดงานหากเป็นคนละคน"
+              : "An attendee with this full name already has a booking for this event. Check with the attendee or contact the organizer if this is a different person.";
+          } else if (error.code === "duplicate_attendee_in_booking") {
+            reply = thai ? "มีชื่อและนามสกุลซ้ำกันในใบจองนี้ กรุณาตรวจรายชื่อผู้เข้าร่วม"
+              : "This booking contains the same full name more than once. Check the attendee list.";
           } else {
             reply = thai ? "จองไม่สำเร็จ กรุณาตรวจสอบราคาแล้วเริ่มใหม่จากหน้ากิจกรรม" : "Could not book. Check the latest prices and start again from the event page.";
           }

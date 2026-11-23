@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.9 - 2026-11-23
+
+- Include paid registrations in Operations reports and align paid roster permissions with legacy registrations. Notify operators about booking activity.
+- Streamline public event cards and preserve full event posters on mobile and desktop. Improve attendee payment reminders and booking navigation.
+- Unify booking management and slip review with sorting, attendee names and prices, slip history, staff uploads, AI-assisted slip reading, and support for early transfers.
+- Flag and correct attendee prices, notify customers about balances, review split payments, and apply coupons to eligible unpaid bookings. Record refunds or issue booking credits.
+- Add room assignments and carpool planning, with color-coded room and registration statuses.
+- Link staff and attendee accounts and improve staff activation, profiles, and password recovery.
+- Reject duplicate attendee names within a booking or across active bookings when unique names are required, including when restoring a booking.
+
 ## 0.11.8 - 2026-11-20
 
 - Invite staff by email from Team Access with a role and event assignments. The recipient verifies the address and sets their password using a one-time link that expires after 24 hours.

@@ -101,6 +101,43 @@ function* paidEnrollmentOpen(eventId: string, now: number): PaidCommand<boolean>
     getEffectiveEventStatus(String(event.status), settings, instant) === "active";
 }
 
+function paidAttendeeNameKey(firstName: unknown, lastName: unknown): string {
+  return JSON.stringify([firstName, lastName].map((part) =>
+    String(part ?? "").normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase(),
+  ));
+}
+
+function* assertUniquePaidAttendeeNames(
+  eventId: string, now: number, input: PaidBookingInput["attendees"] | string,
+): PaidCommand<void> {
+  const [setting] = yield query("SELECT value FROM event_settings WHERE event_id=? AND key='reg_unique_name'", eventId);
+  if (setting && !["1", "true", "yes", "on"].includes(String(setting.value).trim().toLowerCase())) return;
+
+  let names: string[];
+  if (typeof input === "string") {
+    const rows = yield query(
+      "SELECT first_name,last_name FROM paid_attendees WHERE event_id=? AND booking_id=? AND cancelled_ms IS NULL",
+      eventId, input,
+    );
+    names = rows.map((row) => paidAttendeeNameKey(row.first_name, row.last_name));
+  } else {
+    names = input.map(({ firstName, lastName }) => paidAttendeeNameKey(firstName, lastName));
+  }
+  const uniqueNames = new Set(names);
+  if (uniqueNames.size < names.length) throw new PaidBookingError("duplicate_attendee_in_booking");
+
+  const activeAttendees = yield query(
+    `SELECT a.first_name,a.last_name FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id
+     WHERE a.event_id=? AND a.cancelled_ms IS NULL
+       AND (b.state IN ('confirmed','verification_pending','payment_exception') OR
+            (b.state='awaiting_payment' AND b.due_ms>?))`,
+    eventId, now,
+  );
+  if (activeAttendees.some((row) => uniqueNames.has(paidAttendeeNameKey(row.first_name, row.last_name)))) {
+    throw new PaidBookingError("attendee_already_registered");
+  }
+}
+
 export function* readPaidCreditBalance(eventId: string, customerId: string, now = Date.now()): PaidCommand<number> {
   const [row] = yield query(
     `SELECT (SELECT COALESCE(SUM(amount_minor),0) FROM paid_booking_credits WHERE event_id=? AND customer_id=?) -
@@ -169,6 +206,7 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
   if (!(yield* paidEnrollmentOpen(eventId, now))) throw new PaidBookingError("registration_unavailable");
   const dueMs = resolvePaidDeadline(settings, now);
   if (!Number.isSafeInteger(dueMs) || dueMs <= now) throw new PaidBookingError("registration_unavailable");
+  yield* assertUniquePaidAttendeeNames(eventId, now, attendees);
 
   const categories = yield query(
     `SELECT c.id,c.label,c.unit_minor,c.accommodation_discount_minor,c.quota,c.enabled,COALESCE(occupied.units,0) AS occupied
@@ -365,6 +403,7 @@ export function* reinstateOwnedPaidBooking(eventId: string, bookingId: string, c
   if (!settings || Number(settings.published) !== 1) throw new PaidBookingError("registration_unavailable");
   const due = resolvePaidDeadline(settings, now);
   if (!Number.isSafeInteger(due) || due <= now) throw new PaidBookingError("hold_expired");
+  yield* assertUniquePaidAttendeeNames(eventId, now, bookingId);
   const requested = yield query(
     "SELECT category_id,COUNT(*) AS units FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL GROUP BY category_id",
     bookingId,
@@ -1493,6 +1532,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
     due=Math.min(now+holdMinutes!*60000,settings.cutoff_ms==null?Infinity:Number(settings.cutoff_ms));
     if (!Number.isSafeInteger(due) || due<=now) throw new PaidBookingError("hold_expired");
     if (action==="reinstate") {
+      yield* assertUniquePaidAttendeeNames(eventId, now, bookingId);
       const requested=yield query("SELECT category_id,COUNT(*) AS units FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL GROUP BY category_id",bookingId);
       const occupied=yield query(
         "SELECT a.category_id,COUNT(*) AS units FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id " +

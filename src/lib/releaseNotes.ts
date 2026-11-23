@@ -1,5 +1,17 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.9",
+    date: "2026-11-23",
+    title: "Unified booking management and seminar operations",
+    features: [
+      "Manage bookings, review and upload slips, and see attendee prices in one view",
+      "Flag and correct prices, notify customers of balances, review split payments, and apply coupons",
+      "Plan rooms and carpools, and see paid attendees in Operations reports",
+      "Prevent duplicate attendee bookings when unique names are required",
+      "Use improved staff activation, account switching, and password recovery",
+    ],
+  },
+  {
     version: "0.11.8",
     date: "2026-11-20",
     title: "Staff invitations and clearer slip review",

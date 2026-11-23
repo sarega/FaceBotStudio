@@ -254,8 +254,23 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal(receipt.totalMinor, 50000);
     assert.deepEqual(await second.createPaidBooking(command), receipt);
     await assert.rejects(second.createPaidBooking({ ...command, contact: { name: "Changed" } }), /idempotency_conflict/);
-    await assert.rejects(second.createPaidBooking({ ...command, key: "another-group" }), /capacity_exhausted/);
-    await assert.rejects(second.createPaidBooking({ ...command, key: "one-guest", attendees: command.attendees.slice(0, 1) }), /capacity_exhausted/);
+    await assert.rejects(second.createPaidBooking({ ...command, key: "another-group" }), /attendee_already_registered/);
+    const otherBooker = await db.createCustomerAccount({
+      email: "paid-other@example.com", normalized_email: "paid-other@example.com", password_hash: "fixture",
+      first_name: "Other", last_name: "Buyer", phone: "", normalized_phone: "", accepted_terms_at: new Date(), accepted_privacy_at: new Date(),
+    });
+    const firstGuest = command.attendees[0];
+    const matchingGuest = { ...firstGuest, firstName: " one  ", lastName: "GUEST" };
+    await assert.rejects(second.createPaidBooking({
+      ...command, key: "other-booker", customerId: otherBooker.id,
+      contact: { name: "Other Buyer" }, attendees: [matchingGuest],
+    }), /attendee_already_registered/);
+    await assert.rejects(second.createPaidBooking({
+      ...command, key: "repeat-in-group", attendees: [firstGuest, matchingGuest],
+    }), /duplicate_attendee_in_booking/);
+    await assert.rejects(second.createPaidBooking({
+      ...command, key: "one-guest", attendees: [{ ...firstGuest, firstName: "Three" }],
+    }), /capacity_exhausted/);
     await assert.rejects(db.savePaidSettings(event.id, { ...settings, version: 1, capacity: 1 }), /capacity_in_use/);
     fixture.prepare("UPDATE paid_bookings SET created_ms=1,due_ms=2 WHERE id=?").run(receipt.id);
     assert.deepEqual(await db.listDuePaidEvents(Date.now()), [event.id]);
@@ -265,7 +280,8 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.deepEqual(expiredRooming.guests.map(({ bookingState }) => bookingState), ["expired", "expired"]);
     assert.deepEqual(expiredRooming.rooms, reservedRooms);
 
-    assert.deepEqual(await raceGroups(file, command), ["booked", "capacity_exhausted"]);
+    assert.deepEqual(await raceGroups(file, command), ["attendee_already_registered", "booked"]);
+    await assert.rejects(db.reinstateOwnedPaidBooking(event.id, receipt.id, customer.id), /attendee_already_registered/);
     assert.equal((fixture.prepare("SELECT COUNT(*) AS count FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id WHERE b.state='awaiting_payment'").get() as { count: number }).count, 2);
     assert.equal((await db.listOwnedPaidBookings(customer.id, 20, 0)).length, 2);
     const bookings = await db.listOwnedPaidBookings(customer.id, 20, 0);
@@ -329,6 +345,9 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.ok(await db.readPaidProof(event.id, String(active.id), submitted.attempt_id, "org_default"));
     const confirmed = await db.reviewPaidProof(approval);
     assert.equal(confirmed.status, "confirmed");
+    await assert.rejects(second.createPaidBooking({
+      ...command, key: "after-confirmation", customerId: otherBooker.id, attendees: [matchingGuest],
+    }), /attendee_already_registered/);
     const confirmedRooming = (await db.paidRoomingPlan(event.id, "org_default"))!;
     assert.deepEqual(confirmedRooming.guests.filter(guest => guest.bookingId === active.id).map(guest => guest.bookingState),
       ["confirmed", "confirmed"]);
@@ -549,7 +568,7 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal((reopenedDetail?.attendees as unknown[]).length, 2);
     const additional = await db.createPaidBooking({
       ...command, eventId: recoveryEvent.id, key: "extra-attendee",
-      pricingVersion: Number(recoverySettings.version), attendees: command.attendees.slice(0, 1),
+      pricingVersion: Number(recoverySettings.version), attendees: [{ ...firstGuest, firstName: "Extra" }],
     });
     assert.notEqual(additional.id, recovering.id);
     assert.equal((await db.listOwnedPaidBookings(customer.id, 20, 0))
@@ -639,7 +658,7 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
       [260000, 170000]);
     await assert.rejects(db.createPaidBooking({
       ...priceInput, key: "missing-choice",
-      attendees: priceInput.attendees.map((attendee) => ({ ...attendee, answers: {} })),
+      attendees: priceInput.attendees.map((attendee) => ({ ...attendee, lastName: "Missing Choice", answers: {} })),
     }), /invalid_seminar_answers/);
 
     const defaultsEvent = await db.createEvent({name:"Seminar selection defaults",organizer_id:"org_default"});
@@ -669,15 +688,16 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal(seminarRoster.length,1);
     assert.deepEqual(seminarRoster[0].answers,{accommodation:"yes",food:"Vegetarian"});
     const noHotel=await db.createPaidBooking({...defaultsCommand,key:"declines-room",
-      attendees:[{...defaultsCommand.attendees[0],
+      attendees:[{...defaultsCommand.attendees[0],firstName:"No Hotel",
         answers:{accommodation:"no",food:"Non-vegetarian"}}]});
     assert.equal(noHotel.totalMinor,260000);
     await assert.rejects(db.createPaidBooking({...defaultsCommand,key:"invalid-food",
-      attendees:[{...defaultsCommand.attendees[0],answers:{accommodation:"yes",food:"Other"}}]}),
+      attendees:[{...defaultsCommand.attendees[0],firstName:"Invalid Food",answers:{accommodation:"yes",food:"Other"}}]}),
       /invalid_seminar_answers/);
 
     const couponEvent = await db.createEvent({ name: "Coupon test", organizer_id: "org_default" });
     await db.updateEvent(couponEvent.id, { status: "active" });
+    await db.upsertSettings({ reg_unique_name: "0" }, couponEvent.id);
     await db.savePaidSettings(couponEvent.id, {
       ...settings, capacity: 12, categories: [{id:"adult",label:"Adult",unitMinor:340000,quota:null}],
       paymentMode:"external_manual",
