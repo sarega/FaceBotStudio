@@ -1377,6 +1377,9 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(supplementReviews.length, 1);
     assert.equal(supplementReviews[0].proofs.length, 2);
     assert.equal(supplementReviews[0].balance_due_minor, 50000);
+    assert.equal(supplementReviews[0].attendees[0].id, correctedDetails.attendees[0].id);
+    assert.equal(supplementReviews[0].attendees[0].category_label, correctedDetails.attendees[0].category_label);
+    assert.equal(supplementReviews[0].attendees[0].unit_minor, 300000);
     const supplementalApproval = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/review", {
       method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "approve-both-supplements" },
       body: JSON.stringify({ decision: "approve", attempt_id: secondSupplementResult.attempt_id,
@@ -1400,6 +1403,16 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const paidAdminDetail = await (await fetch(adminLookup, { headers: staffHeaders })).json();
     assert.equal(paidAdminDetail.booking.cash_confirmed, true);
     assert.equal(paidAdminDetail.booking.proofs.length, 3);
+    const [verifiedBookingReview] = (await (await fetch(externalPrefix + "/review-queue?reference=" +
+      externalSlipBooking.reference, { headers: staffHeaders })).json()).reviews;
+    assert.equal(verifiedBookingReview.booking_state, "confirmed");
+    assert.equal(verifiedBookingReview.attempt_id, null);
+    assert.equal(verifiedBookingReview.attendees[0].unit_minor, 300000);
+    assert.deepEqual(verifiedBookingReview.proofs, []);
+    assert.equal(verifiedBookingReview.previous_proofs.length, 3);
+    assert.equal(verifiedBookingReview.previous_proofs.reduce((sum: number, proof: { observed_minor: number | null }) =>
+      sum + (proof.observed_minor ?? 0), 0), 300000);
+
     const supportingSlip = await sharp({ create: {
       width: 103, height: 151, channels: 3, background: "#b4b0ce",
     } }).png().toBuffer();

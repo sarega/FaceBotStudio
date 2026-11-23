@@ -287,6 +287,11 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal(queued.attempt_id, submitted.attempt_id);
     assert.equal(queued.attendee_count, 2);
     assert.deepEqual(queued.attendee_names, ["One Guest", "Two Guest"]);
+    const reviewAttendees = queued.attendees as { name: string; category_label: string; unit_minor: number }[];
+    assert.deepEqual(reviewAttendees.map(({ name, category_label, unit_minor }) => [name, category_label, unit_minor]), [
+      ["One Guest", "Adult", 25000],
+      ["Two Guest", "Adult", 25000],
+    ]);
     assert.equal(queued.receiver_last_four, "5678");
     assert.ok(!("receiver_id" in queued) && !("content" in queued));
     await assert.rejects(db.listPaidReviewQueue(event.id, "other", 0), /event_not_found/);

@@ -1060,7 +1060,9 @@ export function* listPaidReviewQueue(
 ): PaidCommand<PaidRow[]> {
   const direction = sort === "desc" ? "DESC" : "ASC";
   const rows = yield query(
-    `SELECT b.id AS booking_id,b.reference AS booking_reference,b.version,b.total_minor,b.payment_state,b.state AS booking_state,
+    `SELECT b.id AS booking_id,b.reference AS booking_reference,b.version,b.total_minor,b.payment_state,
+       CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS booking_state,
+       CASE WHEN ${confirmedCashPayment} THEN 1 ELSE 0 END AS cash_confirmed,
        b.event_id,b.customer_id,b.created_ms AS booking_created_ms,b.due_ms,${confirmedBalance} AS balance_due_minor,
        e.name AS event_name,c.first_name AS customer_first_name,c.last_name AS customer_last_name,
        c.email AS customer_email,c.phone AS customer_phone,
@@ -1072,53 +1074,67 @@ export function* listPaidReviewQueue(
      JOIN customer_accounts c ON c.id=b.customer_id
      LEFT JOIN paid_payment_attempts a
        ON a.id=(SELECT latest.id FROM paid_payment_attempts latest
-         WHERE latest.booking_id=b.id AND latest.event_id=b.event_id AND latest.status IN ('proof_submitted','exception')
+         WHERE latest.booking_id=b.id AND latest.event_id=b.event_id
+           AND (b.state='verification_pending' OR (b.state='confirmed' AND b.payment_state='verified'))
+           AND latest.status IN ('proof_submitted','exception')
          ORDER BY latest.sequence DESC LIMIT 1)
      LEFT JOIN paid_proofs p ON p.attempt_id=a.id LEFT JOIN paid_booking_receivers r ON r.booking_id=b.id
      JOIN paid_event_settings es ON es.event_id=b.event_id
-     WHERE b.event_id=? AND ${reference ? "b.reference=?" : "1=1"}
-       AND ((b.state='verification_pending' AND a.id IS NOT NULL)
-         OR (a.id IS NOT NULL AND ${confirmedCashPayment})
-         OR (${confirmedBalance}>0 AND (a.id IS NOT NULL OR ?=1))
-         OR (b.state='awaiting_payment' AND b.due_ms>?
-           AND (es.payment_mode='external_manual' OR ?)))
+     WHERE b.event_id=? AND ${reference ? "b.reference=?" : `(
+       (b.state='verification_pending' AND a.id IS NOT NULL)
+       OR (a.id IS NOT NULL AND ${confirmedCashPayment})
+       OR (b.state='awaiting_payment' AND b.due_ms>? AND es.payment_mode='external_manual')
+     )`}
      ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 ELSE 1 END,
        COALESCE(a.created_ms,b.created_ms) ${direction},b.id ${direction},a.id ${direction} LIMIT 21 OFFSET ?`,
-    eventId, ...(reference ? [reference] : []), reference ? 1 : 0, Date.now(), reference ? 1 : 0, offset,
+    Date.now(), eventId, reference || Date.now(), offset,
   );
   if (!rows.length) return [];
 
-  const namesByBooking = new Map(rows.map(({ booking_id }) => [String(booking_id), [] as string[]]));
-  const bookingIds = [...namesByBooking.keys()];
+  const attendeesByBooking = new Map(rows.map(({ booking_id }) => [String(booking_id), [] as {
+    id: string; name: string; category_label: string; unit_minor: number;
+  }[]]));
+  const bookingIds = [...attendeesByBooking.keys()];
   const attendees = yield query(
-    `SELECT booking_id,first_name,last_name FROM paid_attendees
+    `SELECT id,booking_id,first_name,last_name,category_label,unit_minor FROM paid_attendees
      WHERE event_id=? AND booking_id IN (${bookingIds.map(() => "?").join(",")}) AND cancelled_ms IS NULL
      ORDER BY booking_id,ordinal`,
     eventId, ...bookingIds,
   );
   for (const attendee of attendees) {
-    namesByBooking.get(String(attendee.booking_id))?.push([attendee.first_name, attendee.last_name].filter(Boolean).join(" "));
+    attendeesByBooking.get(String(attendee.booking_id))?.push({
+      id: String(attendee.id),
+      name: [attendee.first_name, attendee.last_name].filter(Boolean).join(" "),
+      category_label: String(attendee.category_label),
+      unit_minor: Number(attendee.unit_minor),
+    });
   }
   const proofs = yield query(
-    `SELECT a.booking_id,a.id AS attempt_id,a.claimed_minor,p.id AS proof_id,
+    `SELECT a.booking_id,a.id AS attempt_id,a.status,a.claimed_minor,a.observed_minor,p.id AS proof_id,
        (SELECT COUNT(*) FROM paid_proofs other JOIN paid_payment_attempts check_attempt ON check_attempt.id=other.attempt_id
         WHERE other.checksum=p.checksum AND other.attempt_id<>a.id AND check_attempt.status<>'rejected') AS matching_proofs
      FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id
      WHERE a.event_id=? AND a.booking_id IN (${bookingIds.map(() => "?").join(",")})
-       AND a.status IN ('proof_submitted','exception') AND p.deleted_ms IS NULL ORDER BY a.sequence`,
+       AND p.deleted_ms IS NULL ORDER BY a.sequence`,
     eventId, ...bookingIds,
   );
   const proofsByBooking = new Map(bookingIds.map(id => [id, [] as PaidRow[]]));
   for (const { booking_id, ...proof } of proofs) {
     proofsByBooking.get(String(booking_id))?.push({ ...proof,
       claimed_minor: proof.claimed_minor == null ? null : Number(proof.claimed_minor),
+      observed_minor: proof.observed_minor == null ? null : Number(proof.observed_minor),
       matching_proofs: Number(proof.matching_proofs) });
   }
   return rows.map(({ receiver_id, ...row }) => {
-    const attendeeNames = namesByBooking.get(String(row.booking_id)) ?? [];
+    const bookingAttendees = attendeesByBooking.get(String(row.booking_id)) ?? [];
+    const uploadedProofs = proofsByBooking.get(String(row.booking_id)) ?? [];
+    const pendingProofs = row.attempt_id ? uploadedProofs.filter(proof => ["proof_submitted", "exception"].includes(String(proof.status))) : [];
     return {
-      ...row, proofs: proofsByBooking.get(String(row.booking_id)) ?? [], balance_due_minor: Number(row.balance_due_minor), receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),
-      attendee_names: attendeeNames, attendee_count: attendeeNames.length, matching_proofs: Number(row.matching_proofs),
+      ...row, proofs: pendingProofs,
+      previous_proofs: uploadedProofs.filter(proof => !pendingProofs.includes(proof)),
+      cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor), receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),
+      attendees: bookingAttendees, attendee_names: bookingAttendees.map(attendee => attendee.name),
+      attendee_count: bookingAttendees.length, matching_proofs: Number(row.matching_proofs),
       claimed_minor: row.claimed_minor == null ? null : Number(row.claimed_minor),
       claimed_transfer_ms: row.claimed_transfer_ms == null ? null : Number(row.claimed_transfer_ms),
       booking_created_ms: Number(row.booking_created_ms), due_ms: Number(row.due_ms),

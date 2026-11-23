@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Pencil } from "lucide-react";
 import { paidSeminarFields } from "../../../../backend/paidSeminarFields";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import type { AppLanguage } from "../../../lib/i18n";
@@ -103,9 +104,18 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
                 <span className="block break-all text-slate-500">{person.customer_email}</span>
               </td>
               <td className="px-3 py-2 break-all text-slate-500">
-                {person.booking_reference}
-                {firstInBooking && onManageBooking && <button type="button" className="registration-admin-control mt-1"
-                  onClick={() => onManageBooking(person.booking_reference)}>{language === "th" ? "จัดการใบจอง" : "Manage booking"}</button>}
+                <div className="flex items-start gap-1.5">
+                  <span className="min-w-0">{person.booking_reference}</span>
+                  {firstInBooking && onManageBooking && <button type="button"
+                    aria-label={t("จัดการใบจอง", "Manage booking")}
+                    className="group/edit relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-blue-700 hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-blue-700"
+                    onClick={() => onManageBooking(person.booking_reference)}>
+                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                    <span aria-hidden="true" className="pointer-events-none absolute right-0 top-full z-10 hidden whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs text-white group-hover/edit:block group-focus-visible/edit:block">
+                      {t("จัดการใบจอง", "Manage booking")}
+                    </span>
+                  </button>}
+                </div>
               </td>
               <td className="px-3 py-2 font-semibold text-slate-700">
                 <span className="block font-normal tabular-nums">{format(person.unit_minor)} {t("ต่อคน", "per person")}</span>

@@ -1,35 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { PaidProofForm } from "../../../components/PaidProofForm";
 
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type Booking = {
   id: string; reference: string; state: string; payment_state: string; version: number;
   total_minor: number; balance_due_minor: number;
   cash_confirmed: boolean; pending_proofs: number; payment_notice?: string;
-  payment_mode: "promptpay" | "external_manual";
-  proofs: { attempt_id: string; status: string }[];
   attendee_prices: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number }[];
   due_ms: number; attendees: number; checked_in: number;
   credit_used_minor: number; credit_issued_minor: number;
   refunds: { reference: string; amount_minor: number }[];
 };
 type Copy = [string, string];
-const statusLabels: Record<string, Copy> = {
-  awaiting_payment: ["รอชำระเงิน", "Awaiting payment"],
-  verification_pending: ["รอตรวจสลิป", "Awaiting review"],
-  confirmed: ["ยืนยันแล้ว", "Confirmed"],
-  expired: ["หมดอายุ", "Expired"],
-  cancelled: ["ยกเลิกแล้ว", "Cancelled"],
-  payment_exception: ["ต้องตรวจสอบเพิ่มเติม", "Needs follow-up"],
-  unpaid: ["ยังไม่ชำระ", "Unpaid"],
-  proof_submitted: ["ส่งสลิปแล้ว", "Slip submitted"],
-  verified: ["ตรวจสอบยอดแล้ว", "Payment verified"],
-  supporting: ["หลักฐานประกอบ", "Supporting evidence"],
-  exception: ["ต้องตรวจสอบเพิ่มเติม", "Needs follow-up"],
-  rejected: ["สลิปถูกปฏิเสธ", "Slip rejected"],
-  underpaid: ["ชำระไม่ครบ", "Underpaid"],
-  refunded: ["คืนเงินแล้ว", "Refunded"],
-};
 const actionLabels: Record<string, Copy> = {
   payment_notice: ["ส่งข้อความแจ้งชำระส่วนต่าง", "Send a balance reminder"],
   correct_price: ["แก้ราคาผู้เข้าร่วมและเรียกเก็บส่วนต่าง", "Correct attendee price and collect the difference"],
@@ -55,16 +36,14 @@ const errorLabels: Record<string, Copy> = {
 const control = "registration-admin-control";
 const input = "mt-0.5 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5";
 
-export function PaidBookingOperations({ eventId, apiFetch, onChange, language, initialReference = "" }: {
-  eventId: string; apiFetch: ApiFetch; onChange: () => void; language: "th" | "en"; initialReference?: string;
+export function PaidBookingOperations({ eventId, apiFetch, onChange, language, bookingReference, version }: {
+  eventId: string; apiFetch: ApiFetch; onChange: () => void; language: "th" | "en"; bookingReference: string; version: number;
 }) {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const locale = language === "th" ? "th-TH" : "en-GB";
   const money = new Intl.NumberFormat(locale, { style: "currency", currency: "THB" });
-  const statusLabel = (state: string) => t(...(statusLabels[state] ?? ["ไม่ทราบสถานะ", "Unknown status"]));
   const [chosenAction, setChosenAction] = useState("");
   const [attendeeId, setAttendeeId] = useState("");
-  const [reference, setReference] = useState(initialReference);
   const [booking, setBooking] = useState<Booking | null>(null);
   const [error, setError] = useState<Copy | null>(null);
   const [busy, setBusy] = useState(false);
@@ -92,24 +71,14 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, i
   }
 
   useEffect(() => {
-    if (!initialReference) return;
     const request = new AbortController();
-    void loadBooking(initialReference, request.signal);
+    void loadBooking(bookingReference, request.signal);
     return () => request.abort();
-  }, [base, initialReference]);
-
-  function find(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBooking(null);
-    setChosenAction("");
-    setAttendeeId("");
-    setNoticeSent(false);
-    void loadBooking(reference.trim());
-  }
+  }, [base, bookingReference, version]);
 
   async function manage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!booking || busy || !selectedAction) return;
+    if (!booking || booking.version !== version || busy || !selectedAction) return;
     const values = new FormData(event.currentTarget);
     const action = selectedAction;
     const reason = String(values.get("reason") || "").trim();
@@ -142,7 +111,6 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, i
       if (!response.ok) throw new Error(result.error || "Booking update failed");
       setChosenAction(action === "correct_price" ? "payment_notice" : "");
       setNoticeSent(action === "payment_notice");
-      await loadBooking(booking.reference);
       onChange();
     } catch (failure) { setError((failure instanceof Error && errorLabels[failure.message]) || ["บันทึกการเปลี่ยนแปลงไม่สำเร็จ", "Could not update the booking."]); }
     finally { setBusy(false); }
@@ -158,20 +126,10 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, i
     booking?.state === "verification_pending" || booking?.state === "payment_exception" ? ["cancel"] : [];
   const selectedAction = actions.includes(chosenAction) ? chosenAction : actions[0];
   const attendee = booking?.attendee_prices?.find(item => item.id === attendeeId) ?? booking?.attendee_prices?.[0];
-  const bookingPath = booking ? `${base}/${encodeURIComponent(booking.id)}` : "";
   return (
     <div className="space-y-2 text-sm">
-      <form className="flex flex-wrap items-end gap-1.5" onSubmit={find}>
-        <label className="min-w-0 flex-[0_1_14rem]">{t("เลขอ้างอิงใบจอง", "Booking reference")}
-          <input className={input} required value={reference} onChange={(event) => setReference(event.target.value)} />
-        </label>
-        <button disabled={busy} className={control}>{t("ค้นหา", "Find booking")}</button>
-      </form>
       {busy && !booking && <p role="status">{t("กำลังโหลดใบจอง…", "Loading booking…")}</p>}
       {booking && <div className="space-y-1.5">
-        <p className="break-all font-medium">{booking.reference}</p>
-        <p>{t(`ผู้เข้าร่วม ${booking.attendees} คน`, `${booking.attendees} attendees`)} · {money.format(booking.total_minor / 100)} · {statusLabel(booking.state)} / {statusLabel(booking.payment_state)}</p>
-        {booking.balance_due_minor > 0 && <p className="font-semibold text-amber-800">{t("ยอดชำระเพิ่ม", "Additional amount due")} {money.format(booking.balance_due_minor / 100)}</p>}
         <p>{t("กำหนดชำระ", "Payment deadline")} {new Date(booking.due_ms).toLocaleString(locale, { timeZone: "Asia/Bangkok" })} · {t("เช็กอินแล้ว", "Checked in")} {booking.checked_in}</p>
         {!!booking.refunds?.length && <p>{t("บันทึกคืนเงินแล้ว", "Refund recorded")} {booking.refunds.map(item => `${money.format(item.amount_minor / 100)} · ${item.reference}`).join(", ")}</p>}
         {booking.credit_issued_minor > 0 && <p>{t("เครดิตที่ออกให้", "Credit issued")} {money.format(booking.credit_issued_minor / 100)}</p>}
@@ -180,30 +138,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, i
         {booking.balance_due_minor > 0 && booking.payment_notice && <p className="whitespace-pre-wrap text-slate-700">
           <strong>{t("ข้อความล่าสุดถึงผู้จอง", "Latest message to the customer")}</strong> {booking.payment_notice}
         </p>}
-        {!!booking.proofs.length && <ul className="flex flex-wrap gap-2">
-          {booking.proofs.map((proof, index) => <li key={proof.attempt_id}>
-            <a className="registration-admin-control" href={`${bookingPath}/proofs/${encodeURIComponent(proof.attempt_id)}`} target="_blank" rel="noopener noreferrer">
-              {t(`สลิป ${index + 1}`, `Slip ${index + 1}`)} · {statusLabel(proof.status)}
-            </a>
-          </li>)}
-        </ul>}
-        {booking.cash_confirmed && <details key={booking.id}>
-          <summary className={`${control} paid-slip-staff-submit cursor-pointer`}>{t("แนบสลิปแทนผู้จอง", "Attach a slip for the customer")}</summary>
-          <div className="mt-2 max-w-xl space-y-2">
-            <p>{booking.balance_due_minor > 0
-              ? t("สลิปจะเข้าคิวตรวจยอดส่วนต่าง", "The slip goes to the review queue for the remaining balance.")
-              : t("แนบเป็นหลักฐานประกอบใบเดิม ยอดที่ชำระแล้วคงเดิม", "Attach supporting evidence to this booking. The paid amount stays the same.")}</p>
-            <PaidProofForm key={booking.version} staff bookingReference={booking.reference} locale={language}
-              path={bookingPath} version={booking.version} paymentMode={booking.payment_mode} totalMinor={booking.balance_due_minor || null}
-              submitRequest={async (url, init) => {
-                const response = await apiFetch(url, init);
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.error || "proof_unavailable");
-                return result;
-              }}
-              onSubmitted={() => { void loadBooking(booking.reference); onChange(); }} />
-          </div>
-        </details>}
+        {actions.length === 0 && <p className="text-slate-600">{t("สถานะนี้ไม่มีรายการให้แก้ไข", "No edits available for this status.")}</p>}
         {actions.length > 0 && <form key={selectedAction} onSubmit={manage} className="grid max-w-xl gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-2">
           <label>{t("การดำเนินการ", "Operation")}
             <select value={selectedAction} onChange={event => setChosenAction(event.target.value)} className={input} required>
@@ -239,7 +174,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, i
           {selectedAction === "credit" && <p className="text-xs text-amber-800 sm:col-span-2">
             {t("ยอดชำระจะเก็บไว้เป็นเครดิตในบัญชีผู้จองสำหรับงานนี้ ระบบจะยกเลิกบัตรของใบจองเดิม", "The paid amount becomes credit for this event in the booker’s account. Existing passes are revoked.")}
           </p>}
-          <button disabled={busy} className={`${control} registration-admin-control-primary justify-self-start`}>{selectedAction === "payment_notice" ? t("ส่งข้อความ", "Send message") : t("บันทึก", "Save operation")}</button>
+          <button disabled={busy || booking.version !== version} className={`${control} registration-admin-control-primary justify-self-start`}>{selectedAction === "payment_notice" ? t("ส่งข้อความ", "Send message") : t("บันทึก", "Save operation")}</button>
         </form>}
       </div>}
       {error && <p role="alert" className="text-red-700">{t(...error)}</p>}

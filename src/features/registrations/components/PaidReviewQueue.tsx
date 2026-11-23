@@ -22,11 +22,13 @@ type Review = {
   version: number;
   total_minor: number;
   attendee_count: number;
-  attendee_names?: string[];
+  attendees: { id: string; name: string; category_label: string; unit_minor: number }[];
   claimed_minor: number | null;
   proof_id: string | null;
   balance_due_minor: number;
   booking_state: string;
+  cash_confirmed: boolean;
+  previous_proofs: { attempt_id: string; status: string; observed_minor: number | null; claimed_minor: number | null }[];
   proofs: { attempt_id: string; proof_id: string; claimed_minor: number | null; matching_proofs: number }[];
   claimed_transfer_ms: number | null;
   claimed_reference: string | null;
@@ -135,10 +137,10 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
   </div>;
 }
 
-export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, focusBookingManagement, onFocusConsumed, summary, summaryError, onSummaryRefresh }: {
+export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, focusBookingEditor, onFocusConsumed, summary, summaryError, onSummaryRefresh }: {
   eventId: string; apiFetch: ApiFetch; onOpenCustomer?:(customerId:string)=>void;
   focusBookingReference?:string;
-  focusBookingManagement?: boolean;
+  focusBookingEditor?: boolean;
   onFocusConsumed: () => void;
   summary?: Record<string, unknown> | null;
   summaryError: boolean;
@@ -147,6 +149,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Review[]>();
+  const [loadedReference, setLoadedReference] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
   const [offset, setOffset] = useState(0);
   const [uploadedBooking, setUploadedBooking] = useState("");
@@ -155,11 +158,12 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const [next, setNext] = useState<number | null>(null);
   const [sort, setSort] = useState<"asc" | "desc">("desc");
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [tool, setTool] = useState<"download" | "dashboard" | "booking" | null>(null);
+  const [tool, setTool] = useState<"download" | "dashboard" | null>(null);
   const [refresh, setRefresh] = useState(0);
   const toolsId = useId();
-  const [managedBooking, setManagedBooking] = useState("");
-  const bookingToolsRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const scrollToBooking = useRef(false);
+  const [editingBooking, setEditingBooking] = useState("");
   const t = (th: string, en: string) => language === "th" ? th : en;
   const locale = language === "th" ? "th-TH" : "en-GB";
   const money = new Intl.NumberFormat(locale, { style: "currency", currency: "THB" });
@@ -170,26 +174,21 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   useEffect(()=>{
     if(focusBookingReference === undefined)return;
     setOpen(true);
-    if (focusBookingManagement) {
-      setManagedBooking(focusBookingReference);
-      setToolsOpen(true);
-      setTool("booking");
-      setReference("");
-      setReferenceDraft("");
-      requestAnimationFrame(() => bookingToolsRef.current?.scrollIntoView({ block: "start" }));
-    } else {
-      setReference(focusBookingReference);
-      setReferenceDraft(focusBookingReference);
-    }
+    setReference(focusBookingReference);
+    setReferenceDraft(focusBookingReference);
     setOffset(0);
+    setToolsOpen(false);
+    setEditingBooking(focusBookingEditor ? focusBookingReference : "");
+    scrollToBooking.current = true;
     onFocusConsumed();
-  },[focusBookingReference,focusBookingManagement,eventId]);
+  },[focusBookingReference,focusBookingEditor,eventId]);
   const fetchRef = useRef(apiFetch);
   fetchRef.current = apiFetch;
   const prefix = `/api/events/${encodeURIComponent(eventId)}/paid-registration`;
 
   function showFullQueue() {
     setUploadedBooking("");
+    setRows(undefined);
     setReference("");
     setReferenceDraft("");
     setOffset(0);
@@ -197,7 +196,9 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
     setRefresh((value) => value + 1);
   }
 
-  function refreshAfterUpdate() {
+  function refreshAfterUpdate(bookingReference: string) {
+    setReference(bookingReference);
+    setReferenceDraft(bookingReference);
     setOffset(0);
     setRefresh((value) => value + 1);
     window.dispatchEvent(new Event("meetrix:paid-booking-updated"));
@@ -210,7 +211,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   useEffect(() => {
     if (!open) return;
     const request = new AbortController();
-    setRows(undefined);
     setLoadFailed(false);
     const params = new URLSearchParams({ offset: String(offset), sort });
     if (reference) params.set("reference", reference);
@@ -220,25 +220,33 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
         const result = await response.json();
         if (!request.signal.aborted) {
           setRows(result.reviews);
+          setLoadedReference(reference);
           setNext(result.next_offset);
+          if (scrollToBooking.current) {
+            scrollToBooking.current = false;
+            sectionRef.current?.scrollIntoView({ block: "start" });
+          }
         }
       }).catch(() => { if (!request.signal.aborted) setLoadFailed(true); });
     return () => request.abort();
   }, [open, offset, prefix, reference, refresh, sort]);
 
+  const matchingRows = reference ? rows?.filter(row => row.booking_reference === reference) : rows;
+  const visibleRows = loadedReference === reference || matchingRows?.length ? matchingRows : undefined;
   return (
-    <section id="paid-review-queue" className="registration-admin-section registration-admin-review">
-      <RegistrationSectionHeader tone="review" title={t("ตรวจสลิป", "Slip Review")}
+    <section id="paid-review-queue" ref={sectionRef} className="registration-admin-section registration-admin-review scroll-mt-20">
+      <RegistrationSectionHeader tone="review" title={t("ใบจองและตรวจสลิป", "Bookings & Slip Review")}
         subtitle={summary
           ? t(`รอตรวจสลิป ${Number(summary.pending_review_bookings)} ใบจอง · ยังไม่ส่งสลิป ${Number(summary.awaiting_payment_attendees)} คน`,
               `${Number(summary.pending_review_bookings)} bookings to review · ${Number(summary.awaiting_payment_attendees)} attendees awaiting payment`)
           : t("ตรวจสลิปและยืนยันการชำระเงิน", "Review slips and confirm payments")} open={open} onToggle={()=>setOpen(!open)}
-        actions={<button type="button" className={toolbarControl} onClick={showFullQueue}>{t("โหลดใหม่", "Refresh")}</button>} />
+        actions={<button type="button" className={toolbarControl} onClick={() => setRefresh(value => value + 1)}>{t("โหลดใหม่", "Refresh")}</button>} />
       {open && <div className="registration-section-content space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <form className="flex min-w-0 flex-[1_1_8rem] items-center gap-1.5 sm:max-w-xs" onSubmit={(event) => {
             event.preventDefault();
-            setReference(referenceDraft.trim());
+            setRows(undefined);
+            setReference(referenceDraft.trim().toLowerCase());
             setOffset(0);
             setRefresh((value) => value + 1);
           }}>
@@ -267,7 +275,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
             {([
               ["download", t("ดาวน์โหลด", "Download")],
               ["dashboard", t("สรุปการจอง", "Dashboard")],
-              ["booking", t("จัดการใบจอง", "Booking operations")],
             ] as const).map(([value, label]) => (
               <button key={value} type="button" aria-pressed={tool === value} onClick={() => setTool(tool === value ? null : value)}
                 className={toolbarControl}>
@@ -286,10 +293,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
               <span>{t("ผู้เข้าร่วม", "Attendees")} <strong>{Number(summary.attendees ?? 0)}</strong></span>
             </div>}
           </div>
-          <div hidden={tool !== "booking"} ref={bookingToolsRef} className="scroll-mt-20">
-            <PaidBookingOperations key={managedBooking} initialReference={managedBooking} language={language} eventId={eventId} apiFetch={apiFetch}
-              onChange={refreshAfterUpdate}/>
-          </div>
         </div>
         {reference && <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="break-all">{t("กำลังแสดงใบจอง", "Filtered to booking")} {reference}</span>
@@ -301,14 +304,23 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
         {uploadedBooking && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {t("แนบสลิปแล้ว ใบจองเข้าคิวรอตรวจ", "Slip uploaded. The booking is awaiting review.")} {uploadedBooking}
         </p>}
-        {!rows && !loadFailed && <p role="status">{t("กำลังโหลดคิวตรวจสลิป…", "Loading reviews…")}</p>}
-        {rows?.length === 0 && <p>{reference
-          ? t("ไม่พบใบจองที่ชำระได้หรือรอตรวจสำหรับเลขอ้างอิงนี้", "No payable or pending booking found for this reference.")
+        {!visibleRows && !loadFailed && <p role="status">{t("กำลังโหลดคิวตรวจสลิป…", "Loading reviews…")}</p>}
+        {visibleRows?.length === 0 && <p>{reference
+          ? t("ไม่พบใบจองสำหรับเลขอ้างอิงนี้", "No booking found for this reference.")
           : t("ไม่มีสลิปรอตรวจ", "No payment slips awaiting review.")}</p>}
-        {rows && rows.length > 0 && <div className="grid gap-1.5">{rows.map((review) => {
+        {visibleRows && visibleRows.length > 0 && <div className="grid gap-1.5">{visibleRows.map((review) => {
           const path=prefix+"/bookings/"+encodeURIComponent(review.booking_id);
           const customerName = `${review.customer_first_name} ${review.customer_last_name}`.trim() || review.customer_email;
-          return <details key={review.booking_id}
+          const canUpload = review.booking_state === "awaiting_payment" ||
+            review.booking_state === "verification_pending" || review.cash_confirmed || review.balance_due_minor > 0;
+          const statusLabels: Record<string, [string, string]> = {
+            confirmed: ["ยืนยันแล้ว", "Confirmed"],
+            awaiting_payment: ["รอชำระ", "Awaiting payment"],
+            expired: ["หมดอายุ", "Expired"],
+            cancelled: ["ยกเลิกแล้ว", "Cancelled"],
+            payment_exception: ["ต้องตรวจสอบ", "Needs follow-up"],
+          };
+          return <details key={review.booking_id} open={reference ? true : undefined}
             className="paid-review-item group/review rounded-lg border border-slate-200">
             <summary className="grid min-h-10 cursor-pointer list-none grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto_auto] items-center gap-2 rounded-lg px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-emerald-600 sm:gap-4 sm:px-3 [&::-webkit-details-marker]:hidden">
               <span className="truncate font-semibold text-slate-900" title={customerName}>{customerName}</span>
@@ -320,7 +332,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
               <div className="min-w-0 space-y-2">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="rounded-md bg-amber-50 px-2 py-0.5 font-semibold text-amber-800">
-                    {review.attempt_id ? t("รอตรวจสลิป", "Awaiting review") : t("ยังไม่ส่งสลิป", "No slip submitted")}
+                    {review.attempt_id ? t("รอตรวจสลิป", "Awaiting review") : t(...(statusLabels[review.booking_state] ?? ["ต้องตรวจสอบ", "Needs follow-up"]))}
                   </span>
                   <span className="wrap-anywhere text-slate-600">{bookingLabel} {review.booking_reference}</span>
                 </div>
@@ -328,20 +340,33 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   <p className="font-semibold text-slate-900">
                     {t(`ผู้เข้าร่วมในใบจองนี้ (${review.attendee_count} คน)`, `Attendees in this booking (${review.attendee_count})`)}
                   </p>
-                  {review.attendee_names?.length ? (
-                    <ol className="list-decimal pl-5 text-slate-700">
-                      {review.attendee_names.map((name, index) => <li key={index} className="wrap-anywhere">{name}</li>)}
-                    </ol>
+                  {review.attendees.length ? (
+                    <table className="mt-1 w-full table-fixed text-left text-slate-700">
+                      <thead className="text-xs text-slate-600">
+                        <tr>
+                          <th scope="col" className="w-[38%] py-1 pr-2">{t("ชื่อ", "Name")}</th>
+                          <th scope="col" className="py-1 pr-2">{t("ประเภทบัตร", "Ticket category")}</th>
+                          <th scope="col" className="w-[7rem] py-1 text-right">{t("ราคาต่อคน", "Price per person")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {review.attendees.map(attendee => <tr key={attendee.id} className="border-t border-slate-200 align-top">
+                          <td className="wrap-anywhere py-1 pr-2 font-medium">{attendee.name}</td>
+                          <td className="wrap-anywhere py-1 pr-2">{attendee.category_label}</td>
+                          <td className="wrap-anywhere py-1 text-right font-semibold tabular-nums">{money.format(attendee.unit_minor / 100)}</td>
+                        </tr>)}
+                      </tbody>
+                    </table>
                   ) : <p className="text-slate-600">{t("ไม่มีรายชื่อผู้เข้าร่วมให้แสดง", "No attendee names to display.")}</p>}
                 </div>
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 wrap-anywhere text-slate-700 [&>dt]:text-slate-600">
-                  <dt>{t("ยอดที่ต้องชำระ", "Amount due")}</dt>
+                  <dt>{t("ยอดรวมใบจอง", "Booking total")}</dt>
                   <dd className="font-semibold">{money.format(review.total_minor / 100)}</dd>
                   {review.balance_due_minor > 0 && <><dt>{t("ยอดชำระเพิ่ม", "Additional amount due")}</dt>
                     <dd className="font-semibold">{money.format(review.balance_due_minor / 100)}</dd></>}
                   {review.proofs.length === 1 && review.claimed_minor != null && <>
                     <dt>{t("ยอดที่ลูกค้าแจ้ง", "Reported amount")}</dt>
-                    <dd className={review.claimed_minor === review.total_minor ? "font-semibold text-emerald-700" : "font-semibold text-rose-700"}>
+                    <dd className={review.claimed_minor === (review.booking_state === "confirmed" ? review.balance_due_minor : review.total_minor) ? "font-semibold text-emerald-700" : "font-semibold text-rose-700"}>
                       {money.format(review.claimed_minor / 100)}
                     </dd>
                   </>}
@@ -369,6 +394,21 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   <dt>{t("งาน", "Event")}</dt><dd>{review.event_name}</dd>
                   <dt>{t("ลงทะเบียนเมื่อ", "Booked at")}</dt><dd>{dateTime.format(review.booking_created_ms)}</dd>
                 </dl>
+                <details className="rounded-lg border border-slate-200" open={editingBooking === review.booking_reference}
+                  onToggle={event => {
+                    const isOpen = event.currentTarget.open;
+                    setEditingBooking(current => isOpen ? review.booking_reference :
+                      current === review.booking_reference ? "" : current);
+                  }}>
+                  <summary className="cursor-pointer px-2.5 py-2 font-semibold text-blue-700">
+                    {t("แก้ไขใบจอง", "Edit booking")}
+                  </summary>
+                  {editingBooking === review.booking_reference && <div className="px-2.5 pb-2.5">
+                    <PaidBookingOperations eventId={eventId} apiFetch={apiFetch} language={language}
+                      bookingReference={review.booking_reference} version={review.version}
+                      onChange={() => refreshAfterUpdate(review.booking_reference)} />
+                  </div>}
+                </details>
                 {onOpenCustomer && <button type="button" className={toolbarControl}
                   onClick={() => onOpenCustomer(review.customer_id)}>
                   {t("เปิดบัญชีลูกค้า", "View customer account")}
@@ -389,17 +429,37 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   })}
                 </div>
                 {review.attempt_id && <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch} language={language}
-                  onUpdated={refreshAfterUpdate} />}
-                  <details>
+                  onUpdated={() => refreshAfterUpdate(review.booking_reference)} />}
+                {review.previous_proofs.length > 0 && <>
+                  <p className="font-semibold">{t("สลิปก่อนหน้า", "Previous slips")}</p>
+                  <ul className="grid gap-1.5">
+                    {review.previous_proofs.map((proof, index) => {
+                      const amount = proof.observed_minor ?? proof.claimed_minor;
+                      const status = proof.status === "verified" ? t("ตรวจแล้ว", "Reviewed") :
+                        proof.status === "rejected" ? t("ปฏิเสธแล้ว", "Rejected") : t("ส่งแล้ว", "Submitted");
+                      return <li key={proof.attempt_id}>
+                        <a className="flex flex-wrap items-center justify-between gap-x-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-blue-700 hover:underline"
+                          href={path + "/proofs/" + encodeURIComponent(proof.attempt_id)} target="_blank" rel="noopener noreferrer">
+                          {review.proofs.length === 0 && <img className="max-h-40 w-full rounded bg-white object-contain"
+                            src={path + "/proofs/" + encodeURIComponent(proof.attempt_id)}
+                            alt={t(`สลิปก่อนหน้า ${index + 1}`, `Previous slip ${index + 1}`)} loading="lazy" />}
+                          <span>{t(`เปิดสลิป ${index + 1}`, `Open slip ${index + 1}`)} · {status}</span>
+                          {amount != null && <span className="font-semibold tabular-nums">{money.format(amount / 100)}</span>}
+                        </a>
+                      </li>;
+                    })}
+                  </ul>
+                </>}
+                {canUpload && <details>
                     <summary className="registration-admin-control paid-slip-staff-submit cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                      <UploadCloud className="h-4 w-4" aria-hidden="true" /> {review.attempt_id ? t("แนบสลิปเพิ่มแทนลูกค้า", "Add another slip for customer") : t("อัปโหลดสลิปแทนลูกค้า", "Upload slip for customer")}
+                      <UploadCloud className="h-4 w-4" aria-hidden="true" /> {review.attempt_id || review.previous_proofs.length ? t("แนบสลิปเพิ่มแทนลูกค้า", "Add another slip for customer") : t("อัปโหลดสลิปแทนลูกค้า", "Upload slip for customer")}
                     </summary>
                     <div className="mt-2 space-y-2">
                       <p className="text-slate-600">{t("แนบภาพเพื่อส่งเข้าคิวรอตรวจ ยอดและเวลาโอนระบุภายหลังได้", "Attach the slip to send it for review. The amount and transfer time can be added later.")}</p>
                       <PaidProofForm key={review.version} staff bookingReference={review.booking_reference} locale={language} path={path} version={review.version}
                         paymentMode={review.payment_mode} totalMinor={review.booking_state === "confirmed" ? review.balance_due_minor || null : review.total_minor} onSubmitted={() => {
                           setUploadedBooking(review.booking_reference);
-                          refreshAfterUpdate();
+                          refreshAfterUpdate(review.booking_reference);
                         }}
                         submitRequest={async (url, init) => {
                           const response = await apiFetch(url, init);
@@ -408,12 +468,12 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                           return result;
                         }} />
                     </div>
-                  </details>
+                  </details>}
               </div>
             </div>
           </details>;
         })}</div>}
-        {rows && (offset > 0 || next != null) && <div className="flex gap-2 text-sm">
+        {visibleRows && !reference && (offset > 0 || next != null) && <div className="flex gap-2 text-sm">
           {offset > 0 && <button type="button" className={toolbarControl} onClick={() => setOffset(Math.max(0, offset - 20))}>{t("ก่อนหน้า", "Previous")}</button>}
           {next != null && <button type="button" className={toolbarControl} onClick={() => setOffset(next)}>{t("ถัดไป", "Next")}</button>}
         </div>}

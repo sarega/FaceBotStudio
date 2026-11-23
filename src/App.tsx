@@ -3173,7 +3173,7 @@ export default function App() {
   });
   const [notificationHistoryLoading,setNotificationHistoryLoading]=useState(false);
   const [notificationHistoryError,setNotificationHistoryError]=useState("");
-  const [reviewFocus,setReviewFocus]=useState<{eventId:string;reference:string;manage?:boolean}|null>(null);
+  const [reviewFocus,setReviewFocus]=useState<{eventId:string;reference:string;edit?:boolean}|null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState("");
@@ -11202,14 +11202,14 @@ export default function App() {
                   <PaidReviewQueue summary={notificationSummary} summaryError={!!eventNotificationData?.failed}
                     onSummaryRefresh={() => setNotificationRefresh((value) => value + 1)} language={language} key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
                     focusBookingReference={reviewFocus?.eventId===selectedEventId?reviewFocus.reference:undefined}
-                    focusBookingManagement={reviewFocus?.manage}
+                    focusBookingEditor={reviewFocus?.edit}
                     onFocusConsumed={() => setReviewFocus(null)}
                     onOpenCustomer={(customerId)=>{setCustomerFocusId(customerId);setActiveTab("customers");}}/>
                 </>
               )}
               <RegistrationsScreen
                 apiFetch={apiFetch}
-                onManagePaidBooking={canReviewPaidSlips ? reference => setReviewFocus({ eventId: selectedEventId, reference, manage: true }) : undefined}
+                onManagePaidBooking={canReviewPaidSlips ? reference => setReviewFocus({ eventId: selectedEventId, reference, edit: true }) : undefined}
                 onPaidBookingCancelled={canReviewPaidSlips ? () => setNotificationRefresh(value => value + 1) : undefined}
                 language={language}
                 filteredRegistrations={filteredRegistrations}
