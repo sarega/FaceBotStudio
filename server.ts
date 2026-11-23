@@ -17741,7 +17741,7 @@ async function startServer() {
       try {
         const booking = await appDb.readOwnedPaidBooking(req.params.eventId,req.params.id,req.customer!.account.id);
         if (!booking || booking.payment_mode !== "external_manual" ||
-          !["awaiting_payment","verification_pending"].includes(String(booking.state))) {
+          (!["awaiting_payment","verification_pending"].includes(String(booking.state)) && Number(booking.balance_due_minor) <= 0)) {
           return res.status(404).json({error:"payment_display_unavailable"});
         }
         return res.set("Cache-Control","private, no-store")
@@ -18216,7 +18216,7 @@ async function startServer() {
             : "<p>ไม่มีรายชื่อผู้เข้าร่วมที่ยังมีผล</p>"}
           ผู้จอง: ${escapeXml([row.first_name, row.last_name].filter(Boolean).join(" "))}<br>${escapeXml(row.booking_reference)}
           ${row.transfer_reference ? "<br>อ้างอิง " + escapeXml(row.transfer_reference) : ""}</td>
-          <td>${escapeXml(amount(row.amount_minor))}</td><td>${status(row.status)}
+          <td>${row.status === "verified" && row.amount_minor == null ? "รวมในยอดใบจอง" : escapeXml(amount(row.amount_minor))}</td><td>${status(row.status)}
           ${row.receiver_id ? "<br>" + escapeXml(row.receiver_name) + " · " + escapeXml(String(row.receiver_id).slice(-4)) : ""}</td>
           <td><span class="box"></span></td><td>${slips[index]}</td></tr>`).join("");
         const html = `<!doctype html><html lang="th"><meta charset="utf-8"><style>
@@ -18297,11 +18297,13 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund","credit"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit","correct_price"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
             Number(body.hold_minutes) < 5 || Number(body.hold_minutes) > 43200)) ||
+          (action === "correct_price" && (typeof body.attendee_id !== "string" || !body.attendee_id.trim() ||
+            body.attendee_id.length > 128 || !Number.isSafeInteger(body.unit_minor))) ||
           (action === "refund" && (typeof body.refund_reference !== "string" || !body.refund_reference.trim()))) {
         return res.status(400).json({ error: "invalid_admin_action" });
       }
@@ -18309,8 +18311,10 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price",reason:body.reason.trim(),
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
+          attendeeId: typeof body.attendee_id === "string" ? body.attendee_id : undefined,
+          unitMinor: typeof body.unit_minor === "number" ? body.unit_minor : undefined,
           refundReference:typeof body.refund_reference === "string" ? body.refund_reference : undefined,
         });
         return res.set("Cache-Control","private, no-store").json(result);
@@ -18366,6 +18370,15 @@ async function startServer() {
   );
 
   const paidProofBody = express.raw({ type: "application/octet-stream", limit: "4mb", inflate: false });
+  const paidProofUploadRateLimit = createRateLimitMiddleware({
+    name: "paid-proof-upload",
+    windowMs: 10 * 60 * 1000,
+    max: 20,
+    keyFn: (req: AuthenticatedRequest) => buildRateLimitKey(
+      req.customer?.account.id ?? req.auth?.user.id ?? getRequestIp(req) ?? "unknown", req.params.id,
+    ),
+    errorMessage: "Too many slip uploads. Please wait and try again.",
+  });
   const paidSlipAnalysisRateLimit = createRateLimitMiddleware({
     name: "paid-slip-analysis",
     windowMs: 10 * 60 * 1000,
@@ -18418,7 +18431,8 @@ async function startServer() {
       const reference = req.get("x-booking-reference") ?? "";
       const booking = await appDb.readPaidAdminBooking(eventId, req.auth!.user.organization_id, reference);
       if (!booking || booking.id !== req.params.id) return res.status(404).json({ error: "booking_not_found" });
-      if (booking.state !== "awaiting_payment" || Number(booking.due_ms) <= Date.now()) {
+      if (!(booking.state === "awaiting_payment" && Number(booking.due_ms) > Date.now()) &&
+          booking.state !== "verification_pending" && Number(booking.balance_due_minor) <= 0) {
         return res.status(409).json({ error: "state_conflict" });
       }
       if (!process.env.OPENROUTER_API_KEY) return res.status(503).json({ error: "slip_analysis_unavailable" });
@@ -18481,11 +18495,11 @@ async function startServer() {
       return res.status(500).json({ error: "proof_unavailable" });
     }
   };
-  app.post("/api/customer/paid-bookings/:eventId/:id/proofs", publicRegistrationRateLimit, requireVerifiedCustomer,
+  app.post("/api/customer/paid-bookings/:eventId/:id/proofs", requireVerifiedCustomer, paidProofUploadRateLimit,
     paidProofBody, handlePaidProofUpload(false),
   );
   app.post("/api/events/:eventId/paid-registration/bookings/:id/proofs",
-    requireRoles(["owner", "admin"]), paidSettingsScope, publicRegistrationRateLimit, paidProofBody, handlePaidProofUpload(true),
+    requireRoles(["owner", "admin"]), paidSettingsScope, paidProofUploadRateLimit, paidProofBody, handlePaidProofUpload(true),
   );
 
   app.get("/api/events/:eventId/paid-registration/bookings/:id/proofs/:attemptId",

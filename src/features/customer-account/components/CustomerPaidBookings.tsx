@@ -19,6 +19,7 @@ type Booking = {
   credit_issued_minor?: number;
   refunded_minor?: number;
   total_due_minor: number;
+  balance_due_minor?: number;
   due_at: string;
 };
 type PreferenceField = { key: EditableSeminarKey; scope: "booking" | "attendee"; required: boolean; options?: string[]; surcharge?: { option: string; minor: number } };
@@ -75,7 +76,7 @@ function PreferenceInput({ locale, field, initial, path, attendeeId, onSaved }: 
   </form>;
 }
 
-type Detail = { registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; total_due_minor: number; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
+type Detail = { balance_due_minor?: number; pending_proofs?: number; registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; total_due_minor: number; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
   coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; room_is_default?: boolean; email?: string; phone?: string; registration_answers?: PaidSeminarAnswer[]; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 const baht = (minor: number, locale: CustomerLocale) =>
@@ -168,6 +169,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
   const [error, setError] = useState<CustomerCopy>();
   const [reactivating, setReactivating] = useState<string>();
   const [cancelling, setCancelling] = useState<string>();
+  const [cancelTarget, setCancelTarget] = useState<string>();
   const paymentAnchorRef = useRef<HTMLDivElement>(null);
   const slipAnchorRef = useRef<HTMLDivElement>(null);
   const revealSlip = useRef(reference !== "" && new URLSearchParams(window.location.search).get("upload_slip") === "1");
@@ -202,10 +204,11 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
       if (request.signal.aborted) return;
       setDetail(result);
       setPage((current) => current && { ...current, bookings: current.bookings.map((booking) =>
-        booking.id === selected.id ? { ...booking, status: result.status, payment_status: result.payment_state, due_at: result.due_at, total_due_minor: result.total_due_minor } : booking) });
+        booking.id === selected.id ? { ...booking, status: result.status, payment_status: result.payment_state, due_at: result.due_at, total_due_minor: result.total_due_minor, balance_due_minor: result.balance_due_minor } : booking) });
     }).catch(() => { if (!request.signal.aborted) setError(["โหลดรายละเอียดการจองไม่สำเร็จ", "Could not load booking details."]); });
     return () => request.abort();
   }, [selected]);
+  useEffect(() => setCancelTarget(undefined), [selected?.id]);
 
   function showSavedAnswer(key: EditableSeminarKey, value: string, attendeeId?: string) {
     const update = (answers: PaidSeminarAnswer[] = []) => [
@@ -254,10 +257,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
   }
 
   async function cancelBooking(booking: Booking) {
-    if (cancelling || !window.confirm(t(
-      `ยกเลิกใบจอง ${booking.reference} และคืนที่นั่งทั้งหมดในใบจองนี้หรือไม่? หากโอนเงินแล้ว ให้ติดต่อผู้จัดงานก่อน`,
-      `Cancel booking ${booking.reference} and release all its places? If you already transferred money, contact the organizer first.`,
-    ))) return;
+    if (cancelling || cancelTarget !== booking.id) return;
     setCancelling(booking.id);
     setError(undefined);
     try {
@@ -266,6 +266,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
       setPage(current => current && { ...current, bookings: current.bookings.map(entry =>
         entry.id === booking.id ? { ...entry, status: "cancelled" } : entry) });
       setSelected(current => current?.id === booking.id ? undefined : current);
+      setCancelTarget(undefined);
       onPaymentChanged?.();
     } catch (failure) {
       setError(failure instanceof Error && failure.message === "state_conflict"
@@ -308,6 +309,9 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
           {!!booking.credit_used_minor && <p className="text-emerald-700">{booking.status === "cancelled" || booking.status === "expired" ? t("เครดิตคืนเข้าบัญชี", "Credit returned") : t("เครดิตที่ใช้", "Credit applied")} · {baht(booking.credit_used_minor, locale)}</p>}
           {booking.status === "awaiting_payment" && <p className="text-slate-600">
             {t("ชำระภายใน", "Due")} {formatCustomerDate(booking.due_at, locale)} {t("(เวลาไทย)", "(Thailand time)")}
+          </p>}
+          {!!booking.balance_due_minor && <p className="font-semibold text-amber-800">
+            {t("ยอดที่ต้องชำระเพิ่ม", "Additional amount due")} · {baht(booking.balance_due_minor, locale)}
           </p>}
           {booking.status === "awaiting_payment" && <PaymentCountdown locale={locale} dueAt={booking.due_at} onExpired={() => {
             setPage((current) => current && { ...current, bookings: current.bookings.map((item) =>
@@ -354,12 +358,6 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
               onClick={() => { setError(undefined); setDetail(undefined); revealSlip.current = false; didScrollToInvoice.current = false; setSelected(selected?.id === booking.id ? undefined : booking); }}>
               {selected?.id === booking.id ? t("ซ่อนรายละเอียด", "Hide details") : booking.status === "awaiting_payment" ? t("ดูวิธีชำระเงิน", "View payment instructions") : t("ดูหรือแก้ไขใบจอง", "View or edit booking")}
             </button>
-            {!tickets && booking.status === "awaiting_payment" && ["unpaid", "rejected"].includes(booking.payment_status) && (
-              <button type="button" disabled={!!cancelling} onClick={() => void cancelBooking(booking)}
-                className="min-h-11 rounded-xl border border-rose-300 px-4 py-2 font-semibold text-rose-700 disabled:opacity-50">
-                {cancelling === booking.id ? t("กำลังยกเลิก…", "Cancelling…") : t("ยกเลิกใบจอง", "Cancel booking")}
-              </button>
-            )}
             {!tickets && booking.event_slug && <a href={`/events/${encodeURIComponent(booking.event_slug)}#public-registration`}
               className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 px-4 font-semibold text-blue-700">
               {t("ลงทะเบียนเพิ่ม", "Book more attendees")}
@@ -460,10 +458,47 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                 <p className="text-sm text-slate-700">{t("หลังส่งสลิป ผู้จัดงานจะตรวจสอบเงินและยืนยันการลงทะเบียน จากนั้นจึงได้รับบัตรเข้างาน", "After you submit the slip, the organizer will verify your payment and confirm your registration before issuing your pass.")}</p>
               </Step>
             </div>}
-            {detail.status === "verification_pending" && <div role="status"
-              className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-50 p-4 font-semibold text-emerald-700">
-              <CheckCircle2 className="h-6 w-6"/> {t("ส่งสลิปสำเร็จแล้ว รอผู้จัดงานยืนยัน", "Slip received. Awaiting organizer confirmation.")}
+            {!tickets && (detail.status === "verification_pending" || !!detail.balance_due_minor) && <div ref={slipAnchorRef} className="scroll-mt-24 space-y-3 rounded-xl border border-slate-200 p-3">
+              {!!detail.pending_proofs && <p role="status" className="flex items-center gap-2 text-emerald-700">
+                <CheckCircle2 className="h-5 w-5" aria-hidden="true" />
+                {t(`ส่งสลิปแล้ว ${detail.pending_proofs} ใบ รอผู้จัดงานตรวจ`, `${detail.pending_proofs} slip(s) submitted for review`)}
+              </p>}
+              {!!detail.balance_due_minor && <>
+                <p className="font-bold">{t("ยอดที่ต้องชำระเพิ่ม", "Additional amount due")} · {baht(detail.balance_due_minor, locale)}</p>
+                {detail.payment_mode === "external_manual"
+                  ? <ExternalPaymentInstructions locale={locale} eventId={booking.event_id} bookingId={booking.id} />
+                  : <img src={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/payment-qr?v=${detail.version}`}
+                      alt={t("QR สำหรับยอดชำระเพิ่ม", "QR code for the remaining balance")} className="w-48 max-w-full rounded-xl bg-white p-2" />}
+              </>}
+              <details className="rounded-lg border border-slate-200 p-3">
+                <summary className="cursor-pointer font-semibold text-blue-700">{t("แนบสลิปเพิ่ม", "Add another slip")}</summary>
+                <div className="mt-3">
+                  <PaidProofForm locale={locale} key={detail.version} path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}`}
+                    paymentMode={detail.payment_mode} submitRequest={customerApi} version={detail.version}
+                    totalMinor={detail.balance_due_minor || detail.total_due_minor}
+                    onSubmitted={() => { setSelected({ ...booking }); onPaymentChanged?.(); }} />
+                </div>
+              </details>
             </div>}
+            {!tickets && detail.status === "awaiting_payment" && ["unpaid", "rejected"].includes(detail.payment_state) && (
+              <div className="border-t border-slate-200 pt-3">
+                {cancelTarget !== booking.id ? <button type="button" className="min-h-10 px-2 text-sm text-slate-600 underline"
+                  onClick={() => setCancelTarget(booking.id)}>{t("จัดการการยกเลิก", "Manage cancellation")}</button> :
+                  <section className="space-y-2 rounded-xl border border-rose-200 p-3">
+                    <h4 className="font-semibold">{t("ยกเลิกใบจองและคืนที่นั่งทั้งหมดหรือไม่?", "Cancel this booking and release every seat?")}</h4>
+                    <p className="text-sm">{t("ถ้าโอนเงินแล้ว ให้แนบสลิปหรือติดต่อผู้จัดงานก่อน", "If you transferred money, attach the slip or contact the organizer first.")}</p>
+                    <div className="flex flex-wrap gap-3">
+                      <button type="button" autoFocus disabled={!!cancelling} onClick={() => setCancelTarget(undefined)}
+                        className="min-h-11 rounded-lg bg-blue-700 px-3 font-semibold text-white">{t("เก็บใบจองไว้", "Keep booking")}</button>
+                      <button type="button" disabled={!!cancelling} onClick={() => void cancelBooking(booking)}
+                        className="min-h-11 rounded-lg border border-rose-300 px-3 font-semibold text-rose-700 disabled:opacity-50">
+                        {cancelling === booking.id ? t("กำลังยกเลิก…", "Cancelling…") : t("ยืนยันยกเลิกใบจอง", "Confirm cancellation")}
+                      </button>
+                    </div>
+                  </section>}
+              </div>
+            )}
+
 
 
             </div>

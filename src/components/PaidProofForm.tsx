@@ -93,7 +93,11 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
       onSubmitted();
     } catch (failure) {
       const code = failure instanceof Error ? failure.message : "";
-      setError(code === "proof_storage_unavailable"
+      setError(code === "duplicate_reference_or_proof"
+        ? ["ภาพนี้ถูกแนบไว้แล้ว กรุณาเลือกสลิปของรายการโอนอีกครั้ง", "This image is already attached. Choose the slip for the other transfer."]
+        : code === "too_many_proofs"
+          ? ["แนบสลิปรอตรวจได้สูงสุด 8 ใบ กรุณาติดต่อผู้จัดงาน", "This booking already has 8 slips pending review. Contact the organizer."]
+        : code === "proof_storage_unavailable"
         ? ["ยังไม่เปิดระบบเก็บสลิปอย่างปลอดภัย กรุณาติดต่อผู้จัดงาน", "Secure slip upload is not configured."]
         : code === "hold_expired"
           ? staff ? ["ใบจองหมดอายุแล้ว กรุณาเปิดรายการอีกครั้งก่อนแนบสลิป", "Reactivate this expired booking before uploading a slip."]

@@ -60,6 +60,8 @@ type PaidNotificationBooking = {
   status: string;
   due_at: string;
   updated_at: string;
+  balance_due_minor?: number;
+  pending_proofs?: number;
   refunded_minor?: number;
   credit_issued_minor?: number;
   credit_used_minor?: number;
@@ -276,12 +278,13 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
   }, [account?.email_verified_at, paymentRevision]);
 
   useEffect(() => {
-    if (!pendingBookings.length) return;
-    const nextDue = Math.min(...pendingBookings.map(booking => Date.parse(booking.due_at)));
+    const holds = pendingBookings.filter(booking => booking.status === "awaiting_payment");
+    if (!holds.length) return;
+    const nextDue = Math.min(...holds.map(booking => Date.parse(booking.due_at)));
     const delay = Math.max(0, nextDue - Date.now());
     if (!Number.isFinite(delay) || delay > 2_147_483_647) return;
     const timer = window.setTimeout(() => {
-      setPendingBookings(current => current.filter(booking => Date.parse(booking.due_at) > Date.now()));
+      setPendingBookings(current => current.filter(booking => booking.status !== "awaiting_payment" || Date.parse(booking.due_at) > Date.now()));
       setPaymentRevision(value => value + 1);
     }, delay + 100);
     return () => window.clearTimeout(timer);
@@ -374,12 +377,16 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
   const validPending = (dueAt?: string | null) => !dueAt || Date.parse(dueAt) > Date.now();
   const bookingItems = new Map([...recentBookings, ...pendingBookings].map(booking => [booking.reference, booking]));
   const paidItems: CustomerNotification[] = [...bookingItems.values()].map(booking => {
-    const needsPayment = booking.status === "awaiting_payment" && validPending(booking.due_at);
+    const topUp = booking.status === "confirmed" && (booking.balance_due_minor ?? 0) > 0;
+    const needsPayment = (booking.status === "awaiting_payment" && validPending(booking.due_at)) ||
+      (topUp && !booking.pending_proofs);
     const expired = booking.status === "expired" || (booking.status === "awaiting_payment" && !needsPayment);
     const title = booking.refunded_minor ? t("บันทึกคืนเงินแล้ว", "Refund recorded")
       : booking.credit_issued_minor ? t("ออกเครดิตสำหรับงานนี้", "Credit issued for this event")
         : (expired || booking.status === "cancelled") && booking.credit_used_minor
           ? t("คืนเครดิตที่ใช้กับใบจอง", "Booking credit returned")
+        : topUp ? booking.pending_proofs ? t("สลิปยอดเพิ่มรอตรวจสอบ", "Additional payment awaiting review")
+          : t("มียอดที่ต้องชำระเพิ่ม", "Additional payment due")
         : needsPayment ? t("รอชำระเงินหรือส่งสลิป", "Payment or slip upload needed")
           : expired ? t("หมดเวลาชำระเงิน", "Payment deadline passed")
           : booking.status === "verification_pending" ? t("ส่งสลิปแล้ว รอตรวจสอบ", "Slip submitted for review")

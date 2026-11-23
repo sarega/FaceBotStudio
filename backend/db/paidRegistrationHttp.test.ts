@@ -1321,6 +1321,61 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await settle(supported.id, supported.version, "credit", "restore-used-credit")).status, 200);
     assert.equal(await balance("test-owner"), 250000);
 
+    const correction = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/manage", {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "correct-attendee-price" },
+      body: JSON.stringify({ action: "correct_price", reason: "Correct the published price",
+        attendee_id: externalConfirmedDetail.attendees[0].id, unit_minor: 300000, version: externalConfirmedDetail.version }),
+    });
+    assert.equal(correction.status, 200, await correction.clone().text());
+    const correctionResult = await correction.json();
+    assert.equal(correctionResult.status, "confirmed");
+    assert.equal(correctionResult.balance_due_minor, 50000);
+    const correctedDetails = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
+    assert.equal(correctedDetails.attendees[0].unit_minor, 300000);
+    assert.equal(correctedDetails.balance_due_minor, 50000);
+    assert.equal((await fetch(externalOwnedPath + "/payment-display", { headers: headers("test-owner") })).status, 200);
+    assert.equal((await cancelOwned(externalSlipBooking.id)).status, 409);
+
+    const attachSupplement = async (version: number, key: string, color: string) => {
+      const image = await sharp({ create: { width: 103, height: 151, channels: 3, background: color } }).png().toBuffer();
+      return fetch(externalOwnedPath + "/proofs", { method: "POST", body: Uint8Array.from(image), headers: {
+        ...headers("test-owner"), "x-csrf-token": "fixture-csrf", "Content-Type": "application/octet-stream",
+        "Idempotency-Key": key, "x-booking-version": String(version), "x-payment-method": "bank_transfer", "x-proof-mime": "image/png",
+      } });
+    };
+    const firstSupplement = await attachSupplement(correctionResult.version, "supplement-1", "#f1e4a4");
+    assert.equal(firstSupplement.status, 202, await firstSupplement.clone().text());
+    const firstSupplementResult = await firstSupplement.json();
+    const duplicateSupplement = await attachSupplement(firstSupplementResult.version, "duplicate-supplement", "#f1e4a4");
+    assert.equal(duplicateSupplement.status, 409);
+    assert.equal((await duplicateSupplement.json()).error, "duplicate_reference_or_proof");
+    const secondSupplement = await attachSupplement(firstSupplementResult.version, "supplement-2", "#afdbd3");
+    assert.equal(secondSupplement.status, 202, await secondSupplement.clone().text());
+    const secondSupplementResult = await secondSupplement.json();
+    const supplementReviews = (await (await fetch(externalPrefix + "/review-queue?reference=" +
+      externalSlipBooking.reference, { headers: staffHeaders })).json()).reviews;
+    assert.equal(supplementReviews.length, 1);
+    assert.equal(supplementReviews[0].proofs.length, 2);
+    assert.equal(supplementReviews[0].balance_due_minor, 50000);
+    const supplementalApproval = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/review", {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "approve-both-supplements" },
+      body: JSON.stringify({ decision: "approve", attempt_id: secondSupplementResult.attempt_id,
+        version: secondSupplementResult.version, reason: "Verified both transfers against the bank statement" }),
+    });
+    assert.equal(supplementalApproval.status, 200, await supplementalApproval.clone().text());
+    const fullyPaid = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
+    assert.equal(fullyPaid.status, "confirmed");
+    assert.equal(fullyPaid.balance_due_minor, 0);
+    assert.equal(fullyPaid.pending_proofs, 0);
+    const sameCredential = await fetch(externalOwnedPath + "/attendees/" +
+      fullyPaid.attendees[0].id + "/credential", { headers: headers("test-owner") });
+    assert.equal(sameCredential.status, 200);
+    assert.deepEqual(new Uint8Array(await sameCredential.arrayBuffer()), new Uint8Array(await externalCredential.arrayBuffer()));
+    const paidTransfers = await db.listDailyPaidTransfers(paidEvent.id, "org_default", 0, Date.now() + 60_000);
+    const correctedTransfers = paidTransfers.filter(row => row.booking_id === externalSlipBooking.id);
+    assert.equal(correctedTransfers.length, 3);
+    assert.equal(correctedTransfers.reduce((total, row) => total + Number(row.amount_minor ?? 0), 0), 300000);
+
     const pendingEmail = "unverified-cleanup@example.com";
     const pendingAccount = await db.createCustomerAccount({
       email: pendingEmail, normalized_email: pendingEmail, password_hash: "fixture", first_name: "Test", last_name: "Pending",

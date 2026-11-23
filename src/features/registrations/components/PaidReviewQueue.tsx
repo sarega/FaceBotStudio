@@ -25,6 +25,8 @@ type Review = {
   attendee_names?: string[];
   claimed_minor: number | null;
   proof_id: string | null;
+  balance_due_minor: number;
+  proofs: { attempt_id: string; proof_id: string; claimed_minor: number | null; matching_proofs: number }[];
   claimed_transfer_ms: number | null;
   claimed_reference: string | null;
   claimed_payer_name?: string | null;
@@ -50,14 +52,18 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
   const [showReject, setShowReject] = useState(false);
   const [showException, setShowException] = useState(false);
   const command = useRef<{ body: string; key: string } | undefined>(undefined);
-  const canApprove = !!review.attempt_id && !!review.proof_id && review.matching_proofs === 0;
+  const [selectedAttempt, setSelectedAttempt] = useState(review.attempt_id);
+  const hasDuplicates = review.proofs.some(proof => proof.matching_proofs > 0);
+  const canApprove = !!review.attempt_id && review.proofs.length > 0 && !hasDuplicates;
+  const reported = review.proofs.every(proof => proof.claimed_minor != null)
+    ? review.proofs.reduce((total, proof) => total + (proof.claimed_minor ?? 0), 0) : null;
 
   async function submit(decision:"approve"|"reject"|"flag") {
     if (busy || (decision === "approve" && !canApprove)) return;
     setError(null);
     const reason = decision === "approve" ? "Verified transfer against bank records"
       : rejectReason.trim() || (decision === "reject" ? "Proof rejected by organizer" : "Proof flagged for follow-up");
-    const body = JSON.stringify({ decision, attempt_id: review.attempt_id, version: review.version, reason });
+    const body = JSON.stringify({ decision, attempt_id: decision === "approve" ? review.attempt_id : selectedAttempt, version: review.version, reason });
     if(command.current?.body!==body)command.current={body,key:crypto.randomUUID()};
     setBusy(true);
     try {
@@ -81,10 +87,10 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
 
   return <div className="space-y-2 text-sm">
     {review.attempt_id && <div className="space-y-2">
-      {review.claimed_minor != null && review.claimed_minor !== review.total_minor && <p className="rounded-lg bg-amber-50 p-3 font-semibold text-amber-900">
+      {reported != null && reported !== (review.balance_due_minor || review.total_minor) && <p className="rounded-lg bg-amber-50 p-3 font-semibold text-amber-900">
         {t("ยอดที่แจ้งต่างจากยอดจอง กรุณาเทียบกับยอดในภาพสลิป", "The reported amount differs from the booking total. Check the slip image.")}
       </p>}
-      {review.matching_proofs>0 && <p className="rounded-lg bg-rose-50 p-3 font-semibold text-rose-800">
+      {hasDuplicates && <p className="rounded-lg bg-rose-50 p-3 font-semibold text-rose-800">
         {t("พบภาพสลิปซ้ำกับรายการอื่น — ไม่ควรอนุมัติโดยไม่ตรวจสอบ", "This slip matches another booking. Check the duplicate before approving.")}
       </p>}
       <p className="text-xs font-medium text-slate-600">
@@ -93,7 +99,7 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
       <div className="flex flex-wrap gap-1.5">
         <button type="button" onClick={() => void submit("approve")} disabled={!canApprove || busy}
           className="registration-admin-control registration-admin-control-primary">
-          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {busy ? t("กำลังบันทึก…", "Saving…") : t("อนุมัติ", "Approve")}
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {busy ? t("กำลังบันทึก…", "Saving…") : review.proofs.length > 1 ? t("อนุมัติสลิปทั้งหมด", "Approve all slips") : t("อนุมัติ", "Approve")}
         </button>
         <button type="button" aria-expanded={showReject} onClick={()=>{setShowReject(v=>!v);setShowException(false);}}
           className="registration-admin-control">
@@ -105,6 +111,13 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
         </button>
       </div>
       {(showReject||showException)&&<div className="space-y-2 rounded-lg bg-slate-50 p-3">
+        {review.proofs.length > 1 && <label className="block">{t("เลือกสลิป", "Choose slip")}
+          <select className={inputClass} value={selectedAttempt ?? ""} onChange={event => setSelectedAttempt(event.target.value)}>
+            {review.proofs.map((proof, index) => <option key={proof.attempt_id} value={proof.attempt_id}>
+              {t(`สลิปใบที่ ${index + 1}`, `Slip ${index + 1}`)}
+            </option>)}
+          </select>
+        </label>}
         <label className="block">{t("หมายเหตุให้ผู้ดูแล (ถ้ามี)", "Note for staff (optional)")}
           <input className={inputClass} maxLength={1000} value={rejectReason}
             onChange={e=>setRejectReason(e.target.value)} />
@@ -277,9 +290,8 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           : t("ไม่มีสลิปรอตรวจ", "No payment slips awaiting review.")}</p>}
         {rows && rows.length > 0 && <div className="grid gap-1.5">{rows.map((review) => {
           const path=prefix+"/bookings/"+encodeURIComponent(review.booking_id);
-          const proofUrl=review.attempt_id ? path+"/proofs/"+encodeURIComponent(review.attempt_id) : "";
           const customerName = `${review.customer_first_name} ${review.customer_last_name}`.trim() || review.customer_email;
-          return <details key={review.attempt_id??review.booking_id}
+          return <details key={review.booking_id}
             className="paid-review-item group/review rounded-lg border border-slate-200">
             <summary className="grid min-h-10 cursor-pointer list-none grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto_auto] items-center gap-2 rounded-lg px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-emerald-600 sm:gap-4 sm:px-3 [&::-webkit-details-marker]:hidden">
               <span className="truncate font-semibold text-slate-900" title={customerName}>{customerName}</span>
@@ -308,13 +320,15 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 wrap-anywhere text-slate-700 [&>dt]:text-slate-600">
                   <dt>{t("ยอดที่ต้องชำระ", "Amount due")}</dt>
                   <dd className="font-semibold">{money.format(review.total_minor / 100)}</dd>
-                  {review.claimed_minor != null && <>
+                  {review.balance_due_minor > 0 && <><dt>{t("ยอดชำระเพิ่ม", "Additional amount due")}</dt>
+                    <dd className="font-semibold">{money.format(review.balance_due_minor / 100)}</dd></>}
+                  {review.proofs.length === 1 && review.claimed_minor != null && <>
                     <dt>{t("ยอดที่ลูกค้าแจ้ง", "Reported amount")}</dt>
                     <dd className={review.claimed_minor === review.total_minor ? "font-semibold text-emerald-700" : "font-semibold text-rose-700"}>
                       {money.format(review.claimed_minor / 100)}
                     </dd>
                   </>}
-                  {review.claimed_transfer_ms != null && <>
+                  {review.proofs.length === 1 && review.claimed_transfer_ms != null && <>
                     <dt>{t("เวลาโอนที่แจ้ง", "Reported transfer time")}</dt><dd>{dateTime.format(review.claimed_transfer_ms)}</dd>
                   </>}
                   {review.created_ms != null && <>
@@ -323,10 +337,10 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   {review.receiver_name && <>
                     <dt>{t("บัญชีรับเงิน", "Receiving account")}</dt><dd>{review.receiver_name}</dd>
                   </>}
-                  {review.claimed_payer_name && <>
+                  {review.proofs.length === 1 && review.claimed_payer_name && <>
                     <dt>{t("ชื่อผู้โอนที่อ่านจากสลิป", "Payer name read from the slip")}</dt><dd>{review.claimed_payer_name}</dd>
                   </>}
-                  {review.claimed_reference && <>
+                  {review.proofs.length === 1 && review.claimed_reference && <>
                     <dt>{t("เลขอ้างอิงสลิป", "Slip reference")}</dt><dd>{review.claimed_reference}</dd>
                   </>}
                   <dt>{t("ผู้จอง", "Booked by")}</dt><dd className="font-semibold">{customerName}</dd>
@@ -344,27 +358,29 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                 </button>}
               </div>
               <div className="min-w-0 space-y-2">
-                {proofUrl && review.proof_id && (
-                  <a href={proofUrl} target="_blank" rel="noopener noreferrer" className="block space-y-1">
-                    <img src={proofUrl} alt={t("ภาพสลิปที่แนบ", "Uploaded payment slip")}
-                      loading="lazy" className="max-h-56 w-full rounded-lg border border-slate-200 bg-white object-contain" />
-                    <span className="inline-block font-semibold text-blue-700 underline">
-                      {t("เปิดภาพสลิปขนาดเต็ม", "Open full-size slip")}
-                    </span>
-                  </a>
-                )}
-                {review.attempt_id ? (
-                  <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch} language={language}
-                    onUpdated={refreshAfterUpdate} />
-                ) : (
+                <div className={review.proofs.length > 1 ? "grid gap-2 sm:grid-cols-2" : ""}>
+                  {review.proofs.map((proof, index) => {
+                    const url = path + "/proofs/" + encodeURIComponent(proof.attempt_id);
+                    const label = t(`สลิปใบที่ ${index + 1}`, `Slip ${index + 1}`);
+                    return <a key={proof.attempt_id} href={url} target="_blank" rel="noopener noreferrer" className="block space-y-1">
+                      <img src={url} alt={label} loading="lazy" className="max-h-56 w-full rounded-lg border border-slate-200 bg-white object-contain" />
+                      <span className="font-semibold text-blue-700 underline">
+                        {review.proofs.length > 1 ? label : t("เปิดภาพสลิปขนาดเต็ม", "Open full-size slip")}
+                      </span>
+                      {review.proofs.length > 1 && proof.claimed_minor != null && <span className="ml-2">{money.format(proof.claimed_minor / 100)}</span>}
+                    </a>;
+                  })}
+                </div>
+                {review.attempt_id && <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch} language={language}
+                  onUpdated={refreshAfterUpdate} />}
                   <details>
                     <summary className="registration-admin-control paid-slip-staff-submit cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                      <UploadCloud className="h-4 w-4" aria-hidden="true" /> {t("อัปโหลดสลิปแทนลูกค้า", "Upload slip for customer")}
+                      <UploadCloud className="h-4 w-4" aria-hidden="true" /> {review.attempt_id ? t("แนบสลิปเพิ่มแทนลูกค้า", "Add another slip for customer") : t("อัปโหลดสลิปแทนลูกค้า", "Upload slip for customer")}
                     </summary>
                     <div className="mt-2 space-y-2">
                       <p className="text-slate-600">{t("แนบภาพเพื่อส่งเข้าคิวรอตรวจ ยอดและเวลาโอนระบุภายหลังได้", "Attach the slip to send it for review. The amount and transfer time can be added later.")}</p>
                       <PaidProofForm key={review.version} staff bookingReference={review.booking_reference} locale={language} path={path} version={review.version}
-                        paymentMode={review.payment_mode} totalMinor={review.total_minor} onSubmitted={() => {
+                        paymentMode={review.payment_mode} totalMinor={review.balance_due_minor || review.total_minor} onSubmitted={() => {
                           setUploadedBooking(review.booking_reference);
                           refreshAfterUpdate();
                         }}
@@ -376,7 +392,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                         }} />
                     </div>
                   </details>
-                )}
               </div>
             </div>
           </details>;

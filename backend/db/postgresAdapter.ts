@@ -685,6 +685,9 @@ export class PostgresAppDatabase implements AppDatabase {
       const command = build(event.organizer_id);
       let step = command.next();
       while (step.done === false) {
+        for (const reference of step.value.settlementReferences ?? []) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`facebot:verified-payment:${reference}`]);
+        }
         let index = 0;
         const sql = step.value.sql.replace(/\?/g, () => `$${++index}`);
         const { rows } = await client.query<Record<string, unknown>>(sql, step.value.params);

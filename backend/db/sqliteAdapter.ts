@@ -1496,8 +1496,12 @@ export class SqliteAppDatabase implements AppDatabase {
     this.db.transaction(() => {
       for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql", "050_paid_external_payment.sql", "051_paid_payment_display.sql"]) {
         if (name === "050_paid_external_payment.sql" && (this.db.pragma("table_info(paid_event_settings)") as { name: string }[]).some((column) => column.name === "payment_mode")) continue;
-        this.db.exec(readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8"));
+        const migration = readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8");
+        this.db.exec(name === "042_paid_payment_evidence.sql"
+          ? migration.replace(/CREATE UNIQUE INDEX IF NOT EXISTS idx_paid_one_verified_attempt[\s\S]*?;/, "")
+          : migration);
       }
+      this.db.exec(readFileSync(new URL("./migrations/065_paid_split_payments.sql", import.meta.url), "utf8"));
       this.ensureColumn("paid_payment_attempts", "claimed_payer_name", "TEXT");
       const paidSettingsColumns = this.db.pragma("table_info(paid_event_settings)") as { name: string }[];
       if (!paidSettingsColumns.some((column) => column.name === "deadline_mode")) {
