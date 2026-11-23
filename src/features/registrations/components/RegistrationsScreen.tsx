@@ -286,7 +286,8 @@ export function RegistrationsScreen({
     return "";
   };
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)]">
+    <div className="registration-workspace">
+    <div className="registration-workspace-grid grid grid-cols-1 gap-4">
       <div className="space-y-4">
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="flex flex-col gap-2 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -889,6 +890,7 @@ export function RegistrationsScreen({
           )}
         </div>
       </div>
+    </div>
     </div>
   );
 }

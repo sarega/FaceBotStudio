@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Pencil } from "lucide-react";
+import { Check, Copy, Pencil } from "lucide-react";
 import { paidSeminarFields } from "../../../../backend/paidSeminarFields";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import type { AppLanguage } from "../../../lib/i18n";
@@ -62,12 +62,54 @@ function CancelBookingForm({ person, language, onCancel }: {
   </form>;
 }
 
+const rosterColumnWidths = [172, 104, 144, 132, 132, 102];
+
+function BookingReference({ reference, language, onManage }: {
+  reference: string; language: AppLanguage; onManage?: () => void;
+}) {
+  const [copyStatus, setCopyStatus] = useState<"copied" | "failed">();
+  const copyLabel = language === "th" ? "คัดลอกเลขใบจองเต็ม" : "Copy full booking reference";
+  const manageLabel = language === "th" ? "จัดการใบจอง" : "Manage booking";
+  return <div className="flex items-center gap-1 whitespace-nowrap">
+    <span className="min-w-0 truncate font-mono" title={reference}>{reference.slice(0, 8)}</span>
+    <button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded text-blue-700 hover:bg-blue-50"
+      title={copyLabel} aria-label={copyLabel} onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(reference);
+          setCopyStatus("copied");
+        } catch {
+          setCopyStatus("failed");
+        }
+      }}>
+      {copyStatus === "copied" ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+    </button>
+    {onManage && <button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded text-blue-700 hover:bg-blue-50"
+      title={manageLabel} aria-label={manageLabel} onClick={onManage}>
+      <Pencil className="size-3.5" aria-hidden="true" />
+    </button>}
+    <span className="sr-only" role="status">
+      {copyStatus === "copied" ? (language === "th" ? "คัดลอกเลขใบจองแล้ว" : "Booking reference copied")
+        : copyStatus === "failed" ? (language === "th" ? "คัดลอกไม่สำเร็จ" : "Could not copy the booking reference") : ""}
+    </span>
+  </div>;
+}
+
 export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBooking,onManageBooking}:Props) {
-  if(!total)return null;
+  const [widths, setWidths] = useState(rosterColumnWidths);
+  const drag = useRef<{ index: number; startX: number; startWidth: number } | null>(null);
+  if (!total) return null;
   const t = (th: string, en: string) => language === "th" ? th : en;
   const money = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
   const format = (minor: number) => money.format(minor / 100);
   const shownBookings = new Set<string>();
+  const headers = [
+    t("ผู้เข้าร่วมและสถานะ", "Attendee and status"), t("ประเภท", "Category"), t("ผู้จอง", "Booked by"),
+    t("ใบจอง", "Booking"), t("ยอดเงิน", "Amount"), t("รายละเอียด", "Details"),
+  ];
+  const setColumnWidth = (index: number, width: number) => {
+    setWidths(current => current.map((value, column) => column === index
+      ? Math.min(520, Math.max(index === 3 ? 132 : 76, width)) : value));
+  };
   return <section className="paid-attendee-roster border-b border-emerald-200 p-3">
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-sm font-bold text-emerald-900">
@@ -76,12 +118,37 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
       <button type="button" onClick={onRefresh}
         className="text-xs font-semibold text-emerald-700 underline">{t("โหลดใหม่", "Refresh")}</button>
     </div>
-    <div className="max-h-[30rem] overflow-auto rounded-lg border border-emerald-200">
-      <table className="w-full min-w-[780px] text-left text-xs">
-        <thead className="sticky top-0 text-emerald-950"><tr>
-          <th className="px-3 py-2">{t("ผู้เข้าร่วมและสถานะ", "Attendee and status")}</th><th className="px-3 py-2">{t("ประเภท", "Category")}</th>
-          <th className="px-3 py-2">{t("ผู้จอง", "Booked by")}</th><th className="px-3 py-2">{t("ใบจอง", "Booking")}</th>
-          <th className="px-3 py-2">{t("ยอดเงิน", "Amount")}</th><th className="px-3 py-2">{t("รายละเอียดลงทะเบียน", "Registration details")}</th>
+    <div className="relative max-h-[30rem] overflow-auto rounded-lg border border-emerald-200">
+      <table className="w-full table-fixed text-left text-xs" style={{ minWidth: widths.reduce((sum, width) => sum + width, 0) }}>
+        <colgroup>{widths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+        <thead className="sticky top-0 z-10 text-emerald-950"><tr>
+          {headers.map((label, index) => <th key={label} scope="col" className="relative break-words py-2 pl-2 pr-3">
+            {label}
+            <span role="separator" aria-orientation="vertical" tabIndex={0}
+              aria-label={t(`ปรับความกว้างคอลัมน์ ${label}`, `Resize ${label} column`)}
+              aria-valuemin={index === 3 ? 132 : 76} aria-valuemax={520} aria-valuenow={widths[index]}
+              className="absolute inset-y-0 right-0 w-2 cursor-col-resize touch-none select-none border-r border-emerald-700/25 hover:bg-emerald-600/30 focus-visible:bg-emerald-600/30"
+              onPointerDown={event => {
+                if (event.button !== 0) return;
+                drag.current = { index, startX: event.clientX, startWidth: widths[index] };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={event => {
+                if (drag.current?.index === index) setColumnWidth(index, drag.current.startWidth + event.clientX - drag.current.startX);
+              }}
+              onPointerUp={event => {
+                if (drag.current?.index === index) setColumnWidth(index, drag.current.startWidth + event.clientX - drag.current.startX);
+              }}
+              onLostPointerCapture={() => { drag.current = null; }}
+              onDoubleClick={() => setColumnWidth(index, rosterColumnWidths[index])}
+              onKeyDown={event => {
+                if (event.key === "Home") setColumnWidth(index, rosterColumnWidths[index]);
+                else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  setColumnWidth(index, widths[index] + (event.key === "ArrowRight" ? 12 : -12));
+                } else return;
+                event.preventDefault();
+              }} />
+          </th>)}
         </tr></thead>
         <tbody className="divide-y divide-slate-100">
           {people.map(person => {
@@ -91,41 +158,31 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
             const canCancel = firstInBooking && status === "awaiting_payment" &&
               ["unpaid", "rejected"].includes(person.payment_state) && Number.isSafeInteger(person.booking_version);
             return <tr key={person.attendee_id} data-registration-status={status}>
-              <td className="w-44 px-3 py-2 font-semibold text-slate-900">
+              <td className="break-words p-2 align-top font-semibold text-slate-900">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span>{person.first_name} {person.last_name}</span>
                   <RegistrationStatusTag status={status} language={language} />
                 </div>
                 {canCancel && onCancelBooking && <CancelBookingForm person={person} language={language} onCancel={onCancelBooking} />}
               </td>
-              <td className="px-3 py-2">{person.category_label}</td>
-              <td className="px-3 py-2">
+              <td className="break-words p-2 align-top">{person.category_label}</td>
+              <td className="break-words p-2 align-top">
                 {person.customer_first_name} {person.customer_last_name}
-                <span className="block break-all text-slate-500">{person.customer_email}</span>
+                <span className="block truncate text-slate-500" title={person.customer_email}>{person.customer_email}</span>
               </td>
-              <td className="px-3 py-2 break-all text-slate-500">
-                <div className="flex items-start gap-1.5">
-                  <span className="min-w-0">{person.booking_reference}</span>
-                  {firstInBooking && onManageBooking && <button type="button"
-                    aria-label={t("จัดการใบจอง", "Manage booking")}
-                    className="group/edit relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-blue-700 hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-blue-700"
-                    onClick={() => onManageBooking(person.booking_reference)}>
-                    <Pencil className="h-4 w-4" aria-hidden="true" />
-                    <span aria-hidden="true" className="pointer-events-none absolute right-0 top-full z-10 hidden whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs text-white group-hover/edit:block group-focus-visible/edit:block">
-                      {t("จัดการใบจอง", "Manage booking")}
-                    </span>
-                  </button>}
-                </div>
+              <td className="p-2 align-top text-slate-500">
+                <BookingReference key={person.booking_reference} reference={person.booking_reference} language={language}
+                  onManage={firstInBooking && onManageBooking ? () => onManageBooking(person.booking_reference) : undefined} />
               </td>
-              <td className="px-3 py-2 font-semibold text-slate-700">
-                <span className="block font-normal tabular-nums">{format(person.unit_minor)} {t("ต่อคน", "per person")}</span>
-                <span className="block whitespace-nowrap font-normal tabular-nums">{format(person.booking_total_minor)} {t("ทั้งใบจอง", "per booking")}</span>
+              <td className="p-2 align-top font-semibold text-slate-700">
+                <span className="block font-normal tabular-nums"><span className="whitespace-nowrap">{format(person.unit_minor)}</span> {t("ต่อคน", "per person")}</span>
+                <span className="block font-normal tabular-nums"><span className="whitespace-nowrap">{format(person.booking_total_minor)}</span> {t("ทั้งใบจอง", "per booking")}</span>
                 {person.pending_slip_minor != null && <span className="block font-normal tabular-nums">{t("ตามสลิป", "On slip")} {format(person.pending_slip_minor)}</span>}
               </td>
-              <td className="px-3 py-2">
+              <td className="break-words p-2 align-top">
                 {Object.keys(person.answers ?? {}).length || Object.keys(person.booking_answers ?? {}).length ? (
                   <details>
-                    <summary className="cursor-pointer whitespace-nowrap font-semibold text-blue-700">{t("ดูคำตอบ", "View answers")}</summary>
+                    <summary className="cursor-pointer font-semibold text-blue-700">{t("ดูคำตอบ", "View answers")}</summary>
                     <dl className="space-y-1 pt-1">
                       {Object.entries({ ...person.booking_answers, ...person.answers }).map(([key, value]) =>
                         <div key={key}><dt className="font-semibold">{paidSeminarFields[key as keyof typeof paidSeminarFields]?.label ?? key}</dt>

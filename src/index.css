@@ -2470,6 +2470,17 @@ html.theme-dark .registration-admin-review .registration-section-content > .flex
   color: #e2e8f0 !important;
 }
 
+.registration-workspace {
+  container: registration-workspace / inline-size;
+  min-width: 0;
+}
+
+@container registration-workspace (min-width: 70rem) {
+  .registration-workspace-grid {
+    grid-template-columns: minmax(0, 1fr) clamp(18rem, 24cqw, 21rem);
+  }
+}
+
 /* Attendee roster is nested in the legacy card, not a registration-admin-section. */
 html.theme-dark .paid-attendee-roster {
   background: #102c2b !important;
