@@ -1,5 +1,5 @@
 import { attendeeCarpoolRole, carpoolRoleFromAnswer, type CarpoolAttendee, type CarpoolLayout, type PaidCarpoolPlan, type PaidCarpoolUpdate } from "../carpoolPlan";
-import { applyCoupon, recordCouponRedemption } from "./paidCoupons";
+import { applyCoupon, isValidCouponCode, normalizeCouponCode, recordCouponRedemption } from "./paidCoupons";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { decryptPaidProof, encryptPaidProof, paidProofEncryptionConfigured } from "../paidProofEncryption";
 import { roomSurchargeMinor, isEditableSeminarKey, type EditableSeminarKey, normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
@@ -60,6 +60,25 @@ const paymentNoticeFields = `(SELECT notice.reason ${currentPaymentNotice}) AS p
   (SELECT notice.id ${currentPaymentNotice}) AS payment_notice_id`;
 const confirmedBalance = `CASE WHEN b.state='confirmed' AND b.payment_state='verified'
   AND b.total_minor>${verifiedCash} THEN b.total_minor-${verifiedCash} ELSE 0 END`;
+
+const unpaidWithoutAttempts = `b.state='awaiting_payment' AND b.payment_state='unpaid'
+  AND NOT EXISTS (SELECT 1 FROM paid_payment_attempts attempt WHERE attempt.booking_id=b.id)`;
+const appliedCouponFields = `
+  (SELECT code FROM paid_coupon_redemptions WHERE booking_id=b.id) AS coupon_code,
+  (SELECT discount_minor FROM paid_coupon_redemptions WHERE booking_id=b.id) AS coupon_discount_minor`;
+
+function* confirmCoveredPaidBooking(eventId: string, bookingId: string, customerId: string, now: number): PaidCommand<void> {
+  const attendees = yield query("SELECT id FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL", bookingId);
+  for (const attendee of attendees) {
+    yield query("INSERT INTO paid_credentials (id,event_id,booking_id,attendee_id,issued_ms) VALUES (?,?,?,?,?)",
+      randomUUID(), eventId, bookingId, String(attendee.id), now);
+  }
+  yield query(
+    `INSERT INTO notification_deliveries (id,channel,kind,recipient,related_type,related_id,payload_json,idempotency_key)
+     VALUES (?,'email','paid_booking.confirmed',?,'paid_booking',?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,
+    randomUUID(), customerId, bookingId, JSON.stringify({ eventId, customerId }), `paid_booking.confirmed:${bookingId}:email`,
+  );
+}
 
 function audit(eventId: string, id: string, actor: string, action: string, previous: string | null, next: string, now: number) {
   return query(
@@ -237,14 +256,7 @@ export function* createPaidBooking(eventId: string, organizationId: string, inpu
       attendee.firstName, attendee.lastName, JSON.stringify({ email: attendee.email, phone: attendee.phone, answers: attendee.answers, pricing: { base_minor: attendee.baseMinor, room_surcharge_minor: attendee.surchargeMinor, accommodation_discount_minor: attendee.appliedDiscountMinor } }),
     );
   }
-  if (covered) {
-    for (const attendeeId of (yield query("SELECT id FROM paid_attendees WHERE booking_id=?", id))) {
-      yield query("INSERT INTO paid_credentials (id,event_id,booking_id,attendee_id,issued_ms) VALUES (?,?,?,?,?)",
-        randomUUID(),eventId,id,String(attendeeId.id),now);
-    }
-    yield query("INSERT INTO notification_deliveries (id,channel,kind,recipient,related_type,related_id,payload_json,idempotency_key) VALUES (?,'email','paid_booking.confirmed',?,'paid_booking',?,?,?) ON CONFLICT(idempotency_key) DO NOTHING",
-      randomUUID(),customerId,id,JSON.stringify({eventId,customerId}),"paid_booking.confirmed:"+id+":email");
-  }
+  if (covered) yield* confirmCoveredPaidBooking(eventId, id, customerId, now);
   yield audit(eventId, id, customerId, "create", null, covered ? "confirmed" : "awaiting_payment", now);
   yield query(
     "INSERT INTO paid_command_keys (principal,event_id,operation,command_key,digest,booking_id,result_json,created_ms) VALUES (?,?,'create',?,?,?,?,?)",
@@ -1058,12 +1070,18 @@ export type PaidReviewSortOrder = "asc" | "desc";
 export function* listPaidReviewQueue(
   eventId: string, offset: number, reference?: string, sort: PaidReviewSortOrder = "asc",
 ): PaidCommand<PaidRow[]> {
+  const activePriceFlags = `EXISTS (
+    SELECT 1 FROM paid_attendees attendee JOIN paid_attendee_price_flags flag ON flag.attendee_id=attendee.id
+    WHERE attendee.booking_id=b.id AND attendee.cancelled_ms IS NULL
+  )`;
+  const now = Date.now();
   const direction = sort === "desc" ? "DESC" : "ASC";
   const rows = yield query(
     `SELECT b.id AS booking_id,b.reference AS booking_reference,b.version,b.total_minor,b.payment_state,
        CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS booking_state,
        CASE WHEN ${confirmedCashPayment} THEN 1 ELSE 0 END AS cash_confirmed,
        b.event_id,b.customer_id,b.created_ms AS booking_created_ms,b.due_ms,${confirmedBalance} AS balance_due_minor,
+       ${appliedCouponFields},
        e.name AS event_name,c.first_name AS customer_first_name,c.last_name AS customer_last_name,
        c.email AS customer_email,c.phone AS customer_phone,
        a.id AS attempt_id,a.status,a.claimed_minor,a.claimed_transfer_ms,a.claimed_reference,a.claimed_payer_name,a.created_ms,
@@ -1083,22 +1101,25 @@ export function* listPaidReviewQueue(
      WHERE b.event_id=? AND ${reference ? "b.reference=?" : `(
        (b.state='verification_pending' AND a.id IS NOT NULL)
        OR (a.id IS NOT NULL AND ${confirmedCashPayment})
+       OR ${confirmedBalance}>0
+       OR (b.state='confirmed' AND ${activePriceFlags})
        OR (b.state='awaiting_payment' AND b.due_ms>? AND es.payment_mode='external_manual')
      )`}
-     ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 ELSE 1 END,
+     ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 WHEN ${activePriceFlags} OR ${confirmedBalance}>0 THEN 1 ELSE 2 END,
        COALESCE(a.created_ms,b.created_ms) ${direction},b.id ${direction},a.id ${direction} LIMIT 21 OFFSET ?`,
-    Date.now(), eventId, reference || Date.now(), offset,
+    now, eventId, reference || now, offset,
   );
   if (!rows.length) return [];
 
   const attendeesByBooking = new Map(rows.map(({ booking_id }) => [String(booking_id), [] as {
-    id: string; name: string; category_label: string; unit_minor: number;
+    id: string; name: string; category_label: string; unit_minor: number; price_flagged: boolean;
   }[]]));
   const bookingIds = [...attendeesByBooking.keys()];
   const attendees = yield query(
-    `SELECT id,booking_id,first_name,last_name,category_label,unit_minor FROM paid_attendees
-     WHERE event_id=? AND booking_id IN (${bookingIds.map(() => "?").join(",")}) AND cancelled_ms IS NULL
-     ORDER BY booking_id,ordinal`,
+    `SELECT a.id,a.booking_id,a.first_name,a.last_name,a.category_label,a.unit_minor,flag.flagged_ms
+     FROM paid_attendees a LEFT JOIN paid_attendee_price_flags flag ON flag.attendee_id=a.id
+     WHERE a.event_id=? AND a.booking_id IN (${bookingIds.map(() => "?").join(",")}) AND a.cancelled_ms IS NULL
+     ORDER BY a.booking_id,a.ordinal`,
     eventId, ...bookingIds,
   );
   for (const attendee of attendees) {
@@ -1107,6 +1128,7 @@ export function* listPaidReviewQueue(
       name: [attendee.first_name, attendee.last_name].filter(Boolean).join(" "),
       category_label: String(attendee.category_label),
       unit_minor: Number(attendee.unit_minor),
+      price_flagged: attendee.flagged_ms != null,
     });
   }
   const proofs = yield query(
@@ -1132,6 +1154,7 @@ export function* listPaidReviewQueue(
     return {
       ...row, proofs: pendingProofs,
       previous_proofs: uploadedProofs.filter(proof => !pendingProofs.includes(proof)),
+      coupon_discount_minor: row.coupon_discount_minor == null ? null : Number(row.coupon_discount_minor),
       cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor), receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),
       attendees: bookingAttendees, attendee_names: bookingAttendees.map(attendee => attendee.name),
       attendee_count: bookingAttendees.length, matching_proofs: Number(row.matching_proofs),
@@ -1307,14 +1330,16 @@ export function* confirmPaidMessengerDraft(input: PaidMessengerConfirmInput, org
 
 export interface PaidAdminAction {
   eventId: string; bookingId: string; organizationId: string; actorId: string;
-  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice";
-  reason: string; holdMinutes?: number; refundReference?: string; attendeeId?: string; unitMinor?: number;
+  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag";
+  reason: string; holdMinutes?: number; refundReference?: string; attendeeId?: string; unitMinor?: number; couponCode?: string;
 }
 
 export function* readPaidAdminBooking(eventId: string, organizationId: string, reference: string): PaidCommand<PaidRow | undefined> {
   const [row] = yield query(
     `SELECT b.id,b.reference,b.state,b.payment_state,b.total_minor,b.version,b.due_ms,${confirmedBalance} AS balance_due_minor,${pendingEvidence} AS pending_proofs,${paymentNoticeFields},
     CASE WHEN ${confirmedCashPayment} THEN 1 ELSE 0 END AS cash_confirmed,
+    CASE WHEN ${unpaidWithoutAttempts} THEN 1 ELSE 0 END AS unpaid_without_attempts,
+    ${appliedCouponFields},
     CASE WHEN EXISTS(SELECT 1 FROM paid_booking_receivers r WHERE r.booking_id=b.id) THEN 'promptpay' ELSE 'external_manual' END AS payment_mode,` +
     "COALESCE((SELECT amount_minor FROM paid_booking_credit_uses WHERE booking_id=b.id),0) AS credit_used_minor," +
     "COALESCE((SELECT amount_minor FROM paid_booking_credits WHERE booking_id=b.id),0) AS credit_issued_minor," +
@@ -1334,21 +1359,28 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
      FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id
      WHERE a.booking_id=? AND p.deleted_ms IS NULL ORDER BY a.sequence`, String(row.id),
   );
-  return { ...row, proofs, pending_proofs: Number(row.pending_proofs), cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor),
+  const canApplyCoupon = Number(row.unpaid_without_attempts) === 1 && Number(row.due_ms) > Date.now() && row.coupon_code == null;
+  return { ...row, proofs, can_apply_coupon: canApplyCoupon,
+    coupon_discount_minor: row.coupon_discount_minor == null ? null : Number(row.coupon_discount_minor), pending_proofs: Number(row.pending_proofs), cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor),
     attendee_prices: attendeePrices.map(attendee => ({ ...attendee, unit_minor: Number(attendee.unit_minor) })), credit_used_minor:Number(row.credit_used_minor),credit_issued_minor:Number(row.credit_issued_minor), total_minor:Number(row.total_minor),version:Number(row.version),due_ms:Number(row.due_ms),
     attendees:Number(row.attendees),checked_in:Number(row.checked_in),refunds };
 }
 
 export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status:string; payment_status:string; version:number; due_at:string; total_minor?:number; balance_due_minor?:number }> {
   const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor } = input;
+  const couponCode = normalizeCouponCode(input.couponCode ?? "");
   if (!key || key.length>128 || !reason?.trim() || reason.length>1000 || !Number.isSafeInteger(version) || version<1 ||
-      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice"].includes(action) ||
+      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag"].includes(action) ||
       (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
-      (action==="correct_price" && (!attendeeId || !Number.isSafeInteger(unitMinor) || unitMinor! < 1 || unitMinor! > 2_147_483_647)) ||
+      (["correct_price", "flag_price", "clear_price_flag"].includes(action) && !attendeeId) ||
+      (action==="correct_price" && (!Number.isSafeInteger(unitMinor) || unitMinor! < 1 || unitMinor! > 2_147_483_647)) ||
       (action==="refund" && (!refundReference?.trim() || refundReference.length>255))) throw new PaidBookingError("invalid_admin_action");
+  if (action === "apply_coupon" && !isValidCouponCode(couponCode)) throw new PaidBookingError("coupon_invalid");
   const principal="staff:"+actorId;
   const digest=createHash("sha256").update(JSON.stringify([bookingId,version,action,reason,holdMinutes,refundReference,
-    ...(action === "correct_price" ? [attendeeId,unitMinor] : [])])).digest("hex");
+    ...(action === "correct_price" ? [attendeeId,unitMinor] : []),
+    ...(action === "apply_coupon" ? [couponCode] : []),
+    ...(["flag_price", "clear_price_flag"].includes(action) ? [attendeeId] : [])])).digest("hex");
   const [replay]=yield query("SELECT digest,result_json FROM paid_command_keys WHERE principal=? AND event_id=? AND operation='admin_booking' AND command_key=?",
     principal,eventId,key);
   if (replay) {
@@ -1356,7 +1388,10 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
     return JSON.parse(String(replay.result_json));
   }
   const [booking]=yield query(`SELECT b.state,b.payment_state,b.due_ms,b.total_minor,b.version,b.customer_id,b.contact_json,
-    ${verifiedCash} AS paid_minor,${confirmedBalance} AS balance_due_minor,${pendingEvidence} AS pending_proofs FROM paid_bookings b
+    ${verifiedCash} AS paid_minor,${confirmedBalance} AS balance_due_minor,${pendingEvidence} AS pending_proofs,
+    CASE WHEN ${unpaidWithoutAttempts} THEN 1 ELSE 0 END AS unpaid_without_attempts,
+    (SELECT code FROM paid_coupon_redemptions WHERE booking_id=b.id) AS coupon_code
+    FROM paid_bookings b
     WHERE b.event_id=? AND b.id=? AND b.organization_id=?`,
     eventId,bookingId,organizationId);
   if (!booking) throw new PaidBookingError("booking_not_found");
@@ -1365,11 +1400,60 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   const previous=String(booking.state);
   let state=previous, payment=String(booking.payment_state), due=Number(booking.due_ms);
   let correction: { total_minor: number; balance_due_minor: number } | undefined;
+  let couponConfirmed = false;
   let auditReason = reason.trim();
   if (action === "payment_notice") {
     if (Number(booking.balance_due_minor) <= 0 || Number(booking.pending_proofs) > 0) {
       throw new PaidBookingError("state_conflict");
     }
+  } else if (action === "apply_coupon") {
+    if (Number(booking.unpaid_without_attempts) !== 1) throw new PaidBookingError("state_conflict");
+    if (due <= now) throw new PaidBookingError("hold_expired");
+    if (booking.coupon_code != null) throw new PaidBookingError("coupon_already_applied");
+
+    const [credit] = yield query("SELECT amount_minor FROM paid_booking_credit_uses WHERE booking_id=?", bookingId);
+    const existingCredit = Number(credit?.amount_minor ?? 0);
+    const subtotal = Number(booking.total_minor) + existingCredit;
+    const customerId = String(booking.customer_id);
+    const applied = yield* applyCoupon(eventId, customerId, couponCode, subtotal);
+    const retainedCredit = Math.min(existingCredit, applied.total_minor);
+    const total = applied.total_minor - retainedCredit;
+    if (retainedCredit < existingCredit) {
+      if (retainedCredit > 0) {
+        yield query("UPDATE paid_booking_credit_uses SET amount_minor=? WHERE booking_id=?", retainedCredit, bookingId);
+      } else {
+        yield query("DELETE FROM paid_booking_credit_uses WHERE booking_id=?", bookingId);
+      }
+    }
+    const buyerContact = JSON.parse(String(booking.contact_json ?? "{}"));
+    buyerContact.coupon = { code: applied.code, subtotal_minor: subtotal, discount_minor: applied.discount_minor };
+    yield* recordCouponRedemption(eventId, applied.code, bookingId, customerId, subtotal, applied.discount_minor);
+    yield query("UPDATE paid_bookings SET total_minor=?,contact_json=? WHERE id=? AND event_id=?",
+      total, JSON.stringify(buyerContact), bookingId, eventId);
+    correction = { total_minor: total, balance_due_minor: 0 };
+    auditReason = `${reason.trim().slice(0, 850)} · ${applied.code}: ${subtotal} → ${total} THB minor units`;
+    if (total === 0) {
+      state = "confirmed";
+      payment = "verified";
+      couponConfirmed = true;
+    }
+  } else if (action === "flag_price" || action === "clear_price_flag") {
+    if (action === "flag_price" && (previous !== "confirmed" || payment !== "verified" || Number(booking.paid_minor) <= 0)) {
+      throw new PaidBookingError("state_conflict");
+    }
+    const [attendee] = yield query(
+      "SELECT id FROM paid_attendees WHERE booking_id=? AND id=? AND cancelled_ms IS NULL", bookingId, attendeeId!,
+    );
+    if (!attendee) throw new PaidBookingError("invalid_admin_action");
+    if (action === "flag_price") {
+      yield query(
+        "INSERT INTO paid_attendee_price_flags (attendee_id,flagged_by,flagged_ms) VALUES (?,?,?) ON CONFLICT(attendee_id) DO NOTHING",
+        attendeeId!, actorId, now,
+      );
+    } else {
+      yield query("DELETE FROM paid_attendee_price_flags WHERE attendee_id=?", attendeeId!);
+    }
+    auditReason = `${auditReason.slice(0, 850)} · attendee ${attendeeId}`;
   } else if (action === "correct_price") {
     if (Number(booking.balance_due_minor) === 0 && Number(booking.pending_proofs) > 0) {
       throw new PaidBookingError("pending_supporting_proof");
@@ -1389,6 +1473,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
     if (typeof attendeeContact.pricing?.base_minor === "number") attendeeContact.pricing.base_minor += delta;
     yield query("UPDATE paid_attendees SET unit_minor=?,contact_json=? WHERE id=? AND booking_id=?",
       unitMinor!, JSON.stringify(attendeeContact), attendeeId!, bookingId);
+    yield query("DELETE FROM paid_attendee_price_flags WHERE attendee_id=?", attendeeId!);
     const buyerContact = JSON.parse(String(booking.contact_json ?? "{}"));
     if (buyerContact.coupon) {
       buyerContact.coupon.subtotal_minor += delta;
@@ -1454,6 +1539,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   }
   yield query("UPDATE paid_bookings SET state=?,payment_state=?,due_ms=?,version=version+1,updated_ms=? WHERE id=? AND event_id=?",
     state,payment,due,now,bookingId,eventId);
+  if (couponConfirmed) yield* confirmCoveredPaidBooking(eventId, bookingId, String(booking.customer_id), now);
   const auditId = randomUUID();
   yield query("INSERT INTO paid_audit_events (id,event_id,booking_id,actor,action,previous_state,next_state,reason,occurred_ms) VALUES (?,?,?,?,?,?,?,?,?)",
     auditId,eventId,bookingId,principal,"admin_"+action,previous,state,auditReason,now);

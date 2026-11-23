@@ -1121,6 +1121,64 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     });
     assert.equal(disabledQuote.status,422);
     assert.equal((await disabledQuote.json()).error,"coupon_disabled");
+    const couponBookingAdmin = origin + "/api/events/" + newExternalEvent.id + "/paid-registration/bookings";
+    const saveStaffCoupon = async (code: string, kind: "percent" | "free", value: number) => {
+      const response = await fetch(couponAdminPath, { method: "PUT", headers: staffCreateHeaders,
+        body: JSON.stringify({ ...couponRule, code, kind, value_minor: value }) });
+      assert.equal(response.status, 200, await response.clone().text());
+    };
+    await saveStaffCoupon("STAFF20", "percent", 2000);
+    await saveStaffCoupon("INVITED", "free", 0);
+    const bookAtFullPrice = async (lastName: string) => {
+      const response = await fetch(couponPage + "/paid-bookings", {
+        method: "POST", headers: { ...headers("test-owner"), "Content-Type": "application/json",
+          "x-csrf-token": "fixture-csrf", "Idempotency-Key": "admin-coupon-booking-" + lastName },
+        body: JSON.stringify({ pricing_version: couponPayload.pricing_version, contact: { name: "Coupon Test" },
+          attendees: [{ category_id: "general", first_name: "Staff Coupon", last_name: lastName }] }),
+      });
+      assert.equal(response.status, 201, await response.clone().text());
+      return response.json();
+    };
+    const applyStaffCoupon = (id: string, code: string, version: number, key: string, requestHeaders = staffCreateHeaders) =>
+      fetch(couponBookingAdmin + "/" + id + "/manage", {
+        method: "POST", headers: { ...requestHeaders, "Idempotency-Key": key },
+        body: JSON.stringify({ action: "apply_coupon", coupon_code: code, version, reason: "Organizer discount" }),
+      });
+    const regularBooking = await bookAtFullPrice("Regular");
+    const invitedBooking = await bookAtFullPrice("Invited");
+    assert.equal(regularBooking.total_due_minor, 65000);
+    const regularLookup = await (await fetch(couponBookingAdmin + "/by-reference/" + regularBooking.reference,
+      { headers: staffHeaders })).json();
+    assert.equal(regularLookup.booking.can_apply_coupon, true);
+    assert.equal((await applyStaffCoupon(regularBooking.id, "STAFF20", regularBooking.version, "customer-coupon-denied",
+      { ...headers("test-owner"), "Content-Type": "application/json", "x-csrf-token": "fixture-csrf" })).status, 401);
+    const applyDiscount = await applyStaffCoupon(regularBooking.id, " staff20 ", regularBooking.version, "staff-discount");
+    assert.equal(applyDiscount.status, 200, await applyDiscount.clone().text());
+    const discountReceipt = await applyDiscount.json();
+    assert.equal(discountReceipt.total_minor, 52000);
+    assert.equal(discountReceipt.status, "awaiting_payment");
+    assert.deepEqual(await (await applyStaffCoupon(regularBooking.id, "STAFF20", regularBooking.version, "staff-discount")).json(),
+      discountReceipt);
+    const stackCoupon = await applyStaffCoupon(regularBooking.id, "INVITED", discountReceipt.version, "no-coupon-stacking");
+    assert.equal(stackCoupon.status, 409);
+    assert.equal((await stackCoupon.json()).error, "coupon_already_applied");
+    const couponLimit = await applyStaffCoupon(invitedBooking.id, "STAFF20", invitedBooking.version, "staff-coupon-limit");
+    assert.equal(couponLimit.status, 409);
+    assert.equal((await couponLimit.json()).error, "coupon_exhausted");
+    const applyInvite = await applyStaffCoupon(invitedBooking.id, "INVITED", invitedBooking.version, "staff-invite");
+    assert.equal(applyInvite.status, 200, await applyInvite.clone().text());
+    assert.equal((await applyInvite.json()).status, "confirmed");
+    const appliedInviteUrl = origin + "/api/customer/paid-bookings/" + newExternalEvent.id + "/" + invitedBooking.id;
+    const invitedDetail = await (await fetch(appliedInviteUrl, { headers: headers("test-owner") })).json();
+    assert.equal(invitedDetail.total_due_minor, 0);
+    assert.deepEqual(invitedDetail.coupon, { code: "INVITED", subtotal_minor: 65000, discount_minor: 65000 });
+    assert.equal((await fetch(appliedInviteUrl + "/attendees/" + invitedDetail.attendees[0].id + "/credential",
+      { headers: headers("test-owner") })).status, 200);
+    const inviteDeliveries = await db.listNotificationDeliveries({ related_type: "paid_booking", related_id: invitedBooking.id });
+    assert.equal(inviteDeliveries.filter(row => row.kind === "paid_booking.confirmed").length, 1);
+    const alreadyPaid = await applyStaffCoupon(invitedBooking.id, "STAFF20", invitedDetail.version, "staff-coupon-paid");
+    assert.equal(alreadyPaid.status, 409);
+    assert.equal((await alreadyPaid.json()).error, "state_conflict");
     const preferencesFixture = new Database(database);
     try {
       preferencesFixture.prepare(`INSERT INTO paid_event_forms (event_id,fields_json) VALUES (?,?)
@@ -1208,6 +1266,12 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(assistedUpload.status, 202, await assistedUpload.clone().text());
     const assistedReceipt = await assistedUpload.json();
     assert.equal(assistedReceipt.status, "verification_pending");
+    const couponAfterSlip = await fetch(assistedPath + "/manage", {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "staff-coupon-after-slip" },
+      body: JSON.stringify({ action: "apply_coupon", coupon_code: "STAFF20", version: assistedReceipt.version, reason: "Already submitted" }),
+    });
+    assert.equal(couponAfterSlip.status, 409);
+    assert.equal((await couponAfterSlip.json()).error, "state_conflict");
     assert.equal((await cancelOwned(assisted.id)).status, 409);
     assert.deepEqual((await paymentActions()).bookings, []);
     const assistedQueue = await fetch(externalPrefix + "/review-queue?reference=" + assisted.reference, { headers: staffHeaders });
@@ -1321,15 +1385,31 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await settle(supported.id, supported.version, "credit", "restore-used-credit")).status, 200);
     assert.equal(await balance("test-owner"), 250000);
 
+    const flagResponse = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/manage", {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "flag-attendee-price" },
+      body: JSON.stringify({ action: "flag_price", reason: "Check participant price",
+        attendee_id: externalConfirmedDetail.attendees[0].id, version: externalConfirmedDetail.version }),
+    });
+    assert.equal(flagResponse.status, 200, await flagResponse.clone().text());
+    const flagReceipt = await flagResponse.json();
+    assert.equal(flagReceipt.status, "confirmed");
+    const flaggedReview = (await (await fetch(externalPrefix + "/review-queue", { headers: staffHeaders })).json()).reviews
+      .find((row: { booking_id: string }) => row.booking_id === externalSlipBooking.id);
+    assert.equal(flaggedReview.attendees[0].price_flagged, true);
+    assert.equal(flaggedReview.total_minor, externalConfirmedDetail.total_due_minor);
+
     const correction = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/manage", {
       method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "correct-attendee-price" },
       body: JSON.stringify({ action: "correct_price", reason: "Correct the published price",
-        attendee_id: externalConfirmedDetail.attendees[0].id, unit_minor: 300000, version: externalConfirmedDetail.version }),
+        attendee_id: externalConfirmedDetail.attendees[0].id, unit_minor: 300000, version: flagReceipt.version }),
     });
     assert.equal(correction.status, 200, await correction.clone().text());
     const correctionResult = await correction.json();
     assert.equal(correctionResult.status, "confirmed");
     assert.equal(correctionResult.balance_due_minor, 50000);
+    const [correctedReview] = (await (await fetch(externalPrefix + "/review-queue?reference=" +
+      externalSlipBooking.reference, { headers: staffHeaders })).json()).reviews;
+    assert.equal(correctedReview.attendees[0].price_flagged, false);
     const correctedDetails = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
     assert.equal(correctedDetails.attendees[0].unit_minor, 300000);
     assert.equal(correctedDetails.balance_due_minor, 50000);

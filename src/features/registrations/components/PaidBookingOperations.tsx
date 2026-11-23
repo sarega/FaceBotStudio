@@ -5,6 +5,7 @@ type Booking = {
   id: string; reference: string; state: string; payment_state: string; version: number;
   total_minor: number; balance_due_minor: number;
   cash_confirmed: boolean; pending_proofs: number; payment_notice?: string;
+  can_apply_coupon: boolean;
   attendee_prices: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number }[];
   due_ms: number; attendees: number; checked_in: number;
   credit_used_minor: number; credit_issued_minor: number;
@@ -12,6 +13,7 @@ type Booking = {
 };
 type Copy = [string, string];
 const actionLabels: Record<string, Copy> = {
+  apply_coupon: ["ใช้คูปองแทนผู้จอง", "Apply coupon for customer"],
   payment_notice: ["ส่งข้อความแจ้งชำระส่วนต่าง", "Send a balance reminder"],
   correct_price: ["แก้ราคาผู้เข้าร่วมและเรียกเก็บส่วนต่าง", "Correct attendee price and collect the difference"],
   extend: ["ขยายเวลาชำระเงิน", "Extend payment deadline"],
@@ -21,6 +23,13 @@ const actionLabels: Record<string, Copy> = {
   credit: ["ยกเลิกและเก็บเป็นเครดิต", "Cancel and keep as credit"],
 };
 const errorLabels: Record<string, Copy> = {
+  coupon_invalid: ["รูปแบบรหัสคูปองไม่ถูกต้อง", "Enter a valid coupon code."],
+  coupon_not_found: ["ไม่พบคูปองนี้สำหรับงานนี้", "This event has no coupon with that code."],
+  coupon_disabled: ["คูปองนี้ถูกปิดใช้งาน", "This coupon is disabled."],
+  coupon_not_started: ["คูปองนี้ยังไม่เริ่มใช้", "This coupon is not active yet."],
+  coupon_expired: ["คูปองนี้หมดอายุแล้ว", "This coupon has expired."],
+  coupon_exhausted: ["คูปองนี้ถึงโควตาการใช้แล้ว", "The coupon usage limit has been reached."],
+  coupon_already_applied: ["ใบจองนี้ใช้คูปองแล้ว", "This booking already has a coupon."],
   pending_supporting_proof: ["กรุณาตรวจสลิปที่แนบไว้ก่อนแก้ราคา", "Review the attached slip before changing the price."],
   invalid_price_correction: ["ราคาใหม่ต้องสูงกว่าราคาเดิม", "The corrected price must be higher than the current price."],
   credit_changed: ["เครดิตเดิมถูกใช้ไปแล้ว ให้สร้างใบจองใหม่", "The original credit is no longer available. Create a new booking."],
@@ -36,8 +45,10 @@ const errorLabels: Record<string, Copy> = {
 const control = "registration-admin-control";
 const input = "mt-0.5 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5";
 
-export function PaidBookingOperations({ eventId, apiFetch, onChange, language, bookingReference, version }: {
-  eventId: string; apiFetch: ApiFetch; onChange: () => void; language: "th" | "en"; bookingReference: string; version: number;
+export type BookingEditRequest = { action: "correct_price"; attendeeId: string } | { action: "payment_notice" };
+
+export function PaidBookingOperations({ eventId, apiFetch, onChange, language, bookingReference, version, request }: {
+  eventId: string; apiFetch: ApiFetch; onChange: () => void; language: "th" | "en"; bookingReference: string; version: number; request?: BookingEditRequest;
 }) {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const locale = language === "th" ? "th-TH" : "en-GB";
@@ -48,6 +59,8 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
   const [error, setError] = useState<Copy | null>(null);
   const [busy, setBusy] = useState(false);
   const [noticeSent, setNoticeSent] = useState(false);
+  const [couponApplied, setCouponApplied] = useState<{ code: string; totalMinor: number }>();
+  const noticeInput = useRef<HTMLTextAreaElement>(null);
   const fetchRef = useRef(apiFetch);
   fetchRef.current = apiFetch;
   const base = `/api/events/${encodeURIComponent(eventId)}/paid-registration/bookings`;
@@ -76,12 +89,19 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
     return () => request.abort();
   }, [base, bookingReference, version]);
 
+  useEffect(() => {
+    if (!request) return;
+    setChosenAction(request.action);
+    if (request.action === "correct_price") setAttendeeId(request.attendeeId);
+  }, [request]);
+
   async function manage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!booking || booking.version !== version || busy || !selectedAction) return;
     const values = new FormData(event.currentTarget);
     const action = selectedAction;
-    const reason = String(values.get("reason") || "").trim();
+    const couponCode = String(values.get("coupon_code") || "").trim().toUpperCase();
+    const reason = String(values.get("reason") || "").trim() || (action === "apply_coupon" ? "Coupon applied by staff" : "");
     const copy = actionLabels[action];
     if (!copy) return;
     const unitMinor = Math.round(Number(values.get("unit_price")) * 100);
@@ -94,11 +114,12 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
       : action === "refund"
       ? t("บันทึกการคืนเงินเต็มจำนวนที่โอนแล้วและยกเลิกบัตรคิวอาร์ทั้งหมด", "Record the completed full refund and revoke all QR tickets")
       : t(...copy);
-    if (action !== "payment_notice" && !window.confirm(`${label}?\n${t("ใบจอง", "Booking")} ${booking.reference}\n${t("เหตุผล", "Reason")} ${reason}`)) return;
+    if (action !== "payment_notice" && !window.confirm(`${label}${action === "apply_coupon" ? ` · ${couponCode}` : ""}?\n${t("ใบจอง", "Booking")} ${booking.reference}\n${t("เหตุผล", "Reason")} ${reason}`)) return;
     const body = {
       action, reason, version: booking.version,
       ...(["extend", "reinstate"].includes(action) ? { hold_minutes: Number(values.get("hold_minutes")) } : {}),
       ...(action === "correct_price" ? { attendee_id: attendee?.id, unit_minor: unitMinor } : {}),
+      ...(action === "apply_coupon" ? { coupon_code: couponCode } : {}),
       ...(action === "refund" ? { refund_reference: String(values.get("refund_reference") || "").trim() } : {}),
     };
     setBusy(true); setError(null);
@@ -111,6 +132,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
       if (!response.ok) throw new Error(result.error || "Booking update failed");
       setChosenAction(action === "correct_price" ? "payment_notice" : "");
       setNoticeSent(action === "payment_notice");
+      setCouponApplied(action === "apply_coupon" ? { code: couponCode, totalMinor: result.total_minor } : undefined);
       onChange();
     } catch (failure) { setError((failure instanceof Error && errorLabels[failure.message]) || ["บันทึกการเปลี่ยนแปลงไม่สำเร็จ", "Could not update the booking."]); }
     finally { setBusy(false); }
@@ -122,9 +144,14 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
           ...(booking.balance_due_minor > 0 && !booking.pending_proofs ? ["payment_notice"] : []),
           ...(booking.checked_in || booking.balance_due_minor > 0 || booking.pending_proofs ? [] : ["refund", "credit"])]
         : booking.credit_used_minor > 0 && !booking.checked_in ? ["credit"] : [] :
-    booking?.state === "awaiting_payment" && booking.due_ms > Date.now() ? ["extend", "cancel"] :
+    booking?.state === "awaiting_payment" && booking.due_ms > Date.now() ? [...(booking.can_apply_coupon ? ["apply_coupon"] : []), "extend", "cancel"] :
     booking?.state === "verification_pending" || booking?.state === "payment_exception" ? ["cancel"] : [];
   const selectedAction = actions.includes(chosenAction) ? chosenAction : actions[0];
+  useEffect(() => {
+    if (request?.action === "payment_notice" && selectedAction === "payment_notice" && booking?.version === version) {
+      noticeInput.current?.focus();
+    }
+  }, [request, selectedAction, booking?.version, version]);
   const attendee = booking?.attendee_prices?.find(item => item.id === attendeeId) ?? booking?.attendee_prices?.[0];
   return (
     <div className="space-y-2 text-sm">
@@ -134,6 +161,9 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
         {!!booking.refunds?.length && <p>{t("บันทึกคืนเงินแล้ว", "Refund recorded")} {booking.refunds.map(item => `${money.format(item.amount_minor / 100)} · ${item.reference}`).join(", ")}</p>}
         {booking.credit_issued_minor > 0 && <p>{t("เครดิตที่ออกให้", "Credit issued")} {money.format(booking.credit_issued_minor / 100)}</p>}
         {booking.credit_used_minor > 0 && <p>{booking.state === "cancelled" ? t("คืนเครดิตที่ใช้", "Credit restored") : t("ใช้เครดิต", "Credit applied")} {money.format(booking.credit_used_minor / 100)}</p>}
+        {couponApplied && <p role="status" className="font-semibold text-emerald-700">
+          {t(`ใช้คูปอง ${couponApplied.code} แล้ว · ยอดใหม่`, `Coupon ${couponApplied.code} applied · New total`)} {money.format(couponApplied.totalMinor / 100)}
+        </p>}
         {noticeSent && <p role="status" className="font-semibold text-emerald-700">{t("แจ้งในบัญชีแล้ว ระบบจะส่งอีเมลตามการตั้งค่าของผู้จอง", "Posted to the customer’s account. Email follows their notification settings.")}</p>}
         {booking.balance_due_minor > 0 && booking.payment_notice && <p className="whitespace-pre-wrap text-slate-700">
           <strong>{t("ข้อความล่าสุดถึงผู้จอง", "Latest message to the customer")}</strong> {booking.payment_notice}
@@ -145,6 +175,9 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
               {actions.map((item) => <option key={item} value={item}>{t(...actionLabels[item])}</option>)}
             </select>
           </label>
+          {selectedAction === "apply_coupon" && <label>{t("รหัสคูปอง", "Coupon code")}
+            <input name="coupon_code" required maxLength={32} autoCapitalize="characters" spellCheck={false} className={input} />
+          </label>}
           {selectedAction === "correct_price" && <>
             <label>{t("ผู้เข้าร่วมที่ต้องแก้ราคา", "Attendee to correct")}
               <select required className={input} value={attendee?.id ?? ""} onChange={event => setAttendeeId(event.target.value)}>
@@ -165,16 +198,18 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
             <input name="refund_reference" className={input} required />
           </label>}
           <label className="sm:col-span-2">{selectedAction === "payment_notice"
-            ? t("ข้อความถึงผู้จอง", "Message to the customer") : t("เหตุผล", "Reason")}
+            ? t("ข้อความถึงผู้จอง", "Message to the customer")
+            : selectedAction === "apply_coupon" ? t("เหตุผล (ไม่บังคับ)", "Reason (optional)") : t("เหตุผล", "Reason")}
             {selectedAction === "payment_notice"
-              ? <textarea name="reason" required rows={2} maxLength={1000} className={input} />
-              : <input name="reason" required maxLength={1000} className={input} />}
+              ? <textarea key={booking.balance_due_minor} ref={noticeInput} name="reason" required rows={3} maxLength={1000} className={input}
+                  defaultValue={`ผู้จัดงานปรับราคาในใบจองแล้ว กรุณาชำระส่วนต่าง ${money.format(booking.balance_due_minor / 100)} แล้วแนบสลิปในใบจองนี้\nThe organizer updated your booking price. Please pay the remaining ${money.format(booking.balance_due_minor / 100)} and upload the slip to this booking.`} />
+              : <input name="reason" required={selectedAction !== "apply_coupon"} maxLength={1000} className={input} />}
           </label>
           {selectedAction === "refund" && <p className="text-xs text-amber-800 sm:col-span-2">{t("บันทึกหลังโอนเงินคืนสำเร็จ การบันทึกจะยกเลิกบัตรคิวอาร์ที่ยังไม่ได้สแกน", "Record the refund after completing the bank transfer. This revokes all unscanned QR tickets.")}</p>}
           {selectedAction === "credit" && <p className="text-xs text-amber-800 sm:col-span-2">
             {t("ยอดชำระจะเก็บไว้เป็นเครดิตในบัญชีผู้จองสำหรับงานนี้ ระบบจะยกเลิกบัตรของใบจองเดิม", "The paid amount becomes credit for this event in the booker’s account. Existing passes are revoked.")}
           </p>}
-          <button disabled={busy || booking.version !== version} className={`${control} registration-admin-control-primary justify-self-start`}>{selectedAction === "payment_notice" ? t("ส่งข้อความ", "Send message") : t("บันทึก", "Save operation")}</button>
+          <button disabled={busy || booking.version !== version} className={`${control} registration-admin-control-primary justify-self-start`}>{selectedAction === "payment_notice" ? t("ส่งข้อความ", "Send message") : selectedAction === "apply_coupon" ? t("ใช้คูปอง", "Apply coupon") : t("บันทึก", "Save operation")}</button>
         </form>}
       </div>}
       {error && <p role="alert" className="text-red-700">{t(...error)}</p>}

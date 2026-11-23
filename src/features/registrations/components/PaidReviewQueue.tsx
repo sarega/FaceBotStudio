@@ -1,9 +1,9 @@
 import { PaidTransferReportExport } from "../../reports/components/PaidTransferReportExport";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
-import { PaidBookingOperations } from "./PaidBookingOperations";
+import { PaidBookingOperations, type BookingEditRequest } from "./PaidBookingOperations";
 import { PaidProofForm } from "../../../components/PaidProofForm";
 import { useEffect, useId, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Flag, FlagOff, Send, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
 
 type Review = {
   booking_id: string;
@@ -22,10 +22,12 @@ type Review = {
   version: number;
   total_minor: number;
   attendee_count: number;
-  attendees: { id: string; name: string; category_label: string; unit_minor: number }[];
+  attendees: { id: string; name: string; category_label: string; unit_minor: number; price_flagged?: boolean }[];
   claimed_minor: number | null;
   proof_id: string | null;
   balance_due_minor: number;
+  coupon_code?: string | null;
+  coupon_discount_minor?: number | null;
   booking_state: string;
   cash_confirmed: boolean;
   previous_proofs: { attempt_id: string; status: string; observed_minor: number | null; claimed_minor: number | null }[];
@@ -164,6 +166,9 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const sectionRef = useRef<HTMLElement>(null);
   const scrollToBooking = useRef(false);
   const [editingBooking, setEditingBooking] = useState("");
+  const [editRequest, setEditRequest] = useState<{ reference: string; request: BookingEditRequest }>();
+  const [flagBusy, setFlagBusy] = useState("");
+  const [flagError, setFlagError] = useState<{ reference: string; text: string }>();
   const t = (th: string, en: string) => language === "th" ? th : en;
   const locale = language === "th" ? "th-TH" : "en-GB";
   const money = new Intl.NumberFormat(locale, { style: "currency", currency: "THB" });
@@ -179,6 +184,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
     setOffset(0);
     setToolsOpen(false);
     setEditingBooking(focusBookingEditor ? focusBookingReference : "");
+    setEditRequest(undefined);
     scrollToBooking.current = true;
     onFocusConsumed();
   },[focusBookingReference,focusBookingEditor,eventId]);
@@ -202,6 +208,38 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
     setOffset(0);
     setRefresh((value) => value + 1);
     window.dispatchEvent(new Event("meetrix:paid-booking-updated"));
+  }
+
+  function openEditor(bookingReference: string, request: BookingEditRequest) {
+    setEditingBooking(bookingReference);
+    setEditRequest({ reference: bookingReference, request });
+  }
+
+  async function updatePriceFlag(review: Review, attendeeId: string, clear: boolean) {
+    if (flagBusy) return;
+    setFlagBusy(attendeeId);
+    setFlagError(undefined);
+    try {
+      const result = await apiFetch(`${prefix}/bookings/${encodeURIComponent(review.booking_id)}/manage`, {
+        method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ attendee_id: attendeeId, version: review.version, action: clear ? "clear_price_flag" : "flag_price",
+          reason: clear ? "Price flag cleared by staff" : "Attendee price flagged for correction" }),
+      });
+      if (!result.ok) {
+        const body = await result.json().catch(() => ({}));
+        if (body.error === "version_conflict") {
+          refreshAfterUpdate(review.booking_reference);
+          throw new Error(t("ใบจองมีการเปลี่ยนแปลง ระบบโหลดใหม่แล้ว ให้ลองอีกครั้ง", "The booking changed. It has been refreshed. Try again."));
+        }
+        throw new Error(t("บันทึกธงราคาไม่สำเร็จ", "Could not save the price flag."));
+      }
+      if (!clear) openEditor(review.booking_reference, { action: "correct_price", attendeeId });
+      refreshAfterUpdate(review.booking_reference);
+    } catch (error) {
+      setFlagError({ reference: review.booking_reference, text: error instanceof Error ? error.message : t("บันทึกธงราคาไม่สำเร็จ", "Could not save the price flag.") });
+    } finally {
+      setFlagBusy("");
+    }
   }
 
   useEffect(() => {
@@ -313,6 +351,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           const customerName = `${review.customer_first_name} ${review.customer_last_name}`.trim() || review.customer_email;
           const canUpload = review.booking_state === "awaiting_payment" ||
             review.booking_state === "verification_pending" || review.cash_confirmed || review.balance_due_minor > 0;
+          const hasFlag = review.attendees.some(attendee => attendee.price_flagged);
           const statusLabels: Record<string, [string, string]> = {
             confirmed: ["ยืนยันแล้ว", "Confirmed"],
             awaiting_payment: ["รอชำระ", "Awaiting payment"],
@@ -323,7 +362,10 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           return <details key={review.booking_id} open={reference ? true : undefined}
             className="paid-review-item group/review rounded-lg border border-slate-200">
             <summary className="grid min-h-10 cursor-pointer list-none grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto_auto] items-center gap-2 rounded-lg px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-emerald-600 sm:gap-4 sm:px-3 [&::-webkit-details-marker]:hidden">
-              <span className="truncate font-semibold text-slate-900" title={customerName}>{customerName}</span>
+              <span className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-900" title={customerName}>
+                {hasFlag && <Flag className="size-4 shrink-0 text-rose-600" aria-label={t("มีราคาที่ต้องแก้", "Price correction flagged")} />}
+                <span className="truncate">{customerName}</span>
+              </span>
               <span className="truncate text-slate-600" title={review.event_name}>{review.event_name}</span>
               <span className="whitespace-nowrap text-right font-semibold tabular-nums text-slate-900">{money.format(review.total_minor/100)}</span>
               <ChevronDown className="h-4 w-4 text-slate-500 group-open/review:rotate-180" aria-hidden="true" />
@@ -332,7 +374,8 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
               <div className="min-w-0 space-y-2">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="rounded-md bg-amber-50 px-2 py-0.5 font-semibold text-amber-800">
-                    {review.attempt_id ? t("รอตรวจสลิป", "Awaiting review") : t(...(statusLabels[review.booking_state] ?? ["ต้องตรวจสอบ", "Needs follow-up"]))}
+                    {review.attempt_id ? t("รอตรวจสลิป", "Awaiting review") : review.balance_due_minor > 0
+                      ? t("รอชำระส่วนต่าง", "Additional payment due") : t(...(statusLabels[review.booking_state] ?? ["ต้องตรวจสอบ", "Needs follow-up"]))}
                   </span>
                   <span className="wrap-anywhere text-slate-600">{bookingLabel} {review.booking_reference}</span>
                 </div>
@@ -350,20 +393,52 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                         </tr>
                       </thead>
                       <tbody>
-                        {review.attendees.map(attendee => <tr key={attendee.id} className="border-t border-slate-200 align-top">
-                          <td className="wrap-anywhere py-1 pr-2 font-medium">{attendee.name}</td>
+                        {review.attendees.map(attendee => <tr key={attendee.id} className={`border-t border-slate-200 align-top ${attendee.price_flagged ? "bg-rose-50" : ""}`}>
+                          <td className="wrap-anywhere py-1 pr-2 font-medium">
+                            {attendee.name}
+                            {attendee.price_flagged && <span className="block text-xs text-rose-800">{t("ต้องแก้ราคา", "Price flagged")}</span>}
+                          </td>
                           <td className="wrap-anywhere py-1 pr-2">{attendee.category_label}</td>
-                          <td className="wrap-anywhere py-1 text-right font-semibold tabular-nums">{money.format(attendee.unit_minor / 100)}</td>
+                          <td className="wrap-anywhere py-1 text-right font-semibold tabular-nums">
+                            {money.format(attendee.unit_minor / 100)}
+                            {review.cash_confirmed && <div className="flex justify-end gap-1">
+                              <button type="button" className="inline-flex size-7 items-center justify-center rounded text-rose-700 hover:bg-rose-100 focus-visible:outline-2"
+                                aria-label={t(`แก้ราคาที่ปักธง · ${attendee.name}`, `Flag or correct price · ${attendee.name}`)}
+                                title={attendee.price_flagged ? t("แก้ราคาที่ปักธง", "Correct flagged price") : t("ปักธงราคาที่ผิด", "Flag incorrect price")}
+                                disabled={!!flagBusy}
+                                onClick={() => attendee.price_flagged
+                                  ? openEditor(review.booking_reference, { action: "correct_price", attendeeId: attendee.id })
+                                  : void updatePriceFlag(review, attendee.id, false)}>
+                                <Flag className={`size-4 ${attendee.price_flagged ? "fill-current" : ""}`} aria-hidden="true" />
+                              </button>
+                              {attendee.price_flagged && <button type="button" className="inline-flex size-7 items-center justify-center rounded text-slate-600 hover:bg-slate-100 focus-visible:outline-2"
+                                aria-label={t(`เอาธงออก · ${attendee.name}`, `Clear price flag · ${attendee.name}`)}
+                                title={t("เอาธงออก", "Clear price flag")} disabled={!!flagBusy}
+                                onClick={() => void updatePriceFlag(review, attendee.id, true)}>
+                                <FlagOff className="size-4" aria-hidden="true" />
+                              </button>}
+                            </div>}
+                          </td>
                         </tr>)}
                       </tbody>
                     </table>
                   ) : <p className="text-slate-600">{t("ไม่มีรายชื่อผู้เข้าร่วมให้แสดง", "No attendee names to display.")}</p>}
+                  {flagError?.reference === review.booking_reference && <p role="alert" className="mt-1 text-sm text-rose-800">{flagError.text}</p>}
                 </div>
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 wrap-anywhere text-slate-700 [&>dt]:text-slate-600">
                   <dt>{t("ยอดรวมใบจอง", "Booking total")}</dt>
                   <dd className="font-semibold">{money.format(review.total_minor / 100)}</dd>
+                  {review.coupon_code && review.coupon_discount_minor != null && <>
+                    <dt>{t("คูปอง", "Coupon")}</dt>
+                    <dd className="font-semibold">{review.coupon_code} · −{money.format(review.coupon_discount_minor / 100)}</dd>
+                  </>}
                   {review.balance_due_minor > 0 && <><dt>{t("ยอดชำระเพิ่ม", "Additional amount due")}</dt>
-                    <dd className="font-semibold">{money.format(review.balance_due_minor / 100)}</dd></>}
+                    <dd className="flex flex-wrap items-center gap-2 font-semibold">{money.format(review.balance_due_minor / 100)}
+                      {!review.proofs.length && <button type="button" className={toolbarControl}
+                        onClick={() => openEditor(review.booking_reference, { action: "payment_notice" })}>
+                        <Send className="size-4" aria-hidden="true" />{t("แจ้งยอดให้ผู้จอง", "Notify customer")}
+                      </button>}
+                    </dd></>}
                   {review.proofs.length === 1 && review.claimed_minor != null && <>
                     <dt>{t("ยอดที่ลูกค้าแจ้ง", "Reported amount")}</dt>
                     <dd className={review.claimed_minor === (review.booking_state === "confirmed" ? review.balance_due_minor : review.total_minor) ? "font-semibold text-emerald-700" : "font-semibold text-rose-700"}>
@@ -406,6 +481,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   {editingBooking === review.booking_reference && <div className="px-2.5 pb-2.5">
                     <PaidBookingOperations eventId={eventId} apiFetch={apiFetch} language={language}
                       bookingReference={review.booking_reference} version={review.version}
+                      request={editRequest?.reference === review.booking_reference ? editRequest.request : undefined}
                       onChange={() => refreshAfterUpdate(review.booking_reference)} />
                   </div>}
                 </details>

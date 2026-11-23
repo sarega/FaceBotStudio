@@ -1502,6 +1502,7 @@ export class SqliteAppDatabase implements AppDatabase {
           : migration);
       }
       this.db.exec(readFileSync(new URL("./migrations/065_paid_split_payments.sql", import.meta.url), "utf8"));
+      this.db.exec(readFileSync(new URL("./migrations/066_paid_attendee_price_flags.sql", import.meta.url), "utf8"));
       this.ensureColumn("paid_payment_attempts", "claimed_payer_name", "TEXT");
       const paidSettingsColumns = this.db.pragma("table_info(paid_event_settings)") as { name: string }[];
       if (!paidSettingsColumns.some((column) => column.name === "deadline_mode")) {
