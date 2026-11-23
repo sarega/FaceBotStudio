@@ -20,6 +20,7 @@ type Booking = {
   refunded_minor?: number;
   total_due_minor: number;
   balance_due_minor?: number;
+  pending_proofs?: number;
   due_at: string;
 };
 type PreferenceField = { key: EditableSeminarKey; scope: "booking" | "attendee"; required: boolean; options?: string[]; surcharge?: { option: string; minor: number } };
@@ -76,7 +77,7 @@ function PreferenceInput({ locale, field, initial, path, attendeeId, onSaved }: 
   </form>;
 }
 
-type Detail = { balance_due_minor?: number; pending_proofs?: number; registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; total_due_minor: number; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
+type Detail = { payment_notice?: string | null; balance_due_minor?: number; pending_proofs?: number; registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; total_due_minor: number; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
   coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; room_is_default?: boolean; email?: string; phone?: string; registration_answers?: PaidSeminarAnswer[]; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 const baht = (minor: number, locale: CustomerLocale) =>
@@ -246,6 +247,10 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
         ? ["คูปองของรายการเดิมไม่สามารถใช้ได้แล้ว กรุณาทำรายการใหม่", "Original coupon unavailable. Create a new booking."]
         : code === "capacity_exhausted"
         ? ["ที่นั่งเต็มแล้ว กรุณาติดต่อผู้จัดงาน", "No capacity available for this booking."]
+        : code === "attendee_already_registered"
+        ? ["ผู้เข้าร่วมในรายการนี้มีชื่อในใบจองอื่นของงานนี้แล้ว กรุณาติดต่อผู้จัดงาน", "This event already has another booking with a matching attendee name. Contact the organizer."]
+        : code === "duplicate_attendee_in_booking"
+        ? ["มีชื่อผู้เข้าร่วมซ้ำกันในใบจองนี้ กรุณาติดต่อผู้จัดงาน", "This booking contains a duplicate attendee name. Contact the organizer."]
         : code === "registration_unavailable" || code === "hold_expired"
           ? ["ปิดรับลงทะเบียนแล้ว กรุณาติดต่อผู้จัดงาน", "Registration window is closed."]
           : code === "state_conflict"
@@ -321,8 +326,8 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
           }} />}
           {overview ? (
             <a className="inline-flex min-h-10 items-center font-semibold text-blue-700 underline"
-              href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}`}>
-              {booking.status === "awaiting_payment" ? t("ไปชำระเงิน", "Continue to payment") : t("ดูรายการจอง", "View booking")}
+              href={`/app/orders?paid_booking=${encodeURIComponent(booking.reference)}${booking.balance_due_minor ? "&upload_slip=1" : ""}`}>
+              {booking.balance_due_minor && !booking.pending_proofs ? t("ชำระส่วนต่าง", "Pay the balance") : booking.status === "awaiting_payment" ? t("ไปชำระเงิน", "Continue to payment") : t("ดูรายการจอง", "View booking")}
             </a>
           ) : <>
           {booking.status === "expired" && (
@@ -336,7 +341,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
             </div>
           )}
           <div className="flex flex-wrap items-center gap-3">
-            {!tickets && booking.status === "awaiting_payment" && <button type="button"
+            {!tickets && (booking.status === "awaiting_payment" || !!booking.balance_due_minor) && <button type="button"
               className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700"
               onClick={() => {
                 if (selected?.id === booking.id && slipAnchorRef.current) {
@@ -351,7 +356,10 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                   setSelected(booking);
                 }
               }}>
-              <UploadCloud className="h-4 w-4" aria-hidden="true" />{t("อัปโหลดสลิป", "Upload payment slip")}
+              <UploadCloud className="h-4 w-4" aria-hidden="true" />
+              {booking.balance_due_minor
+                ? booking.pending_proofs ? t("ดูสลิปยอดเพิ่ม", "View additional payment slips") : t("ชำระส่วนต่าง", "Pay the balance")
+                : t("อัปโหลดสลิป", "Upload payment slip")}
             </button>}
             <button type="button" aria-expanded={selected?.id === booking.id}
               className="min-h-11 rounded-xl border border-slate-200 px-4 py-2 font-semibold text-blue-700"
@@ -465,13 +473,17 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
               </p>}
               {!!detail.balance_due_minor && <>
                 <p className="font-bold">{t("ยอดที่ต้องชำระเพิ่ม", "Additional amount due")} · {baht(detail.balance_due_minor, locale)}</p>
-                {detail.payment_mode === "external_manual"
+                {detail.payment_notice && <p className="whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2">
+                  <strong className="block">{t("ข้อความจากผู้จัดงาน", "Message from the organizer")}</strong>{detail.payment_notice}
+                </p>}
+                {!detail.pending_proofs && (detail.payment_mode === "external_manual"
                   ? <ExternalPaymentInstructions locale={locale} eventId={booking.event_id} bookingId={booking.id} />
                   : <img src={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/payment-qr?v=${detail.version}`}
-                      alt={t("QR สำหรับยอดชำระเพิ่ม", "QR code for the remaining balance")} className="w-48 max-w-full rounded-xl bg-white p-2" />}
+                      alt={t("QR สำหรับยอดชำระเพิ่ม", "QR code for the remaining balance")} className="w-48 max-w-full rounded-xl bg-white p-2" />)}
               </>}
               <details className="rounded-lg border border-slate-200 p-3">
-                <summary className="cursor-pointer font-semibold text-blue-700">{t("แนบสลิปเพิ่ม", "Add another slip")}</summary>
+                <summary className="cursor-pointer font-semibold text-blue-700">{detail.balance_due_minor && !detail.pending_proofs
+                  ? t("อัปโหลดสลิปส่วนต่าง", "Upload balance payment slip") : t("แนบสลิปเพิ่ม", "Add another slip")}</summary>
                 <div className="mt-3">
                   <PaidProofForm locale={locale} key={detail.version} path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}`}
                     paymentMode={detail.payment_mode} submitRequest={customerApi} version={detail.version}

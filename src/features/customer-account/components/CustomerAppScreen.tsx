@@ -61,12 +61,13 @@ type PaidNotificationBooking = {
   due_at: string;
   updated_at: string;
   balance_due_minor?: number;
+  payment_notice?: string | null;
   pending_proofs?: number;
   refunded_minor?: number;
   credit_issued_minor?: number;
   credit_used_minor?: number;
 };
-type CustomerNotification = { id: string; title: string; event: string; at?: string; href: string; needsPayment: boolean };
+type CustomerNotification = { id: string; title: string; event: string; at?: string; href: string; needsPayment: boolean; note?: string | null };
 
 function CustomerNotificationList({ entries, locale, onSelect }: {
   entries: CustomerNotification[]; locale: CustomerLocale; onSelect?: () => void;
@@ -80,6 +81,7 @@ function CustomerNotificationList({ entries, locale, onSelect }: {
         <span className="min-w-0 flex-1">
           <span className="block font-semibold text-slate-900">{entry.title}</span>
           {entry.event && <span className="block break-words text-xs text-slate-600">{entry.event}</span>}
+          {entry.note && <span className="block whitespace-pre-wrap break-words text-sm text-slate-800">{entry.note}</span>}
           {entry.at && <time dateTime={entry.at} className="text-xs text-slate-500">{formatCustomerDate(entry.at, locale)}</time>}
         </span>
         <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
@@ -320,8 +322,10 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
       .catch((error: unknown) => {
         if (cancelled) return;
         if (error instanceof Error && error.message === "CUSTOMER_NOT_AUTHENTICATED") {
-          const reference = new URLSearchParams(window.location.search).get("paid_booking") || "";
-          const query = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(reference) ? `?paid_booking=${encodeURIComponent(reference)}` : "";
+          const params = new URLSearchParams(window.location.search);
+          const reference = params.get("paid_booking") || "";
+          const upload = params.get("upload_slip") === "1" ? "&upload_slip=1" : "";
+          const query = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(reference) ? `?paid_booking=${encodeURIComponent(reference)}${upload}` : "";
           window.location.assign(`/account/login${query}`);
           return;
         }
@@ -386,14 +390,16 @@ export function CustomerAppScreen({ locale, languageControl, themeControl }: { l
         : (expired || booking.status === "cancelled") && booking.credit_used_minor
           ? t("คืนเครดิตที่ใช้กับใบจอง", "Booking credit returned")
         : topUp ? booking.pending_proofs ? t("สลิปยอดเพิ่มรอตรวจสอบ", "Additional payment awaiting review")
-          : t("มียอดที่ต้องชำระเพิ่ม", "Additional payment due")
+          : `${t("มียอดที่ต้องชำระเพิ่ม", "Additional payment due")} · ${new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-GB", {
+            style: "currency", currency: "THB",
+          }).format((booking.balance_due_minor ?? 0) / 100)}`
         : needsPayment ? t("รอชำระเงินหรือส่งสลิป", "Payment or slip upload needed")
           : expired ? t("หมดเวลาชำระเงิน", "Payment deadline passed")
           : booking.status === "verification_pending" ? t("ส่งสลิปแล้ว รอตรวจสอบ", "Slip submitted for review")
           : booking.status === "confirmed" ? t("ยืนยันใบจองแล้ว", "Booking confirmed")
           : booking.status === "cancelled" ? t("ยกเลิกใบจองแล้ว", "Booking cancelled")
           : t("อัปเดตสถานะใบจอง", "Booking status updated");
-    return { id: booking.reference, title, event: booking.event_name, at: expired ? booking.due_at : booking.updated_at,
+    return { id: booking.reference, title, event: booking.event_name, note: topUp ? booking.payment_notice : undefined, at: expired ? booking.due_at : booking.updated_at,
       href: `/app/orders?paid_booking=${encodeURIComponent(booking.reference)}${needsPayment ? "&upload_slip=1" : ""}`, needsPayment };
   });
   const orderItems: CustomerNotification[] = account.email_verified_at ? orders

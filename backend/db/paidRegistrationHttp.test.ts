@@ -1336,6 +1336,26 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await fetch(externalOwnedPath + "/payment-display", { headers: headers("test-owner") })).status, 200);
     assert.equal((await cancelOwned(externalSlipBooking.id)).status, 409);
 
+    const noticeCommand = {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "request-corrected-balance" },
+      body: JSON.stringify({ action: "payment_notice", reason: "Please pay the remaining THB 500.",
+        version: correctionResult.version }),
+    };
+    const manageCorrected = externalPrefix + "/bookings/" + externalSlipBooking.id + "/manage";
+    const notice = await fetch(manageCorrected, noticeCommand);
+    assert.equal(notice.status, 200, await notice.clone().text());
+    const noticeResult = await notice.json();
+    assert.deepEqual(await (await fetch(manageCorrected, noticeCommand)).json(), noticeResult);
+    const ownedNotice = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
+    assert.equal(ownedNotice.payment_notice, "Please pay the remaining THB 500.");
+    const ownedList = await (await fetch(origin + "/api/customer/paid-bookings?reference=" +
+      externalSlipBooking.reference, { headers: headers("test-owner") })).json();
+    assert.equal(ownedList.bookings[0].payment_notice, ownedNotice.payment_notice);
+    assert.equal((await fetch(externalOwnedPath, { headers: headers("test-other") })).status, 404);
+    const balanceDeliveries = await db.listNotificationDeliveries({ related_type: "paid_booking", limit: 30 });
+    assert.equal(balanceDeliveries.filter(row => row.kind === "paid_booking.balance_reminder" &&
+      row.related_id === externalSlipBooking.id).length, 1);
+
     const attachSupplement = async (version: number, key: string, color: string) => {
       const image = await sharp({ create: { width: 103, height: 151, channels: 3, background: color } }).png().toBuffer();
       return fetch(externalOwnedPath + "/proofs", { method: "POST", body: Uint8Array.from(image), headers: {
@@ -1343,7 +1363,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
         "Idempotency-Key": key, "x-booking-version": String(version), "x-payment-method": "bank_transfer", "x-proof-mime": "image/png",
       } });
     };
-    const firstSupplement = await attachSupplement(correctionResult.version, "supplement-1", "#f1e4a4");
+    const firstSupplement = await attachSupplement(noticeResult.version, "supplement-1", "#f1e4a4");
     assert.equal(firstSupplement.status, 202, await firstSupplement.clone().text());
     const firstSupplementResult = await firstSupplement.json();
     const duplicateSupplement = await attachSupplement(firstSupplementResult.version, "duplicate-supplement", "#f1e4a4");
@@ -1375,6 +1395,38 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const correctedTransfers = paidTransfers.filter(row => row.booking_id === externalSlipBooking.id);
     assert.equal(correctedTransfers.length, 3);
     assert.equal(correctedTransfers.reduce((total, row) => total + Number(row.amount_minor ?? 0), 0), 300000);
+
+    const adminLookup = externalPrefix + "/bookings/by-reference/" + externalSlipBooking.reference;
+    const paidAdminDetail = await (await fetch(adminLookup, { headers: staffHeaders })).json();
+    assert.equal(paidAdminDetail.booking.cash_confirmed, true);
+    assert.equal(paidAdminDetail.booking.proofs.length, 3);
+    const supportingSlip = await sharp({ create: {
+      width: 103, height: 151, channels: 3, background: "#b4b0ce",
+    } }).png().toBuffer();
+    const attachedToPaid = await fetch(manageCorrected.replace(/manage$/, "proofs"), {
+      method: "POST", body: Uint8Array.from(supportingSlip),
+      headers: { ...staffCreateHeaders, ...proofHeaders, "x-booking-version": String(fullyPaid.version),
+        "Idempotency-Key": "attach-to-fully-paid", "x-claimed-minor": "1000" },
+    });
+    assert.equal(attachedToPaid.status, 202, await attachedToPaid.clone().text());
+    const supportingReceipt = await attachedToPaid.json();
+    const supportingQueue = await (await fetch(externalPrefix + "/review-queue?reference=" +
+      externalSlipBooking.reference, { headers: staffHeaders })).json();
+    assert.equal(supportingQueue.reviews[0].booking_state, "confirmed");
+    assert.equal(supportingQueue.reviews[0].balance_due_minor, 0);
+    assert.equal(supportingQueue.reviews[0].proofs[0].attempt_id, supportingReceipt.attempt_id);
+    const approveEvidence = await fetch(manageCorrected.replace(/manage$/, "review"), {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "approve-evidence-fully-paid" },
+      body: JSON.stringify({ decision: "approve", attempt_id: supportingReceipt.attempt_id,
+        version: supportingReceipt.version, reason: "Supporting evidence for the original payment" }),
+    });
+    assert.equal(approveEvidence.status, 200, await approveEvidence.clone().text());
+    const afterSupporting = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
+    assert.equal(afterSupporting.status, "confirmed");
+    assert.equal(afterSupporting.balance_due_minor, 0);
+    const actualTransfers = await db.listDailyPaidTransfers(paidEvent.id, "org_default", 0, Date.now() + 60_000);
+    assert.equal(actualTransfers.filter(row => row.booking_id === externalSlipBooking.id)
+      .reduce((total, row) => total + Number(row.amount_minor ?? 0), 0), 300000);
 
     const pendingEmail = "unverified-cleanup@example.com";
     const pendingAccount = await db.createCustomerAccount({

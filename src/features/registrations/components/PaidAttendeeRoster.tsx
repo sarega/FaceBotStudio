@@ -5,6 +5,7 @@ import type { AppLanguage } from "../../../lib/i18n";
 import type { PaidRosterPerson } from "./paidRosterTypes";
 
 type Props = {
+  onManageBooking?: (reference: string) => void;
   people: PaidRosterPerson[];
   total: number;
   language: AppLanguage;
@@ -60,7 +61,7 @@ function CancelBookingForm({ person, language, onCancel }: {
   </form>;
 }
 
-export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBooking}:Props) {
+export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBooking,onManageBooking}:Props) {
   if(!total)return null;
   const t = (th: string, en: string) => language === "th" ? th : en;
   const money = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
@@ -101,7 +102,11 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
                 {person.customer_first_name} {person.customer_last_name}
                 <span className="block break-all text-slate-500">{person.customer_email}</span>
               </td>
-              <td className="px-3 py-2 break-all text-slate-500">{person.booking_reference}</td>
+              <td className="px-3 py-2 break-all text-slate-500">
+                {person.booking_reference}
+                {firstInBooking && onManageBooking && <button type="button" className="registration-admin-control mt-1"
+                  onClick={() => onManageBooking(person.booking_reference)}>{language === "th" ? "จัดการใบจอง" : "Manage booking"}</button>}
+              </td>
               <td className="px-3 py-2 font-semibold text-slate-700">
                 <span className="block font-normal tabular-nums">{format(person.unit_minor)} {t("ต่อคน", "per person")}</span>
                 <span className="block whitespace-nowrap font-normal tabular-nums">{format(person.booking_total_minor)} {t("ทั้งใบจอง", "per booking")}</span>

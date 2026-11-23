@@ -255,9 +255,11 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: form.email, password: form.password }),
         });
-        const reference = new URLSearchParams(window.location.search).get("paid_booking") || "";
+        const params = new URLSearchParams(window.location.search);
+        const reference = params.get("paid_booking") || "";
         if (data.account.email_verified_at && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(reference)) {
-          window.location.assign(`/app/orders?paid_booking=${encodeURIComponent(reference)}`);
+          const upload = params.get("upload_slip") === "1" ? "&upload_slip=1" : "";
+          window.location.assign(`/app/orders?paid_booking=${encodeURIComponent(reference)}${upload}`);
           return;
         }
         if (data.account.has_staff_access) {

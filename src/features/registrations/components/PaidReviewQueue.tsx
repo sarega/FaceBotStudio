@@ -26,6 +26,7 @@ type Review = {
   claimed_minor: number | null;
   proof_id: string | null;
   balance_due_minor: number;
+  booking_state: string;
   proofs: { attempt_id: string; proof_id: string; claimed_minor: number | null; matching_proofs: number }[];
   claimed_transfer_ms: number | null;
   claimed_reference: string | null;
@@ -85,21 +86,22 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
     } finally {setBusy(false);}
   }
 
+  const supporting = review.booking_state === "confirmed" && review.balance_due_minor === 0;
   return <div className="space-y-2 text-sm">
     {review.attempt_id && <div className="space-y-2">
-      {reported != null && reported !== (review.balance_due_minor || review.total_minor) && <p className="rounded-lg bg-amber-50 p-3 font-semibold text-amber-900">
+      {!supporting && reported != null && reported !== (review.balance_due_minor || review.total_minor) && <p className="rounded-lg bg-amber-50 p-3 font-semibold text-amber-900">
         {t("ยอดที่แจ้งต่างจากยอดจอง กรุณาเทียบกับยอดในภาพสลิป", "The reported amount differs from the booking total. Check the slip image.")}
       </p>}
       {hasDuplicates && <p className="rounded-lg bg-rose-50 p-3 font-semibold text-rose-800">
         {t("พบภาพสลิปซ้ำกับรายการอื่น — ไม่ควรอนุมัติโดยไม่ตรวจสอบ", "This slip matches another booking. Check the duplicate before approving.")}
       </p>}
       <p className="text-xs font-medium text-slate-600">
-        {t("กดอนุมัติเมื่อท่านตรวจสอบเงินเข้าบัญชีธนาคารแล้วเท่านั้น", "Confirm the deposit in the bank account before approving.")}
+        {supporting ? t("แนบไว้เป็นหลักฐานประกอบใบจอง", "Keep this slip as supporting evidence.") : t("กดอนุมัติเมื่อท่านตรวจสอบเงินเข้าบัญชีธนาคารแล้วเท่านั้น", "Confirm the deposit in the bank account before approving.")}
       </p>
       <div className="flex flex-wrap gap-1.5">
         <button type="button" onClick={() => void submit("approve")} disabled={!canApprove || busy}
           className="registration-admin-control registration-admin-control-primary">
-          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {busy ? t("กำลังบันทึก…", "Saving…") : review.proofs.length > 1 ? t("อนุมัติสลิปทั้งหมด", "Approve all slips") : t("อนุมัติ", "Approve")}
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {busy ? t("กำลังบันทึก…", "Saving…") : supporting ? t("รับเป็นหลักฐานเพิ่ม", "Accept supporting evidence") : review.proofs.length > 1 ? t("อนุมัติสลิปทั้งหมด", "Approve all slips") : t("อนุมัติ", "Approve")}
         </button>
         <button type="button" aria-expanded={showReject} onClick={()=>{setShowReject(v=>!v);setShowException(false);}}
           className="registration-admin-control">
@@ -133,9 +135,10 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
   </div>;
 }
 
-export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, onFocusConsumed, summary, summaryError, onSummaryRefresh }: {
+export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, focusBookingReference, focusBookingManagement, onFocusConsumed, summary, summaryError, onSummaryRefresh }: {
   eventId: string; apiFetch: ApiFetch; onOpenCustomer?:(customerId:string)=>void;
   focusBookingReference?:string;
+  focusBookingManagement?: boolean;
   onFocusConsumed: () => void;
   summary?: Record<string, unknown> | null;
   summaryError: boolean;
@@ -155,6 +158,8 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const [tool, setTool] = useState<"download" | "dashboard" | "booking" | null>(null);
   const [refresh, setRefresh] = useState(0);
   const toolsId = useId();
+  const [managedBooking, setManagedBooking] = useState("");
+  const bookingToolsRef = useRef<HTMLDivElement>(null);
   const t = (th: string, en: string) => language === "th" ? th : en;
   const locale = language === "th" ? "th-TH" : "en-GB";
   const money = new Intl.NumberFormat(locale, { style: "currency", currency: "THB" });
@@ -164,9 +169,21 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const bookingLabel = t("เลขอ้างอิงใบจอง", "Booking reference");
   useEffect(()=>{
     if(focusBookingReference === undefined)return;
-    setOpen(true);setReference(focusBookingReference);setReferenceDraft(focusBookingReference);setOffset(0);
+    setOpen(true);
+    if (focusBookingManagement) {
+      setManagedBooking(focusBookingReference);
+      setToolsOpen(true);
+      setTool("booking");
+      setReference("");
+      setReferenceDraft("");
+      requestAnimationFrame(() => bookingToolsRef.current?.scrollIntoView({ block: "start" }));
+    } else {
+      setReference(focusBookingReference);
+      setReferenceDraft(focusBookingReference);
+    }
+    setOffset(0);
     onFocusConsumed();
-  },[focusBookingReference,eventId]);
+  },[focusBookingReference,focusBookingManagement,eventId]);
   const fetchRef = useRef(apiFetch);
   fetchRef.current = apiFetch;
   const prefix = `/api/events/${encodeURIComponent(eventId)}/paid-registration`;
@@ -269,9 +286,9 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
               <span>{t("ผู้เข้าร่วม", "Attendees")} <strong>{Number(summary.attendees ?? 0)}</strong></span>
             </div>}
           </div>
-          <div hidden={tool !== "booking"}>
-            <PaidBookingOperations language={language} eventId={eventId} apiFetch={apiFetch}
-              onChange={() => setRefresh((value) => value + 1)}/>
+          <div hidden={tool !== "booking"} ref={bookingToolsRef} className="scroll-mt-20">
+            <PaidBookingOperations key={managedBooking} initialReference={managedBooking} language={language} eventId={eventId} apiFetch={apiFetch}
+              onChange={refreshAfterUpdate}/>
           </div>
         </div>
         {reference && <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -380,7 +397,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                     <div className="mt-2 space-y-2">
                       <p className="text-slate-600">{t("แนบภาพเพื่อส่งเข้าคิวรอตรวจ ยอดและเวลาโอนระบุภายหลังได้", "Attach the slip to send it for review. The amount and transfer time can be added later.")}</p>
                       <PaidProofForm key={review.version} staff bookingReference={review.booking_reference} locale={language} path={path} version={review.version}
-                        paymentMode={review.payment_mode} totalMinor={review.balance_due_minor || review.total_minor} onSubmitted={() => {
+                        paymentMode={review.payment_mode} totalMinor={review.booking_state === "confirmed" ? review.balance_due_minor || null : review.total_minor} onSubmitted={() => {
                           setUploadedBooking(review.booking_reference);
                           refreshAfterUpdate();
                         }}

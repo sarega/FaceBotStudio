@@ -1,9 +1,13 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { PaidProofForm } from "../../../components/PaidProofForm";
 
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type Booking = {
   id: string; reference: string; state: string; payment_state: string; version: number;
   total_minor: number; balance_due_minor: number;
+  cash_confirmed: boolean; pending_proofs: number; payment_notice?: string;
+  payment_mode: "promptpay" | "external_manual";
+  proofs: { attempt_id: string; status: string }[];
   attendee_prices: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number }[];
   due_ms: number; attendees: number; checked_in: number;
   credit_used_minor: number; credit_issued_minor: number;
@@ -20,11 +24,14 @@ const statusLabels: Record<string, Copy> = {
   unpaid: ["ยังไม่ชำระ", "Unpaid"],
   proof_submitted: ["ส่งสลิปแล้ว", "Slip submitted"],
   verified: ["ตรวจสอบยอดแล้ว", "Payment verified"],
+  supporting: ["หลักฐานประกอบ", "Supporting evidence"],
+  exception: ["ต้องตรวจสอบเพิ่มเติม", "Needs follow-up"],
   rejected: ["สลิปถูกปฏิเสธ", "Slip rejected"],
   underpaid: ["ชำระไม่ครบ", "Underpaid"],
   refunded: ["คืนเงินแล้ว", "Refunded"],
 };
 const actionLabels: Record<string, Copy> = {
+  payment_notice: ["ส่งข้อความแจ้งชำระส่วนต่าง", "Send a balance reminder"],
   correct_price: ["แก้ราคาผู้เข้าร่วมและเรียกเก็บส่วนต่าง", "Correct attendee price and collect the difference"],
   extend: ["ขยายเวลาชำระเงิน", "Extend payment deadline"],
   cancel: ["ยกเลิกใบจอง", "Cancel booking"],
@@ -33,6 +40,7 @@ const actionLabels: Record<string, Copy> = {
   credit: ["ยกเลิกและเก็บเป็นเครดิต", "Cancel and keep as credit"],
 };
 const errorLabels: Record<string, Copy> = {
+  pending_supporting_proof: ["กรุณาตรวจสลิปที่แนบไว้ก่อนแก้ราคา", "Review the attached slip before changing the price."],
   invalid_price_correction: ["ราคาใหม่ต้องสูงกว่าราคาเดิม", "The corrected price must be higher than the current price."],
   credit_changed: ["เครดิตเดิมถูกใช้ไปแล้ว ให้สร้างใบจองใหม่", "The original credit is no longer available. Create a new booking."],
   booking_not_found: ["ไม่พบใบจอง", "Booking not found."],
@@ -47,8 +55,8 @@ const errorLabels: Record<string, Copy> = {
 const control = "registration-admin-control";
 const input = "mt-0.5 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5";
 
-export function PaidBookingOperations({ eventId, apiFetch, onChange, language }: {
-  eventId: string; apiFetch: ApiFetch; onChange: () => void; language: "th" | "en";
+export function PaidBookingOperations({ eventId, apiFetch, onChange, language, initialReference = "" }: {
+  eventId: string; apiFetch: ApiFetch; onChange: () => void; language: "th" | "en"; initialReference?: string;
 }) {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const locale = language === "th" ? "th-TH" : "en-GB";
@@ -56,22 +64,47 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language }:
   const statusLabel = (state: string) => t(...(statusLabels[state] ?? ["ไม่ทราบสถานะ", "Unknown status"]));
   const [chosenAction, setChosenAction] = useState("");
   const [attendeeId, setAttendeeId] = useState("");
-  const [reference, setReference] = useState("");
+  const [reference, setReference] = useState(initialReference);
   const [booking, setBooking] = useState<Booking | null>(null);
   const [error, setError] = useState<Copy | null>(null);
   const [busy, setBusy] = useState(false);
+  const [noticeSent, setNoticeSent] = useState(false);
+  const fetchRef = useRef(apiFetch);
+  fetchRef.current = apiFetch;
   const base = `/api/events/${encodeURIComponent(eventId)}/paid-registration/bookings`;
 
-  async function find(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true); setError(null); setBooking(null); setChosenAction(""); setAttendeeId("");
+  async function loadBooking(bookingReference: string, signal?: AbortSignal) {
+    setBusy(true);
+    setError(null);
     try {
-      const response = await apiFetch(`${base}/by-reference/${encodeURIComponent(reference.trim())}`);
+      const response = await fetchRef.current(`${base}/by-reference/${encodeURIComponent(bookingReference)}`, { signal });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "booking_not_found");
-      setBooking(result.booking as Booking);
-    } catch (failure) { setError((failure instanceof Error && errorLabels[failure.message]) || ["โหลดใบจองไม่สำเร็จ", "Could not load booking."]); }
-    finally { setBusy(false); }
+      if (!signal?.aborted) setBooking(result.booking as Booking);
+    } catch (failure) {
+      if (!signal?.aborted) {
+        setBooking(null);
+        setError((failure instanceof Error && errorLabels[failure.message]) || ["โหลดใบจองไม่สำเร็จ", "Could not load booking."]);
+      }
+    } finally {
+      if (!signal?.aborted) setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!initialReference) return;
+    const request = new AbortController();
+    void loadBooking(initialReference, request.signal);
+    return () => request.abort();
+  }, [base, initialReference]);
+
+  function find(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBooking(null);
+    setChosenAction("");
+    setAttendeeId("");
+    setNoticeSent(false);
+    void loadBooking(reference.trim());
   }
 
   async function manage(event: FormEvent<HTMLFormElement>) {
@@ -92,7 +125,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language }:
       : action === "refund"
       ? t("บันทึกการคืนเงินเต็มจำนวนที่โอนแล้วและยกเลิกบัตรคิวอาร์ทั้งหมด", "Record the completed full refund and revoke all QR tickets")
       : t(...copy);
-    if (!window.confirm(`${label}?\n${t("ใบจอง", "Booking")} ${booking.reference}\n${t("เหตุผล", "Reason")} ${reason}`)) return;
+    if (action !== "payment_notice" && !window.confirm(`${label}?\n${t("ใบจอง", "Booking")} ${booking.reference}\n${t("เหตุผล", "Reason")} ${reason}`)) return;
     const body = {
       action, reason, version: booking.version,
       ...(["extend", "reinstate"].includes(action) ? { hold_minutes: Number(values.get("hold_minutes")) } : {}),
@@ -107,16 +140,9 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language }:
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Booking update failed");
-      setBooking({ ...booking, state: result.status, payment_state: result.payment_status,
-        version: result.version, due_ms: Date.parse(result.due_at),
-        total_minor: result.total_minor ?? booking.total_minor,
-        balance_due_minor: result.balance_due_minor ?? booking.balance_due_minor,
-        attendee_prices: action === "correct_price" ? booking.attendee_prices.map(item =>
-          item.id === attendee?.id ? { ...item, unit_minor: unitMinor } : item) : booking.attendee_prices,
-        credit_issued_minor: action === "credit" ? booking.total_minor : booking.credit_issued_minor,
-        refunds: action === "refund" ? [...booking.refunds, { reference: body.refund_reference!, amount_minor: booking.total_minor }] : booking.refunds,
-      });
-      setChosenAction("");
+      setChosenAction(action === "correct_price" ? "payment_notice" : "");
+      setNoticeSent(action === "payment_notice");
+      await loadBooking(booking.reference);
       onChange();
     } catch (failure) { setError((failure instanceof Error && errorLabels[failure.message]) || ["บันทึกการเปลี่ยนแปลงไม่สำเร็จ", "Could not update the booking."]); }
     finally { setBusy(false); }
@@ -124,12 +150,15 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language }:
   const actions = booking?.state === "expired" ? ["reinstate"] :
     booking?.state === "confirmed" && booking.payment_state === "verified"
       ? booking.total_minor > (booking.balance_due_minor ?? 0)
-        ? ["correct_price", ...(booking.checked_in || booking.balance_due_minor > 0 ? [] : ["refund", "credit"])]
+        ? [...(booking.balance_due_minor === 0 && booking.pending_proofs ? [] : ["correct_price"]),
+          ...(booking.balance_due_minor > 0 && !booking.pending_proofs ? ["payment_notice"] : []),
+          ...(booking.checked_in || booking.balance_due_minor > 0 || booking.pending_proofs ? [] : ["refund", "credit"])]
         : booking.credit_used_minor > 0 && !booking.checked_in ? ["credit"] : [] :
     booking?.state === "awaiting_payment" && booking.due_ms > Date.now() ? ["extend", "cancel"] :
     booking?.state === "verification_pending" || booking?.state === "payment_exception" ? ["cancel"] : [];
   const selectedAction = actions.includes(chosenAction) ? chosenAction : actions[0];
   const attendee = booking?.attendee_prices?.find(item => item.id === attendeeId) ?? booking?.attendee_prices?.[0];
+  const bookingPath = booking ? `${base}/${encodeURIComponent(booking.id)}` : "";
   return (
     <div className="space-y-2 text-sm">
       <form className="flex flex-wrap items-end gap-1.5" onSubmit={find}>
@@ -138,6 +167,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language }:
         </label>
         <button disabled={busy} className={control}>{t("ค้นหา", "Find booking")}</button>
       </form>
+      {busy && !booking && <p role="status">{t("กำลังโหลดใบจอง…", "Loading booking…")}</p>}
       {booking && <div className="space-y-1.5">
         <p className="break-all font-medium">{booking.reference}</p>
         <p>{t(`ผู้เข้าร่วม ${booking.attendees} คน`, `${booking.attendees} attendees`)} · {money.format(booking.total_minor / 100)} · {statusLabel(booking.state)} / {statusLabel(booking.payment_state)}</p>
@@ -146,7 +176,35 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language }:
         {!!booking.refunds?.length && <p>{t("บันทึกคืนเงินแล้ว", "Refund recorded")} {booking.refunds.map(item => `${money.format(item.amount_minor / 100)} · ${item.reference}`).join(", ")}</p>}
         {booking.credit_issued_minor > 0 && <p>{t("เครดิตที่ออกให้", "Credit issued")} {money.format(booking.credit_issued_minor / 100)}</p>}
         {booking.credit_used_minor > 0 && <p>{booking.state === "cancelled" ? t("คืนเครดิตที่ใช้", "Credit restored") : t("ใช้เครดิต", "Credit applied")} {money.format(booking.credit_used_minor / 100)}</p>}
-        {actions.length > 0 && <form onSubmit={manage} className="grid max-w-xl gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-2">
+        {noticeSent && <p role="status" className="font-semibold text-emerald-700">{t("แจ้งในบัญชีแล้ว ระบบจะส่งอีเมลตามการตั้งค่าของผู้จอง", "Posted to the customer’s account. Email follows their notification settings.")}</p>}
+        {booking.balance_due_minor > 0 && booking.payment_notice && <p className="whitespace-pre-wrap text-slate-700">
+          <strong>{t("ข้อความล่าสุดถึงผู้จอง", "Latest message to the customer")}</strong> {booking.payment_notice}
+        </p>}
+        {!!booking.proofs.length && <ul className="flex flex-wrap gap-2">
+          {booking.proofs.map((proof, index) => <li key={proof.attempt_id}>
+            <a className="registration-admin-control" href={`${bookingPath}/proofs/${encodeURIComponent(proof.attempt_id)}`} target="_blank" rel="noopener noreferrer">
+              {t(`สลิป ${index + 1}`, `Slip ${index + 1}`)} · {statusLabel(proof.status)}
+            </a>
+          </li>)}
+        </ul>}
+        {booking.cash_confirmed && <details key={booking.id}>
+          <summary className={`${control} paid-slip-staff-submit cursor-pointer`}>{t("แนบสลิปแทนผู้จอง", "Attach a slip for the customer")}</summary>
+          <div className="mt-2 max-w-xl space-y-2">
+            <p>{booking.balance_due_minor > 0
+              ? t("สลิปจะเข้าคิวตรวจยอดส่วนต่าง", "The slip goes to the review queue for the remaining balance.")
+              : t("แนบเป็นหลักฐานประกอบใบเดิม ยอดที่ชำระแล้วคงเดิม", "Attach supporting evidence to this booking. The paid amount stays the same.")}</p>
+            <PaidProofForm key={booking.version} staff bookingReference={booking.reference} locale={language}
+              path={bookingPath} version={booking.version} paymentMode={booking.payment_mode} totalMinor={booking.balance_due_minor || null}
+              submitRequest={async (url, init) => {
+                const response = await apiFetch(url, init);
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "proof_unavailable");
+                return result;
+              }}
+              onSubmitted={() => { void loadBooking(booking.reference); onChange(); }} />
+          </div>
+        </details>}
+        {actions.length > 0 && <form key={selectedAction} onSubmit={manage} className="grid max-w-xl gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-2">
           <label>{t("การดำเนินการ", "Operation")}
             <select value={selectedAction} onChange={event => setChosenAction(event.target.value)} className={input} required>
               {actions.map((item) => <option key={item} value={item}>{t(...actionLabels[item])}</option>)}
@@ -171,14 +229,17 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language }:
           {selectedAction === "refund" && <label>{t("เลขอ้างอิงการโอนคืน", "Refund transfer reference")}
             <input name="refund_reference" className={input} required />
           </label>}
-          <label className="sm:col-span-2">{t("เหตุผล", "Reason")}
-            <input name="reason" required maxLength={1000} className={input} />
+          <label className="sm:col-span-2">{selectedAction === "payment_notice"
+            ? t("ข้อความถึงผู้จอง", "Message to the customer") : t("เหตุผล", "Reason")}
+            {selectedAction === "payment_notice"
+              ? <textarea name="reason" required rows={2} maxLength={1000} className={input} />
+              : <input name="reason" required maxLength={1000} className={input} />}
           </label>
           {selectedAction === "refund" && <p className="text-xs text-amber-800 sm:col-span-2">{t("บันทึกหลังโอนเงินคืนสำเร็จ การบันทึกจะยกเลิกบัตรคิวอาร์ที่ยังไม่ได้สแกน", "Record the refund after completing the bank transfer. This revokes all unscanned QR tickets.")}</p>}
           {selectedAction === "credit" && <p className="text-xs text-amber-800 sm:col-span-2">
             {t("ยอดชำระจะเก็บไว้เป็นเครดิตในบัญชีผู้จองสำหรับงานนี้ ระบบจะยกเลิกบัตรของใบจองเดิม", "The paid amount becomes credit for this event in the booker’s account. Existing passes are revoked.")}
           </p>}
-          <button disabled={busy} className={`${control} registration-admin-control-primary justify-self-start`}>{t("บันทึก", "Save operation")}</button>
+          <button disabled={busy} className={`${control} registration-admin-control-primary justify-self-start`}>{selectedAction === "payment_notice" ? t("ส่งข้อความ", "Send message") : t("บันทึก", "Save operation")}</button>
         </form>}
       </div>}
       {error && <p role="alert" className="text-red-700">{t(...error)}</p>}

@@ -12822,6 +12822,29 @@ async function sendCurrentNotificationDelivery(delivery: NotificationDeliveryRow
     });
   }
   if (delivery.channel === "facebook") return sendFacebookNotificationDelivery(delivery);
+  if (delivery.kind === "paid_booking.balance_reminder") {
+    const { eventId, customerId, auditId } = JSON.parse(delivery.payload_json) as {
+      eventId: string; customerId: string; auditId: string;
+    };
+    const booking = delivery.related_id && await appDb.readOwnedPaidBooking(eventId, delivery.related_id, customerId);
+    if (!booking || booking.payment_notice_id !== auditId || Number(booking.balance_due_minor) <= 0 ||
+        Number(booking.pending_proofs) > 0) return {};
+    const account = await appDb.getCustomerAccountById(customerId);
+    if (!account || !isVerifiedCustomer(account)) return {};
+    const preferences = await appDb.getCustomerNotificationPreferences(account.id);
+    if (!preferences.email_transactional_enabled) return {};
+    const link = buildAbsoluteAppAssetUrl(`/app/orders?paid_booking=${encodeURIComponent(String(booking.reference))}&upload_slip=1`);
+    if (!link || !/^https?:\/\//i.test(link)) throw new NotificationDeliveryError("APP_URL is required for balance reminders", true);
+    const amount = new Intl.NumberFormat("en-GB", { style: "currency", currency: "THB" }).format(Number(booking.balance_due_minor) / 100);
+    const subject = "มียอดที่ต้องชำระเพิ่ม / Additional payment due";
+    const message = `ยอดชำระเพิ่ม / Additional amount due: ${amount}\n\n${String(booking.payment_notice)}`;
+    const action = "เปิดใบจองเพื่อชำระส่วนต่างและส่งสลิป / Open your booking to pay the balance and upload your slip";
+    return sendWithCurrentNotificationSender({
+      ...delivery, recipient: account.email,
+      payload_json: JSON.stringify({ subject, text: `${message}\n\n${action}: ${link}`,
+        html: `<p style="white-space:pre-wrap">${escapeXml(message)}</p><p><a href="${escapeXml(link)}">${action}</a></p>` }),
+    });
+  }
   if (delivery.kind === "paid_booking.payment_reminder") {
     const payload = JSON.parse(delivery.payload_json) as { eventId:string; customerId:string };
     const booking = delivery.related_id &&
@@ -18297,7 +18320,7 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund","credit","correct_price"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
@@ -18311,7 +18334,7 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice",reason:body.reason.trim(),
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
           attendeeId: typeof body.attendee_id === "string" ? body.attendee_id : undefined,
           unitMinor: typeof body.unit_minor === "number" ? body.unit_minor : undefined,
@@ -18432,7 +18455,7 @@ async function startServer() {
       const booking = await appDb.readPaidAdminBooking(eventId, req.auth!.user.organization_id, reference);
       if (!booking || booking.id !== req.params.id) return res.status(404).json({ error: "booking_not_found" });
       if (!(booking.state === "awaiting_payment" && Number(booking.due_ms) > Date.now()) &&
-          booking.state !== "verification_pending" && Number(booking.balance_due_minor) <= 0) {
+          booking.state !== "verification_pending" && !booking.cash_confirmed && Number(booking.balance_due_minor) <= 0) {
         return res.status(409).json({ error: "state_conflict" });
       }
       if (!process.env.OPENROUTER_API_KEY) return res.status(503).json({ error: "slip_analysis_unavailable" });

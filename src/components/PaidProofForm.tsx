@@ -4,7 +4,7 @@ import { thaiTransferTime, type PaidSlipFields } from "../../backend/paidSlipFie
 import type { CustomerCopy, CustomerLocale } from "../features/customer-account/customerLocale";
 
 export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, submitRequest, staff = false, bookingReference, onSubmitted }: { locale: CustomerLocale;
-  path: string; version: number; totalMinor: number; paymentMode: "promptpay" | "external_manual"; onSubmitted: () => void;
+  path: string; version: number; totalMinor: number | null; paymentMode: "promptpay" | "external_manual"; onSubmitted: () => void;
   submitRequest: (path: string, init: RequestInit) => Promise<unknown>; staff?: boolean; bookingReference?: string;
 }) {
   const t = (th: string, en: string) => locale === "th" ? th : en;
@@ -150,9 +150,9 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
           {t("อ่านสลิปอัตโนมัติไม่ได้ ส่งภาพให้ผู้จัดงานตรวจได้เลย", "Automatic reading is unavailable. You can still submit the image for review.")}
         </p>}
         {analysis && <div role="status" className="space-y-1">
-          <p className={analysis.amountMinor === totalMinor ? "font-semibold text-emerald-700" : "font-semibold text-amber-800"}>
+          <p className={analysis.amountMinor != null && (totalMinor == null || analysis.amountMinor === totalMinor) ? "font-semibold text-emerald-700" : "font-semibold text-amber-800"}>
             {analysis.amountMinor == null ? t("อ่านยอดไม่ชัด", "Amount could not be read") :
-              analysis.amountMinor === totalMinor ? t("ยอดที่อ่านได้ตรงกับใบจอง", "The amount read matches the booking") :
+              totalMinor == null ? t("ยอดที่อ่านได้", "Amount read") : analysis.amountMinor === totalMinor ? t("ยอดที่อ่านได้ตรงกับใบจอง", "The amount read matches the booking") :
                 t("ยอดที่อ่านได้ต่างจากใบจอง", "The amount read differs from the booking")}
             {analysis.amountMinor != null && ` · ${money.format(analysis.amountMinor / 100)}`}
           </p>

@@ -124,6 +124,7 @@ type RegistrationsScreenProps = {
   statusUpdateLoading: boolean;
   statusUpdateMessage: string;
   language: AppLanguage;
+  onManagePaidBooking?: (reference: string) => void;
   onPaidBookingCancelled?: () => void;
   apiFetch?: (input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 };
@@ -178,6 +179,7 @@ export function RegistrationsScreen({
   language,
   apiFetch,
   onPaidBookingCancelled,
+  onManagePaidBooking,
 }: RegistrationsScreenProps) {
   const [paidPeople,setPaidPeople]=useState<PaidRosterPerson[]>([]);
   const [paidSummary,setPaidSummary]=useState<PaidRosterSummary|null>(null);
@@ -368,7 +370,7 @@ export function RegistrationsScreen({
             </button>}
           </div>}
           <PaidAttendeeRoster language={language} people={filteredPaid} total={paidPeople.length}
-            onRefresh={() => setPaidRevision(n => n + 1)}
+            onRefresh={() => setPaidRevision(n => n + 1)} onManageBooking={onManagePaidBooking}
             onCancelBooking={apiFetch && onPaidBookingCancelled ? async (person, reason, key) => {
               const path = `/api/events/${encodeURIComponent(person.event_id)}/paid-registration/bookings/${encodeURIComponent(person.booking_id)}/manage`;
               const response = await apiFetch(path, {
