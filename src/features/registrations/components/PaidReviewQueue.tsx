@@ -1,10 +1,9 @@
-import { thaiTransferInput, thaiTransferTime, type PaidSlipFields } from "../../../../backend/paidSlipFields";
 import { PaidTransferReportExport } from "../../reports/components/PaidTransferReportExport";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidBookingOperations } from "./PaidBookingOperations";
 import { PaidProofForm } from "../../../components/PaidProofForm";
 import { useEffect, useId, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, ScanText, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
 
 type Review = {
   booking_id: string;
@@ -47,67 +46,18 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<[string, string] | null>(null);
-  const [bankReference, setBankReference] = useState(
-    review.claimed_reference || (review.attempt_id ? "SLIP-" + review.attempt_id : ""),
-  );
   const [rejectReason, setRejectReason] = useState("");
   const [showReject, setShowReject] = useState(false);
   const [showException, setShowException] = useState(false);
-  const [observedAmount, setObservedAmount] = useState(review.claimed_minor == null ? "" : (review.claimed_minor / 100).toFixed(2));
-  const [observedTime, setObservedTime] = useState(() => review.claimed_transfer_ms == null ? "" : thaiTransferInput(review.claimed_transfer_ms));
-  const [receiver, setReceiver] = useState("");
-  const [confirmEarlyTransfer, setConfirmEarlyTransfer] = useState(false);
-  const [earlyReason, setEarlyReason] = useState("");
-  const [analysis, setAnalysis] = useState<PaidSlipFields>();
-  const [analysisStatus, setAnalysisStatus] = useState<"idle" | "reading" | "done" | "error">("idle");
-  const command = useRef<{body:string;key:string}|undefined>(undefined);
-  const money = new Intl.NumberFormat(language === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" });
-  const amountMinor = observedAmount ? Math.round(Number(observedAmount) * 100) : null;
-  const transferMs = thaiTransferTime(observedTime);
-  const earlyTransfer = transferMs < review.booking_created_ms;
-  const reading = analysisStatus === "reading";
-  const canApprove = !!review.attempt_id && !!review.proof_id && amountMinor === review.total_minor &&
-    Number.isFinite(transferMs) && review.matching_proofs === 0 &&
-    (!earlyTransfer || (confirmEarlyTransfer && !!earlyReason.trim())) &&
-    (review.payment_mode === "external_manual" || !!receiver.trim());
-
-  async function analyzeStoredSlip() {
-    if (!review.attempt_id || reading || busy) return;
-    setAnalysisStatus("reading");
-    try {
-      const response = await apiFetch(`${path}/proofs/${encodeURIComponent(review.attempt_id)}/analyze`, { method: "POST" });
-      if (!response.ok) throw new Error();
-      const fields = await response.json() as PaidSlipFields;
-      setAnalysis(fields);
-      if (fields.amountMinor != null) setObservedAmount((fields.amountMinor / 100).toFixed(2));
-      if (fields.transferAt) {
-        setObservedTime(fields.transferAt);
-        setConfirmEarlyTransfer(false);
-        setEarlyReason("");
-      }
-      setAnalysisStatus("done");
-    } catch {
-      setAnalysisStatus("error");
-    }
-  }
+  const command = useRef<{ body: string; key: string } | undefined>(undefined);
+  const canApprove = !!review.attempt_id && !!review.proof_id && review.matching_proofs === 0;
 
   async function submit(decision:"approve"|"reject"|"flag") {
-    if (busy || reading || (decision === "approve" && !canApprove)) return;
+    if (busy || (decision === "approve" && !canApprove)) return;
     setError(null);
-    if(decision==="approve" && !bankReference.trim()) {
-      setError(["กรุณากรอกเลขอ้างอิงธนาคารจากสลิป เพื่อป้องกันการใช้สลิปซ้ำ", "Enter the bank reference from the slip to prevent duplicate use."]);return;
-    }
-    const reason = decision === "approve"
-      ? earlyTransfer ? earlyReason.trim() : "Verified transfer against bank records"
-      : rejectReason.trim() || "Proof rejected by organizer";
-    const body=JSON.stringify({decision,attempt_id:review.attempt_id,version:review.version,reason,
-      ...(decision === "approve" && earlyTransfer ? { confirm_early_transfer: true } : {}),
-      observed:decision==="approve"?{
-        amount_minor:amountMinor,currency:"THB",paid_at:new Date(transferMs).toISOString(),
-        reference:bankReference.trim(),receiver_id:review.payment_mode==="external_manual" ?
-          "EXTERNAL_MANUAL":receiver.trim(),
-      }:undefined,
-    });
+    const reason = decision === "approve" ? "Verified transfer against bank records"
+      : rejectReason.trim() || (decision === "reject" ? "Proof rejected by organizer" : "Proof flagged for follow-up");
+    const body = JSON.stringify({ decision, attempt_id: review.attempt_id, version: review.version, reason });
     if(command.current?.body!==body)command.current={body,key:crypto.randomUUID()};
     setBusy(true);
     try {
@@ -118,9 +68,6 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
       if(!response.ok) {
         const messages:Record<string,[string,string]>={
           duplicate_reference_or_proof:["พบสลิปหรือเลขอ้างอิงซ้ำ กรุณาตรวจสอบก่อนอนุมัติ", "A duplicate slip or bank reference was found. Check before approving."],
-          receiver_mismatch:["บัญชีปลายทางไม่ตรงกับบัญชีรับเงินของรายการนี้", "The receiving account does not match this booking."],
-          transfer_outside_hold:["เวลาโอนถึงหรือเลยกำหนดชำระของใบจอง กรุณาตรวจสอบ", "The transfer time is at or after the payment deadline. Check the payment."],
-          early_transfer_confirmation_required:["ยืนยันว่าได้รับเงินก่อนวันลงทะเบียนและกรอกเหตุผล", "Confirm the pre-booking transfer and enter a reason."],
           version_conflict:["รายการถูกแก้ไขแล้ว กรุณาโหลดคิวใหม่", "This booking has changed. Refresh the queue."],
         };
         setError(messages[result.error] ?? ["บันทึกผลไม่สำเร็จ กรุณาลองใหม่", "Could not save the decision. Try again."]);
@@ -134,25 +81,8 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
 
   return <div className="space-y-2 text-sm">
     {review.attempt_id && <div className="space-y-2">
-      {review.proof_id && <div className="space-y-1">
-        <button type="button" disabled={reading || busy} onClick={() => void analyzeStoredSlip()} className={toolbarControl}>
-          <ScanText className="h-4 w-4" aria-hidden="true" /> {reading ? t("กำลังอ่านสลิป…", "Reading slip…") : t("อ่านสลิปด้วย AI", "Read slip with AI")}
-        </button>
-        <p className="text-xs text-slate-600">{t("การกดอ่านจะส่งภาพไปประมวลผลผ่าน OpenRouter", "AI reading sends the image to OpenRouter for processing.")}</p>
-        {analysisStatus === "error" && <p role="status" className="text-amber-800">{t("อ่านด้วย AI ไม่สำเร็จ ตรวจภาพและกรอกข้อมูลได้", "AI reading failed. Check the image and enter the details.")}</p>}
-        {analysis && <div role="status">
-          <p className={analysis.amountMinor === review.total_minor ? "text-emerald-700" : "text-amber-800"}>
-            {analysis.amountMinor == null ? t("อ่านยอดไม่ชัด", "Amount could not be read") :
-              analysis.amountMinor === review.total_minor ? t("ยอดที่อ่านได้ตรงกับใบจอง", "The amount read matches the booking") :
-                t("ยอดที่อ่านได้ต่างจากใบจอง", "The amount read differs from the booking")}
-            {analysis.amountMinor != null && ` · ${money.format(analysis.amountMinor / 100)}`}
-          </p>
-          <p>{analysis.transferAt ? t("กรอกวันและเวลาโอนให้แล้ว", "Transfer date and time filled in.") : t("อ่านวันหรือเวลาโอนไม่ชัด", "Transfer date or time could not be read.")}</p>
-          {analysis.payerName && <p>{t("ชื่อผู้โอนที่ AI อ่านได้", "Payer name read by AI")} <strong>{analysis.payerName}</strong></p>}
-        </div>}
-      </div>}
       {review.claimed_minor != null && review.claimed_minor !== review.total_minor && <p className="rounded-lg bg-amber-50 p-3 font-semibold text-amber-900">
-        {t("ยอดในสลิปไม่ตรงกับยอดจอง — กรุณาตรวจสอบก่อนอนุมัติ", "The slip amount differs from the booking total. Check before approving.")}
+        {t("ยอดที่แจ้งต่างจากยอดจอง กรุณาเทียบกับยอดในภาพสลิป", "The reported amount differs from the booking total. Check the slip image.")}
       </p>}
       {review.matching_proofs>0 && <p className="rounded-lg bg-rose-50 p-3 font-semibold text-rose-800">
         {t("พบภาพสลิปซ้ำกับรายการอื่น — ไม่ควรอนุมัติโดยไม่ตรวจสอบ", "This slip matches another booking. Check the duplicate before approving.")}
@@ -160,40 +90,10 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
       <p className="text-xs font-medium text-slate-600">
         {t("กดอนุมัติเมื่อท่านตรวจสอบเงินเข้าบัญชีธนาคารแล้วเท่านั้น", "Confirm the deposit in the bank account before approving.")}
       </p>
-      <details open={(review.claimed_minor !== review.total_minor || !review.claimed_transfer_ms || !!analysis) || undefined} className="rounded-lg border border-slate-200 p-3">
-        <summary className="cursor-pointer text-slate-600">{t("ตรวจยอดและเวลาโอน", "Check transfer details")}</summary>
-        <fieldset disabled={reading || busy} className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label>{t("ยอดที่รับจริง (บาท)", "Amount received (THB)")}
-            <input className={inputClass} inputMode="decimal" type="number" min="0.01" step="0.01"
-              value={observedAmount} onChange={e=>setObservedAmount(e.target.value)}/>
-          </label>
-          <label>{t("วันเวลาโอน (เวลาไทย)", "Transfer date and time (Thailand)")}
-            <input className={inputClass} type="datetime-local" step="1" value={observedTime}
-              onChange={e => { setObservedTime(e.target.value); setConfirmEarlyTransfer(false); setEarlyReason(""); }}/>
-          </label>
-          <label className="sm:col-span-2">{t("เลขอ้างอิงสลิปหรือธนาคาร", "Slip or bank reference")}
-            <input className={inputClass} value={bankReference} maxLength={255}
-              onChange={e=>setBankReference(e.target.value)}/>
-          </label>
-          {review.payment_mode!=="external_manual" && <label>{t("บัญชีผู้รับ", "Receiving account")}
-            <input className={inputClass} value={receiver} onChange={e=>setReceiver(e.target.value)}/>
-          </label>}
-        </fieldset>
-      </details>
-      {earlyTransfer && <fieldset disabled={reading || busy} className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
-        <p className="font-semibold">{t("เงินโอนก่อนลงทะเบียน", "Transfer predates the booking")}</p>
-        <label className="flex items-start gap-2">
-          <input type="checkbox" checked={confirmEarlyTransfer} onChange={event => setConfirmEarlyTransfer(event.target.checked)} />
-          {t("ตรวจรายการเดินบัญชีแล้ว และยืนยันว่าเงินโอนนี้เป็นของใบจองนี้", "I checked the bank statement and confirmed this transfer belongs to this booking.")}
-        </label>
-        {confirmEarlyTransfer && <label className="block">{t("เหตุผลที่อนุมัติยอดโอนล่วงหน้า", "Reason for approving the pre-booking transfer")}
-          <input className={inputClass} maxLength={900} value={earlyReason} onChange={event => setEarlyReason(event.target.value)} />
-        </label>}
-      </fieldset>}
       <div className="flex flex-wrap gap-1.5">
-        <button type="button" onClick={() => void submit("approve")} disabled={!canApprove || busy || reading}
+        <button type="button" onClick={() => void submit("approve")} disabled={!canApprove || busy}
           className="registration-admin-control registration-admin-control-primary">
-          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {busy ? t("กำลังบันทึก…", "Saving…") : t("ยืนยันเงินเข้าและอนุมัติ", "Confirm payment and approve")}
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {busy ? t("กำลังบันทึก…", "Saving…") : t("อนุมัติ", "Approve")}
         </button>
         <button type="button" aria-expanded={showReject} onClick={()=>{setShowReject(v=>!v);setShowException(false);}}
           className="registration-admin-control">
@@ -204,9 +104,6 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
           <AlertTriangle className="h-4 w-4" aria-hidden="true" /> {t("ส่งตรวจสอบเพิ่มเติม", "Flag for follow-up")}
         </button>
       </div>
-      {!canApprove && <p className="text-xs text-amber-800">
-        {t("ก่อนอนุมัติ ตรวจสอบยอด วันเวลา บัญชีผู้รับ และเงื่อนไขที่แจ้งด้านบน", "Check the amount, slip, and receiving account before approving.")}
-      </p>}
       {(showReject||showException)&&<div className="space-y-2 rounded-lg bg-slate-50 p-3">
         <label className="block">{t("หมายเหตุให้ผู้ดูแล (ถ้ามี)", "Note for staff (optional)")}
           <input className={inputClass} maxLength={1000} value={rejectReason}
@@ -418,7 +315,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                     </dd>
                   </>}
                   {review.claimed_transfer_ms != null && <>
-                    <dt>{t("เวลาโอน", "Transfer time")}</dt><dd>{dateTime.format(review.claimed_transfer_ms)}</dd>
+                    <dt>{t("เวลาโอนที่แจ้ง", "Reported transfer time")}</dt><dd>{dateTime.format(review.claimed_transfer_ms)}</dd>
                   </>}
                   {review.created_ms != null && <>
                     <dt>{t("ส่งสลิปเมื่อ", "Slip submitted")}</dt><dd>{dateTime.format(review.created_ms)}</dd>
@@ -449,7 +346,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
               <div className="min-w-0 space-y-2">
                 {proofUrl && review.proof_id && (
                   <a href={proofUrl} target="_blank" rel="noopener noreferrer" className="block space-y-1">
-                    <img src={proofUrl} alt={t("ภาพสลิปที่ลูกค้าส่ง", "Payment slip submitted by customer")}
+                    <img src={proofUrl} alt={t("ภาพสลิปที่แนบ", "Uploaded payment slip")}
                       loading="lazy" className="max-h-56 w-full rounded-lg border border-slate-200 bg-white object-contain" />
                     <span className="inline-block font-semibold text-blue-700 underline">
                       {t("เปิดภาพสลิปขนาดเต็ม", "Open full-size slip")}

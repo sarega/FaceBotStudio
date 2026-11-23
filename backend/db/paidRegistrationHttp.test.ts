@@ -312,7 +312,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       headers: { ...headers("test-owner"), "Content-Type": "application/octet-stream",
         "Idempotency-Key": "external-slip-proof", "x-csrf-token": "fixture-csrf",
         "x-booking-version": "1", "x-claimed-minor": "250000",
-        "x-claimed-transfer-at": new Date().toISOString(), "x-payment-method": "bank_transfer",
+        "x-claimed-transfer-at": "2023-11-23T00:32:00.000Z", "x-payment-method": "bank_transfer",
         "x-proof-mime": "image/png", "x-payment-reference": "external-slip-test" },
     });
     assert.equal(externalProof.status, 202, await externalProof.clone().text());
@@ -373,13 +373,16 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const approvedExternalSlip = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/review", {
       method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "external-slip-review" },
       body: JSON.stringify({ decision: "approve", attempt_id: externalReceipt.attempt_id,
-        version: externalReceipt.version, reason: "Verified transfer against bank records",
-        observed: { amount_minor: 250000, currency: "THB",
-          paid_at: new Date().toISOString(), reference: "SLIP-"+externalReceipt.attempt_id,
-          receiver_id: "EXTERNAL_MANUAL" } }),
+        version: externalReceipt.version, reason: "Verified transfer against bank records" }),
     });
     assert.equal(approvedExternalSlip.status, 200, await approvedExternalSlip.clone().text());
     assert.equal((await approvedExternalSlip.json()).status, "confirmed");
+    const submittedAt = Number(externalReviews[0].created_ms);
+    const quickApprovalRows = await db.listDailyPaidTransfers(paidEvent.id, "org_default", submittedAt, submittedAt + 1);
+    const quickApproval = quickApprovalRows.find(row => row.attempt_id === externalReceipt.attempt_id);
+    assert.equal(quickApproval?.status, "verified");
+    assert.equal(Number(quickApproval?.amount_minor), 250000);
+    assert.equal(quickApproval?.transfer_ms, null);
     const externalConfirmed = await fetch(externalOwnedPath, { headers: headers("test-owner") });
     const externalConfirmedDetail = await externalConfirmed.json();
     assert.equal(externalConfirmedDetail.status, "confirmed");
@@ -443,15 +446,11 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(paymentQr.headers.get("content-type"), "image/png");
     assert.equal((await fetch(`${ownedPath}/payment-qr`, { headers: headers("test-other") })).status, 404);
     const image = await sharp({ create: { width: 96, height: 144, channels: 3, background: "#dce8f5" } }).png().toBuffer();
-    const analyze = (token: string, bytes: Buffer) => fetch(`${ownedPath}/proof-analysis`, {
-      method: "POST", body: Uint8Array.from(bytes),
-      headers: { ...headers(token), "Content-Type": "application/octet-stream", "x-csrf-token": "fixture-csrf" },
+    const disabledAnalysis = await fetch(`${ownedPath}/proof-analysis`, {
+      method: "POST", body: Uint8Array.from(image),
+      headers: { ...headers("test-owner"), "Content-Type": "application/octet-stream", "x-csrf-token": "fixture-csrf" },
     });
-    assert.equal((await analyze("test-other", image)).status, 404);
-    assert.equal((await analyze("test-owner", Buffer.from("<svg/>"))).status, 415);
-    const slipAnalysis = await analyze("test-owner", image);
-    assert.equal(slipAnalysis.status, 200, await slipAnalysis.clone().text());
-    assert.deepEqual(await slipAnalysis.json(), { amountMinor: 50000, transferAt: "2025-11-21T13:45:12", payerName: "สมใจ ทดสอบ" });
+    assert.equal(disabledAnalysis.status, 404);
     const proof = (token: string, bytes: Buffer) => fetch(`${ownedPath}/proofs`, {
       method: "POST", body: Uint8Array.from(bytes),
       headers: {
@@ -585,8 +584,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(queuedSlip.attempt_id, pending.attempt_id);
     assert.equal(queuedSlip.claimed_payer_name, "สมใจ ทดสอบ");
     const storedAnalysis = await fetch(staffUrl + "/analyze", { method: "POST", headers: staffHeaders });
-    assert.equal(storedAnalysis.status, 200);
-    assert.equal((await storedAnalysis.json()).payerName, "สมใจ ทดสอบ");
+    assert.equal(storedAnalysis.status, 404);
     const verifiedTransferAt = new Date().toISOString();
     const approve = (receiver: string) => fetch(`${eventPrefix}/bookings/${booking.id}/review`, {
       method: "POST", headers: { ...staffHeaders, "Content-Type": "application/json", "Idempotency-Key": "verify" },

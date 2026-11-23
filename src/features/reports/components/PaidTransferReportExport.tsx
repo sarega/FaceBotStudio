@@ -50,11 +50,11 @@ export function PaidTransferReportExport({ eventId, apiFetch, language }: {
           </select>
         </label>
         {reportScope !== "all" && <label className="text-sm font-medium text-slate-900">
-          {reportScope === "range" ? t("ตั้งแต่วันที่โอน", "From") : t("วันที่โอน", "Transfer date")}
+          {reportScope === "range" ? t("ตั้งแต่วันที่", "From") : t("วันที่", "Date")}
           <input type="date" className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5"
             value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
         </label>}
-        {reportScope === "range" && <label className="text-sm font-medium text-slate-900">{t("ถึงวันที่โอน", "Through")}
+        {reportScope === "range" && <label className="text-sm font-medium text-slate-900">{t("ถึงวันที่", "Through")}
           <input type="date" min={reportDate} className="mt-1 block rounded-lg border border-slate-200 bg-white px-2 py-1.5"
             value={reportEnd} onChange={(event) => setReportEnd(event.target.value)} />
         </label>}

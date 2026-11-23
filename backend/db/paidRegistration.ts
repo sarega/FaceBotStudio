@@ -753,11 +753,12 @@ export interface PaidReviewReceipt {
 export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReviewReceipt> {
   const { eventId, bookingId, attemptId, organizationId, reviewerId, key, version, decision, reason, observed, confirmEarlyTransfer } = input;
   const now = Date.now();
-  const reference = observed?.reference.trim().normalize("NFKC").toUpperCase();
-  const namespace = observed?.receiverNamespace === "EXTERNAL_MANUAL"
+  const proofApproval = decision === "approve" && !!attemptId && !observed;
+  let reference = observed?.reference.trim().normalize("NFKC").toUpperCase();
+  let namespace = observed?.receiverNamespace === "EXTERNAL_MANUAL"
     ? "EXTERNAL_MANUAL" : observed?.receiverNamespace.replace(/[^0-9]/g, "");
   if ((!attemptId && decision !== "approve") || !key || key.length > 128 || !reason.trim() || reason.length > 1000 ||
-      (decision === "approve" && (!observed || !reference || !namespace || reference.length > 255 || namespace.length > 255 ||
+      (decision === "approve" && !proofApproval && (!observed || !reference || !namespace || reference.length > 255 || namespace.length > 255 ||
         !Number.isSafeInteger(observed.amountMinor) || observed.amountMinor <= 0 ||
         !Number.isSafeInteger(observed.transferMs) || observed.transferMs <= 0 || observed.transferMs > now))) {
     throw new PaidBookingError("invalid_review");
@@ -788,14 +789,20 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   if (Number(booking.version) !== version) throw new PaidBookingError("version_conflict");
   let paymentAttemptId = attemptId;
   let checksum: string | null = null;
+  let approvedAmount = observed?.amountMinor;
   if (paymentAttemptId) {
     const [attempt] = yield query(
-      `SELECT a.id,p.checksum FROM paid_payment_attempts a LEFT JOIN paid_proofs p ON p.attempt_id=a.id
+      `SELECT a.id,a.claimed_reference,p.checksum,p.deleted_ms FROM paid_payment_attempts a LEFT JOIN paid_proofs p ON p.attempt_id=a.id
        WHERE a.event_id=? AND a.booking_id=? AND a.id=? AND a.status IN ('proof_submitted','exception')`,
       eventId, bookingId, paymentAttemptId,
     );
     if (!attempt) throw new PaidBookingError("attempt_not_found");
     checksum = typeof attempt.checksum === "string" ? attempt.checksum : null;
+    if (proofApproval) {
+      if (!checksum || attempt.deleted_ms != null) throw new PaidBookingError("attempt_not_found");
+      reference = (String(attempt.claimed_reference ?? "").trim() || `SLIP-${paymentAttemptId}`).normalize("NFKC").toUpperCase();
+      approvedAmount = Number(booking.total_minor);
+    }
   } else {
     paymentAttemptId = randomUUID();
     yield query(
@@ -809,16 +816,19 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   let paymentStatus: PaidReviewReceipt["payment_status"] = "proof_submitted";
   let attemptStatus = "exception";
   let earlyTransfer = false;
-  if (decision === "approve" && observed) {
+  if (decision === "approve") {
     // Receiver snapshots are immutable per booking even if an event switches payment mode later.
     const [receiver] = yield query("SELECT receiver_id FROM paid_booking_receivers WHERE booking_id=?", bookingId);
+    if (proofApproval) namespace = receiver ? String(receiver.receiver_id) : "EXTERNAL_MANUAL";
     if (receiver ? receiver.receiver_id !== namespace : namespace !== "EXTERNAL_MANUAL") {
       throw new PaidBookingError("receiver_mismatch");
     }
-    earlyTransfer = observed.transferMs < Number(booking.created_ms);
-    if (earlyTransfer && !confirmEarlyTransfer) throw new PaidBookingError("early_transfer_confirmation_required");
-    if (observed.transferMs >= Number(booking.due_ms)) throw new PaidBookingError("transfer_outside_hold");
-    if (observed.amountMinor === Number(booking.total_minor)) {
+    if (observed) {
+      earlyTransfer = observed.transferMs < Number(booking.created_ms);
+      if (earlyTransfer && !confirmEarlyTransfer) throw new PaidBookingError("early_transfer_confirmation_required");
+      if (observed.transferMs >= Number(booking.due_ms)) throw new PaidBookingError("transfer_outside_hold");
+    }
+    if (approvedAmount === Number(booking.total_minor)) {
       const [duplicate] = yield query(
         `SELECT id FROM paid_payment_attempts WHERE receiver_namespace=? AND trusted_reference=?
          UNION ALL SELECT a.id FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id
@@ -839,7 +849,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
       status = "confirmed";
       paymentStatus = "verified";
       attemptStatus = "verified";
-    } else if (observed.amountMinor < Number(booking.total_minor)) {
+    } else if (approvedAmount != null && approvedAmount < Number(booking.total_minor)) {
       paymentStatus = "underpaid";
     }
   } else if (decision === "reject") {
@@ -852,7 +862,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   yield query(
     `UPDATE paid_payment_attempts SET status=?,observed_minor=?,observed_transfer_ms=?,trusted_reference=?,
        receiver_namespace=?,reviewed_by=?,reviewed_ms=?,reason=? WHERE id=?`,
-    attemptStatus, observed?.amountMinor ?? null, observed?.transferMs ?? null,
+    attemptStatus, approvedAmount ?? null, observed?.transferMs ?? null,
     status === "confirmed" ? reference! : null, status === "confirmed" ? namespace! : null,
     reviewerId, now, reviewReason, paymentAttemptId,
   );
@@ -952,21 +962,26 @@ export function* checkInPaidCredential(eventId: string, credential: string, acto
 }
 
 export function* listDailyPaidTransfers(eventId: string, start: number, end: number): PaidCommand<PaidRow[]> {
+  // Slip-only approvals verify the amount but never record a guessed transfer time.
   const transfers = yield query(
-    `SELECT b.id AS booking_id,b.reference AS booking_reference,
-       c.first_name,c.last_name,a.id AS attempt_id,a.status,a.created_ms AS submitted_ms,
-       COALESCE(a.observed_minor,a.claimed_minor) AS amount_minor,
-       COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms) AS transfer_ms,
-       COALESCE(a.trusted_reference,a.claimed_reference) AS transfer_reference,
-       r.receiver_name,r.receiver_id
-     FROM paid_payment_attempts a JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
-     JOIN customer_accounts c ON c.id=b.customer_id
-     LEFT JOIN paid_booking_receivers r ON r.booking_id=b.id
-     WHERE a.event_id=? AND a.status IN ('verified','proof_submitted','exception')
-       AND EXISTS (SELECT 1 FROM paid_proofs p WHERE p.attempt_id=a.id)
-       AND COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms)>=?
-       AND COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms)<?
-     ORDER BY COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms),a.id`,
+    `WITH transfers AS (
+      SELECT b.id AS booking_id,b.reference AS booking_reference,
+         c.first_name,c.last_name,a.id AS attempt_id,a.status,a.created_ms AS submitted_ms,
+         COALESCE(a.observed_minor,a.claimed_minor) AS amount_minor,
+         CASE WHEN a.status='verified' THEN a.observed_transfer_ms
+           ELSE COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms) END AS transfer_ms,
+         COALESCE(a.trusted_reference,a.claimed_reference) AS transfer_reference,
+         r.receiver_name,r.receiver_id
+       FROM paid_payment_attempts a JOIN paid_bookings b ON b.id=a.booking_id AND b.event_id=a.event_id
+       JOIN customer_accounts c ON c.id=b.customer_id
+       LEFT JOIN paid_booking_receivers r ON r.booking_id=b.id
+       WHERE a.event_id=? AND a.status IN ('verified','proof_submitted','exception')
+         AND EXISTS (SELECT 1 FROM paid_proofs p WHERE p.attempt_id=a.id)
+     )
+     SELECT * FROM transfers
+     WHERE COALESCE(transfer_ms,CASE WHEN status='verified' THEN submitted_ms END)>=?
+       AND COALESCE(transfer_ms,CASE WHEN status='verified' THEN submitted_ms END)<?
+     ORDER BY COALESCE(transfer_ms,submitted_ms),attempt_id`,
     eventId, start, end,
   );
   const namesByBooking = new Map(transfers.map(({ booking_id }) => [booking_id, [] as string[]]));

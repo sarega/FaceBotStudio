@@ -24,7 +24,7 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
   const mimeTypes = ["image/jpeg", "image/png", "image/webp"];
 
   async function analyze() {
-    if (!file || reading || busy) return;
+    if (!staff || !file || reading || busy) return;
     const request = new AbortController();
     analysisRequest.current?.abort();
     analysisRequest.current = request;
@@ -134,7 +134,7 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
             setFile(chosen);
           }}/>
       </label>
-      {file && <div className="space-y-1.5 rounded-lg border border-slate-200 p-2.5 text-sm">
+      {staff && file && <div className="space-y-1.5 rounded-lg border border-slate-200 p-2.5 text-sm">
         <button type="button" disabled={busy || reading} onClick={() => void analyze()} className="registration-admin-control">
           <ScanText className="h-4 w-4" aria-hidden="true" />
           {reading ? t("กำลังอ่านสลิป…", "Reading slip…") : t("อ่านยอดและเวลาจากสลิปด้วย AI", "Read amount and time with AI")}
@@ -157,15 +157,15 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
           {staff && analysis.payerName && <p>{t("ชื่อผู้โอนที่ AI อ่านได้", "Payer name read by AI")} <strong>{analysis.payerName}</strong></p>}
         </div>}
       </div>}
-      <details open={analysis ? true : undefined} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
+      {staff && <details open={analysis ? true : undefined} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
         <summary className="cursor-pointer">{t("ยอดและเวลาโอน (ถ้ามี)", "Amount and transfer time (optional)")}</summary>
         <fieldset disabled={busy || reading} className="mt-3 grid gap-3 sm:grid-cols-2">
           <label>{t("ยอดที่โอน (บาท)", "Transferred amount (THB)")}
             <input className={input} inputMode="decimal" value={amount}
               onChange={(event) => setAmount(event.target.value)}/>
           </label>
-          <label>{t("วันเวลาโอน (เวลาไทย)", "Transfer date and time (Thailand)")}
-            <input className={input} type="datetime-local" step="1" value={paidAt}
+          <label>{t("เวลาโอน (วัน/เดือน/ปี เวลาไทย)", "Transfer time (day/month/year, Thailand)")}
+            <input className={input} type="datetime-local" lang="en-GB" step="1" value={paidAt}
               onChange={(event) => setPaidAt(event.target.value)}/>
           </label>
           <label className="sm:col-span-2">{t("เลขอ้างอิงธนาคาร (ถ้ามี)", "Bank reference (optional)")}
@@ -173,7 +173,7 @@ export function PaidProofForm({ locale, path, version, totalMinor, paymentMode, 
               onChange={(event) => setReference(event.target.value)}/>
           </label>
         </fieldset>
-      </details>
+      </details>}
       <button type="submit" disabled={busy || reading || !file}
         className={staff ? "registration-admin-control paid-slip-staff-submit" : "flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-5 py-3 text-base font-bold text-white hover:bg-blue-400 disabled:cursor-not-allowed disabled:bg-slate-600"}>
         <UploadCloud className="h-5 w-5"/>

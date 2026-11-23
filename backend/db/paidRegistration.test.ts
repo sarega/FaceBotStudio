@@ -407,6 +407,14 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     }), /duplicate_reference_or_proof/);
     assert.equal((await db.readOwnedPaidBooking(crossPaidEvent.id, crossPaidBooking.id, customer.id))?.state, "awaiting_payment");
 
+    const reusedProof = await db.submitPaidProof({
+      ...proof, eventId: crossPaidEvent.id, bookingId: crossPaidBooking.id, key: "reused-slip", version: 1,
+    });
+    await assert.rejects(db.reviewPaidProof({
+      ...manualReview, eventId: crossPaidEvent.id, bookingId: crossPaidBooking.id, key: "approve-reused-slip",
+      attemptId: reusedProof.attempt_id, version: reusedProof.version, observed: undefined,
+    }), /duplicate_reference_or_proof/);
+
     const operationsEvent = await db.createEvent({ name: "Admin operations fixture", organizer_id: "org_default" });
     await db.updateEvent(operationsEvent.id, { status: "active" });
     await db.savePaidSettings(operationsEvent.id, settings);
