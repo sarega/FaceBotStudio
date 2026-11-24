@@ -1,3 +1,4 @@
+import { isOptionalAttendeePhone } from "../../src/lib/attendeePhone";
 import { attendeeCarpoolRole, carpoolRoleFromAnswer, type CarpoolAttendee, type CarpoolLayout, type PaidCarpoolPlan, type PaidCarpoolUpdate } from "../carpoolPlan";
 import { applyCoupon, isValidCouponCode, normalizeCouponCode, recordCouponRedemption } from "./paidCoupons";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
@@ -473,7 +474,8 @@ function editablePreferenceAnswers(answers: unknown): Record<string, string> {
     .map((answer) => [answer.key, answer.value]));
 }
 
-export type PaidPreferenceEdit = { key: EditableSeminarKey; attendeeId?: string; value: string };
+export type PaidPreferenceEdit = { key: EditableSeminarKey; attendeeId?: string; value: string } |
+  { key: "personal_phone"; attendeeId: string; value: string };
 
 export function* readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: PaidPreferenceEdit): PaidCommand<PaidRow | undefined> {
   const [booking] = yield query(
@@ -513,7 +515,14 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
   const preferenceFields = fields.filter(({ key }) => isEditableSeminarKey(key) &&
     (key !== "room_preference" || (roomSurcharge ? canRepriceRoom : !attendees.some(({ contact_json }) =>
       Number(JSON.parse(String(contact_json || "{}")).pricing?.room_surcharge_minor) > 0))));
-  if (edit) {
+  if (edit?.key === "personal_phone") {
+    if (!preferencesEditable || !isOptionalAttendeePhone(edit.value)) throw new PaidBookingError("state_conflict");
+    const target = attendees.find(({ id }) => id === edit.attendeeId);
+    if (!target) throw new PaidBookingError("attendee_not_found");
+    target.contact_json = JSON.stringify({ ...JSON.parse(String(target.contact_json || "{}")), phone: edit.value.trim() });
+    yield query("UPDATE paid_attendees SET contact_json=? WHERE id=? AND booking_id=? AND cancelled_ms IS NULL",
+      String(target.contact_json), edit.attendeeId, id);
+  } else if (edit) {
     if (!preferencesEditable) throw new PaidBookingError("state_conflict");
     const field = preferenceFields.find(({ key }) => key === edit.key);
     const target = edit.attendeeId ? attendees.find(({ id }) => id === edit.attendeeId) : booking;
@@ -573,6 +582,7 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
     registrant_phone: contact.phone,
     registration_answers: Array.isArray(contact.answers) ? contact.answers : [],
     preferences_close_at: eventStart?.toISOString() ?? null,
+    attendee_phones_editable: preferencesEditable,
     preference_fields: preferencesEditable ? preferenceFields : [],
     preference_answers: editablePreferenceAnswers(JSON.parse(String(booking.contact_json ?? "{}")).answers),
     state: booking.state === "awaiting_payment" && dueMs <= Date.now() ? "expired" : booking.state,
@@ -1182,11 +1192,11 @@ export function* listPaidReviewQueue(
   if (!rows.length) return [];
 
   const attendeesByBooking = new Map(rows.map(({ booking_id }) => [String(booking_id), [] as {
-    id: string; name: string; category_label: string; unit_minor: number; price_flagged: boolean;
+    id: string; name: string; category_label: string; unit_minor: number; price_flagged: boolean; phone: string;
   }[]]));
   const bookingIds = [...attendeesByBooking.keys()];
   const attendees = yield query(
-    `SELECT a.id,a.booking_id,a.first_name,a.last_name,a.category_label,a.unit_minor,flag.flagged_ms
+    `SELECT a.id,a.booking_id,a.first_name,a.last_name,a.category_label,a.unit_minor,a.contact_json,flag.flagged_ms
      FROM paid_attendees a LEFT JOIN paid_attendee_price_flags flag ON flag.attendee_id=a.id
      WHERE a.event_id=? AND a.booking_id IN (${bookingIds.map(() => "?").join(",")}) AND a.cancelled_ms IS NULL
      ORDER BY a.booking_id,a.ordinal`,
@@ -1199,6 +1209,7 @@ export function* listPaidReviewQueue(
       category_label: String(attendee.category_label),
       unit_minor: Number(attendee.unit_minor),
       price_flagged: attendee.flagged_ms != null,
+      phone: String(JSON.parse(String(attendee.contact_json || "{}")).phone || ""),
     });
   }
   const proofs = yield query(
@@ -1403,8 +1414,8 @@ export function* confirmPaidMessengerDraft(input: PaidMessengerConfirmInput, org
 
 export interface PaidAdminAction {
   eventId: string; bookingId: string; organizationId: string; actorId: string;
-  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag";
-  reason: string; holdMinutes?: number; refundReference?: string; attendeeId?: string; unitMinor?: number; couponCode?: string;
+  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone";
+  reason: string; holdMinutes?: number; refundReference?: string; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
 }
 
 export function* readPaidAdminBooking(eventId: string, organizationId: string, reference: string): PaidCommand<PaidRow | undefined> {
@@ -1440,18 +1451,20 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
 }
 
 export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status:string; payment_status:string; version:number; due_at:string; total_minor?:number; balance_due_minor?:number }> {
-  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor } = input;
+  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone } = input;
   const couponCode = normalizeCouponCode(input.couponCode ?? "");
   if (!key || key.length>128 || !reason?.trim() || reason.length>1000 || !Number.isSafeInteger(version) || version<1 ||
-      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag"].includes(action) ||
+      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone"].includes(action) ||
       (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
       (["correct_price", "flag_price", "clear_price_flag"].includes(action) && !attendeeId) ||
+      (action==="set_attendee_phone" && (!attendeeId || !isOptionalAttendeePhone(attendeePhone))) ||
       (action==="correct_price" && (!Number.isSafeInteger(unitMinor) || unitMinor! < 1 || unitMinor! > 2_147_483_647)) ||
       (action==="refund" && (!refundReference?.trim() || refundReference.length>255))) throw new PaidBookingError("invalid_admin_action");
   if (action === "apply_coupon" && !isValidCouponCode(couponCode)) throw new PaidBookingError("coupon_invalid");
   const principal="staff:"+actorId;
   const digest=createHash("sha256").update(JSON.stringify([bookingId,version,action,reason,holdMinutes,refundReference,
     ...(action === "correct_price" ? [attendeeId,unitMinor] : []),
+    ...(action === "set_attendee_phone" ? [attendeeId,attendeePhone?.trim()] : []),
     ...(action === "apply_coupon" ? [couponCode] : []),
     ...(["flag_price", "clear_price_flag"].includes(action) ? [attendeeId] : [])])).digest("hex");
   const [replay]=yield query("SELECT digest,result_json FROM paid_command_keys WHERE principal=? AND event_id=? AND operation='admin_booking' AND command_key=?",
@@ -1475,7 +1488,15 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   let correction: { total_minor: number; balance_due_minor: number } | undefined;
   let couponConfirmed = false;
   let auditReason = reason.trim();
-  if (action === "payment_notice") {
+  if (action === "set_attendee_phone") {
+    if (previous === "cancelled" || payment === "refunded") throw new PaidBookingError("state_conflict");
+    const [attendee] = yield query("SELECT contact_json FROM paid_attendees WHERE id=? AND booking_id=? AND event_id=? AND cancelled_ms IS NULL",
+      attendeeId!, bookingId, eventId);
+    if (!attendee) throw new PaidBookingError("attendee_not_found");
+    const contact = { ...JSON.parse(String(attendee.contact_json || "{}")), phone: attendeePhone!.trim() };
+    yield query("UPDATE paid_attendees SET contact_json=? WHERE id=? AND booking_id=? AND event_id=? AND cancelled_ms IS NULL",
+      JSON.stringify(contact), attendeeId!, bookingId, eventId);
+  } else if (action === "payment_notice") {
     if (Number(booking.balance_due_minor) <= 0 || Number(booking.pending_proofs) > 0) {
       throw new PaidBookingError("state_conflict");
     }

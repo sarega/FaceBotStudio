@@ -417,6 +417,19 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const externalConfirmed = await fetch(externalOwnedPath, { headers: headers("test-owner") });
     const externalConfirmedDetail = await externalConfirmed.json();
     assert.equal(externalConfirmedDetail.status, "confirmed");
+    const phoneManageUrl = externalPrefix + "/bookings/" + externalSlipBooking.id + "/manage";
+    const attendeePhoneChange = { action: "set_attendee_phone", reason: "Update attendee contact",
+      version: externalConfirmedDetail.version, attendee_id: externalConfirmedDetail.attendees[0].id, attendee_phone: "+66 81 234 5678" };
+    const phoneManage = (body: object, key: string) => fetch(phoneManageUrl, {
+      method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": key }, body: JSON.stringify(body),
+    });
+    assert.equal((await phoneManage({ ...attendeePhoneChange, attendee_phone: "not a phone" }, "invalid-attendee-phone")).status, 400);
+    assert.equal((await phoneManage(attendeePhoneChange, "set-attendee-phone")).status, 200);
+    const phoneUpdated = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
+    assert.equal(phoneUpdated.attendees[0].phone, "+66 81 234 5678");
+    assert.equal(phoneUpdated.registrant_phone, externalConfirmedDetail.registrant_phone);
+    assert.equal(phoneUpdated.total_due_minor, externalConfirmedDetail.total_due_minor);
+    assert.equal(phoneUpdated.status, "confirmed");
     const externalCredential = await fetch(externalOwnedPath + "/attendees/" +
       externalConfirmedDetail.attendees[0].id + "/credential", { headers: headers("test-owner") });
     assert.equal(externalCredential.status, 200);
@@ -435,7 +448,8 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await externalApproval.json()).status, "confirmed");
     const groupInput = (names: string[]) => JSON.stringify({
       pricing_version: 1, contact: { name: "Test Customer" },
-      attendees: names.map((name) => ({ category_id: "adult", first_name: name, last_name: "Guest" })),
+      attendees: names.map((name, index) => ({ category_id: "adult", first_name: name, last_name: "Guest",
+        ...(index === 0 && { phone: "0812345678" }) })),
     });
     const create = (key: string, csrf = "fixture-csrf", token = "test-owner", requestBody = groupInput(["One", "Two"])) => fetch(`${prefix}/paid-bookings`, {
       method: "POST", body: requestBody,
@@ -473,6 +487,16 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(owned.status, 200);
     const attendees = (await owned.json()).attendees;
     assert.equal(attendees.length, 2);
+    assert.equal(attendees[0].phone, "0812345678");
+    assert.ok(!attendees[1].phone);
+    const editAttendeePhone = (token: string, value: string) => fetch(ownedPath + "/preferences", {
+      method: "PATCH", headers: { ...headers(token), "Content-Type": "application/json", "x-csrf-token": "fixture-csrf" },
+      body: JSON.stringify({ key: "personal_phone", attendee_id: attendees[0].id, value }),
+    });
+    assert.equal((await editAttendeePhone("test-other", "0899999999")).status, 404);
+    assert.equal((await editAttendeePhone("test-owner", "0899999999")).status, 204);
+    assert.equal((await db.listPaidAttendeeRoster(event.id, "org_default")).find(row => row.attendee_id === attendees[0].id)?.attendee_phone, "0899999999");
+    assert.equal((await editAttendeePhone("test-owner", "")).status, 204);
     const credentialPath = (attendeeId: string) => `${ownedPath}/attendees/${attendeeId}/credential`;
     assert.equal((await fetch(credentialPath(attendees[0].id), { headers: headers("test-owner") })).status, 404);
     const paymentQr = await fetch(`${ownedPath}/payment-qr`, { headers: headers("test-owner") });
@@ -1441,7 +1465,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const flagResponse = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/manage", {
       method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "flag-attendee-price" },
       body: JSON.stringify({ action: "flag_price", reason: "Check participant price",
-        attendee_id: externalConfirmedDetail.attendees[0].id, version: externalConfirmedDetail.version }),
+        attendee_id: externalConfirmedDetail.attendees[0].id, version: phoneUpdated.version }),
     });
     assert.equal(flagResponse.status, 200, await flagResponse.clone().text());
     const flagReceipt = await flagResponse.json();
@@ -1465,6 +1489,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(correctedReview.attendees[0].price_flagged, false);
     const correctedDetails = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
     assert.equal(correctedDetails.attendees[0].unit_minor, 300000);
+    assert.equal(correctedDetails.attendees[0].phone, "+66 81 234 5678");
     assert.equal(correctedDetails.balance_due_minor, 50000);
     assert.equal((await fetch(externalOwnedPath + "/payment-display", { headers: headers("test-owner") })).status, 200);
     assert.equal((await cancelOwned(externalSlipBooking.id)).status, 409);

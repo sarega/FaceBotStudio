@@ -1,3 +1,4 @@
+import { AttendeePhoneEditor } from "../../../components/AttendeePhoneEditor";
 import { PaidProofForm } from "../../../components/PaidProofForm";
 import { formatCustomerDate, type CustomerCopy, type CustomerLocale } from "../customerLocale";
 import { paidSeminarFields, type EditableSeminarKey, type PaidSeminarKey, type PaidSeminarAnswer } from "../../../../backend/paidSeminarFields";
@@ -78,7 +79,7 @@ function PreferenceInput({ locale, field, initial, path, attendeeId, onSaved }: 
   </form>;
 }
 
-type Detail = { payment_notice?: string | null; balance_due_minor?: number; pending_proofs?: number; registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; total_due_minor: number; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
+type Detail = { attendee_phones_editable?: boolean; payment_notice?: string | null; balance_due_minor?: number; pending_proofs?: number; registrant_name?: string; registrant_email?: string; registrant_phone?: string; preferences_close_at?: string | null; registration_answers?: PaidSeminarAnswer[];  preference_fields?: PreferenceField[]; preference_answers?: Record<string, string>; status: string; total_due_minor: number; due_at: string; version: number; payment_state: string; payment_mode: "promptpay" | "external_manual";
   coupon?: { code: string; subtotal_minor: number; discount_minor: number } | null; attendees: { id: string; room_is_default?: boolean; email?: string; phone?: string; registration_answers?: PaidSeminarAnswer[]; preference_answers?: Record<string, string>; first_name: string; last_name: string; category_label: string; unit_minor: number; base_minor?: number; accommodation_discount_minor?: number }[] };
 type Page = { bookings: Booking[]; next_offset: number | null };
 const baht = (minor: number, locale: CustomerLocale) =>
@@ -415,7 +416,20 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                     ({t("ไม่ใช้ที่พัก", "No accommodation")}: −{baht(attendee.accommodation_discount_minor, locale)})
                   </span>
                 )}
-                {(attendee.email || attendee.phone) && <p className="break-words text-slate-600">{[attendee.email, attendee.phone].filter(Boolean).join(" · ")}</p>}
+                {attendee.email && <p className="break-words text-slate-600">{attendee.email}</p>}
+                {detail.attendee_phones_editable ? <AttendeePhoneEditor phone={attendee.phone} language={locale}
+                  onSave={async phone => {
+                    try {
+                      await customerApi(`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}/preferences`, {
+                        method: "PATCH", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ key: "personal_phone", attendee_id: attendee.id, value: phone }),
+                      });
+                      setDetail(current => current && { ...current, attendees: current.attendees.map(person =>
+                        person.id === attendee.id ? { ...person, phone } : person) });
+                    } catch {
+                      throw new Error(t("บันทึกเบอร์ไม่ได้ กรุณาโหลดใบจองใหม่แล้วลองอีกครั้ง", "Could not save the number. Reload the booking and retry."));
+                    }
+                  }} /> : attendee.phone && <p className="text-slate-600">{t("เบอร์โทรส่วนตัว", "Personal phone")} · {attendee.phone}</p>}
                 {attendee.registration_answers?.map(({ key, label, value }) => <p className="text-slate-600" key={key}>{t(seminarLabels[key] ?? label, paidSeminarFields[key]?.label ?? label)} · {key === "accommodation" && value === "yes" ? t("ต้องการ", "Yes") : key === "accommodation" && value === "no" ? t("ไม่ต้องการ", "No") : value}{key === "room_preference" && attendee.room_is_default ? t(" (ค่าเริ่มต้น)", " (Default)") : ""}</p>)}
                 {detail.status === "confirmed" && (
                   <a className="ml-2 text-blue-700 underline" target="_blank" rel="noopener noreferrer"

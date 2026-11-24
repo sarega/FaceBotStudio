@@ -121,10 +121,11 @@ export function buildRegistrationReportHtml({
       const total = matches.reduce((sum, { row }) => sum + due(row), 0);
       return section(label, `${matches.length} ${t(["ใบจอง", "bookings"])} · ${t(key === "expired"
         ? ["ยอดตามใบจองที่หมดอายุ", "Unpaid amount on expired holds"] : ["ยอดค้าง", "Outstanding"])} ${money(total)}`,
-        table([labels.reference, labels.customer, labels.registered, ["ติดต่อผู้จอง", "Booker contact"], ["กำหนดชำระ", "Payment deadline"], labels.outstanding],
+        table([labels.reference, labels.customer, labels.registered, ["ติดต่อผู้จอง / ผู้เข้าร่วม", "Booker / attendee contact"], ["กำหนดชำระ", "Payment deadline"], labels.outstanding],
           matches.map(({ row, people }) => [
             cell(row.booking_reference), cell(customer(row), ...people.map(name)), cell(confirmation(row.report_booking_state)),
-            cell(row.customer_phone, row.customer_email), cell(date(row.due_ms)), cell(money(due(row))),
+            cell(row.customer_phone, row.customer_email, ...people.filter(person => text(person.attendee_phone))
+              .map(person => `${name(person)} · ${text(person.attendee_phone)}`)), cell(date(row.due_ms)), cell(money(due(row))),
           ])));
     }).join("");
   } else if (kind === "coupons") {

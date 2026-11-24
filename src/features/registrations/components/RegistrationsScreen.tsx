@@ -246,7 +246,7 @@ export function RegistrationsScreen({
     const search=registrationListQuery.trim().toLowerCase();
     return paidPeople.filter(person=>(!search||
       [person.first_name,person.last_name,person.booking_reference,
-        person.customer_first_name,person.customer_last_name,person.customer_email]
+        person.customer_first_name,person.customer_last_name,person.customer_email,person.attendee_phone]
         .join(" ").toLowerCase().includes(search)) &&
       (registrationStatusFilter==="all" ||
        registrationStatusFilter==="checked-in" && person.checked_in_ms!=null ||

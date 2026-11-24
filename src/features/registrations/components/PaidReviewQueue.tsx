@@ -1,3 +1,4 @@
+import { AttendeePhoneEditor } from "../../../components/AttendeePhoneEditor";
 import { PaidTransferReportExport } from "../../reports/components/PaidTransferReportExport";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { getRosterStatus, RegistrationStatusTag } from "./RegistrationStatusTag";
@@ -23,7 +24,7 @@ type Review = {
   version: number;
   total_minor: number;
   attendee_count: number;
-  attendees: { id: string; name: string; category_label: string; unit_minor: number; price_flagged?: boolean }[];
+  attendees: { id: string; name: string; category_label: string; unit_minor: number; price_flagged?: boolean; phone?: string }[];
   claimed_minor: number | null;
   proof_id: string | null;
   balance_due_minor: number;
@@ -470,6 +471,22 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                         {review.attendees.map(attendee => <tr key={attendee.id} className={`border-t border-slate-200 align-top ${attendee.price_flagged ? "bg-rose-50" : ""}`}>
                           <td className="wrap-anywhere py-1 pr-2 font-medium">
                             {attendee.name}
+                            {review.booking_state !== "cancelled" && review.payment_state !== "refunded" ?
+                              <AttendeePhoneEditor key={review.version} phone={attendee.phone} language={language}
+                                onSave={async phone => {
+                                  const response = await apiFetch(path + "/manage", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+                                    body: JSON.stringify({ action: "set_attendee_phone", version: review.version,
+                                      attendee_id: attendee.id, attendee_phone: phone, reason: "Updated attendee personal contact" }),
+                                  });
+                                  if (!response.ok) {
+                                    const failure = await response.json().catch(() => ({}));
+                                    if (failure.error === "version_conflict") refreshAfterUpdate(review.booking_reference);
+                                    throw new Error(t("บันทึกเบอร์ไม่ได้ กรุณาลองอีกครั้ง", "Could not save the number. Try again."));
+                                  }
+                                  refreshAfterUpdate(review.booking_reference);
+                                }} /> : attendee.phone && <p className="text-xs text-slate-600">{attendee.phone}</p>}
                             {attendee.price_flagged && <span className="block text-xs text-rose-800">{t("ต้องแก้ราคา", "Price flagged")}</span>}
                           </td>
                           <td className="wrap-anywhere py-1 pr-2">{attendee.category_label}</td>

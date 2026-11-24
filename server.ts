@@ -1,3 +1,4 @@
+import { isOptionalAttendeePhone } from "./src/lib/attendeePhone";
 import { parseCarpoolUpdate } from "./backend/carpoolPlan";
 import { parseRoomingPlan } from "./backend/roomingPlan";
 import { isValidCouponCode } from "./backend/db/paidCoupons";
@@ -17928,6 +17929,9 @@ async function startServer() {
       const readContact = (value: Record<string, unknown>, path: string) => {
         const email = readOptionalString(value, "email", 320);
         if (email && !isLikelyEmailAddress(email)) issues.push({ field: `${path}.email`, message: "Invalid email" });
+        if (path.startsWith("attendees.") && value.phone != null && !isOptionalAttendeePhone(value.phone)) {
+          issues.push({ field: `${path}.phone`, message: "Invalid attendee phone number" });
+        }
         return { email, phone: readOptionalString(value, "phone", 64) };
       };
       const contact = asRecord(body.contact);
@@ -18357,13 +18361,14 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
             Number(body.hold_minutes) < 5 || Number(body.hold_minutes) > 43200)) ||
-          (["correct_price", "flag_price", "clear_price_flag"].includes(action) &&
+          (["correct_price", "flag_price", "clear_price_flag", "set_attendee_phone"].includes(action) &&
             (typeof body.attendee_id !== "string" || !body.attendee_id.trim() || body.attendee_id.length > 128)) ||
+          (action === "set_attendee_phone" && !isOptionalAttendeePhone(body.attendee_phone)) ||
           (action === "correct_price" && !Number.isSafeInteger(body.unit_minor)) ||
           (action === "apply_coupon" && (typeof body.coupon_code !== "string" || body.coupon_code.length > 64)) ||
           (action === "refund" && (typeof body.refund_reference !== "string" || !body.refund_reference.trim()))) {
@@ -18373,9 +18378,10 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone",reason:body.reason.trim(),
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
           attendeeId: typeof body.attendee_id === "string" ? body.attendee_id : undefined,
+          attendeePhone: typeof body.attendee_phone === "string" ? body.attendee_phone : undefined,
           unitMinor: typeof body.unit_minor === "number" ? body.unit_minor : undefined,
           couponCode: typeof body.coupon_code === "string" ? body.coupon_code : undefined,
           refundReference:typeof body.refund_reference === "string" ? body.refund_reference : undefined,
@@ -18588,18 +18594,19 @@ async function startServer() {
   app.patch("/api/customer/paid-bookings/:eventId/:id/preferences", requireVerifiedCustomer,
     async (req: AuthenticatedRequest, res) => {
       const { key, attendee_id, value } = readObjectBody(req);
-      if (!isEditableSeminarKey(key) || typeof value !== "string" || value.length > 500 ||
+      if ((key !== "personal_phone" && !isEditableSeminarKey(key)) || typeof value !== "string" || value.length > 500 ||
+          (key === "personal_phone" && (typeof attendee_id !== "string" || !isOptionalAttendeePhone(value))) ||
           (attendee_id !== undefined && (typeof attendee_id !== "string" || !attendee_id || attendee_id.length > 80))) {
         return res.status(400).json({ error: "invalid_seminar_answers" });
       }
       try {
-        const updated = await appDb.readOwnedPaidBooking(req.params.eventId, req.params.id, req.customer!.account.id, {
-          key, value, attendeeId: typeof attendee_id === "string" ? attendee_id : undefined,
-        });
+        const updated = await appDb.readOwnedPaidBooking(req.params.eventId, req.params.id, req.customer!.account.id, key === "personal_phone"
+          ? { key, value, attendeeId: attendee_id as string }
+          : { key, value, attendeeId: typeof attendee_id === "string" ? attendee_id : undefined });
         return res.set("Cache-Control", "private, no-store").status(updated ? 204 : 404).end();
       } catch (error) {
         if (error instanceof PaidBookingError) {
-          return res.status(error.code === "event_not_found" ? 404 : 409).json({ error: error.code });
+          return res.status(["event_not_found", "attendee_not_found"].includes(error.code) ? 404 : 409).json({ error: error.code });
         }
         return res.status(500).json({ error: "preferences_unavailable" });
       }

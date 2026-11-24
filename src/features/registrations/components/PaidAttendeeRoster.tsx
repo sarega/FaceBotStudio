@@ -163,6 +163,9 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
                   <span>{person.first_name} {person.last_name}</span>
                   <RegistrationStatusTag status={status} language={language} />
                 </div>
+                {person.attendee_phone && <a className="mt-1 block text-xs font-normal text-blue-700 underline"
+                  href={`tel:${person.attendee_phone.replace(/[^+0-9]/g, "")}`}
+                  title={t("เบอร์โทรส่วนตัว", "Personal phone")}>{person.attendee_phone}</a>}
                 {canCancel && onCancelBooking && <CancelBookingForm person={person} language={language} onCancel={onCancelBooking} />}
               </td>
               <td className="break-words p-2 align-top">{person.category_label}</td>

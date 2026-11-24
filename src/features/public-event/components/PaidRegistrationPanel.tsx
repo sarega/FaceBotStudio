@@ -1,10 +1,11 @@
+import { isOptionalAttendeePhone } from "../../../lib/attendeePhone";
 import { PaymentCountdown } from "../../../components/PaymentCountdown";
 import { roomSurchargeMinor, paidSeminarFields, seminarDefaultAnswers, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
 
 type Catalog = { payment_mode?: "promptpay" | "external_manual"; pricing_version: number; fields: PaidSeminarField[]; categories: { id: string; label: string; unit_minor: number; accommodation_discount_minor?: number }[] };
-type Attendee = { category_id: string; first_name: string; last_name: string; answers?: Record<string, string> };
+type Attendee = { category_id: string; first_name: string; last_name: string; phone?: string; answers?: Record<string, string> };
 type Booking = { id: string; event_id: string; reference: string; status: string; total_due_minor: number; due_at: string };
 
 const field = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900";
@@ -216,6 +217,12 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy || !catalog) return;
+    const invalidPhoneIndex = attendees.findIndex(row => !isOptionalAttendeePhone(row.phone ?? ""));
+    if (invalidPhoneIndex >= 0) {
+      setError(locale === "th" ? `กรุณาตรวจเบอร์โทรของผู้เข้าร่วมคนที่ ${invalidPhoneIndex + 1}` :
+        `Check the phone number for attendee ${invalidPhoneIndex + 1}.`);
+      return;
+    }
     if (couponCode.trim() && !couponPreview) {
       setCouponError(locale === "th" ? "กรุณากดใช้โค้ดก่อนยืนยันการจอง" : "Click Apply to validate your coupon.");
       return;
@@ -377,6 +384,19 @@ export function PaidRegistrationPanel({ slug, eventId, enabled, timezone, locale
                 <label className="block text-sm">{locale === "th" ? "นามสกุล" : "Last name"}
                   <input className={field} required maxLength={180} value={row.last_name} onChange={(event) => update(index, { last_name: event.target.value })} />
                 </label>
+                <details className="text-sm">
+                  <summary className="cursor-pointer font-medium text-blue-700">
+                    {locale === "th" ? "+ เบอร์โทรส่วนตัว (ไม่บังคับ)" : "+ Personal phone (optional)"}
+                  </summary>
+                  <label className="mt-1 block">
+                    <span className="sr-only">{locale === "th" ? "เบอร์โทรส่วนตัว" : "Personal phone"}</span>
+                    <input type="tel" maxLength={64} className={field} value={row.phone ?? ""}
+                      onChange={event => {
+                        const phone = event.target.value;
+                        setAttendees(rows => rows.map((person, number) => number === index ? { ...person, phone } : person));
+                      }} />
+                  </label>
+                </details>
                 <SeminarInputs fields={catalog.fields.filter(({ scope }) => scope === "attendee")} values={row.answers} locale={locale}
                   onChange={(key, value) => update(index, { answers: { ...row.answers, [key]: value } })} />
                 {((catalog.categories.find((category) => category.id === row.category_id)?.accommodation_discount_minor ?? 0) > 0 || roomSurchargeMinor(catalog.fields, row.answers) > 0) &&
