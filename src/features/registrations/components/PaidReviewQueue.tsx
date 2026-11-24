@@ -1,9 +1,10 @@
 import { PaidTransferReportExport } from "../../reports/components/PaidTransferReportExport";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
+import { getRosterStatus, RegistrationStatusTag } from "./RegistrationStatusTag";
 import { PaidBookingOperations, type BookingEditRequest } from "./PaidBookingOperations";
 import { PaidProofForm } from "../../../components/PaidProofForm";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, Flag, FlagOff, Send, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, FileCheck, FileClock, FileMinus, FileX, Flag, FlagOff, Send, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
 
 type Review = {
   booking_id: string;
@@ -46,6 +47,23 @@ type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respon
 
 const inputClass = "mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2";
 const toolbarControl = "registration-admin-control";
+
+function SlipStatus({ review, language }: { review: Review; language: "th" | "en" }) {
+  const hasPendingSlip = review.proofs.length > 0;
+  const hasPreviousSlip = review.previous_proofs.length > 0;
+  const rejectedOnly = hasPreviousSlip && review.previous_proofs.every(proof => proof.status === "rejected");
+  const [Icon, status, th, en] = hasPendingSlip ? [FileClock, "verification_pending", "มีสลิป รอตรวจ", "Slip pending"]
+    : rejectedOnly ? [FileX, "cancelled", "สลิปถูกปฏิเสธ", "Slip rejected"]
+      : hasPreviousSlip ? [FileCheck, "confirmed", "มีสลิปแล้ว", "Slip attached"]
+        : [FileMinus, "expired", "ยังไม่มีสลิป", "No slip"];
+  const label = language === "th" ? th : en;
+  return <span className="registration-status-tag shrink-0" data-registration-status={status} title={label}>
+    <span className="flex items-center gap-1">
+      <Icon className="size-3.5" aria-hidden="true" />
+      <span className="sr-only @min-[44rem]:not-sr-only">{label}</span>
+    </span>
+  </span>;
+}
 
 function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
   review: Review; path: string; apiFetch: ApiFetch; onUpdated: () => void; language: "th" | "en";
@@ -410,19 +428,14 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           const canUpload = review.booking_state === "awaiting_payment" ||
             review.booking_state === "verification_pending" || review.cash_confirmed || review.balance_due_minor > 0;
           const hasFlag = review.attendees.some(attendee => attendee.price_flagged);
-          const statusLabels: Record<string, [string, string]> = {
-            confirmed: ["ยืนยันแล้ว", "Confirmed"],
-            awaiting_payment: ["รอชำระ", "Awaiting payment"],
-            expired: ["หมดอายุ", "Expired"],
-            cancelled: ["ยกเลิกแล้ว", "Cancelled"],
-            payment_exception: ["ต้องตรวจสอบ", "Needs follow-up"],
-          };
+          const bookingStatus = getRosterStatus(review.booking_state);
           return <details key={review.booking_id} open={reference ? true : undefined}
             className="paid-review-item group/review rounded-lg border border-slate-200">
             <summary className="grid min-h-10 cursor-pointer list-none grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto_auto] items-center gap-2 rounded-lg px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-emerald-600 sm:gap-4 sm:px-3 [&::-webkit-details-marker]:hidden">
               <span className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-900" title={customerName}>
                 {hasFlag && <Flag className="size-4 shrink-0 text-rose-600" aria-label={t("มีราคาที่ต้องแก้", "Price correction flagged")} />}
                 <span className="truncate">{customerName}</span>
+                <SlipStatus review={review} language={language} />
               </span>
               <span className="truncate text-slate-600" title={review.event_name}>{review.event_name}</span>
               <span className="whitespace-nowrap text-right font-semibold tabular-nums text-slate-900">{money.format(review.total_minor/100)}</span>
@@ -431,10 +444,13 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
             <div className="paid-review-details border-t border-slate-200 p-2.5 text-sm">
               <div className="min-w-0 space-y-2">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="rounded-md bg-amber-50 px-2 py-0.5 font-semibold text-amber-800">
-                    {review.attempt_id ? t("รอตรวจสลิป", "Awaiting review") : review.balance_due_minor > 0
-                      ? t("รอชำระส่วนต่าง", "Additional payment due") : t(...(statusLabels[review.booking_state] ?? ["ต้องตรวจสอบ", "Needs follow-up"]))}
-                  </span>
+                  <RegistrationStatusTag status={bookingStatus} language={language} />
+                  {review.attempt_id && bookingStatus !== "verification_pending" &&
+                    <RegistrationStatusTag status="verification_pending" language={language} />}
+                  {!review.attempt_id && review.balance_due_minor > 0 &&
+                    <span className="registration-status-tag" data-registration-status="awaiting_payment">
+                      {t("รอชำระส่วนต่าง", "Additional payment due")}
+                    </span>}
                   <span className="wrap-anywhere text-slate-600">{bookingLabel} {review.booking_reference}</span>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5">
