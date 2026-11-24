@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import { PaidAttendeeRoster } from "./PaidAttendeeRoster";
-import { registrationReportTitles, type ReportKind } from "../../../lib/registrationReportKinds";
+import { isRosterCsvKind, registrationReportTitles, registrationRosterCsvTitles, type ReportKind, type RosterCsvKind } from "../../../lib/registrationReportKinds";
 import type { PaidRosterPerson,PaidRosterSummary } from "./paidRosterTypes";
 import type { ReactNode } from "react";
 import {
@@ -200,19 +200,25 @@ export function RegistrationsScreen({
     ...(canExportPaymentFollowup ? ["followup"] as const : []),
     "attendees",
   ];
-  async function downloadRegistrationFile(kind?: ReportKind) {
+  async function downloadRegistrationFile(kind?: ReportKind | RosterCsvKind) {
     if (!apiFetch || !selectedEventId || reportBusy) return;
     setReportBusy(true);
     setReportError("");
     try {
-      const query = new URLSearchParams({ event_id: selectedEventId, ...(kind && { kind, language }) });
-      const response = await apiFetch(`/api/registrations/${kind ? "report" : "export"}?${query}`);
-      if (!response.ok || !response.headers.get("Content-Type")?.startsWith(kind ? "application/pdf" : "text/csv")) throw new Error();
+      const roster = isRosterCsvKind(kind) ? kind : undefined;
+      const pdf = Boolean(kind && !roster);
+      const query = new URLSearchParams({ event_id: selectedEventId });
+      if (kind) {
+        query.set(roster ? "roster" : "kind", kind);
+        query.set("language", language);
+      }
+      const response = await apiFetch(`/api/registrations/${pdf ? "report" : "export"}?${query}`);
+      if (!response.ok || !response.headers.get("Content-Type")?.startsWith(pdf ? "application/pdf" : "text/csv")) throw new Error();
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
       link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ||
-        (kind ? `registrations-${kind}.pdf` : "registrations.csv");
+        (kind ? `registrations-${kind}.${pdf ? "pdf" : "csv"}` : "registrations.csv");
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {
@@ -344,11 +350,21 @@ export function RegistrationsScreen({
               </p>
             </div>
             <InlineActionsMenu label={t("actions", "Actions")} tone="neutral">
+              {apiFetch && selectedEventId && !checkerMode && <>
+                <p className="px-3 pb-1 pt-1 text-xs font-semibold text-slate-500">
+                  {language === "th" ? "CSV สำหรับส่งต่อทีม · ทั้งอีเวนต์" : "Team CSV · entire event"}
+                </p>
+                {(Object.keys(registrationRosterCsvTitles) as RosterCsvKind[]).map(kind => <MenuActionItem
+                  key={kind} disabled={reportBusy} onClick={() => void downloadRegistrationFile(kind)}>
+                  <Download className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  {registrationRosterCsvTitles[kind][language === "th" ? 0 : 1]}
+                </MenuActionItem>)}
+              </>}
               {apiFetch ? <MenuActionItem disabled={reportBusy || !selectedEventId} onClick={() => void downloadRegistrationFile()}>
                 <Download className="h-3.5 w-3.5" />
                 {checkerMode
                   ? (language === "th" ? "ส่งออกรายชื่อเช็กอิน (CSV)" : "Export check-in roster (CSV)")
-                  : (language === "th" ? "ส่งออกผู้เข้าร่วมทั้งหมด (CSV)" : "Export all attendees (CSV)")}
+                  : (language === "th" ? "ส่งออกข้อมูลทั้งหมดทุกสถานะ (CSV)" : "Export full data, all statuses (CSV)")}
               </MenuActionItem> : <MenuActionLink href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}>
                 <Download className="h-3.5 w-3.5" /> CSV
               </MenuActionLink>}

@@ -1664,6 +1664,7 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000,includeReport
        b.reference AS booking_reference,b.customer_id,b.contact_json AS booking_contact_json,
        b.state AS booking_state,b.payment_state,b.version AS booking_version,b.created_ms AS booked_ms,b.due_ms,
        b.total_minor AS booking_total_minor,
+       EXISTS (SELECT 1 FROM paid_attendee_price_flags f WHERE f.attendee_id=a.id) AS price_flagged,
        ${includeReportFields ? `
          ${appliedCouponFields},
          ${verifiedCash} AS verified_cash_minor,
@@ -1710,6 +1711,7 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000,includeReport
       checked_in_ms:row.checked_in_ms==null?null:Number(row.checked_in_ms),
       cancelled_ms:row.cancelled_ms==null?null:Number(row.cancelled_ms),
       attendee_email:String(contact.email||""),attendee_phone:String(contact.phone||""),
+      booking_email:String(bookingContact.email||""),booking_phone:String(bookingContact.phone||""),
       answers,booking_answers:bookingAnswers};
   });
 }

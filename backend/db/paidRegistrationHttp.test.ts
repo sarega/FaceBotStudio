@@ -833,8 +833,8 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       .map(guest => ({ ...guest, accommodation: "yes" as const }));
     const drafted = draftRoomingPlan([], pair, randomUUID);
     assert.equal(drafted.length, 1);
-    const newRoom = { id: randomUUID(), number: "", locked: false, slots: [null, null] };
-    const updatedRooms = moveRoomingGuest([...drafted, newRoom], pair[0].id, { roomId: newRoom.id, slot: 1 });
+    const newRoom = { id: randomUUID(), number: "", locked: false, slots: Array(5).fill(null) };
+    const updatedRooms = moveRoomingGuest([...drafted, newRoom], pair[0].id, { roomId: newRoom.id, slot: 4 });
     const mixedPlan = { version: persistedPlan.version, rooms: [persistedPlan.rooms[0], ...updatedRooms] };
     const saveMixedPlan = (headers: Record<string, string>) => fetch(roomsPath, {
       method: "PUT", headers, body: JSON.stringify(mixedPlan),
@@ -1047,6 +1047,24 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       assert.ok(excelCsv.includes(person.first_name));
       assert.ok(excelCsv.includes(person.last_name));
     }
+
+    const teamCsvUrl = `${origin}/api/registrations/export?event_id=${event.id}&language=en&roster=`;
+    const teamCsv = await fetch(teamCsvUrl + "active", { headers: operatorAccess });
+    assert.equal(teamCsv.status, 200, await teamCsv.clone().text());
+    assert.match(teamCsv.headers.get("content-disposition") ?? "", /-active\.csv/);
+    assert.equal(teamCsv.headers.get("cache-control"), "private, no-store");
+    const teamText = await teamCsv.text();
+    assert.match(teamText, /"One","Guest","Checked in","Adult","250\.00","","","test-owner@example\.com"/);
+    assert.match(teamText, /"Awaiting payment"/);
+    assert.doesNotMatch(teamText, /booking_reference|customer_id|Expired|Cancelled/);
+    const confirmedCsv = await fetch(teamCsvUrl + "confirmed", { headers: staffHeaders });
+    assert.equal(confirmedCsv.status, 200);
+    assert.doesNotMatch(await confirmedCsv.text(), /"Awaiting payment"/);
+    const pendingCsv = await fetch(teamCsvUrl + "pending", { headers: staffHeaders });
+    assert.equal(pendingCsv.status, 200);
+    assert.doesNotMatch(await pendingCsv.text(), /"Confirmed"|"Checked in"/);
+    assert.equal((await fetch(teamCsvUrl + "active", { headers: checkerAccess })).status, 403);
+    assert.equal((await fetch(teamCsvUrl + "unknown", { headers: staffHeaders })).status, 400);
 
     assert.equal(summary.confirmed_bookings, 2);
     assert.equal(summary.confirmed_attendees, 3);
@@ -1536,6 +1554,10 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       .find((row: { booking_id: string }) => row.booking_id === externalSlipBooking.id);
     assert.equal(flaggedReview.attendees[0].price_flagged, true);
     assert.equal(flaggedReview.total_minor, externalConfirmedDetail.total_due_minor);
+    const externalTeamCsv = `${origin}/api/registrations/export?event_id=${paidEvent.id}&language=en&roster=active`;
+    const flaggedCsv = await fetch(externalTeamCsv, { headers: staffHeaders });
+    assert.equal(flaggedCsv.status, 200);
+    assert.ok(!(await flaggedCsv.text()).includes("+66 81 234 5678"));
 
     const correction = await fetch(externalPrefix + "/bookings/" + externalSlipBooking.id + "/manage", {
       method: "POST", headers: { ...staffCreateHeaders, "Idempotency-Key": "correct-attendee-price" },
@@ -1549,6 +1571,9 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const [correctedReview] = (await (await fetch(externalPrefix + "/review-queue?reference=" +
       externalSlipBooking.reference, { headers: staffHeaders })).json()).reviews;
     assert.equal(correctedReview.attendees[0].price_flagged, false);
+    const correctedCsv = await fetch(externalTeamCsv, { headers: staffHeaders });
+    assert.equal(correctedCsv.status, 200);
+    assert.match(await correctedCsv.text(), /"3000\.00","[^"]*","'\+66 81 234 5678"/);
     const correctedDetails = await (await fetch(externalOwnedPath, { headers: headers("test-owner") })).json();
     assert.equal(correctedDetails.attendees[0].unit_minor, 300000);
     assert.equal(correctedDetails.attendees[0].phone, "+66 81 234 5678");

@@ -1,5 +1,14 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.15",
+    date: "2026-11-24",
+    title: "Custom rooms and team CSV exports",
+    features: [
+      "Right-click in Room Assignments to add a preset or set a custom bed count",
+      "Download active, confirmed, or pending attendee CSVs with prices, meals, and contact details",
+    ],
+  },
+  {
     version: "0.11.14",
     date: "2026-11-24",
     title: "More space for room assignments",

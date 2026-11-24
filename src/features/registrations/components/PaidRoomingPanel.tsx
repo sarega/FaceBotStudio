@@ -1,6 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { BedDouble, BedSingle, Download, Plus, Sofa, GripVertical, Lock, RefreshCw, Save, Unlock, WandSparkles } from "lucide-react";
-import { ROOM_BED_COUNTS, draftRoomingPlan, moveRoomingGuest, parseRoomingPlan, type RoomingRoom } from "../../../../backend/roomingPlan";
+import { MAX_ROOM_BEDS, ROOM_BED_COUNTS, draftRoomingPlan, isRoomBedCount, moveRoomingGuest, parseRoomingPlan, type RoomingRoom } from "../../../../backend/roomingPlan";
 import type { PaidRoomingPlan } from "../../../../backend/db/paidRegistration";
 import { downloadRegistrationCsv } from "./registrationCsv";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
@@ -15,10 +15,10 @@ type Props = {
 function roomTypeForBeds(beds: number) {
   if (beds === 1) return "single";
   if (beds === 2) return "twin";
-  return "suite";
+  return beds <= 4 ? "suite" : "custom";
 }
 
-const roomIcons = { single: BedSingle, twin: BedDouble, suite: Sofa };
+const roomIcons = { single: BedSingle, twin: BedDouble, suite: Sofa, custom: BedDouble };
 type BedPosition = { roomId: string; slot: number };
 
 export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
@@ -27,6 +27,7 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
     single: t("ห้องเดี่ยว", "Single room"),
     twin: t("ห้องคู่", "Twin room"),
     suite: t("ห้องสวีท", "Suite"),
+    custom: t("ห้องกำหนดเอง", "Custom room"),
   };
   const request = useRef(apiFetch);
   request.current = apiFetch;
@@ -48,6 +49,10 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
   const pendingRoom = useRef<string | null>(null);
   const guestHeadingId = useId();
   const roomHeadingId = useId();
+  const roomMenuId = useId();
+  const roomMenu = useRef<HTMLDivElement>(null);
+  const menuRoomId = useRef<string | undefined>(undefined);
+  const [roomMenuOpen, setRoomMenuOpen] = useState(false);
   const dirty = !!plan && JSON.stringify(plan.rooms) !== JSON.stringify(rooms);
   useEffect(() => {
     if (!loadRequest) return;
@@ -153,11 +158,49 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
     if (id) move(id, destination);
   }
 
-  function addRoom(beds: number) {
+  function addRoom(beds: number, afterRoomId?: string) {
+    if (busy || !isRoomBedCount(beds)) return;
     const room: RoomingRoom = { id: crypto.randomUUID(), number: "", locked: false, slots: Array(beds).fill(null) };
     pendingRoom.current = room.id;
     setRoomSearch("");
-    setRooms(current => [...current, room]);
+    setRooms(current => {
+      const index = afterRoomId ? current.findIndex(item => item.id === afterRoomId) : -1;
+      return index < 0 ? [...current, room] : [...current.slice(0, index + 1), room, ...current.slice(index + 1)];
+    });
+  }
+
+  function showRoomMenu(event: MouseEvent<HTMLElement>, contextual: boolean) {
+    const menu = roomMenu.current;
+    const target = event.target;
+    if (!menu || busy) return;
+    if (contextual && target instanceof Element && target.closest("input, [popover]")) return;
+    event.preventDefault();
+    const isOpen = menu.matches(":popover-open");
+    if (isOpen && !contextual) {
+      menu.hidePopover();
+      return;
+    }
+    menuRoomId.current = contextual && target instanceof Element
+      ? target.closest<HTMLElement>("[data-room-id]")?.dataset.roomId : undefined;
+    const anchor = (contextual && target instanceof Element ? target : event.currentTarget).getBoundingClientRect();
+    const x = contextual && event.clientX ? event.clientX : anchor.left;
+    const y = contextual && event.clientY ? event.clientY : anchor.bottom;
+    if (!isOpen) menu.showPopover();
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - height - 8))}px`;
+    menu.querySelector("button")?.focus({ preventScroll: true });
+  }
+
+  function addRoomFromMenu(beds: number) {
+    if (!isRoomBedCount(beds)) return;
+    roomMenu.current?.hidePopover();
+    addRoom(beds, menuRoomId.current);
+  }
+
+  function roomPresetLabel(beds: number) {
+    const label = roomLabels[roomTypeForBeds(beds)];
+    return t(`${label} · ${beds} เตียง`, `${label} · ${beds} ${beds === 1 ? "bed" : "beds"}`);
   }
 
   async function save() {
@@ -275,6 +318,7 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
   return <section className="registration-admin-section">
     <RegistrationSectionHeader tone="rooming" title={t("จัดห้องพัก", "Room assignments")} open={open} onToggle={() => {
       if (busy) return;
+      if (open) roomMenu.current?.hidePopover();
       if (!open) setLoadRequest({ replacePlan: !plan });
       setOpen(!open);
     }} />
@@ -336,9 +380,15 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
                 : t("ไม่มีผู้พักที่รอจัดห้อง", "No guests waiting for a room.")}</p>}
             </div>
           </aside>
-          <div className="rooming-pane rounded-xl border border-slate-200 bg-slate-50">
+          <div className="rooming-pane rounded-xl border border-slate-200 bg-slate-50" onContextMenu={event => showRoomMenu(event, true)}>
             <div className="space-y-2 border-b border-slate-200 p-2.5">
-              <h3 id={roomHeadingId} className="font-semibold text-slate-900">{t("ห้องพัก", "Rooms")} · {rooms.length}</h3>
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <h3 id={roomHeadingId} className="font-semibold text-slate-900">{t("ห้องพัก", "Rooms")} · {rooms.length}</h3>
+                <button type="button" className={button} disabled={busy} popoverTarget={roomMenuId} aria-expanded={roomMenuOpen}
+                  onClick={event => showRoomMenu(event, false)}>
+                  <Plus className="h-4 w-4" aria-hidden="true" /> {t("เพิ่มห้อง", "Add room")}
+                </button>
+              </div>
               <input type="search" className="min-h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-900"
                 value={roomSearch} onChange={event => setRoomSearch(event.target.value)}
                 aria-label={t("ค้นหาห้องพัก", "Search rooms")} placeholder={t("ค้นหาเลขห้อง", "Search room number")} />
@@ -393,7 +443,37 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
             })}
             {!visibleRooms.length && <p className="text-sm text-slate-600">{roomSearchTerm
               ? t("ไม่พบห้องที่ค้นหา", "No matching rooms.")
-              : t("ยังไม่มีห้อง กดเพิ่มห้องด้านบนเพื่อเริ่มจัด", "Add a room above to start assigning guests.")}</p>}
+              : t("กดเพิ่มห้องหรือคลิกขวาเพื่อเริ่มจัดห้อง", "Use Add room or right-click here to start assigning guests.")}</p>}
+            </div>
+            <div id={roomMenuId} ref={roomMenu} popover="auto" role="group" aria-label={t("เพิ่มห้องพัก", "Add a room")}
+              className="rooming-add-menu rounded-xl border border-slate-200 bg-white p-2 text-slate-900 shadow-xl"
+              onToggle={event => setRoomMenuOpen(event.newState === "open")}>
+              <div className="grid gap-1">
+                {ROOM_BED_COUNTS.map(beds => {
+                  const type = roomTypeForBeds(beds);
+                  const Icon = roomIcons[type];
+                  return <button key={beds} type="button" disabled={busy} className={`${button} room-type-add justify-start`}
+                    data-room-type={type} onClick={() => addRoomFromMenu(beds)}>
+                    <Icon className="h-4 w-4" aria-hidden="true" /> {roomPresetLabel(beds)}
+                  </button>;
+                })}
+              </div>
+              <form className="mt-2 space-y-1.5 border-t border-slate-200 pt-2" onSubmit={event => {
+                event.preventDefault();
+                addRoomFromMenu(Number(new FormData(event.currentTarget).get("beds")));
+              }}>
+                <label htmlFor={`${roomMenuId}-beds`} className="block text-sm font-medium">
+                  {t("ห้องกำหนดเอง · จำนวนเตียง", "Custom room · Number of beds")}
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input id={`${roomMenuId}-beds`} name="beds" type="number" min={1} max={MAX_ROOM_BEDS}
+                    step={1} required defaultValue={5} disabled={busy}
+                    className="min-h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-900" />
+                  <button type="submit" className={`${button} registration-admin-control-primary`} disabled={busy}>
+                    {t("สร้างห้อง", "Create room")}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>

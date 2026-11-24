@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { draftRoomingPlan, moveRoomingGuest, parseRoomingPlan, type RoomingGuest, type RoomingRoom } from "./roomingPlan";
+import { MAX_ROOM_BEDS, draftRoomingPlan, moveRoomingGuest, parseRoomingPlan, type RoomingGuest, type RoomingRoom } from "./roomingPlan";
 
 const room = (id: string, slots: (string | null)[], locked = false): RoomingRoom => ({ id, number: "", slots, locked });
 const guest = (id: string, bookingId: string, accommodation: RoomingGuest["accommodation"] = "yes", single = false): RoomingGuest =>
@@ -30,12 +30,16 @@ test("auto drafting uses the booking and requested accommodation and preserves e
   assert.deepEqual(draftRoomingPlan(drafted, guests, () => `new-${++i}`), drafted);
 });
 
-test("a saved plan accepts suites and rejects over-capacity rooms and duplicates", () => {
+test("a saved plan accepts suites and custom rooms and rejects invalid capacities and duplicates", () => {
   assert.equal(parseRoomingPlan([room("a", ["one"]), room("b", ["one"])]), null);
-  const suites = [room("a", ["one", "two", null]), room("b", ["three", null, null, null])];
+  const suites = [room("a", ["one", "two", null]), room("b", ["three", null, null, null, null])];
   assert.deepEqual(parseRoomingPlan(suites), suites);
-  const moved = moveRoomingGuest(suites, "one", { roomId: "b", slot: 3 });
-  assert.deepEqual(moved[1].slots, ["three", null, null, "one"]);
-  assert.equal(parseRoomingPlan([room("a", ["one", "two", null, null, null])]), null);
+  const moved = moveRoomingGuest(suites, "one", { roomId: "b", slot: 4 });
+  assert.deepEqual(moved[1].slots, ["three", null, null, null, "one"]);
+  assert.deepEqual(parseRoomingPlan(moved), moved);
+  const largestRoom = [room("a", Array(MAX_ROOM_BEDS).fill(null))];
+  assert.deepEqual(parseRoomingPlan(largestRoom), largestRoom);
+  assert.equal(parseRoomingPlan([room("a", [])]), null);
+  assert.equal(parseRoomingPlan([room("a", Array(MAX_ROOM_BEDS + 1).fill(null))]), null);
   assert.equal(parseRoomingPlan([{ ...room("a", [null]), number: " 101 " }, { ...room("b", [null]), number: "101" }]), null);
 });

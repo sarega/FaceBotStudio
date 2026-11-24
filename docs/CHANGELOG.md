@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.15 - 2026-11-24
+
+- Add a right-click menu and an Add room button in Room Assignments. Choose a preset or set a capacity from 1 to 50 beds.
+- Export team-ready CSVs for active, confirmed, or pending registrations from the Actions menu. Include ticket prices, meal preferences, and contact details, and omit inactive records, flagged prices, matched duplicates, and internal IDs.
+
 ## 0.11.14 - 2026-11-24
 
 - Give the guest and room lists more vertical space while keeping each list independently scrollable.

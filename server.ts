@@ -27,7 +27,8 @@ import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
 import { hasEventDescriptionMarkup, renderEventDescriptionHtml } from "./src/lib/eventDescriptionHtml";
 import { parseOutreachCsv } from "./backend/outreachCsv";
 import { buildRegistrationReportHtml } from "./backend/registrationReports";
-import { isRegistrationReportKind } from "./src/lib/registrationReportKinds";
+import { buildRegistrationRosterCsv } from "./backend/registrationRosterCsv";
+import { isRegistrationReportKind, isRosterCsvKind } from "./src/lib/registrationReportKinds";
 import { buildStoredZipArchive, createStoredZipWriter } from "./backend/zipArchive";
 import {
   ROLE_PREVIEW_EVENT_HEADER,
@@ -20497,34 +20498,43 @@ async function startServer() {
     requireEventScope({ queryKey: "event_id", allowDefault: true, allowCheckinAccess: false }),
     registrationsExportRateLimit,
     async (req: AuthenticatedRequest, res) => {
+    const { roster, language } = req.query;
+    if (roster !== undefined && (!isRosterCsvKind(roster) || (language !== "th" && language !== "en") ||
+        typeof req.query.event_id !== "string" || !req.query.event_id.trim())) {
+      return res.status(400).json({ error: "invalid_registration_export" });
+    }
+    if (roster !== undefined && req.auth!.user.role === "checker") {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
     try {
       const eventId = getRequestedEventId(req);
       const organizationId=req.auth!.user.organization_id;
       const [rows,paid,paidSummary,event] = await Promise.all([
         appDb.exportRegistrations(eventId),
         appDb.listPaidAttendeeRoster(eventId,organizationId,10001),
-        appDb.readPaidEventSummary(eventId,organizationId),
+        roster === undefined ? appDb.readPaidEventSummary(eventId,organizationId) : undefined,
         appDb.getEventById(eventId),
       ]);
       if (paid.length > 10000) {
         return res.status(422).json({ error: "CSV export supports up to 10,000 paid attendees" });
       }
       const eventName = (await appDb.getSettingValue("event_name", eventId)) || event?.name || "event";
-      const filename = buildRegistrationExportFilename(eventName);
-      const csvWithBOM = req.auth!.user.role === "checker"
+      const rosterCsv = isRosterCsvKind(roster) ? buildRegistrationRosterCsv(rows, paid, roster, language === "th" ? "th" : "en") : null;
+      const baseFilename = buildRegistrationExportFilename(eventName);
+      const filename = rosterCsv ? baseFilename.replace(/\.csv$/, `-${roster}.csv`) : baseFilename;
+      const csvWithBOM = rosterCsv?.csv ?? (req.auth!.user.role === "checker"
         ? buildCheckinRosterCsv(rows, paid)
-        : buildUnifiedAttendeesCsvWithBom(eventName,rows,paid);
+        : buildUnifiedAttendeesCsvWithBom(eventName,rows,paid));
       await recordSecurityEvent(req, "registration.export_downloaded", {
         event_id: eventId,
-        rows: rows.length+paid.length,
-        legacy_rows:rows.length,paid_attendee_rows:paid.length,
-        paid_booking_count:paidSummary?.bookings??0,
+        rows: rosterCsv?.count ?? rows.length+paid.length,
+        ...(rosterCsv ? { roster } : {
+          legacy_rows: rows.length, paid_attendee_rows: paid.length, paid_booking_count: paidSummary?.bookings ?? 0,
+        }),
         filename,
       });
 
-      res.header("Content-Type", "text/csv; charset=utf-8");
-      res.attachment(filename);
-      res.send(csvWithBOM);
+      return res.set("Cache-Control", "private, no-store").attachment(filename).type("text/csv; charset=utf-8").send(csvWithBOM);
     } catch (error) {
       res.status(500).json({ error: "Failed to export CSV" });
     }

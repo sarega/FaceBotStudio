@@ -12,6 +12,11 @@ export type RoomingGuest = {
 };
 
 export const ROOM_BED_COUNTS = [1, 2, 3, 4] as const;
+export const MAX_ROOM_BEDS = 50;
+
+export function isRoomBedCount(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= MAX_ROOM_BEDS;
+}
 
 export type RoomingRoom = {
   id: string;
@@ -68,7 +73,7 @@ export function parseRoomingPlan(input: unknown): RoomingRoom[] | null {
   for (const room of input) {
     if (!room || typeof room.id !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(room.id) || ids.has(room.id) ||
         typeof room.number !== "string" || room.number.length > 40 || typeof room.locked !== "boolean" ||
-        !Array.isArray(room.slots) || !ROOM_BED_COUNTS.some(count => count === room.slots.length)) return null;
+        !Array.isArray(room.slots) || !isRoomBedCount(room.slots.length)) return null;
     const number = room.number.trim();
     const numberKey = number.toLowerCase();
     if (number && numbers.has(numberKey)) return null;

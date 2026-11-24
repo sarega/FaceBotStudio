@@ -2485,6 +2485,14 @@ html.theme-dark .registration-admin-review .registration-section-content > .flex
   outline-offset: 1px;
   box-shadow: 0 0 0 5px #3b82f633;
 }
+.rooming-add-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: min(17rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem);
+  overflow: auto;
+}
 .rooming-guest-list { height: max(8rem, 34dvh); }
 .rooming-room-list {
   display: grid;
@@ -2662,9 +2670,11 @@ tr[data-registration-status] > :first-child {
 [data-room-type="single"] { --room-fill: #ede9fe; --room-ink: #5b21b6; --room-border: #b39af5; --room-accent: #7c3aed; }
 [data-room-type="twin"] { --room-fill: #dbeafe; --room-ink: #1e40af; --room-border: #93b9f8; --room-accent: #2563eb; }
 [data-room-type="suite"] { --room-fill: #fce7f3; --room-ink: #9d174d; --room-border: #f3a3ca; --room-accent: #be185d; }
+[data-room-type="custom"] { --room-fill: #ccfbf1; --room-ink: #115e59; --room-border: #5eead4; --room-accent: #0f766e; }
 html.theme-dark [data-room-type="single"] { --room-fill: #32204f; --room-ink: #e9d5ff; --room-border: #7757a8; --room-accent: #c4a5fa; }
 html.theme-dark [data-room-type="twin"] { --room-fill: #152d52; --room-ink: #bfdbfe; --room-border: #496caa; --room-accent: #93c5fd; }
 html.theme-dark [data-room-type="suite"] { --room-fill: #45243b; --room-ink: #fbcfe8; --room-border: #a25983; --room-accent: #f9a8d4; }
+html.theme-dark [data-room-type="custom"] { --room-fill: #133d3c; --room-ink: #99f6e4; --room-border: #3a8079; --room-accent: #5eead4; }
 
 .registration-admin-control.room-type-add,
 html.theme-dark .registration-admin-control.room-type-add {
