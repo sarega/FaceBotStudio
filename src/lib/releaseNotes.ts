@@ -1,5 +1,16 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.12",
+    date: "2026-11-24",
+    title: "Room assignments and Checker workspace",
+    features: [
+      "Search and scroll guest and room lists separately, and see the highlighted drop target",
+      "Save room plans when both staff and attendee sessions are open in the same browser",
+      "Give Checkers a check-in workspace with attendance and capacity counts",
+      "Save an optional phone number for each attendee in a group booking",
+    ],
+  },
+  {
     version: "0.11.11",
     date: "2026-11-24",
     title: "Registration PDF reports",

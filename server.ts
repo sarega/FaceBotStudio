@@ -2957,7 +2957,7 @@ function ensureCsrfCookieMiddleware(req: AuthenticatedRequest, res: Response, ne
     return next();
   }
 
-  const customerRequest = Boolean(req.customer?.account) || usesCustomerCsrfCookie(req);
+  const customerRequest = usesCustomerCsrfCookie(req);
   const csrfCookieName = customerRequest ? CUSTOMER_CSRF_COOKIE_NAME : CSRF_COOKIE_NAME;
   const existingToken = parseCookies(req.headers.cookie).get(csrfCookieName);
   if (!existingToken) {
@@ -6147,6 +6147,29 @@ const REGISTRATION_EXPORT_FIELDS: Array<keyof RegistrationRow> = [
   "status",
   "timestamp",
 ];
+
+const checkerPaidRosterFields = ["attendee_id", "event_id", "booking_id", "first_name", "last_name",
+  "category_label", "booking_state", "checked_in_ms"] as const;
+const checkerPaidSummaryFields = ["capacity", "bookings", "attendees", "confirmed_attendees",
+  "held_attendees", "checked_in_attendees", "confirmed_bookings"] as const;
+
+function selectCheckinFields(row: Record<string, unknown>, fields: readonly string[]) {
+  return Object.fromEntries(fields.map(field => [field, row[field]]));
+}
+
+function buildCheckinRosterCsv(legacy: RegistrationRow[], paid: Record<string, unknown>[]) {
+  const fields = ["id", "first_name", "last_name", "status", "category"];
+  const rows = [
+    ...legacy.map(row => selectCheckinFields({ ...row }, fields)),
+    ...paid.map(row => ({ id: row.attendee_id, first_name: row.first_name, last_name: row.last_name,
+      status: row.checked_in_ms != null ? "checked-in" : row.booking_state, category: row.category_label })),
+  ];
+  return "\uFEFF" + new Parser({ fields }).parse(rows.map(row =>
+    Object.fromEntries(fields.map(field => {
+      const value = String((row as Record<string, unknown>)[field] ?? "");
+      return [field, /^\s*[=+@-]/.test(value) ? "'" + value : value];
+    }))));
+}
 
 function buildRegistrationExportFilename(eventName: string) {
   const slug = String(eventName || "")
@@ -10781,6 +10804,15 @@ function serializePublicDirectTicket(ticket: DirectTicketRow) {
     row_label: ticket.row_label,
     seat_label: ticket.seat_label,
     delivery: buildDirectTicketDelivery(ticket),
+  };
+}
+
+function serializeDirectTicketForCheckin(ticket: DirectTicketRow) {
+  return {
+    id: ticket.id, event_id: ticket.event_id, holder_name: directTicketRecipientName(ticket),
+    status: ticket.status, checked_in_at: ticket.checked_in_at, issued_at: ticket.issued_at,
+    ticket_class: ticket.ticket_class, performance_title: ticket.performance_title, performance_code: ticket.performance_code,
+    zone: ticket.zone, row_label: ticket.row_label, seat_label: ticket.seat_label,
   };
 }
 
@@ -16428,7 +16460,10 @@ async function startServer() {
         });
       }
 
-      return res.status(result.statusCode).json(result.body);
+      const registration = result.body.registration;
+      return res.status(result.statusCode).json(registration
+        ? { ...result.body, registration: selectCheckinFields(registration, ["id", "event_id", "first_name", "last_name", "status", "timestamp"]) }
+        : result.body);
     } catch (error) {
       console.error("Failed to check in via token:", error);
       return res.status(500).json({ error: "Failed to check in attendee" });
@@ -16452,9 +16487,9 @@ async function startServer() {
         const result = await appDb.checkInDirectTicket(parsed.ticketId);
         await appDb.touchCheckinAccessSession(req.checkinAccess.sessionId);
         if (!result.ticket) return res.status(404).json({ error: "Direct ticket not found" });
-        if (result.ticket.status !== "checked_in" && !result.alreadyCheckedIn) return res.status(409).json({ error: "Ticket is not issued", ticket: serializeAdminDirectTicket(result.ticket) });
+        if (result.ticket.status !== "checked_in" && !result.alreadyCheckedIn) return res.status(409).json({ error: "Ticket is not issued", ticket: serializeDirectTicketForCheckin(result.ticket) });
         await appDb.recordAuditLog({ actor_user_id: null, action: result.alreadyCheckedIn ? "direct_ticket.checkin_repeated" : "direct_ticket.checked_in_via_token", target_type: "direct_ticket", target_id: result.ticket.id, metadata: { event_id: result.ticket.event_id, checkin_access_session_id: req.checkinAccess.sessionId, ip: getRequestIp(req) } });
-        return res.status(result.alreadyCheckedIn ? 409 : 200).json({ ...result, error: result.alreadyCheckedIn ? "Already checked in" : undefined, ticket: serializeAdminDirectTicket(result.ticket) });
+        return res.status(result.alreadyCheckedIn ? 409 : 200).json({ ...result, error: result.alreadyCheckedIn ? "Already checked in" : undefined, ticket: serializeDirectTicketForCheckin(result.ticket) });
       } catch (error) {
         console.error("Failed to check in direct ticket via token:", error);
         return res.status(500).json({ error: "Failed to check in direct ticket" });
@@ -17576,6 +17611,12 @@ async function startServer() {
       return res.set("Cache-Control", "private, no-store").json({ plan });
     } catch (error) {
       if (error instanceof PaidBookingError) return res.status(error.code === "event_not_found" ? 404 : 409).json({ error: error.code });
+      const code = (error as { code?: unknown } | null)?.code;
+      console.error("[rooming] Could not save plan", {
+        eventId: req.eventScope!.eventId, version, roomCount: parsed.length,
+        errorType: error instanceof Error ? error.name : typeof error,
+        errorCode: typeof code === "string" ? code : undefined,
+      });
       return res.status(500).json({ error: "rooming_save_failed" });
     }
   });
@@ -18148,11 +18189,14 @@ async function startServer() {
         const eventId=req.eventScope!.eventId;
         const org=req.auth!.user.organization_id;
         const [attendees,summary]=await Promise.all([
-          appDb.listPaidAttendeeRoster(eventId,org),
+          req.query.summary_only === "1" ? [] : appDb.listPaidAttendeeRoster(eventId,org),
           appDb.readPaidEventSummary(eventId,org),
         ]);
-        return res.set("Cache-Control","private, no-store")
-          .json({attendees,summary:summary??null});
+        const checker = req.auth!.user.role === "checker";
+        return res.set("Cache-Control","private, no-store").json({
+          attendees: checker ? attendees.map(row => selectCheckinFields(row, checkerPaidRosterFields)) : attendees,
+          summary: checker && summary ? selectCheckinFields(summary, checkerPaidSummaryFields) : summary ?? null,
+        });
       }catch(error){
         if(error instanceof PaidBookingError) return res.status(404).json({error:"event_not_found"});
         console.error("Paid roster unavailable",error);
@@ -19302,7 +19346,10 @@ async function startServer() {
           },
         );
       }
-      res.status(result.statusCode).json(result.body);
+      const registration = result.body.registration;
+      res.status(result.statusCode).json(req.auth?.user.role === "checker" && registration
+        ? { ...result.body, registration: selectCheckinFields(registration, ["id", "event_id", "first_name", "last_name", "status", "timestamp"]) }
+        : result.body);
     } catch (error) {
       res.status(500).json({ error: "Failed to check in" });
     }
@@ -20277,9 +20324,10 @@ async function startServer() {
     const existing = await appDb.getDirectTicketById(parsed.ticketId);
     if (!existing || existing.event_id !== getRequestedEventId(req)) return res.status(404).json({ error: "Direct ticket not found" });
     const result = await appDb.checkInDirectTicket(parsed.ticketId); if (!result.ticket) return res.status(404).json({ error: "Direct ticket not found" });
-    if (result.ticket.status !== "checked_in" && !result.alreadyCheckedIn) return res.status(409).json({ error: "Ticket is not issued", ticket: result.ticket });
+    const checker = req.auth?.user.role === "checker";
+    if (result.ticket.status !== "checked_in" && !result.alreadyCheckedIn) return res.status(409).json({ error: "Ticket is not issued", ticket: checker ? serializeDirectTicketForCheckin(result.ticket) : result.ticket });
     await recordAudit(req, result.alreadyCheckedIn ? "direct_ticket.checkin_repeated" : "direct_ticket.checked_in", "direct_ticket", result.ticket.id, { event_id: result.ticket.event_id });
-    return res.status(result.alreadyCheckedIn ? 409 : 200).json({ ...result, error: result.alreadyCheckedIn ? "Already checked in" : undefined, ticket: serializeAdminDirectTicket(result.ticket) });
+    return res.status(result.alreadyCheckedIn ? 409 : 200).json({ ...result, error: result.alreadyCheckedIn ? "Already checked in" : undefined, ticket: checker ? serializeDirectTicketForCheckin(result.ticket) : serializeAdminDirectTicket(result.ticket) });
   });
   app.get("/api/direct-ticketing/tickets/export", requireRoles(["owner", "admin", "operator"]), requireEventScope({ queryKey: "event_id", allowDefault: false, allowCheckinAccess: false }), async (req: AuthenticatedRequest, res) => {
     const eventId = getRequestedEventId(req); const requestedZones = parseDirectTicketZones(req.query.zones); const rows = (await appDb.listDirectTickets(eventId)).filter((ticket) => directTicketMatchesZones(ticket.zone, requestedZones));
@@ -20463,7 +20511,9 @@ async function startServer() {
       }
       const eventName = (await appDb.getSettingValue("event_name", eventId)) || event?.name || "event";
       const filename = buildRegistrationExportFilename(eventName);
-      const csvWithBOM = buildUnifiedAttendeesCsvWithBom(eventName,rows,paid);
+      const csvWithBOM = req.auth!.user.role === "checker"
+        ? buildCheckinRosterCsv(rows, paid)
+        : buildUnifiedAttendeesCsvWithBom(eventName,rows,paid);
       await recordSecurityEvent(req, "registration.export_downloaded", {
         event_id: eventId,
         rows: rows.length+paid.length,

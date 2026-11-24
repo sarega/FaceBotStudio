@@ -6,6 +6,7 @@ import type { AppLanguage } from "../../../lib/i18n";
 import type { PaidRosterPerson } from "./paidRosterTypes";
 
 type Props = {
+  checkerMode?: boolean;
   onManageBooking?: (reference: string) => void;
   people: PaidRosterPerson[];
   total: number;
@@ -94,7 +95,7 @@ function BookingReference({ reference, language, onManage }: {
   </div>;
 }
 
-export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBooking,onManageBooking}:Props) {
+export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBooking,onManageBooking,checkerMode=false}:Props) {
   const [widths, setWidths] = useState(rosterColumnWidths);
   const drag = useRef<{ index: number; startX: number; startWidth: number } | null>(null);
   if (!total) return null;
@@ -106,6 +107,7 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
     t("ผู้เข้าร่วมและสถานะ", "Attendee and status"), t("ประเภท", "Category"), t("ผู้จอง", "Booked by"),
     t("ใบจอง", "Booking"), t("ยอดเงิน", "Amount"), t("รายละเอียด", "Details"),
   ];
+  const visibleColumns = checkerMode ? [0, 1] : headers.map((_, index) => index);
   const setColumnWidth = (index: number, width: number) => {
     setWidths(current => current.map((value, column) => column === index
       ? Math.min(520, Math.max(index === 3 ? 132 : 76, width)) : value));
@@ -119,13 +121,13 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
         className="text-xs font-semibold text-emerald-700 underline">{t("โหลดใหม่", "Refresh")}</button>
     </div>
     <div className="relative max-h-[30rem] overflow-auto rounded-lg border border-emerald-200">
-      <table className="w-full table-fixed text-left text-xs" style={{ minWidth: widths.reduce((sum, width) => sum + width, 0) }}>
-        <colgroup>{widths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+      <table className="w-full table-fixed text-left text-xs" style={{ minWidth: visibleColumns.reduce((sum, index) => sum + widths[index], 0) }}>
+        <colgroup>{visibleColumns.map(index => <col key={index} style={{ width: widths[index] }} />)}</colgroup>
         <thead className="sticky top-0 z-10 text-emerald-950"><tr>
-          {headers.map((label, index) => <th key={label} scope="col" className="relative break-words py-2 pl-2 pr-3">
-            {label}
+          {visibleColumns.map(index => <th key={headers[index]} scope="col" className="relative break-words py-2 pl-2 pr-3">
+            {headers[index]}
             <span role="separator" aria-orientation="vertical" tabIndex={0}
-              aria-label={t(`ปรับความกว้างคอลัมน์ ${label}`, `Resize ${label} column`)}
+              aria-label={t(`ปรับความกว้างคอลัมน์ ${headers[index]}`, `Resize ${headers[index]} column`)}
               aria-valuemin={index === 3 ? 132 : 76} aria-valuemax={520} aria-valuenow={widths[index]}
               className="absolute inset-y-0 right-0 w-2 cursor-col-resize touch-none select-none border-r border-emerald-700/25 hover:bg-emerald-600/30 focus-visible:bg-emerald-600/30"
               onPointerDown={event => {
@@ -163,12 +165,13 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
                   <span>{person.first_name} {person.last_name}</span>
                   <RegistrationStatusTag status={status} language={language} />
                 </div>
-                {person.attendee_phone && <a className="mt-1 block text-xs font-normal text-blue-700 underline"
+                {!checkerMode && person.attendee_phone && <a className="mt-1 block text-xs font-normal text-blue-700 underline"
                   href={`tel:${person.attendee_phone.replace(/[^+0-9]/g, "")}`}
                   title={t("เบอร์โทรส่วนตัว", "Personal phone")}>{person.attendee_phone}</a>}
                 {canCancel && onCancelBooking && <CancelBookingForm person={person} language={language} onCancel={onCancelBooking} />}
               </td>
               <td className="break-words p-2 align-top">{person.category_label}</td>
+              {!checkerMode && <>
               <td className="break-words p-2 align-top">
                 {person.customer_first_name} {person.customer_last_name}
                 <span className="block truncate text-slate-500" title={person.customer_email}>{person.customer_email}</span>
@@ -194,6 +197,7 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
                   </details>
                 ) : "—"}
               </td>
+              </>}
             </tr>;
           })}
         </tbody>

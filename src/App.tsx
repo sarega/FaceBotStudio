@@ -893,7 +893,7 @@ const INITIAL_CHECKIN_TOKEN =
 
 function getDefaultTabForRole(role: UserRole | null | undefined): AppTab {
   if (role === "cashier") return "direct_tickets";
-  if (role === "checker") return "registrations";
+  if (role === "checker") return "checkin";
   if (role === "viewer") return "logs";
   if (role === "operator") return "test";
   return "event";
@@ -3378,6 +3378,8 @@ export default function App() {
   const [checkinSessionCreating, setCheckinSessionCreating] = useState(false);
   const [checkinSessionRevokingId, setCheckinSessionRevokingId] = useState("");
   const [checkinSessionReveal, setCheckinSessionReveal] = useState<{ token: string; url: string; id: string } | null>(null);
+  const [checkerPaidCounts, setCheckerPaidCounts] = useState<{ eventId: string;
+    summary: { capacity: number; confirmed_bookings: number; confirmed_attendees: number; checked_in_attendees: number; held_attendees: number } | null }>();
   const [checkinLatestResult, setCheckinLatestResult] = useState<Registration | null>(null);
   const [checkinStatus, setCheckinStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [checkinErrorMessage, setCheckinErrorMessage] = useState("");
@@ -3573,7 +3575,9 @@ export default function App() {
       : "unsupported";
 
   const selectedRegistration = registrations.find((reg) => reg.id === selectedRegistrationId) || null;
-  const latestCheckinRegistration = checkinLatestResult || selectedRegistration;
+  const checkerMode = role === "checker";
+  const latestCheckinRegistration = checkinLatestResult || (checkerMode ? null : selectedRegistration);
+  const checkerSummary = checkerPaidCounts?.eventId === selectedEventId ? checkerPaidCounts.summary : null;
   const selectedDocumentForChunks = documents.find((document) => document.id === selectedDocumentForChunksId) || null;
   const activeLlmModel = settings.llm_model?.trim() || settings.global_llm_model?.trim() || "google/gemini-3-flash-preview";
   const selectedEventUsage = llmUsageSummary?.selected_event || null;
@@ -3630,6 +3634,8 @@ export default function App() {
   const isAgentMobileFocusMode = activeTab === "agent" && agentWorkspaceView === "console" && agentMobileFocusMode;
   const selectedAdminAgentDashboardEvent = adminAgentDashboard?.events.find((event) => event.is_selected) || null;
   const activeAttendeeCount = Math.max(registrationCounts.total - registrationCounts.cancelled, 0);
+  const checkerEligibleCount = activeAttendeeCount + (checkerSummary?.confirmed_attendees ?? 0);
+  const checkerScannedCount = checkedInCount + (checkerSummary?.checked_in_attendees ?? 0);
   const checkInRate = activeAttendeeCount > 0 ? Math.round((checkedInCount / activeAttendeeCount) * 100) : 0;
   const latestResultState: "success" | "already" | "invalid" | "cancelled" | "idle" =
     checkinStatus === "error" && checkinErrorMessage.toLowerCase().includes("already")
@@ -5474,6 +5480,7 @@ export default function App() {
         }
         setOwnerPreviewAccess(account.role === "owner");
         setAuthUser(user);
+        if (user.role === "checker") setActiveTab("checkin");
         setAuthStatus("authenticated");
         void loadUserPreferences();
       } catch {
@@ -5491,6 +5498,17 @@ export default function App() {
       cancelled = true;
     };
   }, [checkinAccessMode, isCustomerAccountRoute, isCustomerAppRoute, isCustomerCheckoutRoute, isPublicEventCatalogRoute, publicEventSlug]);
+
+  useEffect(() => {
+    if (!checkerMode || authStatus !== "authenticated" || !selectedEventId || activeTab !== "checkin") return;
+    const controller = new AbortController();
+    void apiFetch(`/api/events/${encodeURIComponent(selectedEventId)}/paid-registration/attendees?summary_only=1`, { signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        if (!controller.signal.aborted && data) setCheckerPaidCounts({ eventId: selectedEventId, summary: data.summary ?? null });
+      }).catch(() => {});
+    return () => controller.abort();
+  }, [checkerMode, authStatus, selectedEventId, activeTab, checkinLatestResult]);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !selectedEventId || publicEventSlug || checkinAccessMode || rolePreview.role) return;
@@ -8307,7 +8325,9 @@ export default function App() {
         }));
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        setCheckinStatus("success");
+        const alreadyCheckedIn = checkerMode && data?.already_checked_in === true;
+        setCheckinStatus(alreadyCheckedIn ? "error" : "success");
+        setCheckinErrorMessage(alreadyCheckedIn ? "Already checked in" : "");
         setSearchId(paidCredential ? "" : directTicketId || normalizedId);
         const latest = directTicketId ? normalizeDirectCheckinTicket(data?.ticket) : normalizeCheckinRegistration(data?.registration);
         if (latest) {
@@ -11275,6 +11295,7 @@ export default function App() {
                 </>
               )}
               <RegistrationsScreen
+                checkerMode={checkerMode}
                 apiFetch={apiFetch}
                 canExportFinancialReports={canReviewPaidSlips}
                 canExportPaymentFollowup={canManageRegistrations}
@@ -11392,14 +11413,17 @@ export default function App() {
             >
               <CheckinScreen
                 language={language}
+                checkerMode={checkerMode}
+                capacity={checkerMode ? checkerSummary?.capacity ?? registrationCapacity.limit ?? undefined : undefined}
+                confirmedBookings={checkerMode ? checkerSummary?.confirmed_bookings : undefined}
                 selectedEvent={selectedEvent}
                 getEventStatusLabel={getEventStatusLabel}
                 getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
                 checkinOperatorGuardTone={toBannerTone(checkinOperatorGuard.tone)}
-                registeredCount={registeredCount}
+                registeredCount={checkerMode ? checkerEligibleCount + (checkerSummary?.held_attendees ?? 0) : registeredCount}
                 cancelledCount={cancelledCount}
-                checkedInCount={checkedInCount}
-                checkInRate={checkInRate}
+                checkedInCount={checkerMode ? checkerScannedCount : checkedInCount}
+                checkInRate={checkerMode ? (checkerEligibleCount > 0 ? Math.round(checkerScannedCount / checkerEligibleCount * 100) : 0) : checkInRate}
                 canUseQrScanner={canUseQrScanner}
                 scannerActive={scannerActive}
                 scannerStarting={scannerStarting}

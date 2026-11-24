@@ -45,6 +45,9 @@ type RegistrationRecord = {
 
 type CheckinScreenProps = {
   language: AppLanguage;
+  checkerMode?: boolean;
+  capacity?: number;
+  confirmedBookings?: number;
   selectedEvent: EventRecord | null;
   getEventStatusLabel: (status: EventRecord["effective_status"]) => string;
   getRegistrationAvailabilityLabel: (status: EventRecord["registration_availability"]) => string;
@@ -95,6 +98,9 @@ type CheckinScreenProps = {
 
 export function CheckinScreen({
   language,
+  checkerMode = false,
+  capacity,
+  confirmedBookings,
   selectedEvent,
   getEventStatusLabel,
   getRegistrationAvailabilityLabel,
@@ -174,6 +180,8 @@ export function CheckinScreen({
 
           <CompactStatRow
             stats={[
+              ...(capacity === undefined ? [] : [{ label: language === "th" ? "ความจุ" : "Capacity", value: capacity, tone: "neutral" as const }]),
+              ...(confirmedBookings === undefined ? [] : [{ label: language === "th" ? "ใบจองยืนยันแล้ว" : "Confirmed bookings", value: confirmedBookings, tone: "blue" as const }]),
               { label: t("registered", "Registered"), value: registeredCount, tone: "blue" },
               { label: t("cancelled", "Cancelled"), value: cancelledCount, tone: "neutral" },
               { label: t("checkedIn", "Checked in"), value: checkedInCount, tone: "emerald" },
@@ -296,7 +304,7 @@ export function CheckinScreen({
                 className="mt-1"
                 items={[
                   latestResultLabel,
-                  latestCheckinRegistration ? `ID ${latestCheckinRegistration.id}` : null,
+                  !checkerMode && latestCheckinRegistration ? `ID ${latestCheckinRegistration.id}` : null,
                 ]}
               />
             </div>
@@ -312,9 +320,9 @@ export function CheckinScreen({
                 <p className="text-lg font-semibold text-slate-900">
                   {latestCheckinRegistration.first_name} {latestCheckinRegistration.last_name}
                 </p>
-                <p className="text-xs font-mono text-blue-600">{latestCheckinRegistration.id}</p>
+                {!checkerMode && <p className="text-xs font-mono text-blue-600">{latestCheckinRegistration.id}</p>}
               </div>
-              <div className="grid grid-cols-1 gap-2 text-sm">
+              {(!checkerMode || latestCheckinRegistration.direct_ticket) && <div className="grid grid-cols-1 gap-2 text-sm">
                 <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
                   <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">{latestCheckinRegistration.direct_ticket ? t("ticketPerformance", "Ticket / Performance") : t("phone", "Phone")}</p>
                   <p className="text-slate-700">{latestCheckinRegistration.direct_ticket ? `${latestCheckinRegistration.direct_ticket.ticket_class} · ${latestCheckinRegistration.direct_ticket.performance}` : latestCheckinRegistration.phone || "-"}</p>
@@ -323,8 +331,8 @@ export function CheckinScreen({
                   <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">{latestCheckinRegistration.direct_ticket ? t("seat", "Seat") : t("email", "Email")}</p>
                   <p className="text-slate-700 break-all">{latestCheckinRegistration.direct_ticket?.seat || latestCheckinRegistration.email || "-"}</p>
                 </div>
-              </div>
-              {!checkinAccessMode && !latestCheckinRegistration.direct_ticket && (
+              </div>}
+              {!checkinAccessMode && !checkerMode && !latestCheckinRegistration.direct_ticket && (
                 <ActionButton
                   onClick={() => void onOpenRegistrations()}
                   tone="neutral"

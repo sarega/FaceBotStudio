@@ -18,8 +18,6 @@ type CheckinRegistration = {
   id: string;
   first_name: string;
   last_name: string;
-  phone: string;
-  email: string;
 };
 
 type CheckinAccessRouteProps = {
@@ -262,16 +260,6 @@ export function CheckinAccessRoute({
                   {latestCheckinRegistration.first_name} {latestCheckinRegistration.last_name}
                 </p>
                 <p className="text-xs font-mono text-blue-600">{latestCheckinRegistration.id}</p>
-              </div>
-              <div className="grid grid-cols-1 gap-2 text-sm">
-                <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Phone</p>
-                  <p className="text-slate-700">{latestCheckinRegistration.phone || "-"}</p>
-                </div>
-                <div className="rounded-xl bg-white border border-slate-200 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Email</p>
-                  <p className="text-slate-700 break-all">{latestCheckinRegistration.email || "-"}</p>
-                </div>
               </div>
             </div>
           )}

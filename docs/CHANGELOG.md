@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.12 - 2026-11-24
+
+- Add optional phone numbers for individual attendees during registration and booking edits so staff can contact guests directly on group bookings.
+- Open Checker accounts in the check-in workspace. Show attendee details and seat and check-in counts, and omit financial data from Checker screens, API responses, and roster exports.
+- Give the unassigned guest list and room list separate scrolling and search. Highlight the bed or unassigned area that can accept the current drag.
+- Fix room plan saves when staff and attendee sessions share a browser. Keep the draft on screen after a failed save and show the reason beside the save button.
+
 ## 0.11.11 - 2026-11-24
 
 - Download event-scoped accounting, payment follow-up, coupon and VIP, and attendee and meal PDFs from the registration Actions menu.

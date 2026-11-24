@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,6 +12,8 @@ import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { hashPassword, hashSessionToken } from "../auth";
+import { draftRoomingPlan, moveRoomingGuest } from "../roomingPlan";
+import type { PaidRoomingPlan } from "./paidRegistration";
 import { SqliteAppDatabase } from "./sqliteAdapter";
 import { ROLE_PREVIEW_EVENT_HEADER, ROLE_PREVIEW_HEADER, STAFF_PREVIEW_ROLES } from "../../src/lib/rolePreview";
 
@@ -801,23 +803,54 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const roomsPath = `${eventPrefix}/rooms`;
     const firstRoomPlan = await fetch(roomsPath, { headers: staffHeaders });
     assert.equal(firstRoomPlan.status, 200);
-    const { plan: draftPlan } = await firstRoomPlan.json();
+    const { plan: draftPlan } = await firstRoomPlan.json() as { plan: PaidRoomingPlan };
     assert.equal(draftPlan.version, 0);
     assert.ok(draftPlan.guests.length > 0);
-    assert.ok(draftPlan.guests.every((guest: Record<string, unknown>) => !("customer_email" in guest)));
-    const roomFixture = { id: "room-one", locked: true, number: "", slots: [draftPlan.guests[0].id, null] };
+    assert.ok(draftPlan.guests.every((guest) => !("customer_email" in guest)));
+    const lockedGuest = draftPlan.guests.find(guest => guest.bookingId === manualBooking.id);
+    assert.ok(lockedGuest);
+    const roomFixture = { id: "room-one", locked: true, number: "", slots: [lockedGuest.id, null] };
     const saveRooms = (version: number, rooms: unknown[]) => fetch(roomsPath, {
       method: "PUT", headers: staffCreateHeaders, body: JSON.stringify({ version, rooms }),
     });
-    assert.equal((await saveRooms(0, [{ ...roomFixture, slots: [draftPlan.guests[0].id, draftPlan.guests[0].id] }])).status, 400);
+    assert.equal((await saveRooms(0, [{ ...roomFixture, slots: [lockedGuest.id, lockedGuest.id] }])).status, 400);
     assert.equal((await saveRooms(0, [{ ...roomFixture, slots: ["not-an-attendee", null] }])).status, 409);
     assert.equal((await saveRooms(0, [roomFixture])).status, 200);
     assert.equal((await saveRooms(0, [])).status, 409);
-    assert.equal((await saveRooms(1, [{ ...roomFixture, slots: [null, draftPlan.guests[0].id] }])).status, 409);
+    assert.equal((await saveRooms(1, [{ ...roomFixture, slots: [null, lockedGuest.id] }])).status, 409);
     assert.equal((await saveRooms(1, [{ ...roomFixture, number: "301" }])).status, 200);
     const persistedPlan = (await (await fetch(roomsPath, { headers: staffHeaders })).json()).plan;
     assert.equal(persistedPlan.rooms[0].number, "301");
-    assert.equal(persistedPlan.rooms[0].slots[0], draftPlan.guests[0].id);
+    assert.equal(persistedPlan.rooms[0].slots[0], lockedGuest.id);
+
+    // The same browser can be signed into the staff workspace and the attendee portal.
+    const dualSessionHeaders = {
+      Cookie: "fbs_session=test-reviewer; fbs_customer_session=test-owner; fbs_customer_csrf=fixture-csrf",
+      Origin: origin,
+      "Content-Type": "application/json",
+    };
+    const pair = draftPlan.guests.filter(guest => guest.bookingId === booking.id)
+      .map(guest => ({ ...guest, accommodation: "yes" as const }));
+    const drafted = draftRoomingPlan([], pair, randomUUID);
+    assert.equal(drafted.length, 1);
+    const newRoom = { id: randomUUID(), number: "", locked: false, slots: [null, null] };
+    const updatedRooms = moveRoomingGuest([...drafted, newRoom], pair[0].id, { roomId: newRoom.id, slot: 1 });
+    const mixedPlan = { version: persistedPlan.version, rooms: [persistedPlan.rooms[0], ...updatedRooms] };
+    const saveMixedPlan = (headers: Record<string, string>) => fetch(roomsPath, {
+      method: "PUT", headers, body: JSON.stringify(mixedPlan),
+    });
+    const rejected = await saveMixedPlan(dualSessionHeaders);
+    assert.equal(rejected.status, 403);
+    assert.equal((await rejected.json()).error, "CSRF token validation failed");
+    const staffCookie = rejected.headers.getSetCookie().find(cookie => cookie.startsWith("fbs_csrf="))?.split(";")[0];
+    assert.ok(staffCookie, "the staff write must refresh its own CSRF token even with a customer session");
+    const retried = await saveMixedPlan({
+      ...dualSessionHeaders,
+      Cookie: dualSessionHeaders.Cookie + "; " + staffCookie,
+      "x-csrf-token": staffCookie.slice("fbs_csrf=".length),
+    });
+    assert.equal(retried.status, 200, await retried.clone().text());
+    assert.deepEqual((await (await fetch(roomsPath, { headers: staffHeaders })).json()).plan.rooms, mixedPlan.rooms);
 
     const carpoolPath = `${eventPrefix}/carpool`;
     const initialCarpool = await fetch(carpoolPath, { headers: staffHeaders });
@@ -857,11 +890,22 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await fetch(carpoolPath, { headers: ownerAccess })).status, 200);
     assert.equal((await fetch(carpoolPath, { headers: operatorAccess })).status, 403);
     assert.equal((await fetch(carpoolPath, { headers: headers("test-owner") })).status, 401);
-    for (const access of [ownerAccess, operatorAccess, checkerAccess]) {
+    for (const access of [ownerAccess, operatorAccess]) {
       const paidRoster = await fetch(`${eventPrefix}/attendees`, { headers: access });
       assert.equal(paidRoster.status, 200, await paidRoster.clone().text());
       assert.deepEqual(await paidRoster.json(), attendeeRoster);
     }
+    const checkerRosterResponse = await fetch(`${eventPrefix}/attendees`, { headers: checkerAccess });
+    assert.equal(checkerRosterResponse.status, 200);
+    const checkerRoster = await checkerRosterResponse.json();
+    assert.equal(checkerRoster.attendees.length, attendeeRoster.attendees.length);
+    assert.deepEqual(Object.keys(checkerRoster.attendees[0]).sort(), [
+      "attendee_id", "booking_id", "booking_state", "category_label", "checked_in_ms", "event_id", "first_name", "last_name",
+    ]);
+    assert.equal(checkerRoster.summary.confirmed_bookings, attendeeRoster.summary.confirmed_bookings);
+    assert.ok(Object.keys(checkerRoster.summary).every(key => !key.endsWith("_minor")));
+    const checkerSummaryOnly = await fetch(`${eventPrefix}/attendees?summary_only=1`, { headers: checkerAccess });
+    assert.deepEqual(await checkerSummaryOnly.json(), { attendees: [], summary: checkerRoster.summary });
     for (const access of [unassignedChecker, cashierAccess, viewerAccess]) {
       assert.equal((await fetch(`${eventPrefix}/attendees`, { headers: access })).status, 403);
     }
@@ -872,7 +916,11 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     }
     assert.equal((await fetch(notificationPath, { headers: ownerAccess })).status, 200);
     assert.equal((await fetch(notificationPath, { headers: checkerAccess })).status, 403);
-    assert.equal((await fetch(`${origin}/api/registrations/export?event_id=${event.id}`, { headers: checkerAccess })).status, 200);
+    const checkerCsv = await fetch(`${origin}/api/registrations/export?event_id=${event.id}`, { headers: checkerAccess });
+    assert.equal(checkerCsv.status, 200);
+    const checkerCsvText = await checkerCsv.text();
+    assert.equal(checkerCsvText.split(/\r?\n/)[0], '"id","first_name","last_name","status","category"');
+    assert.match(checkerCsvText, /"One","Guest","checked-in"/);
 
     const operatorFeed = await fetch(`${eventPrefix}/summary?activity=1`, { headers: operatorAccess });
     assert.equal(operatorFeed.status, 200);
@@ -943,6 +991,20 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     );
     assert.equal(directExport.status, 200);
     assert.match(await directExport.text(), /Direct Ticket Guest/);
+    const gateStaff = await staffSession("checker", [event.id, legacyRosterEvent.id]);
+    const directCheckin = await fetch(origin + "/api/direct-ticketing/tickets/" + direct.ticket.id + "/checkin", {
+      method: "POST",
+      headers: { ...staffCreateHeaders, Cookie: gateStaff.Cookie + "; fbs_csrf=staff-csrf" },
+      body: JSON.stringify({ event_id: legacyRosterEvent.id, qr_value: "DIRECT-ADMIN:" + direct.ticket.id }),
+    });
+    assert.equal(directCheckin.status, 200, await directCheckin.clone().text());
+    const gateTicket = (await directCheckin.json()).ticket;
+    assert.equal(gateTicket.holder_name, "Direct Ticket Guest");
+    assert.equal(gateTicket.status, "checked_in");
+    assert.equal(gateTicket.seat_label, "01");
+    for (const field of ["price_amount", "payment_status", "payment_reference", "email", "phone", "delivery"]) {
+      assert.ok(!Object.hasOwn(gateTicket, field), `Gate ticket must not include ${field}`);
+    }
 
     const globalRoster=await fetch(origin+"/api/admin/customers/attendee-roster.csv",
       {headers:staffHeaders});

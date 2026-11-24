@@ -2470,6 +2470,38 @@ html.theme-dark .registration-admin-review .registration-section-content > .flex
   color: #e2e8f0 !important;
 }
 
+.rooming-workspace { container: rooming / inline-size; }
+.rooming-board { display: grid; gap: .75rem; }
+.rooming-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.rooming-scroll {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
+}
+.rooming-scroll:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
+.rooming-board [data-rooming-drop-active="true"] {
+  outline: 3px solid #3b82f6;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 5px #3b82f633;
+}
+.rooming-guest-list { height: clamp(8rem, 26dvh, 16rem); }
+.rooming-room-list {
+  display: grid;
+  align-content: start;
+  align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: .5rem;
+  height: clamp(15rem, 48dvh, 29rem);
+}
+@container rooming (min-width: 43rem) {
+  .rooming-board {
+    grid-template-columns: minmax(13rem, 1fr) minmax(0, 2.6fr);
+    height: clamp(20rem, 64dvh, 56rem);
+  }
+  .rooming-scroll { flex: 1; height: auto; overscroll-behavior: contain; }
+}
+
 .registration-workspace {
   container: registration-workspace / inline-size;
   min-width: 0;

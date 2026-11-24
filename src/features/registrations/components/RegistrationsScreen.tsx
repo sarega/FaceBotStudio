@@ -126,6 +126,7 @@ type RegistrationsScreenProps = {
   statusUpdateLoading: boolean;
   statusUpdateMessage: string;
   language: AppLanguage;
+  checkerMode?: boolean;
   canExportFinancialReports?: boolean;
   canExportPaymentFollowup?: boolean;
   onManagePaidBooking?: (reference: string) => void;
@@ -181,6 +182,7 @@ export function RegistrationsScreen({
   statusUpdateLoading,
   statusUpdateMessage,
   language,
+  checkerMode = false,
   canExportFinancialReports,
   canExportPaymentFollowup,
   apiFetch,
@@ -198,22 +200,23 @@ export function RegistrationsScreen({
     ...(canExportPaymentFollowup ? ["followup"] as const : []),
     "attendees",
   ];
-  async function downloadRegistrationReport(kind: ReportKind) {
+  async function downloadRegistrationFile(kind?: ReportKind) {
     if (!apiFetch || !selectedEventId || reportBusy) return;
     setReportBusy(true);
     setReportError("");
     try {
-      const query = new URLSearchParams({ event_id: selectedEventId, kind, language });
-      const response = await apiFetch(`/api/registrations/report?${query}`);
-      if (!response.ok || !response.headers.get("Content-Type")?.startsWith("application/pdf")) throw new Error();
+      const query = new URLSearchParams({ event_id: selectedEventId, ...(kind && { kind, language }) });
+      const response = await apiFetch(`/api/registrations/${kind ? "report" : "export"}?${query}`);
+      if (!response.ok || !response.headers.get("Content-Type")?.startsWith(kind ? "application/pdf" : "text/csv")) throw new Error();
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = `registrations-${kind}.pdf`;
+      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ||
+        (kind ? `registrations-${kind}.pdf` : "registrations.csv");
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {
-      setReportError(language === "th" ? "สร้างรายงาน PDF ไม่สำเร็จ กรุณาลองอีกครั้ง" : "Could not generate the PDF. Try again.");
+      setReportError(language === "th" ? "ดาวน์โหลดรายงานไม่สำเร็จ กรุณาลองอีกครั้ง" : "Could not download the report. Try again.");
     } finally {
       setReportBusy(false);
     }
@@ -341,18 +344,19 @@ export function RegistrationsScreen({
               </p>
             </div>
             <InlineActionsMenu label={t("actions", "Actions")} tone="neutral">
-              <MenuActionLink
-                href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}
-                tone="neutral"
-              >
+              {apiFetch ? <MenuActionItem disabled={reportBusy || !selectedEventId} onClick={() => void downloadRegistrationFile()}>
                 <Download className="h-3.5 w-3.5" />
-                <span className="font-medium">Export ทุกคน (Excel / CSV)</span>
-              </MenuActionLink>
+                {checkerMode
+                  ? (language === "th" ? "ส่งออกรายชื่อเช็กอิน (CSV)" : "Export check-in roster (CSV)")
+                  : (language === "th" ? "ส่งออกผู้เข้าร่วมทั้งหมด (CSV)" : "Export all attendees (CSV)")}
+              </MenuActionItem> : <MenuActionLink href={`/api/registrations/export?event_id=${encodeURIComponent(selectedEventId)}`}>
+                <Download className="h-3.5 w-3.5" /> CSV
+              </MenuActionLink>}
               {apiFetch && selectedEventId && <>
                 <p className="border-t border-slate-200 px-3 pb-1 pt-2 text-xs font-semibold text-slate-500">
                   {language === "th" ? "รายงาน PDF · ทั้งอีเวนต์" : "PDF reports · entire event"}
                 </p>
-                {reportKinds.map(kind => <MenuActionItem key={kind} disabled={reportBusy} onClick={() => void downloadRegistrationReport(kind)}>
+                {reportKinds.map(kind => <MenuActionItem key={kind} disabled={reportBusy} onClick={() => void downloadRegistrationFile(kind)}>
                   <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                   {registrationReportTitles[kind][language === "th" ? 0 : 1]}
                 </MenuActionItem>)}
@@ -360,7 +364,7 @@ export function RegistrationsScreen({
             </InlineActionsMenu>
           </div>
           {reportBusy && <p className="px-4 pb-2 text-sm text-slate-600" role="status">
-            {language === "th" ? "กำลังสร้างรายงาน PDF…" : "Generating PDF report…"}
+            {language === "th" ? "กำลังเตรียมรายงาน…" : "Preparing report…"}
           </p>}
           {reportError && <p className="px-4 pb-2 text-sm text-rose-700" role="alert">{reportError}</p>}
           <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
@@ -416,7 +420,7 @@ export function RegistrationsScreen({
               {language === "th" ? "ลองอีกครั้ง" : "Retry"}
             </button>}
           </div>}
-          <PaidAttendeeRoster language={language} people={filteredPaid} total={paidPeople.length}
+          <PaidAttendeeRoster checkerMode={checkerMode} language={language} people={filteredPaid} total={paidPeople.length}
             onRefresh={() => setPaidRevision(n => n + 1)} onManageBooking={onManagePaidBooking}
             onCancelBooking={apiFetch && onPaidBookingCancelled ? async (person, reason, key) => {
               const path = `/api/events/${encodeURIComponent(person.event_id)}/paid-registration/bookings/${encodeURIComponent(person.booking_id)}/manage`;
@@ -718,7 +722,7 @@ export function RegistrationsScreen({
           {paidError && <p className="mb-3 text-xs text-amber-700">{language === "th"
             ? "ยอดด้านล่างมาจากระบบลงทะเบียนเดิมเท่านั้น เพราะยังโหลดข้อมูล Paid Booking ไม่ได้"
             : "These totals show legacy registrations only because paid booking data could not be loaded."}</p>}
-          {paidSummary && <dl className="mb-3 grid grid-cols-2 gap-2">
+          {!checkerMode && paidSummary && <dl className="mb-3 grid grid-cols-2 gap-2">
             {[
               { label: language === "th" ? "ยอดรวมตามใบจอง" : "Total booking value",
                 minor: Number(paidSummary.accepted_minor) + Number(paidSummary.unsettled_due_minor) },
@@ -736,10 +740,12 @@ export function RegistrationsScreen({
               </div>
             ))}
           </dl>}
-          {paidSummary&&<div className="mb-3 grid grid-cols-3 gap-2 text-center text-xs">
+          {paidSummary&&<div className={`mb-3 grid gap-2 text-center text-xs ${checkerMode ? "grid-cols-1" : "grid-cols-3"}`}>
+            {!checkerMode && <>
             <div className="registration-booking-stat registration-booking-stat-unpaid rounded-lg p-2"><strong className="block text-lg">{paidSummary.awaiting_payment_bookings}</strong>Booking รอชำระ</div>
             <div className="registration-booking-stat registration-booking-stat-review rounded-lg p-2"><strong className="block text-lg">{paidSummary.pending_review_bookings}</strong>Booking รอตรวจสลิป</div>
-            <div className="registration-booking-stat registration-booking-stat-confirmed rounded-lg p-2"><strong className="block text-lg">{paidSummary.confirmed_bookings}</strong>Booking ยืนยันแล้ว</div>
+            </>}
+            <div className="registration-booking-stat registration-booking-stat-confirmed rounded-lg p-2"><strong className="block text-lg">{paidSummary.confirmed_bookings}</strong>{language === "th" ? "ใบจองยืนยันแล้ว" : "Confirmed bookings"}</div>
           </div>}
           <div className="space-y-2.5">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
