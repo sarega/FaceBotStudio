@@ -1,7 +1,7 @@
 import { customerErrorCopy, type CustomerCopy } from "../customerLocale";
 import { CustomerVerificationNotice } from "./CustomerVerificationNotice";
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, CalendarDays, CheckCircle2, LockKeyhole, LogOut, Mail, RefreshCw, Save, ShieldCheck, ShoppingBag, UserRound } from "lucide-react";
 
 export type CustomerAccount = {
@@ -88,6 +88,50 @@ export async function customerApi<T>(path: string, init: RequestInit = {}) {
   return data as T;
 }
 
+const CustomerApiContext = createContext(customerApi);
+
+export function useCustomerApi() {
+  return useContext(CustomerApiContext);
+}
+
+const sampleAccount: CustomerAccount = {
+  id: "preview",
+  email: "attendee@example.com",
+  first_name: "Demo",
+  last_name: "Attendee",
+  phone: "",
+  email_verified_at: "2026-01-01",
+  address_line1: null,
+  address_line2: null,
+  district: null,
+  subdistrict: null,
+  province: null,
+  postal_code: null,
+  country: null,
+  status: "active",
+};
+
+const sampleCustomerResponses: Record<string, unknown> = {
+  "/api/customer/account/me": { account: sampleAccount },
+  "/api/customer/tickets": { registrations: [], tickets: [] },
+  "/api/customer/orders": { orders: [] },
+  "/api/customer/paid-bookings": { bookings: [], next_offset: null },
+  "/api/customer/notification-preferences": {
+    preferences: { email_transactional_enabled: true, sms_transactional_enabled: false, sms_marketing_enabled: false },
+  },
+};
+
+async function previewCustomerRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  if ((init.method || "GET").toUpperCase() !== "GET") throw new Error("Read-only preview");
+  const response = sampleCustomerResponses[path.split("?")[0]];
+  if (!response) throw new Error("Preview data unavailable");
+  return response as T;
+}
+
+export function CustomerPreviewProvider({ children }: { children: ReactNode }) {
+  return <CustomerApiContext.Provider value={previewCustomerRequest}>{children}</CustomerApiContext.Provider>;
+}
+
 function inputClass() {
   return "w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none placeholder:text-slate-500 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/30 disabled:cursor-not-allowed disabled:opacity-60";
 }
@@ -146,6 +190,7 @@ function customerFormDefaults(token = ""): CustomerForm {
 }
 
 export function CustomerAccountScreen({ locale = "th", languageControl, themeControl, embedded }: { locale?: "th" | "en"; languageControl?: ReactNode; themeControl?: ReactNode; embedded?: "profile" | "security" }) {
+  const customerApi = useCustomerApi();
   const t = (th: string, en: string) => locale === "th" ? th : en;
   const pathname = typeof window !== "undefined" ? window.location.pathname : "/account";
   const urlToken = typeof window !== "undefined"
@@ -345,6 +390,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
   };
 
   const logout = async () => {
+    if (customerApi === previewCustomerRequest) return;
     setBusy(true);
     try {
       await customerApi("/api/customer/account/logout", { method: "POST" });
@@ -528,7 +574,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
     <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
       <h2 className="mb-3 font-semibold text-slate-900">{t("ความปลอดภัยในการเข้าสู่ระบบ", "Session security")}</h2>
       <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={busy} onClick={() => void logout()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 font-semibold text-slate-700 hover:border-slate-300 hover:underline disabled:opacity-50"><LogOut className="h-4 w-4" /> {t("ออกจากระบบ", "Sign out")}</button>
+                <button type="button" disabled={busy || customerApi === previewCustomerRequest} onClick={() => void logout()} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 font-semibold text-slate-700 hover:border-slate-300 hover:underline disabled:opacity-50"><LogOut className="h-4 w-4" /> {t("ออกจากระบบ", "Sign out")}</button>
                 <button type="button" disabled={busy} onClick={() => void revokeSessions()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">{t("ออกจากระบบทุกอุปกรณ์", "Revoke all sessions")}</button>
                 <button type="button" disabled={busy} onClick={() => void disableAccount()} className="rounded-xl px-3 py-2.5 text-sm text-rose-700 hover:bg-rose-400/10 disabled:opacity-50">{t("ปิดใช้งานบัญชี", "Disable account")}</button>
       </div>

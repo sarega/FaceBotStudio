@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.10",
+    date: "2026-11-24",
+    title: "Role previews and clearer slip review",
+    features: [
+      "Preview staff roles and the attendee app from the Owner workspace",
+      "Resize roster columns and copy full booking references",
+      "Read slip and booking statuses directly in the review queue",
+    ],
+  },
+  {
     version: "0.11.9",
     date: "2026-11-23",
     title: "Unified booking management and seminar operations",

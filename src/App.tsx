@@ -72,6 +72,9 @@ import { Ticket } from "./components/Ticket";
 import { AdminWorkspaceFrame } from "./components/layout/AdminWorkspaceFrame";
 import { AdminWorkspaceHeader } from "./components/layout/AdminWorkspaceHeader";
 import { AdminWorkspaceSidebar } from "./components/layout/AdminWorkspaceSidebar";
+import { RolePreviewControl } from "./components/layout/RolePreviewControl";
+import { isStaffPreviewRole, readRolePreview, ROLE_PREVIEW_EVENT_HEADER, ROLE_PREVIEW_HEADER, type PreviewRole } from "./lib/rolePreview";
+import { CustomerPreviewProvider } from "./features/customer-account/components/CustomerAccountScreen";
 import { WorkspaceInsightsDock } from "./components/layout/WorkspaceInsightsDock";
 import {
   ActionButton,
@@ -3156,6 +3159,8 @@ function resetEmailTemplateToDefault(settings: Settings, kind: EmailTemplateKind
 }
 
 export default function App() {
+  const [rolePreview] = useState(() => readRolePreview(window.location));
+  const [ownerPreviewAccess, setOwnerPreviewAccess] = useState(false);
   const initialWorkspaceSession = readWorkspaceSession();
   const [activeTab, setActiveTab] = useState<AppTab>(initialWorkspaceSession.activeTab);
   const [customerFocusId,setCustomerFocusId]=useState("");
@@ -3248,7 +3253,7 @@ export default function App() {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [organizerProfiles, setOrganizerProfiles] = useState<OrganizerProfileRecord[]>([]);
   const [channels, setChannels] = useState<ChannelAccountRecord[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState(initialWorkspaceSession.eventId);
+  const [selectedEventId, setSelectedEventId] = useState(rolePreview.role ? rolePreview.eventId || initialWorkspaceSession.eventId : initialWorkspaceSession.eventId);
   const [eventLoading, setEventLoading] = useState(false);
   const [eventMessage, setEventMessage] = useState("");
   const [newEventName, setNewEventName] = useState("");
@@ -3537,7 +3542,7 @@ export default function App() {
   registrationSortDirectionRef.current = registrationSortDirection;
   registrationStatusFilterRef.current = registrationStatusFilter;
   const adminAgentChatStorageKey = authUser?.id
-    ? `${authUser.id}:global`
+    ? `${authUser.id}:${rolePreview.role ? `preview:${rolePreview.role}` : "global"}`
     : "";
   const isSectionCollapsed = (key: string) => Boolean(collapsedSectionMap[key]);
   const toggleSectionCollapsed = (key: string) => {
@@ -4340,8 +4345,9 @@ export default function App() {
   };
 
   const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const res = await fetch(input, appendCsrfHeader(init));
+    const res = await fetch(input, staffRequestInit(init));
     if (res.status === 401 && !checkinAccessMode) {
+      setOwnerPreviewAccess(false);
       setAuthStatus("unauthenticated");
       setAuthUser(null);
       setLoading(false);
@@ -4350,8 +4356,28 @@ export default function App() {
     return res;
   };
 
+  const staffRequestInit = (init?: RequestInit) => {
+    const request = appendCsrfHeader(init);
+    if (!isStaffPreviewRole(rolePreview.role)) return request;
+    const headers = new Headers(request?.headers);
+    headers.set(ROLE_PREVIEW_HEADER, rolePreview.role);
+    if (rolePreview.eventId) headers.set(ROLE_PREVIEW_EVENT_HEADER, rolePreview.eventId);
+    return { ...request, headers, cache: "no-store" as const };
+  };
+
+  const switchRolePreview = (role: PreviewRole | null) => {
+    if (!role) {
+      window.location.assign("/");
+      return;
+    }
+    const params = new URLSearchParams({ view_as: role });
+    if (selectedEventId) params.set("preview_event", selectedEventId);
+    window.location.assign(`/?${params}`);
+  };
+
   const handleLanguageChange = async (nextLanguage: AppLanguage) => {
     setLanguage(nextLanguage);
+    if (rolePreview.role) return;
     try {
       await apiFetch("/api/auth/preferences", {
         method: "POST",
@@ -4420,8 +4446,8 @@ export default function App() {
     }
   };
 
-  const fetchCurrentUser = async () => {
-    const res = await fetch("/api/auth/me");
+  const fetchCurrentUser = async (preview = false) => {
+    const res = await fetch("/api/auth/me", preview ? staffRequestInit() : { cache: "no-store" });
     if (!res.ok) {
       throw new Error("Not authenticated");
     }
@@ -4792,7 +4818,8 @@ export default function App() {
     return () => mediaQuery.removeListener(update);
   }, []);
 
-  const attendeeRoute = isPublicEventRoute || isPublicEventCatalogRoute || isCustomerAccountRoute || isCustomerAppRoute || isCustomerCheckoutRoute;
+  const attendeeRoute = isPublicEventRoute || isPublicEventCatalogRoute || isCustomerAccountRoute || isCustomerAppRoute || isCustomerCheckoutRoute ||
+    (rolePreview.role === "user" && ownerPreviewAccess);
   const attendeeLanguageControl = <AttendeeLanguageSelect locale={attendeeLocale} onChange={setAttendeeLocale} />;
   useEffect(() => {
     window.localStorage.setItem("meetrix-public-locale", attendeeLocale);
@@ -4802,7 +4829,7 @@ export default function App() {
   const eventNotificationData = canViewNotifications && notificationData?.eventId === selectedEventId && notificationData.userId === authUser?.id ? notificationData : undefined;
   const notificationSummary = eventNotificationData?.summary;
   const notificationActivity = (notificationSummary?.activity ?? []) as InboxEntry[];
-  const notificationKey = `meetrix-notifications:${authUser?.id}:${selectedEventId}`;
+  const notificationKey = `meetrix-notifications:${authUser?.id}:${selectedEventId}${rolePreview.role ? `:${rolePreview.role}-preview` : ""}`;
   const notificationHistoryKey = notificationKey;
   const seen = notificationSeen?.key === notificationKey ? notificationSeen : blankNotificationState(notificationKey);
   const trash = notificationActivity.filter((item) => notificationIsDeleted(seen, item));
@@ -5111,7 +5138,7 @@ export default function App() {
   }, [authUser?.id, desktopNotifyEnabled]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || checkinAccessMode) return;
+    if (authStatus !== "authenticated" || checkinAccessMode || rolePreview.role) return;
     if (!(role === "owner" || role === "admin")) return;
     if (settings.admin_agent_notification_enabled !== "1") return;
     if (!desktopNotifyEnabled || desktopNotifyPermission !== "granted" || !desktopNotificationSupported) return;
@@ -5416,7 +5443,7 @@ export default function App() {
         return;
       }
 
-      void fetchCheckinAccessSession("", { silentNoSession: true })
+      if (!rolePreview.role) void fetchCheckinAccessSession("", { silentNoSession: true })
         .then((existingCheckinSession) => {
           if (cancelled || !existingCheckinSession) return;
           setLoading(false);
@@ -5427,13 +5454,34 @@ export default function App() {
         });
 
       try {
-        const user = await fetchCurrentUser();
+        const account = await fetchCurrentUser();
         if (cancelled) return;
+        if (rolePreview.role && account.role !== "owner") {
+          window.location.replace("/");
+          return;
+        }
+        if (rolePreview.role === "user") {
+          setOwnerPreviewAccess(true);
+          setAuthStatus("unauthenticated");
+          setLoading(false);
+          return;
+        }
+        const user = rolePreview.role ? await fetchCurrentUser(true) : account;
+        if (cancelled) return;
+        if (rolePreview.role && user.role !== rolePreview.role) {
+          window.location.replace("/");
+          return;
+        }
+        setOwnerPreviewAccess(account.role === "owner");
         setAuthUser(user);
         setAuthStatus("authenticated");
         void loadUserPreferences();
       } catch {
         if (cancelled) return;
+        if (rolePreview.role) {
+          window.location.replace("/");
+          return;
+        }
         setAuthStatus("unauthenticated");
         setAuthUser(null);
         setLoading(false);
@@ -5445,7 +5493,7 @@ export default function App() {
   }, [checkinAccessMode, isCustomerAccountRoute, isCustomerAppRoute, isCustomerCheckoutRoute, isPublicEventCatalogRoute, publicEventSlug]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !selectedEventId || publicEventSlug || checkinAccessMode) return;
+    if (authStatus !== "authenticated" || !selectedEventId || publicEventSlug || checkinAccessMode || rolePreview.role) return;
     writeWorkspaceSession(selectedEventId, activeTab, eventWorkspaceView);
   }, [authStatus, selectedEventId, activeTab, eventWorkspaceView, publicEventSlug, checkinAccessMode]);
 
@@ -6937,7 +6985,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!hasAnyUnsavedSettings) return;
+    if (!hasAnyUnsavedSettings || rolePreview.role) return;
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -6946,7 +6994,7 @@ export default function App() {
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [hasAnyUnsavedSettings]);
+  }, [hasAnyUnsavedSettings, rolePreview.role]);
 
   const saveSettingsSubset = async (keys: Array<keyof Settings>, successLabel: string, sourceSettings?: Settings) => {
     setSaving(true);
@@ -9980,6 +10028,14 @@ export default function App() {
     return <CustomerAppScreen locale={attendeeLocale} languageControl={attendeeLanguageControl} themeControl={<AttendeeThemeSelect locale={attendeeLocale} mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
   }
 
+  if (rolePreview.role === "user" && ownerPreviewAccess) {
+    return <CustomerPreviewProvider>
+      <CustomerAppScreen preview locale={attendeeLocale} languageControl={attendeeLanguageControl}
+        themeControl={<AttendeeThemeSelect locale={attendeeLocale} mode={attendeeTheme} onChange={setAttendeeTheme} />}
+        previewControl={<RolePreviewControl language={attendeeLocale} role="user" onChange={switchRolePreview} />} />
+    </CustomerPreviewProvider>;
+  }
+
   if (isCustomerAccountRoute) {
     return <CustomerAccountScreen locale={attendeeLocale} languageControl={attendeeLanguageControl} themeControl={<AttendeeThemeSelect locale={attendeeLocale} mode={attendeeTheme} onChange={setAttendeeTheme} />} />;
   }
@@ -10605,6 +10661,9 @@ export default function App() {
   );
 
   const isChatConsoleTab = activeTab === "test" || (activeTab === "agent" && agentWorkspaceView === "console");
+  const rolePreviewControl = (ownerPreviewAccess || role === "owner")
+    ? <RolePreviewControl language={language} role={rolePreview.role} onChange={switchRolePreview} />
+    : null;
 
   if (isPublicEventRoute) {
     return (
@@ -10662,16 +10721,23 @@ export default function App() {
         isAgentMobileFocusMode={isAgentMobileFocusMode}
         canEditSettings={canEditSettings}
         header={(
+          <>
+          {isAgentMobileFocusMode && rolePreviewControl && (
+            <div className="flex justify-end border-b border-slate-200 px-3 py-1 lg:hidden">{rolePreviewControl}</div>
+          )}
           <AdminWorkspaceHeader
             language={language}
-            notificationControl={canViewNotifications && <button type="button"
+            headerActions={(rolePreviewControl || canViewNotifications) && <div className="flex items-center gap-2">
+              {rolePreviewControl}
+              {canViewNotifications && <button type="button"
               aria-label={notifyLabel(`การแจ้งเตือน (${unreadNotifications} ใหม่)`, `Notifications (${unreadNotifications} new)`)}
               aria-current={activeTab === "notifications" ? "page" : undefined}
               onClick={() => setActiveTab("notifications")}
               className="relative inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700">
               <Bell className="h-4 w-4" />
               {unreadNotifications > 0 && <span aria-hidden="true" className="absolute -right-1 -top-1 rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white">{unreadNotifications}</span>}
-            </button>}
+              </button>}
+            </div>}
             isAgentMobileFocusMode={isAgentMobileFocusMode}
             sidebarCollapsed={effectiveSidebarCollapsed}
             onToggleSidebarCollapsed={handleToggleSidebarCollapsed}
@@ -10691,6 +10757,7 @@ export default function App() {
             globalSearchOpen={globalSearchOpen}
             setGlobalSearchOpen={setGlobalSearchOpen}
           />
+          </>
         )}
         sidebar={(
           <AdminWorkspaceSidebar
@@ -10706,7 +10773,7 @@ export default function App() {
             onLanguageChange={handleLanguageChange}
             themeMode={themeMode}
             setThemeMode={setThemeMode}
-            onLogout={handleLogout}
+            onLogout={rolePreview.role ? undefined : handleLogout}
             selectedEvent={selectedEvent}
             getEventStatusTone={getEventStatusTone}
             getEventStatusLabel={localizedEventStatusLabel}

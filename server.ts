@@ -27,6 +27,11 @@ import { hasEventDescriptionMarkup, renderEventDescriptionHtml } from "./src/lib
 import { parseOutreachCsv } from "./backend/outreachCsv";
 import { buildStoredZipArchive, createStoredZipWriter } from "./backend/zipArchive";
 import {
+  ROLE_PREVIEW_EVENT_HEADER,
+  ROLE_PREVIEW_HEADER,
+  isStaffPreviewRole,
+} from "./src/lib/rolePreview";
+import {
   formatAdminAgentOutreachDraftSummary,
   getAdminAgentOutreachIdentityKeys,
   isAdminAgentCancellation,
@@ -461,6 +466,7 @@ type EventScopeOptions = {
 
 type AuthenticatedRequest = Request & {
   auth?: AuthContext;
+  rolePreview?: { assignedEventIds: string[] };
   staffLogin?: { password: string; user?: AuthUserRow };
   customer?: CustomerAuthContext;
   checkinAccess?: CheckinAccessContext;
@@ -3048,7 +3054,9 @@ function requireEventScope(options?: EventScopeOptions) {
       const role = req.auth.user.role;
       const requiresEventAssignment = role !== "owner" && role !== "admin";
       if (requiresEventAssignment) {
-        const assigned = await appDb.isUserAssignedToEvent(req.auth.user.id, scope.eventId);
+        const assigned = req.rolePreview
+          ? req.rolePreview.assignedEventIds.includes(scope.eventId)
+          : await appDb.isUserAssignedToEvent(req.auth.user.id, scope.eventId);
         if (!assigned) {
           await recordSecurityEvent(req, "security.event_scope_denied", {
             reason: "assignment_missing",
@@ -3252,9 +3260,15 @@ function canSignInAsStaff(user?: AuthUserRow): user is AuthUserRow {
 
 async function attachSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   try {
+    const previewRole = req.path.startsWith("/api/") ? req.get(ROLE_PREVIEW_HEADER) : undefined;
+    if (previewRole !== undefined) {
+      res.set("Cache-Control", "private, no-store");
+      res.vary(ROLE_PREVIEW_HEADER).vary(ROLE_PREVIEW_EVENT_HEADER);
+    }
     const cookies = parseCookies(req.headers.cookie);
     const sessionToken = cookies.get(SESSION_COOKIE_NAME);
     if (!sessionToken) {
+      if (previewRole !== undefined) return res.status(401).json({ error: "Authentication required" });
       return next();
     }
 
@@ -3263,13 +3277,28 @@ async function attachSession(req: AuthenticatedRequest, res: Response, next: Nex
     if (!session || !session.user.is_active) {
       clearSessionCookie(res, req);
       clearCsrfCookie(res, req);
+      if (previewRole !== undefined) return res.status(401).json({ error: "Authentication required" });
       return next();
     }
 
+    let user = session.user;
+    if (previewRole !== undefined) {
+      if (user.role !== "owner" || !isStaffPreviewRole(previewRole)) {
+        return res.status(403).json({ error: "Role preview is available to owners only" });
+      }
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        return res.status(403).json({ error: "Role preview is read-only" });
+      }
+      const eventId = req.get(ROLE_PREVIEW_EVENT_HEADER);
+      const event = eventId && EVENT_ASSIGNMENT_ROLES.has(previewRole) ? await appDb.getEventById(eventId) : null;
+      const assignedEventIds = event && event.organizer_id === user.organization_id ? [event.id] : [];
+      req.rolePreview = { assignedEventIds };
+      user = { ...user, role: previewRole, assigned_event_ids: assignedEventIds };
+    }
     req.auth = {
       sessionId: session.session_id,
       tokenHash,
-      user: session.user,
+      user,
     };
     await appDb.touchSession(session.session_id);
     return next();
@@ -16434,7 +16463,7 @@ async function startServer() {
     try {
       let events = await appDb.listEvents(req.auth?.user.organization_id);
       if (req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)) {
-        const assignedEventIds = new Set(await appDb.listUserEventIds(req.auth.user.id));
+        const assignedEventIds = new Set(req.rolePreview?.assignedEventIds ?? await appDb.listUserEventIds(req.auth.user.id));
         events = events.filter((event) => assignedEventIds.has(event.id));
       }
       const enrichedEvents = await Promise.all(
@@ -22844,7 +22873,7 @@ async function startServer() {
       try {
         const selectedEventId = normalizeOptionalText(req.query?.event_id);
         const allowedEventIds = req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)
-          ? await appDb.listUserEventIds(req.auth.user.id)
+          ? req.rolePreview?.assignedEventIds ?? await appDb.listUserEventIds(req.auth.user.id)
           : undefined;
         const dashboard = await buildAdminAgentDashboard(selectedEventId, getRequestOrganizationId(req), allowedEventIds);
         return res.json(dashboard);

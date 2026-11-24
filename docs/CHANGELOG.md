@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.10 - 2026-11-24
+
+- Let owners preview staff and attendee experiences without leaving their session. Preview requests are read-only.
+- Make the registration roster resizable, shorten booking references, and show slip and booking statuses in the review queue.
+
 ## 0.11.9 - 2026-11-23
 
 - Include paid registrations in Operations reports and align paid roster permissions with legacy registrations. Notify operators about booking activity.

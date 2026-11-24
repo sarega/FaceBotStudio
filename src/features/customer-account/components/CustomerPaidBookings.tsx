@@ -4,7 +4,7 @@ import { paidSeminarFields, type EditableSeminarKey, type PaidSeminarKey, type P
 import { PaymentCountdown } from "../../../components/PaymentCountdown";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CheckCircle2, UploadCloud } from "lucide-react";
-import { customerApi } from "./CustomerAccountScreen";
+import { useCustomerApi } from "./CustomerAccountScreen";
 
 type Booking = {
   id: string;
@@ -38,6 +38,7 @@ const seminarLabels: Record<PaidSeminarKey, string> = {
 function PreferenceInput({ locale, field, initial, path, attendeeId, onSaved }: { locale: CustomerLocale;
   field: PreferenceField; initial?: string; path: string; attendeeId?: string; onSaved: (value: string) => void;
 }) {
+  const customerApi = useCustomerApi();
   const t = (th: string, en: string) => locale === "th" ? th : en;
   const [value, setValue] = useState(initial ?? "");
   const [busy, setBusy] = useState(false);
@@ -97,6 +98,7 @@ function Step({n,title,children,emphasis=false}:{n:number;title:string;children:
 
 type PaymentDisplay = { bank_name: string; account_name: string; account_number: string; qr_png_base64: string };
 function ExternalPaymentInstructions({ locale, eventId, bookingId }: { locale: CustomerLocale; eventId: string; bookingId: string }) {
+  const customerApi = useCustomerApi();
   const t = (th: string, en: string) => locale === "th" ? th : en;
   const [shareError, setShareError] = useState<CustomerCopy>();
   const [details,setDetails] = useState<PaymentDisplay>();
@@ -157,6 +159,7 @@ function ExternalPaymentInstructions({ locale, eventId, bookingId }: { locale: C
 export function CustomerPaidBookings({ locale = "th", overview = false, tickets = false, onPaymentChanged }: {
   locale?: CustomerLocale; overview?: boolean; tickets?: boolean; onPaymentChanged?: () => void;
 }) {
+  const customerApi = useCustomerApi();
   const t = (th: string, en: string) => locale === "th" ? th : en;
   const [reference, setReference] = useState(() => {
     if (overview || tickets) return "";

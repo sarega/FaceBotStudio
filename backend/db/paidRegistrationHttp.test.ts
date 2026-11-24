@@ -13,6 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { hashPassword, hashSessionToken } from "../auth";
 import { SqliteAppDatabase } from "./sqliteAdapter";
+import { ROLE_PREVIEW_EVENT_HEADER, ROLE_PREVIEW_HEADER, STAFF_PREVIEW_ROLES } from "../../src/lib/rolePreview";
 
 test("paid booking HTTP covers group capacity, proof review and admission", { timeout: 25_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), "facebot-paid-http-"));
@@ -41,6 +42,10 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       username: "fixture-reviewer", display_name: "Fixture reviewer", password_hash: "fixture", role: "admin",
     });
     await db.createSession(reviewer.id, hashSessionToken("test-reviewer"), new Date(Date.now() + 3_600_000));
+    const owner = await db.createUser({
+      username: "fixture-owner", display_name: "Fixture owner", password_hash: "fixture", role: "owner",
+    });
+    await db.createSession(owner.id, hashSessionToken("test-staff-owner"), new Date(Date.now() + 3_600_000));
     const fixture = new Database(database);
     try {
       for (const token of ["test-owner", "test-other"]) {
@@ -109,6 +114,28 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const profileUrl = origin + "/api/auth/profile";
     const patchProfile = (input: object, headers: Record<string, string>) =>
       fetch(profileUrl, { method: "PATCH", headers, body: JSON.stringify(input) });
+    const ownerHeaders = { ...staffCreateHeaders, Cookie: "fbs_session=test-staff-owner; fbs_csrf=staff-csrf" };
+    const previewHeaders = { ...ownerHeaders, [ROLE_PREVIEW_HEADER]: "operator", [ROLE_PREVIEW_EVENT_HEADER]: event.id };
+    for (const role of STAFF_PREVIEW_ROLES) {
+      const preview = await fetch(origin + "/api/auth/me", { headers: { ...previewHeaders, [ROLE_PREVIEW_HEADER]: role } });
+      assert.equal(preview.status, 200);
+      assert.equal((await preview.json()).user.role, role);
+      assert.match(preview.headers.get("Cache-Control") ?? "", /no-store/);
+    }
+    assert.equal((await fetch(origin + "/api/auth/me", {
+      headers: { ...staffCreateHeaders, [ROLE_PREVIEW_HEADER]: "operator" },
+    })).status, 403);
+    assert.equal((await fetch(origin + "/api/auth/me", { headers: { [ROLE_PREVIEW_HEADER]: "admin" } })).status, 401);
+    const assignedEvents = await fetch(origin + "/api/events", { headers: previewHeaders });
+    assert.deepEqual((await assignedEvents.json()).map(({ id }: { id: string }) => id), [event.id]);
+    assert.equal((await fetch(origin + "/api/auth/users", { headers: previewHeaders })).status, 403);
+    assert.equal((await fetch(origin + "/api/auth/users", {
+      headers: { ...previewHeaders, [ROLE_PREVIEW_HEADER]: "admin" },
+    })).status, 200);
+    assert.equal((await patchProfile({ display_name: "Changed in preview" }, previewHeaders)).status, 403);
+    assert.equal((await db.getUserById(owner.id))?.display_name, "Fixture owner");
+    const originalSession = await fetch(origin + "/api/auth/me", { headers: ownerHeaders });
+    assert.equal((await originalSession.json()).user.role, "owner");
     const profilePayload = { display_name: "  ผู้ดูแลทีม  ", id: "another-user", username: "changed", role: "owner" };
     assert.equal((await patchProfile(profilePayload, { "Content-Type": "application/json" })).status, 401);
     assert.equal((await patchProfile(profilePayload, { ...staffCreateHeaders, "x-csrf-token": "wrong" })).status, 403);
@@ -128,6 +155,8 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     });
     assert.equal(freeCreated.status, 201, await freeCreated.clone().text());
     const freeEvent = await freeCreated.json();
+    assert.equal((await fetch(origin + "/api/settings?event_id=" + event.id, { headers: previewHeaders })).status, 200);
+    assert.equal((await fetch(origin + "/api/settings?event_id=" + freeEvent.id, { headers: previewHeaders })).status, 403);
     assert.equal((await db.getEventById(freeEvent.id))?.status, "active");
     const freeSettings = await db.getSettingsMap(freeEvent.id);
     assert.equal(freeSettings.event_public_page_enabled, "1");

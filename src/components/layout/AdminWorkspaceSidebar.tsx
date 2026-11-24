@@ -59,7 +59,7 @@ type AdminWorkspaceSidebarProps = {
   onLanguageChange: (language: AppLanguage) => void | Promise<void>;
   themeMode: ThemeMode;
   setThemeMode: ThemeModeSetter;
-  onLogout: () => void | Promise<void>;
+  onLogout?: () => void | Promise<void>;
   selectedEvent: EventRecord | null;
   getEventStatusTone: (status: EventRecord["effective_status"]) => BadgeTone;
   getEventStatusLabel: (status: EventRecord["effective_status"]) => string;
@@ -704,7 +704,7 @@ export function AdminWorkspaceSidebar({
                 ))}
               </div>
             </div>
-            <button
+            {onLogout && <button
               type="button"
               onClick={() => {
                 setUserMenuOpen(false);
@@ -716,7 +716,7 @@ export function AdminWorkspaceSidebar({
             >
               <LogOut className="h-4 w-4" />
               {label("user.logout", "Logout")}
-            </button>
+            </button>}
           </div>
         )}
       </div>

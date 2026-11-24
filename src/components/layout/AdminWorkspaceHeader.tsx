@@ -17,7 +17,7 @@ type BooleanStateSetter = (value: boolean | ((current: boolean) => boolean)) => 
 
 type AdminWorkspaceHeaderProps = {
   language: AppLanguage;
-  notificationControl?: ReactNode;
+  headerActions?: ReactNode;
   isAgentMobileFocusMode: boolean;
   sidebarCollapsed: boolean;
   onToggleSidebarCollapsed: () => void;
@@ -39,7 +39,7 @@ type AdminWorkspaceHeaderProps = {
 };
 
 export function AdminWorkspaceHeader({
-  language, notificationControl,
+  language, headerActions,
   isAgentMobileFocusMode,
   sidebarCollapsed,
   onToggleSidebarCollapsed,
@@ -123,7 +123,7 @@ export function AdminWorkspaceHeader({
               >
                 <Search className="h-4 w-4" />
               </button>
-              {notificationControl && <div className="lg:hidden">{notificationControl}</div>}
+              {headerActions && <div className="lg:hidden">{headerActions}</div>}
             </div>
           </div>
 
@@ -186,7 +186,7 @@ export function AdminWorkspaceHeader({
               </div>
             </div>
           </div>
-          {notificationControl && <div className="ml-auto hidden shrink-0 pl-2 lg:flex">{notificationControl}</div>}
+          {headerActions && <div className="ml-auto hidden shrink-0 pl-2 lg:flex">{headerActions}</div>}
         </div>
       </div>
     </header>
