@@ -2485,7 +2485,7 @@ html.theme-dark .registration-admin-review .registration-section-content > .flex
   outline-offset: 1px;
   box-shadow: 0 0 0 5px #3b82f633;
 }
-.rooming-guest-list { height: clamp(8rem, 26dvh, 16rem); }
+.rooming-guest-list { height: max(8rem, 34dvh); }
 .rooming-room-list {
   display: grid;
   align-content: start;
@@ -2493,12 +2493,13 @@ html.theme-dark .registration-admin-review .registration-section-content > .flex
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
   grid-auto-rows: max-content;
   gap: .5rem;
-  height: clamp(15rem, 48dvh, 29rem);
+  height: max(15rem, 65dvh);
 }
 @container rooming (min-width: 43rem) {
   .rooming-board {
     grid-template-columns: minmax(13rem, 1fr) minmax(0, 2.6fr);
-    height: clamp(20rem, 64dvh, 56rem);
+    /* Leave room for the sticky workspace header when the board is in view. */
+    height: max(20rem, calc(100dvh - 5rem));
   }
   .rooming-scroll { flex: 1; height: auto; overscroll-behavior: contain; }
 }

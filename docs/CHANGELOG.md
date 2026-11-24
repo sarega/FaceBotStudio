@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.14 - 2026-11-24
+
+- Give the guest and room lists more vertical space while keeping each list independently scrollable.
+
 ## 0.11.13 - 2026-11-24
 
 - Keep room cards at their full height in the scrollable Room Assignments grid so new rooms and bed controls remain accessible.

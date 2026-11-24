@@ -1,5 +1,13 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.14",
+    date: "2026-11-24",
+    title: "More space for room assignments",
+    features: [
+      "See more guests and rooms at once with taller, independently scrolling lists",
+    ],
+  },
+  {
     version: "0.11.13",
     date: "2026-11-24",
     title: "Room cards stay accessible",
