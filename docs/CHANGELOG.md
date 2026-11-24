@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.13 - 2026-11-24
+
+- Keep room cards at their full height in the scrollable Room Assignments grid so new rooms and bed controls remain accessible.
+
 ## 0.11.12 - 2026-11-24
 
 - Add optional phone numbers for individual attendees during registration and booking edits so staff can contact guests directly on group bookings.

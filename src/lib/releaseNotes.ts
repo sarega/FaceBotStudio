@@ -1,5 +1,13 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.13",
+    date: "2026-11-24",
+    title: "Room cards stay accessible",
+    features: [
+      "Keep room cards from overlapping when adding rooms or assigning guests",
+    ],
+  },
+  {
     version: "0.11.12",
     date: "2026-11-24",
     title: "Room assignments and Checker workspace",

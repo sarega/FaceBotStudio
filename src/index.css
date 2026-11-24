@@ -2491,6 +2491,7 @@ html.theme-dark .registration-admin-review .registration-section-content > .flex
   align-content: start;
   align-items: start;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  grid-auto-rows: max-content;
   gap: .5rem;
   height: clamp(15rem, 48dvh, 29rem);
 }
