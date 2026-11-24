@@ -1634,7 +1634,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
 /** Read-only view: one row per person, not per booking.
  * Never duplicate paid attendees into legacy registrations storage.
  */
-export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<PaidRow[]> {
+export function* listPaidAttendeeRoster(eventId:string,limit=10000,includeReportFields=false):PaidCommand<PaidRow[]> {
   const safeLimit=Math.min(Math.max(Math.trunc(limit)||10000,1),10001);
   const rows=yield query(
     `SELECT a.id AS attendee_id,a.booking_id,a.event_id,a.ordinal,a.first_name,a.last_name,
@@ -1643,6 +1643,14 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<
        b.reference AS booking_reference,b.customer_id,b.contact_json AS booking_contact_json,
        b.state AS booking_state,b.payment_state,b.version AS booking_version,b.created_ms AS booked_ms,b.due_ms,
        b.total_minor AS booking_total_minor,
+       ${includeReportFields ? `
+         ${appliedCouponFields},
+         ${verifiedCash} AS verified_cash_minor,
+         ${pendingEvidence} AS report_pending_proofs,
+         COALESCE((SELECT amount_minor FROM paid_booking_credit_uses WHERE booking_id=b.id),0) AS credit_used_minor,
+         COALESCE((SELECT amount_minor FROM paid_booking_credits WHERE booking_id=b.id),0) AS credit_issued_minor,
+         COALESCE((SELECT SUM(amount_minor) FROM paid_refunds WHERE booking_id=b.id),0) AS refunded_minor,
+       ` : ""}
        CASE WHEN b.state='verification_pending' OR ${confirmedBalance}>0 THEN (SELECT SUM(COALESCE(pa.observed_minor,pa.claimed_minor)) FROM paid_payment_attempts pa
          WHERE pa.event_id=b.event_id AND pa.booking_id=b.id AND pa.status IN ('proof_submitted','exception')
          ) END AS pending_slip_minor,
@@ -1673,6 +1681,7 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000):PaidCommand<
     const expired=row.booking_state==="awaiting_payment" && Number(row.due_ms)<=now;
     const state=row.cancelled_ms!=null?"cancelled":expired?"expired":String(row.booking_state);
     return {...row,booking_state:state,booking_version:Number(row.booking_version),
+      ...(includeReportFields ? { report_booking_state: expired ? "expired" : row.booking_state } : {}),
       ordinal:Number(row.ordinal),unit_minor:Number(row.unit_minor),
       booked_ms:Number(row.booked_ms),due_ms:Number(row.due_ms),
       booking_total_minor:Number(row.booking_total_minor),

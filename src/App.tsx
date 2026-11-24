@@ -11276,6 +11276,8 @@ export default function App() {
               )}
               <RegistrationsScreen
                 apiFetch={apiFetch}
+                canExportFinancialReports={canReviewPaidSlips}
+                canExportPaymentFollowup={canManageRegistrations}
                 onManagePaidBooking={canReviewPaidSlips ? reference => setReviewFocus({ eventId: selectedEventId, reference, edit: true }) : undefined}
                 onPaidBookingCancelled={canReviewPaidSlips ? () => setNotificationRefresh(value => value + 1) : undefined}
                 language={language}

@@ -25,6 +25,8 @@ import dotenv from "dotenv";
 import { sanitizeEventDescriptionHtml } from "./backend/eventDescriptionHtml";
 import { hasEventDescriptionMarkup, renderEventDescriptionHtml } from "./src/lib/eventDescriptionHtml";
 import { parseOutreachCsv } from "./backend/outreachCsv";
+import { buildRegistrationReportHtml } from "./backend/registrationReports";
+import { isRegistrationReportKind } from "./src/lib/registrationReportKinds";
 import { buildStoredZipArchive, createStoredZipWriter } from "./backend/zipArchive";
 import {
   ROLE_PREVIEW_EVENT_HEADER,
@@ -20385,6 +20387,54 @@ async function startServer() {
       }
     });
   }
+
+  app.get(
+    "/api/registrations/report",
+    requireRoles(REGISTRATION_ROSTER_ROLES),
+    requireEventScope({ allowDefault: false, allowCheckinAccess: false }),
+    registrationsExportRateLimit,
+    async (req: AuthenticatedRequest, res) => {
+      const { kind, language } = req.query;
+      if (!isRegistrationReportKind(kind) || (language !== "th" && language !== "en")) {
+        return res.status(400).json({ error: "invalid_registration_report" });
+      }
+      const { role, organization_id: organizationId } = req.auth!.user;
+      if ((kind === "accounting" || kind === "coupons") && role !== "owner" && role !== "admin" ||
+          kind === "followup" && role === "checker") {
+        return res.status(403).json({ error: "Insufficient permissions" });
+      }
+      const eventId = getRequestedEventId(req);
+      try {
+        const [paid, legacy, event] = await Promise.all([
+          appDb.listPaidAttendeeRoster(eventId, organizationId, 10001, kind !== "attendees"),
+          kind === "attendees" ? appDb.exportRegistrations(eventId) : [],
+          appDb.getEventById(eventId),
+        ]);
+        if (paid.length + legacy.length > 10000) {
+          return res.status(422).json({ error: "registration_report_too_large" });
+        }
+        const html = buildRegistrationReportHtml({
+          kind, language, eventName: event?.name || eventId, generatedAt: Date.now(),
+          paid, legacy, fontCss: buildEmbeddedTicketFontCss(), escape: escapeXml,
+        });
+        const { browser } = await launchTicketBrowser();
+        try {
+          const page = await browser.newPage();
+          await page.setContent(html, { waitUntil: "load" });
+          const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+          await recordAudit(req, "registration.report_downloaded", "event", eventId, { kind, paid: paid.length, legacy: legacy.length });
+          return res.set("Cache-Control", "private, no-store")
+            .attachment(`registrations-${kind}.pdf`).type("application/pdf").send(Buffer.from(pdf));
+        } finally {
+          await browser.close();
+        }
+      } catch (error) {
+        if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });
+        console.error("Could not generate registration PDF", error);
+        return res.status(500).json({ error: "report_unavailable" });
+      }
+    },
+  );
 
   app.get(
     "/api/registrations/export",

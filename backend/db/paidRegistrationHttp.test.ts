@@ -1126,6 +1126,24 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(freeDetails.payment_state,"verified");
     assert.equal(freeDetails.coupon.code,"TESTFREE");
     assert.equal(freeDetails.coupon.discount_minor,65000);
+    const reportRoster = await db.listPaidAttendeeRoster(newExternalEvent.id, "org_default", 10001, true);
+    const couponReportRow = reportRoster.find(row => row.booking_id === freeBooking.id);
+    assert.equal(couponReportRow?.coupon_code, "TESTFREE");
+    assert.equal(Number(couponReportRow?.coupon_discount_minor), 65000);
+    assert.equal(Number(couponReportRow?.verified_cash_minor), 0);
+    const regularRoster = await db.listPaidAttendeeRoster(newExternalEvent.id, "org_default");
+    assert.ok(regularRoster.every(row => !Object.hasOwn(row, "coupon_code")));
+    const registrationReport = origin + "/api/registrations/report?event_id=" + newExternalEvent.id + "&language=th";
+    assert.equal((await fetch(registrationReport + "&kind=bad", { headers: staffCreateHeaders })).status, 400);
+    assert.equal((await fetch(registrationReport + "&kind=coupons", { headers: headers("test-owner") })).status, 401);
+    if (process.env.FACEBOT_TEST_REPORT_PDF) {
+      for (const kind of ["accounting", "coupons", "followup", "attendees"]) {
+        const response = await fetch(registrationReport + "&kind=" + kind, { headers: staffCreateHeaders });
+        assert.equal(response.status, 200, await response.clone().text().then(body => body.slice(0, 150)));
+        assert.match(response.headers.get("content-disposition") ?? "", new RegExp(`registrations-${kind}\\.pdf`));
+        assert.equal(Buffer.from(await response.arrayBuffer()).subarray(0, 5).toString(), "%PDF-");
+      }
+    }
     const ticket=await fetch(ownerFreeUrl+"/attendees/"+freeDetails.attendees[0].id+
       "/credential",{headers:headers("test-owner")});
     assert.equal(ticket.status,200);

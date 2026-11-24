@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import { PaidAttendeeRoster } from "./PaidAttendeeRoster";
+import { registrationReportTitles, type ReportKind } from "../../../lib/registrationReportKinds";
 import type { PaidRosterPerson,PaidRosterSummary } from "./paidRosterTypes";
 import type { ReactNode } from "react";
 import {
@@ -8,6 +9,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Download,
+  FileText,
   ExternalLink,
   MessageCircle,
   QrCode,
@@ -124,6 +126,8 @@ type RegistrationsScreenProps = {
   statusUpdateLoading: boolean;
   statusUpdateMessage: string;
   language: AppLanguage;
+  canExportFinancialReports?: boolean;
+  canExportPaymentFollowup?: boolean;
   onManagePaidBooking?: (reference: string) => void;
   onPaidBookingCancelled?: () => void;
   apiFetch?: (input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
@@ -177,6 +181,8 @@ export function RegistrationsScreen({
   statusUpdateLoading,
   statusUpdateMessage,
   language,
+  canExportFinancialReports,
+  canExportPaymentFollowup,
   apiFetch,
   onPaidBookingCancelled,
   onManagePaidBooking,
@@ -185,6 +191,33 @@ export function RegistrationsScreen({
   const [paidSummary,setPaidSummary]=useState<PaidRosterSummary|null>(null);
   const [paidError,setPaidError]=useState<"access" | "request" | null>(null);
   const [paidRevision,setPaidRevision]=useState(0);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const reportKinds: ReportKind[] = [
+    ...(canExportFinancialReports ? ["accounting", "coupons"] as const : []),
+    ...(canExportPaymentFollowup ? ["followup"] as const : []),
+    "attendees",
+  ];
+  async function downloadRegistrationReport(kind: ReportKind) {
+    if (!apiFetch || !selectedEventId || reportBusy) return;
+    setReportBusy(true);
+    setReportError("");
+    try {
+      const query = new URLSearchParams({ event_id: selectedEventId, kind, language });
+      const response = await apiFetch(`/api/registrations/report?${query}`);
+      if (!response.ok || !response.headers.get("Content-Type")?.startsWith("application/pdf")) throw new Error();
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `registrations-${kind}.pdf`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setReportError(language === "th" ? "สร้างรายงาน PDF ไม่สำเร็จ กรุณาลองอีกครั้ง" : "Could not generate the PDF. Try again.");
+    } finally {
+      setReportBusy(false);
+    }
+  }
   useEffect(()=>{
     const update=()=>setPaidRevision(n=>n+1);
     window.addEventListener("meetrix:paid-booking-updated",update);
@@ -315,8 +348,21 @@ export function RegistrationsScreen({
                 <Download className="h-3.5 w-3.5" />
                 <span className="font-medium">Export ทุกคน (Excel / CSV)</span>
               </MenuActionLink>
+              {apiFetch && selectedEventId && <>
+                <p className="border-t border-slate-200 px-3 pb-1 pt-2 text-xs font-semibold text-slate-500">
+                  {language === "th" ? "รายงาน PDF · ทั้งอีเวนต์" : "PDF reports · entire event"}
+                </p>
+                {reportKinds.map(kind => <MenuActionItem key={kind} disabled={reportBusy} onClick={() => void downloadRegistrationReport(kind)}>
+                  <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  {registrationReportTitles[kind][language === "th" ? 0 : 1]}
+                </MenuActionItem>)}
+              </>}
             </InlineActionsMenu>
           </div>
+          {reportBusy && <p className="px-4 pb-2 text-sm text-slate-600" role="status">
+            {language === "th" ? "กำลังสร้างรายงาน PDF…" : "Generating PDF report…"}
+          </p>}
+          {reportError && <p className="px-4 pb-2 text-sm text-rose-700" role="alert">{reportError}</p>}
           <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />

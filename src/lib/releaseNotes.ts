@@ -1,5 +1,14 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.11",
+    date: "2026-11-24",
+    title: "Registration PDF reports",
+    features: [
+      "Download accounting, follow-up, coupon and VIP, and attendee and meal reports from Registration Actions",
+      "Reconcile finances once per booking and see the attendee names for group bookings",
+    ],
+  },
+  {
     version: "0.11.10",
     date: "2026-11-24",
     title: "Role previews and clearer slip review",

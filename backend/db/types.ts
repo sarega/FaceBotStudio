@@ -1108,7 +1108,7 @@ export interface AppDatabase {
     activityLimit?:number, activityOffset?:number): Promise<PaidRow | undefined>;
   paidCarpoolPlan(eventId: string, organizationId: string, update?: PaidCarpoolUpdate): Promise<PaidCarpoolPlan | null>;
   paidRoomingPlan(eventId: string, organizationId: string, update?: PaidRoomingUpdate): Promise<PaidRoomingPlan | null>;
-  listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number): Promise<PaidRow[]>;
+  listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number, includeReportFields?: boolean): Promise<PaidRow[]>;
   readPaidAdminBooking(eventId: string, organizationId: string, reference: string): Promise<PaidRow | undefined>;
   managePaidBooking(input: PaidAdminAction): Promise<{ status: string; payment_status: string; version: number; due_at: string }>;
   listDailyPaidTransfers(eventId: string, organizationId: string, start: number, end: number): Promise<PaidRow[]>;

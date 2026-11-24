@@ -794,10 +794,10 @@ export class PostgresAppDatabase implements AppDatabase {
     });
   }
 
-  async listPaidAttendeeRoster(eventId: string, organizationId: string, limit=10000) {
+  async listPaidAttendeeRoster(eventId: string, organizationId: string, limit=10000, includeReportFields=false) {
     return this.runPaidCommand(eventId,(ownerId)=>{
       if(ownerId!==organizationId) throw new PaidBookingError("event_not_found");
-      return listPaidAttendeeRoster(eventId,limit);
+      return listPaidAttendeeRoster(eventId,limit,includeReportFields);
     });
   }
 

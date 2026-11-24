@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.11 - 2026-11-24
+
+- Download event-scoped accounting, payment follow-up, coupon and VIP, and attendee and meal PDFs from the registration Actions menu.
+- Count financial totals once per booking, show the attendee names for group bookings, and keep registration and payment statuses distinct.
+
 ## 0.11.10 - 2026-11-24
 
 - Let owners preview staff and attendee experiences without leaving their session. Preview requests are read-only.
