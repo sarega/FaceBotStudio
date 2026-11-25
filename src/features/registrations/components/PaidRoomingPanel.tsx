@@ -3,6 +3,7 @@ import { BedDouble, BedSingle, Download, Plus, Sofa, GripVertical, Lock, Refresh
 import { MAX_ROOM_BEDS, ROOM_BED_COUNTS, draftRoomingPlan, isRoomBedCount, moveRoomingGuest, parseRoomingPlan, type RoomingRoom } from "../../../../backend/roomingPlan";
 import type { PaidRoomingPlan } from "../../../../backend/db/paidRegistration";
 import { downloadRegistrationCsv } from "./registrationCsv";
+import { LogisticsPdfButton } from "./LogisticsPdfButton";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { RegistrationStatusTag, getRosterStatus, rosterStatusLabel } from "./RegistrationStatusTag";
 
@@ -346,6 +347,8 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
               : t(`เพิ่มห้องร่าง ${next.length - rooms.length} ห้อง`, `Added ${next.length - rooms.length} draft rooms.`));
           }}><WandSparkles className="h-4 w-4" aria-hidden="true" /> {t("จัดร่างอัตโนมัติ", "Draft rooms")}</button>
           <button type="button" className={button} disabled={busy || (!rooms.length && !unassigned.length)} onClick={exportRooms}><Download className="h-4 w-4" aria-hidden="true" /> {t("ส่งออก CSV", "Export CSV")}</button>
+          <LogisticsPdfButton path={path} language={language} filename="room-assignments.pdf" apiFetch={apiFetch}
+            ready={!busy && !!plan.rooms.length} dirty={dirty} />
           <button type="button" className={`${button} registration-admin-control-primary`} disabled={busy || !dirty} onClick={() => void save()}><Save className="h-4 w-4" aria-hidden="true" /> {t("บันทึกผัง", "Save plan")}</button>
         </>}
         <button type="button" className={button} disabled={busy} onClick={() => {

@@ -1,11 +1,11 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
+export { ALL_USER_ROLES, type UserRole } from "../src/lib/staffRoles";
 
 export const SESSION_COOKIE_NAME = "fbs_session";
 export const CUSTOMER_SESSION_COOKIE_NAME = "fbs_customer_session";
 export const CHECKIN_ACCESS_COOKIE_NAME = "fbs_checkin_access";
 export const CSRF_COOKIE_NAME = "fbs_csrf";
 export const CUSTOMER_CSRF_COOKIE_NAME = "fbs_customer_csrf";
-export const ALL_USER_ROLES = ["owner", "admin", "operator", "cashier", "checker", "viewer"] as const;
 const SESSION_COOKIE_PATH = "/";
 const CHECKIN_ACCESS_COOKIE_PATH = "/api/checkin-access";
 const CSRF_COOKIE_PATH = "/";
@@ -33,7 +33,6 @@ type CookieRequestLike = {
   headers?: Record<string, unknown>;
 };
 
-export type UserRole = (typeof ALL_USER_ROLES)[number];
 type ScryptHashParameters = { N: number; r: number; p: number };
 
 export type PasswordVerificationResult = {

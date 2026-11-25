@@ -11,6 +11,7 @@ const THAI_LABELS: Record<string, string> = {
   "nav.outreach": "ประชาสัมพันธ์",
   "nav.reports": "รายงาน",
   "nav.registrations": "ผู้ลงทะเบียน",
+  "nav.logistics": "จัดห้องและรถ",
   "nav.directTickets": "บัตรตรง",
   "nav.inbox": "กล่องข้อความสาธารณะ",
   "nav.checkin": "เช็กอิน",

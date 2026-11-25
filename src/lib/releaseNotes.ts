@@ -1,5 +1,14 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.17",
+    date: "2026-11-25",
+    title: "Room and transport coordination",
+    features: [
+      "Assign staff to manage rooms and carpools for selected events",
+      "Download room and carpool plans as PDFs grouped by room or car",
+    ],
+  },
+  {
     version: "0.11.16",
     date: "2026-11-25",
     title: "Carpool reload and review queue controls",

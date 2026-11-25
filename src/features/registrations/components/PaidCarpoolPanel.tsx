@@ -5,6 +5,7 @@ import {
   type CarpoolAttendee, type CarpoolCar, type CarpoolLayout, type CarpoolRole, type PaidCarpoolPlan,
 } from "../../../../backend/carpoolPlan";
 import { downloadRegistrationCsv } from "./registrationCsv";
+import { LogisticsPdfButton } from "./LogisticsPdfButton";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { getRosterStatus, RegistrationStatusTag, rosterStatusLabel } from "./RegistrationStatusTag";
 
@@ -167,6 +168,8 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
         <button type="button" className={control} disabled={busy || dirty || !draft?.attendees.length} onClick={exportCsv}>
           <Download size={14} aria-hidden="true" /> CSV
         </button>
+        <LogisticsPdfButton path={path} language={language} filename="carpool-plan.pdf" apiFetch={apiFetch}
+          ready={!busy && !!saved?.attendees.length} dirty={dirty} />
         <button type="button" className={`${control} registration-admin-control-primary`} disabled={busy || !dirty} onClick={() => void request(true)}>
           <Save size={14} aria-hidden="true" />{t("บันทึก", "Save")}
         </button>

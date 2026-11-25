@@ -74,6 +74,7 @@ import { AdminWorkspaceHeader } from "./components/layout/AdminWorkspaceHeader";
 import { AdminWorkspaceSidebar } from "./components/layout/AdminWorkspaceSidebar";
 import { RolePreviewControl } from "./components/layout/RolePreviewControl";
 import { isStaffPreviewRole, readRolePreview, ROLE_PREVIEW_EVENT_HEADER, ROLE_PREVIEW_HEADER, type PreviewRole } from "./lib/rolePreview";
+import { ALL_USER_ROLES, isEventAssignedRole } from "./lib/staffRoles";
 import { CustomerPreviewProvider } from "./features/customer-account/components/CustomerAccountScreen";
 import { WorkspaceInsightsDock } from "./components/layout/WorkspaceInsightsDock";
 import {
@@ -210,7 +211,7 @@ type RegistrationStatus = "registered" | "cancelled" | "checked-in";
 type RegistrationWindowUiState = "open" | "not_started" | "closed" | "invalid";
 type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 
-type AppTab = "notifications" | "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
+type AppTab = "notifications" | "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "logistics" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
 type EventWorkspaceFilter = "all" | EventStatus;
@@ -341,6 +342,7 @@ interface HelpContent {
 }
 
 const TAB_HELP_CONTENT: Record<AppTab, HelpContent> = {
+  logistics: { title: "Rooms & Transport", summary: "Assign rooms and carpools for the selected event.", points: [] },
   notifications: { title: "Notifications", summary: "Review recent booking and payment activity for the selected event.", points: [] },
   reports: {
     title: "Reports Help",
@@ -838,6 +840,7 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
   team: "Team",
   customers: "Customers",
   registrations: "Registrations",
+  logistics: "Rooms & Transport",
   direct_tickets: "Direct Tickets",
   reports: "Reports",
   checkin: "Check-in",
@@ -845,8 +848,6 @@ const APP_TAB_LABELS: Record<AppTab, string> = {
   outreach: "Outreach",
 };
 
-const MANAGEABLE_ROLES: UserRole[] = ["owner", "admin", "operator", "cashier", "checker", "viewer"];
-const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "cashier", "checker", "viewer"];
 const THEME_STORAGE_KEY = "facebotstudio-theme";
 const ATTENDEE_THEME_STORAGE_KEY = "facebotstudio-attendee-theme";
 const ADMIN_AGENT_CHAT_STORAGE_KEY = "facebotstudio-admin-agent-chat-v1";
@@ -892,6 +893,7 @@ const INITIAL_CHECKIN_TOKEN =
     : "";
 
 function getDefaultTabForRole(role: UserRole | null | undefined): AppTab {
+  if (role === "logistics") return "logistics";
   if (role === "cashier") return "direct_tickets";
   if (role === "checker") return "checkin";
   if (role === "viewer") return "logs";
@@ -904,7 +906,7 @@ function readWorkspaceSession() {
   if (typeof window === "undefined") return fallback;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
-    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "organizer", "logs", "settings", "team", "customers", "registrations", "direct_tickets", "reports", "checkin", "inbox", "outreach", "notifications"];
+    const validTabs: AppTab[] = ["event", "mail", "design", "test", "agent", "organizer", "logs", "settings", "team", "customers", "registrations", "logistics", "direct_tickets", "reports", "checkin", "inbox", "outreach", "notifications"];
     return {
       eventId: typeof parsed.eventId === "string" ? parsed.eventId : "",
       activeTab: validTabs.includes(parsed.activeTab as AppTab) ? parsed.activeTab as AppTab : fallback.activeTab,
@@ -3505,6 +3507,7 @@ export default function App() {
   const isCustomerAccountRoute = currentPathname === "/account" || currentPathname.startsWith("/account/");
   const isCustomerAppRoute = currentPathname === "/app" || currentPathname.startsWith("/app/");
   const role = authUser?.role;
+  const logisticsOnly = role === "logistics";
   const canEditSettings = role === "owner" || role === "admin";
   const canRunTest = role === "owner" || role === "admin" || role === "operator";
   const canRunAgent = role === "owner" || role === "admin" || role === "operator";
@@ -3523,12 +3526,12 @@ export default function App() {
   const canManageTargetRole = (user: AuthUser) => {
     if (!authUser || user.id === authUser.id || !canChangeRoles) return false;
     if (authUser.role === "owner") return user.role !== "owner";
-    return user.role === "operator" || user.role === "cashier" || user.role === "checker" || user.role === "viewer";
+    return isEventAssignedRole(user.role);
   };
   const canManageTargetAccess = (user: AuthUser) => {
     if (!authUser || user.id === authUser.id || !canManageUsers) return false;
     if (authUser.role === "owner") return true;
-    return user.role === "operator" || user.role === "cashier" || user.role === "checker" || user.role === "viewer";
+    return isEventAssignedRole(user.role);
   };
   const canDeleteTeamUser = (user: AuthUser) => canManageTargetAccess(user);
   const deferredGlobalSearchQuery = useDeferredValue(normalizeSearchQuery(globalSearchQuery));
@@ -3689,6 +3692,10 @@ export default function App() {
   const canReviewPaidSlips = role === "owner" || role === "admin";
   const canOpenNotifications = (canReviewPaidSlips || role === "operator") && !!selectedEventId;
   const primaryTabs = [
+    ...(logisticsOnly ? [
+      { id: "logistics" as const, icon: Users, label: translate(language, "nav.logistics", "Rooms & Transport") },
+      { id: "settings" as const, icon: User, label: language === "th" ? "บัญชีของฉัน" : "My account" },
+    ] : []),
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: translate(language, "nav.event", "Event") }] : []),
     ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: translate(language, "nav.mail", "Mail") }] : []),
     ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: translate(language, "nav.context", "Context") }] : []),
@@ -3700,7 +3707,7 @@ export default function App() {
     ...(canOpenNotifications ? [{ id: "notifications" as const, icon: Bell, label: language === "th" ? "การแจ้งเตือน" : "Notifications" }] : []),
   ];
   const setupTabs = [
-    ...(authUser ? [{ id: "settings" as const, icon: SettingsIcon, label: translate(language, "nav.settings", "Settings Center") }] : []),
+    ...(authUser && !logisticsOnly ? [{ id: "settings" as const, icon: SettingsIcon, label: translate(language, "nav.settings", "Settings Center") }] : []),
     ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: translate(language, "nav.team", "Team Access") }] : []),
   ];
   const selectedSetupTab = setupTabs.find((tab) => tab.id === activeTab) || setupTabs[0] || null;
@@ -4020,7 +4027,7 @@ export default function App() {
       : "Recent History";
   const inactiveWorkspaceHeading = eventWorkspaceFilter === "inactive" ? "Inactive Workspaces" : "Inactive";
   const archivedWorkspaceHeading = eventWorkspaceFilter === "archived" ? "Archived Workspaces" : "Archived";
-  const selectorEvents = [...nonHistoricalEvents].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
+  const selectorEvents = [...(logisticsOnly ? events : nonHistoricalEvents)].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
   const selectedEventAvailableInSelector = Boolean(
     selectedEvent && selectorEvents.some((event) => event.id === selectedEvent.id),
   );
@@ -4779,6 +4786,11 @@ export default function App() {
 
   const loadAppData = async () => {
     setLoading(true);
+    if (logisticsOnly) {
+      await fetchEvents();
+      setLoading(false);
+      return;
+    }
     try {
       const [eventRows] = await Promise.all([
         fetchEvents(),
@@ -5480,7 +5492,7 @@ export default function App() {
         }
         setOwnerPreviewAccess(account.role === "owner");
         setAuthUser(user);
-        if (user.role === "checker") setActiveTab("checkin");
+        if (user.role === "checker" || user.role === "logistics") setActiveTab(getDefaultTabForRole(user.role));
         setAuthStatus("authenticated");
         void loadUserPreferences();
       } catch {
@@ -5522,7 +5534,7 @@ export default function App() {
   }, [authStatus, isCustomerAccountRoute, isCustomerAppRoute, isCustomerCheckoutRoute, isPublicEventCatalogRoute, role, checkinAccessMode, publicEventSlug]);
 
   useEffect(() => {
-    if (publicEventSlug || authStatus !== "authenticated" || !selectedEventId) return;
+    if (publicEventSlug || authStatus !== "authenticated" || !selectedEventId || logisticsOnly) return;
 
     void (async () => {
       setLoading(true);
@@ -5556,7 +5568,7 @@ export default function App() {
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canViewRegistrations, canManageKnowledge, canManageCheckinAccess, canEditSettings, publicEventSlug]);
+  }, [authStatus, selectedEventId, canRunTest, canViewLogs, canViewRegistrations, canManageKnowledge, canManageCheckinAccess, canEditSettings, publicEventSlug, logisticsOnly]);
 
   useEffect(() => {
     setRegistrationVisibleCount(REGISTRATION_PAGE_SIZE);
@@ -5902,7 +5914,7 @@ export default function App() {
   }, [agentWorkspaceView]);
 
   useEffect(() => {
-    if (checkinAccessMode) return;
+    if (checkinAccessMode || logisticsOnly) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") {
@@ -5914,7 +5926,7 @@ export default function App() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [checkinAccessMode]);
+  }, [checkinAccessMode, logisticsOnly]);
 
   useEffect(() => {
     return () => {
@@ -6021,6 +6033,7 @@ export default function App() {
     if (authStatus !== "authenticated") return;
 
     const allowedTabs = [
+      ...(logisticsOnly ? ["logistics"] : []),
       ...(canEditSettings ? ["event"] : []),
       ...(canEditSettings ? ["mail"] : []),
       ...(canEditSettings ? ["design"] : []),
@@ -6042,7 +6055,7 @@ export default function App() {
     if (!allowedTabs.includes(activeTab)) {
       setActiveTab(allowedTabs[0] || getDefaultTabForRole(role));
     }
-  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canViewRegistrations, canSellDirectTickets, canCheckinRegistrations, canManageCustomers, canManageUsers, canOpenNotifications, role]);
+  }, [authStatus, activeTab, canEditSettings, canRunTest, canRunAgent, canViewLogs, canViewRegistrations, canSellDirectTickets, canCheckinRegistrations, canManageCustomers, canManageUsers, canOpenNotifications, role, logisticsOnly]);
 
   const extractRegistrationId = (rawValue: string) => {
     const text = String(rawValue || "").trim().toUpperCase();
@@ -10174,7 +10187,7 @@ export default function App() {
       events={events}
       teamMessage={teamMessage}
       canManageUsers={canManageUsers}
-      manageableRoles={MANAGEABLE_ROLES}
+      manageableRoles={ALL_USER_ROLES}
       newUserDisplayName={newUserDisplayName}
       onNewUserDisplayNameChange={setNewUserDisplayName}
       newUserUsername={newUserUsername}
@@ -10185,7 +10198,7 @@ export default function App() {
       newUserEventIds={newUserEventIds}
       onNewUserRoleChange={(nextRole) => {
         setNewUserRole(nextRole);
-        if (EVENT_SCOPED_ROLES.includes(nextRole)) {
+        if (isEventAssignedRole(nextRole)) {
           if (!newUserEventIds.length && selectedEventId) setNewUserEventIds([selectedEventId]);
         } else {
           setNewUserEventIds([]);
@@ -10774,6 +10787,7 @@ export default function App() {
             eventLoading={eventLoading}
             onSelectEvent={handleSelectEvent}
             searchShortcutLabel={searchShortcutLabel}
+            showGlobalSearch={!logisticsOnly}
             globalSearchOpen={globalSearchOpen}
             setGlobalSearchOpen={setGlobalSearchOpen}
           />
@@ -11274,7 +11288,17 @@ export default function App() {
             />
           )}
 
-          {activeTab === "registrations" && (
+          {activeTab === "logistics" && logisticsOnly && (
+            <div key="logistics" className="grid gap-2">
+              {selectedEventId && selectedEvent ? <>
+                <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+                <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+              </> : !eventLoading && <p className="text-sm text-slate-600">
+                {eventMessage || (language === "th" ? "ยังไม่มีอีเวนต์ที่ได้รับมอบหมาย" : "No events have been assigned to you.")}
+              </p>}
+            </div>
+          )}
+          {activeTab === "registrations" && canViewRegistrations && (
             <motion.div
               key="registrations"
               initial={{ opacity: 0, y: 10 }}
@@ -11690,7 +11714,7 @@ export default function App() {
             closeChannelConfigDialog();
           }
         }}
-        globalSearchOpen={globalSearchOpen}
+        globalSearchOpen={!logisticsOnly && globalSearchOpen}
         globalSearchInputRef={globalSearchInputRef}
         globalSearchQuery={globalSearchQuery}
         onGlobalSearchQueryChange={setGlobalSearchQuery}

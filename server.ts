@@ -28,6 +28,8 @@ import { hasEventDescriptionMarkup, renderEventDescriptionHtml } from "./src/lib
 import { parseOutreachCsv } from "./backend/outreachCsv";
 import { buildRegistrationReportHtml } from "./backend/registrationReports";
 import { buildRegistrationRosterCsv } from "./backend/registrationRosterCsv";
+import { buildLogisticsReportHtml } from "./backend/logisticsReport";
+import { isEventAssignedRole } from "./src/lib/staffRoles";
 import { isRegistrationReportKind, isRosterCsvKind } from "./src/lib/registrationReportKinds";
 import { buildStoredZipArchive, createStoredZipWriter } from "./backend/zipArchive";
 import {
@@ -466,6 +468,7 @@ type EventScopeOptions = {
   paramKey?: string | null;
   allowDefault?: boolean;
   allowCheckinAccess?: boolean;
+  allowLogistics?: boolean;
 };
 
 type AuthenticatedRequest = Request & {
@@ -2780,8 +2783,7 @@ function resolveTrustedCsrfOrigins() {
 
 const TRUSTED_CSRF_ORIGINS = resolveTrustedCsrfOrigins();
 const UNSAFE_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const EVENT_SCOPED_USER_ROLES: UserRole[] = ["owner", "admin", "operator", "cashier", "checker", "viewer"];
-const EVENT_ASSIGNMENT_ROLES = new Set<UserRole>(["operator", "cashier", "checker", "viewer"]);
+const LOGISTICS_ROLES: UserRole[] = ["owner", "admin", "logistics"];
 const REGISTRATION_ROSTER_ROLES: UserRole[] = ["owner", "admin", "operator", "checker"];
 const PAID_NOTIFICATION_ROLES: UserRole[] = ["owner", "admin", "operator"];
 const SENSITIVE_SETTINGS_KEYS = new Set([
@@ -3046,7 +3048,8 @@ function requireEventScope(options?: EventScopeOptions) {
       return res.status(403).json({ error: "Check-in scope cannot access another event" });
     }
 
-    if (req.auth?.user && !userHasRole(req.auth.user.role, EVENT_SCOPED_USER_ROLES)) {
+    if (req.auth?.user && (!ALL_USER_ROLES.includes(req.auth.user.role) ||
+        req.auth.user.role === "logistics" && !options?.allowLogistics)) {
       await recordSecurityEvent(req, "security.event_scope_denied", {
         reason: "role_not_allowed",
         role: req.auth.user.role,
@@ -3056,7 +3059,7 @@ function requireEventScope(options?: EventScopeOptions) {
 
     if (req.auth?.user) {
       const role = req.auth.user.role;
-      const requiresEventAssignment = role !== "owner" && role !== "admin";
+      const requiresEventAssignment = isEventAssignedRole(role);
       if (requiresEventAssignment) {
         const assigned = req.rolePreview
           ? req.rolePreview.assignedEventIds.includes(scope.eventId)
@@ -3294,7 +3297,7 @@ async function attachSession(req: AuthenticatedRequest, res: Response, next: Nex
         return res.status(403).json({ error: "Role preview is read-only" });
       }
       const eventId = req.get(ROLE_PREVIEW_EVENT_HEADER);
-      const event = eventId && EVENT_ASSIGNMENT_ROLES.has(previewRole) ? await appDb.getEventById(eventId) : null;
+      const event = eventId && isEventAssignedRole(previewRole) ? await appDb.getEventById(eventId) : null;
       const assignedEventIds = event && event.organizer_id === user.organization_id ? [event.id] : [];
       req.rolePreview = { assignedEventIds };
       user = { ...user, role: previewRole, assigned_event_ids: assignedEventIds };
@@ -3460,7 +3463,7 @@ async function eventIdsBelongToOrganization(eventIds: string[], organizationId: 
 }
 
 function canManageTargetUser(actor: AuthUserRow, target: AuthUserRow, action: "status" | "role") {
-  if (actor.id === target.id) {
+  if (actor.id === target.id || actor.organization_id !== target.organization_id) {
     return false;
   }
 
@@ -3469,7 +3472,7 @@ function canManageTargetUser(actor: AuthUserRow, target: AuthUserRow, action: "s
   }
 
   if (actor.role === "admin") {
-    return target.role === "operator" || target.role === "cashier" || target.role === "checker" || target.role === "viewer";
+    return isEventAssignedRole(target.role);
   }
 
   return false;
@@ -16028,9 +16031,9 @@ async function startServer() {
         return res.status(400).json({ error: "Create owners manually in the database only" });
       }
       if (req.auth?.user.role === "admin" && normalizedRole === "admin") {
-        return res.status(403).json({ error: "Admins can only create operator, cashier, checker, or viewer accounts" });
+        return res.status(403).json({ error: "Admins can only create event-assigned staff accounts" });
       }
-      if (EVENT_ASSIGNMENT_ROLES.has(normalizedRole) && (!assignedEventIds || assignedEventIds.length === 0)) {
+      if (isEventAssignedRole(normalizedRole) && (!assignedEventIds || assignedEventIds.length === 0)) {
         return res.status(400).json({ error: "Select at least one event for this account" });
       }
       if (assignedEventIds && !(await eventIdsBelongToOrganization(assignedEventIds, req.auth!.user.organization_id))) {
@@ -16043,7 +16046,7 @@ async function startServer() {
         password_hash: hashPassword(password ?? createSessionToken()),
         invite_email: email || undefined,
         role: normalizedRole,
-        assigned_event_ids: EVENT_ASSIGNMENT_ROLES.has(normalizedRole) ? assignedEventIds || [] : [],
+        assigned_event_ids: isEventAssignedRole(normalizedRole) ? assignedEventIds || [] : [],
       });
       await recordAudit(req, "auth.user_created", "user", user.id, {
         username: user.username,
@@ -16103,7 +16106,7 @@ async function startServer() {
         return res.status(403).json({ error: "You cannot change this user's role" });
       }
       if (req.auth.user.role === "admin" && (normalizedRole === "owner" || normalizedRole === "admin")) {
-        return res.status(403).json({ error: "Admins can only assign operator, cashier, checker, or viewer roles" });
+        return res.status(403).json({ error: "Admins can only assign event-scoped roles" });
       }
 
       if (normalizedRole !== targetUser.role && normalizedRole !== "checker" &&
@@ -16173,7 +16176,7 @@ async function startServer() {
       if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "status")) {
         return res.status(403).json({ error: "You cannot change this user's event access" });
       }
-      if (!EVENT_ASSIGNMENT_ROLES.has(targetUser.role)) {
+      if (!isEventAssignedRole(targetUser.role)) {
         return res.status(400).json({ error: "Only event-scoped accounts can have event assignments" });
       }
       if (!(await eventIdsBelongToOrganization(eventIds, req.auth.user.organization_id))) {
@@ -16501,7 +16504,7 @@ async function startServer() {
   app.get("/api/events", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       let events = await appDb.listEvents(req.auth?.user.organization_id);
-      if (req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)) {
+      if (req.auth?.user && isEventAssignedRole(req.auth.user.role)) {
         const assignedEventIds = new Set(req.rolePreview?.assignedEventIds ?? await appDb.listUserEventIds(req.auth.user.id));
         events = events.filter((event) => assignedEventIds.has(event.id));
       }
@@ -17568,9 +17571,11 @@ async function startServer() {
 
   const paidSettingsPath = "/api/events/:eventId/paid-registration/settings";
   const paidSettingsScope = requireEventScope({ paramKey: "eventId", queryKey: null, bodyKey: null, allowDefault: false, allowCheckinAccess: false });
+  const logisticsScope = requireEventScope({ paramKey: "eventId", queryKey: null, bodyKey: null,
+    allowDefault: false, allowCheckinAccess: false, allowLogistics: true });
 
   const carpoolPath = "/api/events/:eventId/paid-registration/carpool";
-  app.get(carpoolPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+  app.get(carpoolPath, requireRoles(LOGISTICS_ROLES), logisticsScope, async (req: AuthenticatedRequest, res) => {
     try {
       const plan = await appDb.paidCarpoolPlan(req.eventScope!.eventId, req.auth!.user.organization_id);
       return res.set("Cache-Control", "private, no-store").json({ plan });
@@ -17578,7 +17583,7 @@ async function startServer() {
       return res.status(error instanceof PaidBookingError ? 404 : 500).json({ error: "carpool_unavailable" });
     }
   });
-  app.put(carpoolPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+  app.put(carpoolPath, requireRoles(LOGISTICS_ROLES), logisticsScope, async (req: AuthenticatedRequest, res) => {
     const update = parseCarpoolUpdate(readObjectBody(req));
     if (!update) return res.status(400).json({ error: "carpool_invalid_plan" });
     try {
@@ -17592,7 +17597,7 @@ async function startServer() {
   });
 
   const roomingPath = "/api/events/:eventId/paid-registration/rooms";
-  app.get(roomingPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+  app.get(roomingPath, requireRoles(LOGISTICS_ROLES), logisticsScope, async (req: AuthenticatedRequest, res) => {
     try {
       const plan = await appDb.paidRoomingPlan(req.eventScope!.eventId, req.auth!.user.organization_id);
       return res.set("Cache-Control", "private, no-store").json({ plan });
@@ -17600,7 +17605,7 @@ async function startServer() {
       return res.status(error instanceof PaidBookingError ? 404 : 500).json({ error: "rooming_unavailable" });
     }
   });
-  app.put(roomingPath, requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
+  app.put(roomingPath, requireRoles(LOGISTICS_ROLES), logisticsScope, async (req: AuthenticatedRequest, res) => {
     const { version, rooms } = readObjectBody(req);
     const parsed = parseRoomingPlan(rooms);
     if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0 || !parsed) {
@@ -17621,6 +17626,42 @@ async function startServer() {
       return res.status(500).json({ error: "rooming_save_failed" });
     }
   });
+
+  for (const kind of ["rooms", "carpool"] as const) {
+    app.get(`${kind === "rooms" ? roomingPath : carpoolPath}/report`, requireRoles(LOGISTICS_ROLES), logisticsScope,
+      registrationsExportRateLimit, async (req: AuthenticatedRequest, res) => {
+        const eventId = req.eventScope!.eventId;
+        const organizationId = req.auth!.user.organization_id;
+        const language = req.query.language === "th" ? "th" : "en";
+        try {
+          const [event, report] = await Promise.all([
+            appDb.getEventById(eventId),
+            kind === "rooms"
+              ? appDb.paidRoomingPlan(eventId, organizationId).then(plan => plan && { kind, plan })
+              : appDb.paidCarpoolPlan(eventId, organizationId).then(plan => plan && { kind, plan }),
+          ]);
+          if (!event || !report) return res.status(404).json({ error: "logistics_report_unavailable" });
+          const html = buildLogisticsReportHtml({
+            ...report, eventName: event.name, language, fontCss: buildEmbeddedTicketFontCss(), escape: escapeXml,
+          });
+          const { browser } = await launchTicketBrowser();
+          try {
+            const page = await browser.newPage();
+            await page.setContent(html, { waitUntil: "load" });
+            const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+            return res.set("Cache-Control", "private, no-store")
+              .attachment(`${kind === "rooms" ? "room-assignments" : "carpool-plan"}.pdf`)
+              .type("application/pdf").send(Buffer.from(pdf));
+          } finally {
+            await browser.close();
+          }
+        } catch (error) {
+          if (error instanceof PaidBookingError) return res.status(404).json({ error: "event_not_found" });
+          console.error("Could not generate logistics PDF", error);
+          return res.status(500).json({ error: "logistics_report_unavailable" });
+        }
+      });
+  }
 
   app.get("/api/events/:eventId/paid-registration/coupons",
     requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
@@ -22989,7 +23030,7 @@ async function startServer() {
     async (req: AuthenticatedRequest, res) => {
       try {
         const selectedEventId = normalizeOptionalText(req.query?.event_id);
-        const allowedEventIds = req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)
+        const allowedEventIds = req.auth?.user && isEventAssignedRole(req.auth.user.role)
           ? req.rolePreview?.assignedEventIds ?? await appDb.listUserEventIds(req.auth.user.id)
           : undefined;
         const dashboard = await buildAdminAgentDashboard(selectedEventId, getRequestOrganizationId(req), allowedEventIds);
@@ -23125,7 +23166,7 @@ async function startServer() {
           source: "admin_agent_planner",
           metadata: { mode: "ui" },
           historyScopeKey: `ui:${req.auth?.user.id || "anonymous"}`,
-          forceSingleEvent: Boolean(req.auth?.user && EVENT_ASSIGNMENT_ROLES.has(req.auth.user.role)),
+          forceSingleEvent: Boolean(req.auth?.user && isEventAssignedRole(req.auth.user.role)),
         });
         const effectiveEventId = normalizeOptionalText(execution.eventId) || requestedEventId;
 

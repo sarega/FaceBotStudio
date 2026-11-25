@@ -1,6 +1,6 @@
 import type { UserRole } from "../types";
 
-export const STAFF_PREVIEW_ROLES = ["admin", "operator", "cashier", "checker", "viewer"] as const satisfies readonly UserRole[];
+export const STAFF_PREVIEW_ROLES = ["admin", "operator", "cashier", "checker", "viewer", "logistics"] as const satisfies readonly UserRole[];
 export type StaffPreviewRole = typeof STAFF_PREVIEW_ROLES[number];
 export type PreviewRole = StaffPreviewRole | "user";
 

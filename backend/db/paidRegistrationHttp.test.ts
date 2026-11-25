@@ -873,7 +873,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const movedCar = { ...car, driverId: otherId };
     assert.equal((await saveCarpool([{ ...car, passengers: [] }, movedCar], 1)).status, 200);
 
-    const staffSession = async (role: "owner" | "operator" | "checker" | "cashier" | "viewer", eventIds: string[] = []) => {
+    const staffSession = async (role: "owner" | "operator" | "checker" | "cashier" | "viewer" | "logistics", eventIds: string[] = []) => {
       const username = `paid-access-${role}-${eventIds.length}`;
       const user = await db.createUser({ username, display_name: username, password_hash: "fixture", role, assigned_event_ids: eventIds });
       await db.createSession(user.id, hashSessionToken(username), new Date(Date.now() + 60_000));
@@ -890,6 +890,45 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await fetch(carpoolPath, { headers: ownerAccess })).status, 200);
     assert.equal((await fetch(carpoolPath, { headers: operatorAccess })).status, 403);
     assert.equal((await fetch(carpoolPath, { headers: headers("test-owner") })).status, 401);
+    const logisticsAccess = await staffSession("logistics", [event.id]);
+    const unassignedLogistics = await staffSession("logistics");
+    const logisticsWrite = { ...staffCreateHeaders, Cookie: logisticsAccess.Cookie + "; fbs_csrf=staff-csrf" };
+    const logisticsPreview = { ...previewHeaders, [ROLE_PREVIEW_HEADER]: "logistics" };
+    const logisticsEvents = await fetch(origin + "/api/events", { headers: logisticsAccess });
+    assert.equal(logisticsEvents.status, 200);
+    assert.deepEqual((await logisticsEvents.json()).map(({ id }: { id: string }) => id), [event.id]);
+    for (const [path, format] of [[roomsPath, "rooms"], [carpoolPath, "carpool"]] as const) {
+      const response = await fetch(path, { headers: logisticsAccess });
+      assert.equal(response.status, 200, await response.clone().text());
+      const plan = (await response.json()).plan;
+      const body = JSON.stringify(format === "rooms"
+        ? { version: plan.version, rooms: plan.rooms }
+        : { version: plan.version, roles: plan.roles, cars: plan.cars });
+      const write = { method: "PUT", headers: logisticsWrite, body };
+      const savedPlan = await fetch(path, write);
+      assert.equal(savedPlan.status, 200, await savedPlan.clone().text());
+      assert.equal((await savedPlan.json()).plan.version, plan.version + 1);
+      assert.equal((await fetch(path, { headers: logisticsPreview })).status, 200);
+      assert.equal((await fetch(path, { ...write, headers: logisticsPreview })).status, 403);
+      assert.equal((await fetch(path, { headers: unassignedLogistics })).status, 403);
+      assert.equal((await fetch(path.replace(event.id, paidEvent.id), write)).status, 403);
+      for (const access of [operatorAccess, unassignedLogistics]) {
+        assert.equal((await fetch(path + "/report?language=th", { headers: access })).status, 403);
+      }
+      if (process.env.FACEBOT_TEST_LOGISTICS_PDF === "1") {
+        const report = await fetch(path + "/report?language=th", { headers: logisticsAccess });
+        assert.equal(report.status, 200, (await report.clone().text()).slice(0, 200));
+        assert.match(report.headers.get("content-type") ?? "", /application\/pdf/);
+        assert.equal(Buffer.from(await report.arrayBuffer()).subarray(0, 5).toString(), "%PDF-");
+      }
+    }
+    for (const path of [
+      `${eventPrefix}/attendees`, `${eventPrefix}/review-queue`,
+      `${origin}/api/settings?event_id=${event.id}`, `${origin}/api/registrations/export?event_id=${event.id}`,
+      `${origin}/api/auth/users`,
+    ]) {
+      assert.equal((await fetch(path, { headers: logisticsAccess })).status, 403, path);
+    }
     for (const access of [ownerAccess, operatorAccess]) {
       const paidRoster = await fetch(`${eventPrefix}/attendees`, { headers: access });
       assert.equal(paidRoster.status, 200, await paidRoster.clone().text());

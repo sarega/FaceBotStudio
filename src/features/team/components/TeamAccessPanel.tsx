@@ -3,10 +3,10 @@ import { CalendarRange, RefreshCw, Save, Shield, Trash2, UserPlus } from "lucide
 
 import { ActionButton, StatusLine } from "../../../components/shared/AppUi";
 import type { AuthUser, EventRecord, UserRole } from "../../../types";
-
-const EVENT_SCOPED_ROLES: UserRole[] = ["operator", "cashier", "checker", "viewer"];
+import { isEventAssignedRole } from "../../../lib/staffRoles";
 
 function roleLabel(role: UserRole) {
+  if (role === "logistics") return "Room & Transport Coordinator (ผู้จัดห้องและรถ)";
   return role === "cashier" ? "On-site Cashier" : role === "checker" ? "Gatekeeper" : role;
 }
 
@@ -194,7 +194,7 @@ export function TeamAccessPanel({
                     )}
                   </div>
 
-                  {EVENT_SCOPED_ROLES.includes(user.role) && (
+                  {isEventAssignedRole(user.role) && (
                     <div className="rounded-xl border border-blue-100 bg-white p-3">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex items-center gap-2">
@@ -289,7 +289,7 @@ export function TeamAccessPanel({
                     </option>
                   ))}
               </select>
-              {EVENT_SCOPED_ROLES.includes(newUserRole) && (
+              {isEventAssignedRole(newUserRole) && (
                 <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3">
                   <p className="text-xs font-semibold text-slate-800">Event access</p>
                   <p className="mt-1 text-[11px] text-slate-500">เลือก Event ที่บัญชีนี้จะเข้าถึงได้เท่านั้น</p>
@@ -312,7 +312,7 @@ export function TeamAccessPanel({
               )}
               <ActionButton
                 onClick={() => void onCreateUser()}
-                disabled={teamLoading || !newUserUsername.trim() || !newUserEmail.trim() || (EVENT_SCOPED_ROLES.includes(newUserRole) && !newUserEventIds.length)}
+                disabled={teamLoading || !newUserUsername.trim() || !newUserEmail.trim() || (isEventAssignedRole(newUserRole) && !newUserEventIds.length)}
                 tone="blue"
                 active
                 className="w-full text-sm"

@@ -18,7 +18,7 @@ import type { AuthUser, EventRecord } from "../../types";
 import { translate, type AppLanguage } from "../../lib/i18n";
 
 type ThemeMode = "light" | "dark" | "system";
-type AppTab = "notifications" | "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
+type AppTab = "notifications" | "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "logistics" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type EventWorkspaceView = "setup" | "public";
 type AgentWorkspaceView = "console" | "setup";
 type TimerRef = { current: number | null };

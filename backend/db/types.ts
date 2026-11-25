@@ -1,4 +1,6 @@
 import type { PaidCarpoolPlan, PaidCarpoolUpdate } from "../carpoolPlan";
+import type { UserRole } from "../../src/lib/staffRoles";
+export type { UserRole } from "../../src/lib/staffRoles";
 import type { CouponInput } from "./paidCoupons";
 import type { PaidAdminAction } from "./paidRegistration";
 import type { PaidMessengerDraftInput, PaidMessengerConfirmInput, PaidMessengerQuote, PaidMessengerStatus, PaidReviewInput, PaidReviewReceipt, PaidReviewSortOrder, PaidRoomingUpdate, PaidRoomingPlan, PaidProofInput, PaidProofReceipt, PaidBookingInput, PaidBookingReceipt, PaidCatalog, PaidRow, PaidSettingsInput } from "./paidRegistration";
@@ -20,7 +22,6 @@ export type DirectTicketStatus = "held" | "issued" | "checked_in" | "voided";
 export type DirectTicketDeliveryStatus = "unsent" | "sent";
 export type DirectTicketDeliveryMethod = "email" | "manual";
 export type DirectTicketPaymentStatus = "awaiting_payment" | "proof_submitted" | "verified" | "not_required" | "rejected" | "expired" | "refunded";
-export type UserRole = "owner" | "admin" | "operator" | "cashier" | "checker" | "viewer";
 export type ManualEventStatus = "pending" | "active" | "inactive" | "cancelled" | "archived";
 export type EventStatus = ManualEventStatus | "closed";
 export type ChannelPlatform = "facebook" | "line_oa" | "instagram" | "whatsapp" | "telegram" | "web_chat";

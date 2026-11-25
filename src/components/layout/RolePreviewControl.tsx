@@ -9,6 +9,7 @@ const labels: Record<PreviewRole | "owner", [string, string]> = {
   cashier: ["แคชเชียร์", "Cashier"],
   checker: ["ผู้เช็กอิน", "Checker"],
   viewer: ["ผู้ดูข้อมูล", "Viewer"],
+  logistics: ["ผู้จัดห้องและรถ", "Room & Transport Coordinator"],
   user: ["ผู้เข้าร่วม", "User"],
 };
 

@@ -136,6 +136,12 @@ test("PostgreSQL paid schema initializes from an empty database", {
     const applied = await fixture.query<{ name: string }>("SELECT name FROM schema_migrations");
     assert.deepEqual(applied.rows.map(({ name }) => name).sort(), migrations);
     assert.ok(await db.getEventById("evt_default"));
+    const coordinator = await db.createUser({
+      username: "logistics-fixture", display_name: "Logistics", password_hash: "fixture",
+      role: "logistics", assigned_event_ids: ["evt_default"],
+    });
+    assert.equal(coordinator.role, "logistics");
+    assert.deepEqual(await db.listUserEventIds(coordinator.id), ["evt_default"]);
   } finally {
     await Promise.all([db.close(), fixture.end()]);
   }

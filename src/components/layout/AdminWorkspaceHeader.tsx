@@ -34,6 +34,7 @@ type AdminWorkspaceHeaderProps = {
   eventLoading: boolean;
   onSelectEvent: (eventId: string) => boolean;
   searchShortcutLabel: string;
+  showGlobalSearch: boolean;
   globalSearchOpen: boolean;
   setGlobalSearchOpen: BooleanStateSetter;
 };
@@ -56,6 +57,7 @@ export function AdminWorkspaceHeader({
   eventLoading,
   onSelectEvent,
   searchShortcutLabel,
+  showGlobalSearch,
   globalSearchOpen,
   setGlobalSearchOpen,
 }: AdminWorkspaceHeaderProps) {
@@ -111,7 +113,7 @@ export function AdminWorkspaceHeader({
                   )}
                 </div>
               )}
-              <button
+              {showGlobalSearch && <button
                 type="button"
                 onClick={() => setGlobalSearchOpen(true)}
                 className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border transition-colors lg:hidden ${
@@ -122,12 +124,12 @@ export function AdminWorkspaceHeader({
                 aria-label={label("nav.openSearch", "Open global search")}
               >
                 <Search className="h-4 w-4" />
-              </button>
+              </button>}
               {headerActions && <div className="lg:hidden">{headerActions}</div>}
             </div>
           </div>
 
-          <button
+          {showGlobalSearch && <button
             type="button"
             onClick={() => setGlobalSearchOpen(true)}
             className={`group hidden min-w-0 flex-1 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors lg:flex lg:max-w-[22rem] ${
@@ -148,7 +150,7 @@ export function AdminWorkspaceHeader({
             <span className="hidden rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 lg:inline-flex">
               {searchShortcutLabel}
             </span>
-          </button>
+          </button>}
 
           <div className="lg:w-[min(21rem,100%)] lg:max-w-[21rem]">
             <label htmlFor="event-selector" className="sr-only">

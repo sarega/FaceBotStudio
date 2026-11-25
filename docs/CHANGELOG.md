@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.17 - 2026-11-25
+
+- Add the event-scoped Room & Transport Coordinator role for staff who manage room assignments and carpools.
+- Download separate PDFs from the saved room and carpool plans, with a card for each room or car.
+
 ## 0.11.16 - 2026-11-25
 
 - Show the carpool discard confirmation only when the current plan has unsaved changes.

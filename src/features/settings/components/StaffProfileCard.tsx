@@ -21,6 +21,7 @@ const roleNames: Record<AuthUser["role"], [string, string]> = {
   cashier: ["เจ้าหน้าที่ขายตั๋ว", "Cashier"],
   checker: ["เจ้าหน้าที่เช็กอิน", "Checker"],
   viewer: ["ผู้ดูข้อมูล", "Viewer"],
+  logistics: ["ผู้จัดห้องและรถ", "Room & Transport Coordinator"],
 };
 
 export function StaffProfileCard({ user, language, timezone, apiFetch, onSaved }: Props) {
