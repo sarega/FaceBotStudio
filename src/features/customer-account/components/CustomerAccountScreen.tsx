@@ -3,6 +3,7 @@ import { CustomerVerificationNotice } from "./CustomerVerificationNotice";
 import type { ReactNode } from "react";
 import { createContext, useContext, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, CalendarDays, CheckCircle2, LockKeyhole, LogOut, Mail, RefreshCw, Save, ShieldCheck, ShoppingBag, UserRound } from "lucide-react";
+import { WorkspaceSwitchLink } from "../../../components/shared/WorkspaceSwitchLink";
 
 export type CustomerAccount = {
   id: string;
@@ -200,6 +201,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
   const attendeeOnly = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("attendee") === "1";
   const [mode, setMode] = useState<CustomerScreenMode>(() => embedded ? "profile" : resolveCustomerMode(pathname));
   const [account, setAccount] = useState<CustomerAccount | null>(null);
+  const [hasStaffSession, setHasStaffSession] = useState(false);
   const [form, setForm] = useState<CustomerForm>(() => customerFormDefaults(urlToken));
   const [resetComplete, setResetComplete] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -233,10 +235,11 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
     if (mode !== "profile" || account) return;
     let cancelled = false;
     setBusy(true);
-    void customerApi<{ account: CustomerAccount }>("/api/customer/account/me")
+    void customerApi<{ account: CustomerAccount; has_staff_session?: boolean }>("/api/customer/account/me")
       .then((data) => {
         if (cancelled) return;
         setAccount(data.account);
+        setHasStaffSession(Boolean(data.has_staff_session));
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -612,9 +615,13 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         <nav aria-label={t("เมนูบัญชี", "Account navigation")} className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold">
           <a href="/events" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><CalendarDays className="h-4 w-4" /> {t("งานทั้งหมด", "All events")}</a>
           <a href={returnTo} className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" /> {t("กลับบัญชีของฉัน", "Back to my account")}</a>
-          <a href="/staff/login" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline">
-            <ShieldCheck className="h-4 w-4" /> {attendeeOnly ? t("กลับหน้าทีมงาน", "Back to staff workspace") : t("เข้าสู่ระบบทีมงาน", "Staff sign-in")}
-          </a>
+          {attendeeOnly || hasStaffSession || account?.has_staff_access ? (
+            <WorkspaceSwitchLink language={locale} destination="staff" />
+          ) : (
+            <a href="/staff/login" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline">
+              <ShieldCheck className="h-4 w-4" /> {t("เข้าสู่ระบบทีมงาน", "Staff sign-in")}
+            </a>
+          )}
           <a href="/app/orders" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ShoppingBag className="h-4 w-4" /> {t("การจองของฉัน", "My bookings")}</a>
         </nav>
         <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl shadow-slate-900/10 sm:p-9">

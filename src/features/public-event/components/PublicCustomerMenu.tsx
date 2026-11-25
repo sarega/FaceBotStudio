@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { CalendarDays, ChevronDown, LogOut, Ticket, UserRound } from "lucide-react";
 import { customerApi, type CustomerAccount } from "../../customer-account/components/CustomerAccountScreen";
+import { WorkspaceSwitchLink } from "../../../components/shared/WorkspaceSwitchLink";
 
-/** Customer-only navigation. Never mixes staff/admin and attendee authentication. */
 export function PublicCustomerMenu({ compact = false, locale = "th" }: {
   compact?: boolean; locale?: "th" | "en";
 }) {
   const [account, setAccount] = useState<CustomerAccount | null>(null);
+  const [hasStaffSession, setHasStaffSession] = useState(false);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -18,13 +19,17 @@ export function PublicCustomerMenu({ compact = false, locale = "th" }: {
     async function refresh() {
       const current = ++sequence;
       try {
-        const result = await customerApi<{ account: CustomerAccount }>("/api/customer/account/me", {
+        const result = await customerApi<{ account: CustomerAccount; has_staff_session?: boolean }>("/api/customer/account/me", {
           signal: controller.signal,
         });
-        if (!controller.signal.aborted && current === sequence) setAccount(result.account);
+        if (!controller.signal.aborted && current === sequence) {
+          setAccount(result.account);
+          setHasStaffSession(Boolean(result.has_staff_session));
+        }
       } catch {
         if (!controller.signal.aborted && current === sequence) {
           setAccount(null);
+          setHasStaffSession(false);
           setOpen(false);
         }
       } finally {
@@ -65,6 +70,7 @@ export function PublicCustomerMenu({ compact = false, locale = "th" }: {
     try {
       await customerApi("/api/customer/account/logout", { method: "POST" });
       setAccount(null);
+      setHasStaffSession(false);
       setOpen(false);
       // Other account-aware widgets must not keep displaying the stale signed-in session.
       window.dispatchEvent(new Event("customer-session-changed"));
@@ -115,6 +121,9 @@ export function PublicCustomerMenu({ compact = false, locale = "th" }: {
                 <CalendarDays className="h-4 w-4" /> {locale === "th" ? "ดูงานทั้งหมด" : "Browse Events"}
               </a>
               <div className="my-1 border-t border-current/10" />
+              {(hasStaffSession || account.has_staff_access) && (
+                <div className="mb-1"><WorkspaceSwitchLink language={locale} destination="staff" menuItem /></div>
+              )}
               <button type="button" role="menuitem" disabled={signingOut}
                 onClick={() => void signOut()}
                 className="public-customer-item flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm disabled:opacity-50">
