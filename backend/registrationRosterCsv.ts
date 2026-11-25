@@ -20,7 +20,23 @@ type Candidate = {
   flagged: boolean;
   keys: string[];
   cells: string[];
+  booking?: PaidRow;
 };
+
+type RosterAmounts = {
+  total: number;
+  received: number;
+  review: number;
+  outstanding: number;
+};
+
+export const rosterAmountLabels = {
+  th: ["ยอดตามใบจอง (บาท)", "ตรวจยืนยันแล้ว (บาท)", "ยอดสลิปรอตรวจ (บาท)", "คงค้างรวมรอตรวจ (บาท)"],
+  en: ["Booking value (THB)", "Verified payments (THB)", "Slips under review (THB)", "Outstanding incl. review (THB)"],
+} as const;
+
+const amountCells = (amounts: RosterAmounts) =>
+  [amounts.total, amounts.received, amounts.review, amounts.outstanding].map(minor => (minor / 100).toFixed(2));
 
 const text = (value: unknown) => String(value ?? "").trim();
 const firstValue = (...values: unknown[]) => values.map(text).find(Boolean) ?? "";
@@ -66,6 +82,7 @@ export function buildRegistrationRoster(
     const price = row.unit_minor == null ? NaN : Number(row.unit_minor);
     candidates.push({
       state, updated: Number(row.booked_ms) || 0, paid: true, flagged: row.price_flagged === true || row.price_flagged === 1,
+      booking: row,
       keys: hasPersonalContact
         ? identityKeys(row.first_name, row.last_name, personalEmail, personalPhone)
         : identityKeys(row.first_name, row.last_name, email, phone, text(row.customer_id)),
@@ -78,6 +95,16 @@ export function buildRegistrationRoster(
     Number(b.paid) - Number(a.paid) || b.updated - a.updated);
   const seen = new Set<string>();
   const rows: string[][] = [];
+  const financialRows: string[][] = [];
+  const includedBookings = new Map<string, number>();
+  const bookingSizes = new Map<string, number>();
+  const totals: RosterAmounts = { total: 0, received: 0, review: 0, outstanding: 0 };
+  for (const row of paid) {
+    if (row.booking_id && row.cancelled_ms == null && row.booking_state !== "cancelled") {
+      const id = text(row.booking_id);
+      bookingSizes.set(id, (bookingSizes.get(id) ?? 0) + 1);
+    }
+  }
   for (const row of candidates) {
     if (row.keys.some(key => seen.has(key))) continue;
     // Pick a single current record before applying filters, so a duplicate
@@ -86,21 +113,49 @@ export function buildRegistrationRoster(
     const confirmed = states[row.state][0] >= states.registered[0];
     if (row.flagged || kind === "confirmed" && !confirmed || kind === "pending" && confirmed) continue;
     rows.push(row.cells);
+    const id = text(row.booking?.booking_id);
+    let money = ["", "", "", ""];
+    if (id && row.booking) {
+      const included = includedBookings.get(id) ?? 0;
+      includedBookings.set(id, included + 1);
+      if (included === 0) {
+        const total = Math.max(0, Number(row.booking.booking_total_minor) || 0);
+        const received = Math.min(total, Math.max(0, Number(row.booking.verified_cash_minor) || 0));
+        const review = Math.max(0, Number(row.booking.pending_slip_minor) || 0);
+        const amounts = { total, received, review, outstanding: total - received };
+        totals.total += amounts.total;
+        totals.received += amounts.received;
+        totals.review += amounts.review;
+        totals.outstanding += amounts.outstanding;
+        money = amountCells(amounts);
+      }
+    }
+    financialRows.push([...row.cells, ...money]);
   }
 
   const fields = language === "th"
     ? ["ชื่อ", "นามสกุล", "สถานะ", "ประเภทบัตร", "ราคาต่อคน (บาท)", "อาหาร", "โทรศัพท์", "อีเมล"]
     : ["First name", "Last name", "Status", "Ticket category", "Price per attendee (THB)", "Meal", "Phone", "Email"];
-  return { fields, rows };
+  const partialBookings = [...includedBookings].filter(([id, count]) => count < (bookingSizes.get(id) ?? count)).length;
+  return { fields, rows, financialRows, totals, bookingCount: includedBookings.size, partialBookings };
 }
 
 export function buildRegistrationRosterCsv(
   legacy: RegistrationRow[], paid: PaidRow[], kind: RosterCsvKind, language: "th" | "en",
 ) {
-  const { fields, rows } = buildRegistrationRoster(legacy, paid, kind, language);
-  const records = rows.map(cells => Object.fromEntries(fields.map((field, index) => {
+  const { fields, rows, financialRows, totals, bookingCount, partialBookings } = buildRegistrationRoster(legacy, paid, kind, language);
+  const exportFields = [...fields, ...rosterAmountLabels[language]];
+  const records = financialRows.map(cells => Object.fromEntries(exportFields.map((field, index) => {
     const value = cells[index];
     return [field, /^\s*[=+@-]/.test(value) ? "'" + value : value];
   })));
-  return { csv: "\uFEFF" + new Parser({ fields }).parse(records), count: rows.length };
+  if (bookingCount) {
+    const label = language === "th" ? "รวมยอดใบจอง" : "Booking totals";
+    const detail = language === "th"
+      ? `${bookingCount} ใบจอง${partialBookings ? ` (มี ${partialBookings} ใบจองที่แสดงรายชื่อบางส่วน ยอดเป็นของทั้งใบจอง)` : ""}`
+      : `${bookingCount} bookings${partialBookings ? ` (${partialBookings} partially listed; amounts cover the whole booking)` : ""}`;
+    const summary = [label, "", detail, "", "", "", "", "", ...amountCells(totals)];
+    records.push(Object.fromEntries(exportFields.map((field, index) => [field, summary[index]])));
+  }
+  return { csv: "\uFEFF" + new Parser({ fields: exportFields }).parse(records), count: rows.length };
 }

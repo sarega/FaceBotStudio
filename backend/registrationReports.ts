@@ -93,8 +93,19 @@ export function buildRegistrationReportHtml({
 
   let body: string;
   if (kind === "active_roster") {
-    const { fields, rows } = buildRegistrationRoster(legacy, paid, "active", language);
-    body = section(
+    const { fields, rows, totals, bookingCount, partialBookings } = buildRegistrationRoster(legacy, paid, "active", language);
+    body = `<div class="totals roster-totals">${[
+      [t(["ยอดรวมตามใบจอง", "Total booking value"]), money(totals.total)],
+      [t(["ตรวจยืนยันแล้ว", "Verified payments"]), money(totals.received)],
+      [t(["ยอดตามสลิปรอตรวจ", "Slips under review"]), money(totals.review)],
+      [t(["ยอดคงค้างทั้งหมด", "Total outstanding"]), money(totals.outstanding)],
+    ].map(([label, value]) => `<div>${escape(label)}<strong>${escape(value)}</strong></div>`).join("")}</div>` +
+      `<p>${escape(t(["คำนวณจากใบจองในรายชื่อนี้ โดยนับแต่ละใบจองครั้งเดียว ยอดคงค้างรวมสลิปที่ยังไม่ได้ยืนยัน",
+        "Amounts cover bookings in this roster, counted once per booking. Outstanding includes unverified slips."]))} · ${bookingCount} ${t(["ใบจอง", "bookings"])}</p>` +
+      (partialBookings ? `<p>${escape(t([
+        `${partialBookings} ใบจองแสดงรายชื่อเพียงบางคน ยอดเงินเป็นของทั้งใบจองเนื่องจากชำระเงินร่วมกัน`,
+        `${partialBookings} bookings have only some attendees listed; payment amounts cover the whole booking.`,
+      ]))}</p>` : "") + section(
       ["รายชื่อผู้เข้าร่วมที่ยังมีใบจอง", "Active attendee roster"],
       `${rows.length} ${t(["คน · รวมยืนยันแล้ว รอชำระ และรอตรวจ", "attendees · confirmed, awaiting payment and under review"])}`,
       table(fields.map(field => [field, field]), rows.map(row => row.map(value => cell(value)))),
@@ -190,6 +201,7 @@ export function buildRegistrationReportHtml({
     th { background: #e4edf7; } tbody tr:nth-child(even) { background: #f4f7fb; }
     tr { break-inside: avoid; } .empty { color: #516079; }
     .totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 12px; }
+    .roster-totals { grid-template-columns: repeat(4, 1fr); }
     .totals div { background: #edf3fa; padding: 6px 9px; } .totals strong { display: block; font-size: 15px; }
   </style><header><h1>${escape(t(registrationReportTitles[kind]))}</h1>
     <p>${escape(eventName)}</p><p>${t(["ขอบเขตทั้งอีเวนต์", "Scope: entire event"])} · ${escape(date(generatedAt))} (ICT)</p></header>${body}</html>`;

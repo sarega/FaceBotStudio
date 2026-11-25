@@ -65,6 +65,9 @@ test("active PDF and CSV use the same roster, including unpaid bookings", () => 
   });
   assert.equal(csv.count, 6);
   assert.match(pdf, /6 attendees · confirmed, awaiting payment and under review/);
+  assert.match(pdf, /Total booking value<strong>THB\s*1,500\.00<\/strong>/);
+  assert.match(pdf, /Verified payments<strong>THB\s*500\.00<\/strong>/);
+  assert.match(pdf, /Total outstanding<strong>THB\s*1,000\.00<\/strong>/);
   for (const name of ["Mali", "Boon", "Slip holder", "Awaiting guest", "Needs review", "Free guest"]) {
     assert.ok(csv.csv.includes(name));
     assert.ok(pdf.includes(name));

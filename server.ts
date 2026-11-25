@@ -20506,7 +20506,7 @@ async function startServer() {
       try {
         const rosterReport = kind === "attendees" || kind === "active_roster";
         const [paid, legacy, event] = await Promise.all([
-          appDb.listPaidAttendeeRoster(eventId, organizationId, 10001, !rosterReport),
+          appDb.listPaidAttendeeRoster(eventId, organizationId, 10001, kind !== "attendees"),
           rosterReport ? appDb.exportRegistrations(eventId) : [],
           appDb.getEventById(eventId),
         ]);
@@ -20555,7 +20555,7 @@ async function startServer() {
       const organizationId=req.auth!.user.organization_id;
       const [rows,paid,paidSummary,event] = await Promise.all([
         appDb.exportRegistrations(eventId),
-        appDb.listPaidAttendeeRoster(eventId,organizationId,10001),
+        appDb.listPaidAttendeeRoster(eventId,organizationId,10001, isRosterCsvKind(roster)),
         roster === undefined ? appDb.readPaidEventSummary(eventId,organizationId) : undefined,
         appDb.getEventById(eventId),
       ]);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RegistrationRow } from "./db/types";
-import { buildRegistrationRosterCsv } from "./registrationRosterCsv";
+import { buildRegistrationRoster, buildRegistrationRosterCsv } from "./registrationRosterCsv";
 
 test("team CSV filters and deduplicates active registrations across exports", () => {
   const legacy: RegistrationRow = {
@@ -41,4 +41,31 @@ test("team CSV filters and deduplicates active registrations across exports", ()
   assert.match(pending.csv, /Slip under review/);
   assert.match(pending.csv, /Payment needs review/);
   assert.equal(buildRegistrationRosterCsv([], [], "active", "en").csv.split("\n").length, 1);
+});
+
+test("financial totals count represented bookings once, using verified cash and net booking prices", () => {
+  const group = { booking_id: "group", booking_state: "confirmed", booking_total_minor: 300000,
+    verified_cash_minor: 250000, pending_slip_minor: 50000, unit_minor: 170000 };
+  const paid = [
+    { ...group, first_name: "First" },
+    { ...group, first_name: "Second" },
+    { ...group, first_name: "Flagged", price_flagged: true },
+    { booking_id: "unpaid", first_name: "Unpaid", booking_state: "awaiting_payment", booking_total_minor: 340000 },
+    { booking_id: "review", first_name: "Review", booking_state: "verification_pending", booking_total_minor: 170000, pending_slip_minor: 170000 },
+    { booking_id: "cancelled", first_name: "Cancelled", booking_state: "cancelled", booking_total_minor: 990000 },
+    { booking_id: "expired", first_name: "Expired", booking_state: "expired", booking_total_minor: 990000 },
+  ];
+  const active = buildRegistrationRoster([], paid, "active", "en");
+  assert.deepEqual(active.totals, { total: 810000, received: 250000, review: 220000, outstanding: 560000 });
+  assert.equal(active.bookingCount, 3);
+  assert.equal(active.partialBookings, 1);
+  assert.deepEqual(active.financialRows[0].slice(-4), ["3000.00", "2500.00", "500.00", "500.00"]);
+  assert.deepEqual(active.financialRows[1].slice(-4), ["", "", "", ""]);
+  const csv = buildRegistrationRosterCsv([], paid, "active", "en");
+  assert.equal(csv.count, 4);
+  assert.match(csv.csv, /"Booking totals","","3 bookings \(1 partially listed; amounts cover the whole booking\)".*,"8100\.00","2500\.00","2200\.00","5600\.00"/);
+  assert.deepEqual(buildRegistrationRoster([], paid, "confirmed", "en").totals,
+    { total: 300000, received: 250000, review: 50000, outstanding: 50000 });
+  assert.deepEqual(buildRegistrationRoster([], paid, "pending", "en").totals,
+    { total: 510000, received: 0, review: 170000, outstanding: 510000 });
 });
