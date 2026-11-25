@@ -358,7 +358,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
         actions={<button type="button" className={toolbarControl} onClick={() => setRefresh(value => value + 1)}>{t("โหลดใหม่", "Refresh")}</button>} />
       {open && <div className="registration-section-content space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <form className="flex min-w-0 flex-[1_1_8rem] items-center gap-1.5 sm:max-w-xs" onSubmit={(event) => {
+          <form className={`flex min-w-0 items-center gap-1.5 ${reference ? "flex-[1_1_18rem] sm:max-w-lg" : "flex-[1_1_8rem] sm:max-w-xs"}`} onSubmit={(event) => {
             event.preventDefault();
             setRows(undefined);
             setReference(referenceDraft.trim().toLowerCase());
@@ -371,6 +371,10 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
             <button type="submit" aria-label={t("ค้นหาใบจอง", "Find booking")} className={toolbarControl}>
               <Search className="h-4 w-4" aria-hidden="true" />
             </button>
+            {reference && <button type="button" onClick={showFullQueue}
+              className={`${toolbarControl} registration-admin-control-primary shrink-0 whitespace-nowrap`}>
+              {t("กลับไปคิวทั้งหมด", "Show all reviews")}
+            </button>}
           </form>
           <select aria-label={t("เรียงลำดับคิว", "Sort review queue")} value={sort} className={toolbarControl}
             onChange={(event) => {
@@ -409,12 +413,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
             </div>}
           </div>
         </div>
-        {reference && <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="break-all">{t("กำลังแสดงใบจอง", "Filtered to booking")} {reference}</span>
-          <button type="button" onClick={showFullQueue} className={toolbarControl}>
-            {t("กลับไปคิวทั้งหมด", "Show all reviews")}
-          </button>
-        </div>}
         {loadFailed && <p role="alert" className="text-red-700">{t("โหลดคิวตรวจสลิปไม่สำเร็จ", "Could not load the review queue.")}</p>}
         {uploadedBooking && <p role="status" className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
           {t("แนบสลิปแล้ว ใบจองเข้าคิวรอตรวจ", "Slip uploaded. The booking is awaiting review.")} {uploadedBooking}

@@ -1,5 +1,14 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.16",
+    date: "2026-11-25",
+    title: "Carpool reload and review queue controls",
+    features: [
+      "Open and reload carpool without a discard prompt when the plan has no edits",
+      "Return to the full slip review queue directly from the booking search bar",
+    ],
+  },
+  {
     version: "0.11.15",
     date: "2026-11-24",
     title: "Custom rooms and team CSV exports",

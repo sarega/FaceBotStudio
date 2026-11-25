@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Download, RefreshCw, Save } from "lucide-react";
 import {
   attendeeCarpoolRole, carpoolRoles, MAX_CARPOOL_SEATS,
-  type CarpoolAttendee, type CarpoolCar, type CarpoolRole, type PaidCarpoolPlan,
+  type CarpoolAttendee, type CarpoolCar, type CarpoolLayout, type CarpoolRole, type PaidCarpoolPlan,
 } from "../../../../backend/carpoolPlan";
 import { downloadRegistrationCsv } from "./registrationCsv";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
@@ -14,6 +14,15 @@ type Props = {
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
+function carpoolLayoutKey({ roles, cars }: CarpoolLayout) {
+  // The server trims pickup text. Car and passenger order does not affect assignments.
+  const assignments = cars
+    .filter(car => car.seats || car.pickup.trim())
+    .map(({ driverId, seats, pickup, passengers }) => [driverId, seats, pickup.trim(), [...passengers].sort()] as const)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify([Object.entries(roles).sort(([a], [b]) => a.localeCompare(b)), assignments]);
+}
+
 export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const [open, setOpen] = useState(false);
@@ -24,7 +33,7 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
   const path = `/api/events/${encodeURIComponent(eventId)}/paid-registration/carpool`;
-  const dirty = draft !== saved;
+  const dirty = !!saved && !!draft && draft !== saved && carpoolLayoutKey(draft) !== carpoolLayoutKey(saved);
   const control = "registration-admin-control";
   const roleLabels: Record<CarpoolRole, string> = {
     driver: t("มีรถรับคน", "Drivers"),

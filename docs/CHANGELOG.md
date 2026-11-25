@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.16 - 2026-11-25
+
+- Show the carpool discard confirmation only when the current plan has unsaved changes.
+- Place the return-to-queue button next to the booking search and remove the repeated filter reference.
+
 ## 0.11.15 - 2026-11-24
 
 - Add a right-click menu and an Add room button in Room Assignments. Choose a preset or set a capacity from 1 to 50 beds.
