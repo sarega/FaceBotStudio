@@ -196,6 +196,7 @@ export function RegistrationsScreen({
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState("");
   const reportKinds: ReportKind[] = [
+    ...(!checkerMode ? ["active_roster"] as const : []),
     ...(canExportFinancialReports ? ["accounting", "coupons"] as const : []),
     ...(canExportPaymentFollowup ? ["followup"] as const : []),
     "attendees",

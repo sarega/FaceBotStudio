@@ -1,6 +1,7 @@
 import { registrationReportTitles, type ReportKind } from "../src/lib/registrationReportKinds";
 import type { PaidRow } from "./db/paidRegistration";
 import type { RegistrationRow } from "./db/types";
+import { buildRegistrationRoster } from "./registrationRosterCsv";
 
 type Language = "th" | "en";
 type Copy = readonly [string, string];
@@ -91,7 +92,14 @@ export function buildRegistrationReportHtml({
   } as const;
 
   let body: string;
-  if (kind === "accounting") {
+  if (kind === "active_roster") {
+    const { fields, rows } = buildRegistrationRoster(legacy, paid, "active", language);
+    body = section(
+      ["รายชื่อผู้เข้าร่วมที่ยังมีใบจอง", "Active attendee roster"],
+      `${rows.length} ${t(["คน · รวมยืนยันแล้ว รอชำระ และรอตรวจ", "attendees · confirmed, awaiting payment and under review"])}`,
+      table(fields.map(field => [field, field]), rows.map(row => row.map(value => cell(value)))),
+    );
+  } else if (kind === "accounting") {
     const sum = (read: (row: PaidRow) => number) => bookings.reduce((total, item) => total + read(item.row), 0);
     const discount = (row: PaidRow) => number(row.coupon_discount_minor);
     const credit = (row: PaidRow) => number(row.credit_used_minor);

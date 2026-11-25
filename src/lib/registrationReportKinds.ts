@@ -3,6 +3,7 @@ export const registrationReportTitles = {
   followup: ["ติดตามการชำระ", "Payment follow-up"],
   coupons: ["คูปองและแขก VIP", "Coupons and VIP guests"],
   attendees: ["รายชื่อและอาหาร", "Attendee and meal roster"],
+  active_roster: ["รายชื่อยืนยันแล้ว + รอชำระ/รอตรวจ", "Confirmed + awaiting payment/review"],
 } as const;
 
 export type ReportKind = keyof typeof registrationReportTitles;
@@ -11,7 +12,7 @@ export function isRegistrationReportKind(value: unknown): value is ReportKind {
 }
 
 export const registrationRosterCsvTitles = {
-  active: ["รายชื่อใช้งานทั้งหมด (CSV)", "Active attendee roster (CSV)"],
+  active: ["ยืนยันแล้ว + รอชำระ/รอตรวจ (CSV)", "Confirmed + awaiting payment/review (CSV)"],
   confirmed: ["ลงทะเบียนแล้ว / ยืนยันแล้ว (CSV)", "Registered / confirmed (CSV)"],
   pending: ["รอชำระ / รอตรวจ (CSV)", "Awaiting payment / review (CSV)"],
 } as const;

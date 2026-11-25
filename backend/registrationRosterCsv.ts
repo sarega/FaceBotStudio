@@ -35,7 +35,7 @@ function identityKeys(first: unknown, last: unknown, email: string, phone: strin
   ];
 }
 
-export function buildRegistrationRosterCsv(
+export function buildRegistrationRoster(
   legacy: RegistrationRow[], paid: PaidRow[], kind: RosterCsvKind, language: "th" | "en",
 ) {
   const candidates: Candidate[] = [];
@@ -91,6 +91,13 @@ export function buildRegistrationRosterCsv(
   const fields = language === "th"
     ? ["ชื่อ", "นามสกุล", "สถานะ", "ประเภทบัตร", "ราคาต่อคน (บาท)", "อาหาร", "โทรศัพท์", "อีเมล"]
     : ["First name", "Last name", "Status", "Ticket category", "Price per attendee (THB)", "Meal", "Phone", "Email"];
+  return { fields, rows };
+}
+
+export function buildRegistrationRosterCsv(
+  legacy: RegistrationRow[], paid: PaidRow[], kind: RosterCsvKind, language: "th" | "en",
+) {
+  const { fields, rows } = buildRegistrationRoster(legacy, paid, kind, language);
   const records = rows.map(cells => Object.fromEntries(fields.map((field, index) => {
     const value = cells[index];
     return [field, /^\s*[=+@-]/.test(value) ? "'" + value : value];

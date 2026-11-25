@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildRegistrationReportHtml } from "./registrationReports";
+import { buildRegistrationRosterCsv } from "./registrationRosterCsv";
+import type { RegistrationRow } from "./db/types";
 import type { ReportKind } from "../src/lib/registrationReportKinds";
 
 const snapshot = {
@@ -39,4 +41,40 @@ test("registration PDFs count financial amounts once per booking and keep attend
   assert.doesNotMatch(report("coupons"), /Removed/);
   assert.match(report("attendees"), /Vegetarian 2/);
   assert.match(report("attendees"), /Not yet confirmed<\/h2><p>1 attendees · Unspecified 1/);
+});
+
+test("active PDF and CSV use the same roster, including unpaid bookings", () => {
+  const roster = [
+    ...paid,
+    { first_name: "Awaiting guest", booking_state: "awaiting_payment", attendee_phone: "0812345678", unit_minor: 170000 },
+    { first_name: "Needs review", booking_state: "payment_exception" },
+    { first_name: "Cancelled guest", booking_state: "cancelled" },
+    { first_name: "Expired guest", booking_state: "expired" },
+    { first_name: "Refunded guest", booking_state: "confirmed", payment_state: "refunded" },
+    { first_name: "Flagged guest", booking_state: "confirmed", price_flagged: true },
+    { first_name: "Awaiting guest", booking_state: "awaiting_payment", attendee_phone: "0812345678" },
+  ];
+  const legacy: RegistrationRow[] = [
+    { id: "free-attendee", sender_id: "", first_name: "Free guest", last_name: "", email: "", phone: "",
+      status: "registered", timestamp: "2026-11-23T00:00:00Z" },
+  ];
+  const csv = buildRegistrationRosterCsv(legacy, roster, "active", "en");
+  const pdf = buildRegistrationReportHtml({
+    kind: "active_roster", language: "en", eventName: "Fixture", generatedAt: 0,
+    paid: roster, legacy, fontCss: "", escape: value => String(value ?? ""),
+  });
+  assert.equal(csv.count, 6);
+  assert.match(pdf, /6 attendees · confirmed, awaiting payment and under review/);
+  for (const name of ["Mali", "Boon", "Slip holder", "Awaiting guest", "Needs review", "Free guest"]) {
+    assert.ok(csv.csv.includes(name));
+    assert.ok(pdf.includes(name));
+  }
+  assert.match(pdf, /Awaiting guest<\/td><td>—<\/td><td>Awaiting payment<\/td>/);
+  assert.match(pdf, /1700\.00/);
+  assert.match(pdf, /0812345678/);
+  assert.equal(pdf.split("Awaiting guest").length - 1, 1);
+  for (const name of ["Cancelled guest", "Expired guest", "Refunded guest", "Removed", "Flagged guest"]) {
+    assert.ok(!csv.csv.includes(name));
+    assert.ok(!pdf.includes(name));
+  }
 });

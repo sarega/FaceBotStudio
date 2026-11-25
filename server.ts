@@ -20499,14 +20499,15 @@ async function startServer() {
       }
       const { role, organization_id: organizationId } = req.auth!.user;
       if ((kind === "accounting" || kind === "coupons") && role !== "owner" && role !== "admin" ||
-          kind === "followup" && role === "checker") {
+          (kind === "followup" || kind === "active_roster") && role === "checker") {
         return res.status(403).json({ error: "Insufficient permissions" });
       }
       const eventId = getRequestedEventId(req);
       try {
+        const rosterReport = kind === "attendees" || kind === "active_roster";
         const [paid, legacy, event] = await Promise.all([
-          appDb.listPaidAttendeeRoster(eventId, organizationId, 10001, kind !== "attendees"),
-          kind === "attendees" ? appDb.exportRegistrations(eventId) : [],
+          appDb.listPaidAttendeeRoster(eventId, organizationId, 10001, !rosterReport),
+          rosterReport ? appDb.exportRegistrations(eventId) : [],
           appDb.getEventById(eventId),
         ]);
         if (paid.length + legacy.length > 10000) {

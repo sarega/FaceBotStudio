@@ -1103,6 +1103,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal(pendingCsv.status, 200);
     assert.doesNotMatch(await pendingCsv.text(), /"Confirmed"|"Checked in"/);
     assert.equal((await fetch(teamCsvUrl + "active", { headers: checkerAccess })).status, 403);
+    assert.equal((await fetch(`${origin}/api/registrations/report?event_id=${event.id}&language=en&kind=active_roster`, { headers: checkerAccess })).status, 403);
     assert.equal((await fetch(teamCsvUrl + "unknown", { headers: staffHeaders })).status, 400);
 
     assert.equal(summary.confirmed_bookings, 2);
@@ -1280,7 +1281,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     assert.equal((await fetch(registrationReport + "&kind=bad", { headers: staffCreateHeaders })).status, 400);
     assert.equal((await fetch(registrationReport + "&kind=coupons", { headers: headers("test-owner") })).status, 401);
     if (process.env.FACEBOT_TEST_REPORT_PDF) {
-      for (const kind of ["accounting", "coupons", "followup", "attendees"]) {
+      for (const kind of ["accounting", "coupons", "followup", "attendees", "active_roster"]) {
         const response = await fetch(registrationReport + "&kind=" + kind, { headers: staffCreateHeaders });
         assert.equal(response.status, 200, await response.clone().text().then(body => body.slice(0, 150)));
         assert.match(response.headers.get("content-disposition") ?? "", new RegExp(`registrations-${kind}\\.pdf`));
