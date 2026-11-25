@@ -197,6 +197,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
     ? new URLSearchParams(window.location.hash.slice(1)).get("token") || new URLSearchParams(window.location.search).get("token") || ""
     : "";
   const staffReset = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("staff") === "1";
+  const attendeeOnly = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("attendee") === "1";
   const [mode, setMode] = useState<CustomerScreenMode>(() => embedded ? "profile" : resolveCustomerMode(pathname));
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [form, setForm] = useState<CustomerForm>(() => customerFormDefaults(urlToken));
@@ -219,7 +220,8 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
       return;
     }
     const nextPath = nextMode === "profile" ? "/account" : `/account/${nextMode === "reset" ? "reset-password" : nextMode === "verify" ? "verify-email" : nextMode === "forgot" ? "forgot-password" : nextMode}`;
-    const scopedPath = staffReset && nextMode === "forgot" ? nextPath + "?staff=1" : nextPath;
+    const scopedPath = staffReset && nextMode === "forgot" ? nextPath + "?staff=1"
+      : attendeeOnly && nextMode !== "profile" ? nextPath + "?attendee=1" : nextPath;
     if (embedded && nextMode !== "profile") { window.location.assign(nextPath); return; }
     window.history.pushState({}, "", scopedPath);
     setMode(nextMode);
@@ -298,13 +300,17 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
         const data = await customerApi<{ account: CustomerAccount }>("/api/customer/account/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: form.email, password: form.password }),
+          body: JSON.stringify({ email: form.email, password: form.password, attendee_only: attendeeOnly }),
         });
         const params = new URLSearchParams(window.location.search);
         const reference = params.get("paid_booking") || "";
         if (data.account.email_verified_at && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(reference)) {
           const upload = params.get("upload_slip") === "1" ? "&upload_slip=1" : "";
           window.location.assign(`/app/orders?paid_booking=${encodeURIComponent(reference)}${upload}`);
+          return;
+        }
+        if (attendeeOnly) {
+          window.location.assign("/app/profile");
           return;
         }
         if (data.account.has_staff_access) {
@@ -607,7 +613,7 @@ export function CustomerAccountScreen({ locale = "th", languageControl, themeCon
           <a href="/events" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><CalendarDays className="h-4 w-4" /> {t("งานทั้งหมด", "All events")}</a>
           <a href={returnTo} className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ArrowLeft className="h-4 w-4" /> {t("กลับบัญชีของฉัน", "Back to my account")}</a>
           <a href="/staff/login" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline">
-            <ShieldCheck className="h-4 w-4" /> {t("เข้าสู่ระบบทีมงาน", "Staff sign-in")}
+            <ShieldCheck className="h-4 w-4" /> {attendeeOnly ? t("กลับหน้าทีมงาน", "Back to staff workspace") : t("เข้าสู่ระบบทีมงาน", "Staff sign-in")}
           </a>
           <a href="/app/orders" className="inline-flex min-h-10 items-center gap-1 text-blue-700 hover:underline"><ShoppingBag className="h-4 w-4" /> {t("การจองของฉัน", "My bookings")}</a>
         </nav>

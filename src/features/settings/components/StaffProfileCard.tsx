@@ -93,7 +93,7 @@ export function StaffProfileCard({ user, language, timezone, apiFetch, onSaved }
         {user.staff_email && <a href="/account/forgot-password?staff=1" className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600 underline underline-offset-2">
           <KeyRound className="h-4 w-4" aria-hidden="true" />{t("ตั้งรหัสผ่านใหม่", "Reset password")}
         </a>}
-        {user.has_customer_account && <WorkspaceSwitchLink language={language} destination="attendee" />}
+        <WorkspaceSwitchLink language={language} destination="attendee" />
       </div>
     </section>
   );

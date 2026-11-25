@@ -648,7 +648,7 @@ export function AdminWorkspaceSidebar({
               <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">{authUser?.role}</p>
               <p className="mt-2 text-[11px] text-slate-500">System v{authUser?.system_version || "-"} · {(authUser?.system_revision || "-").slice(0, 7)}</p>
             </div>
-            {authUser?.has_customer_account && (
+            {authUser && (
               <div className="mt-3"><WorkspaceSwitchLink language={language} destination="attendee" /></div>
             )}
             <div className="mt-3">

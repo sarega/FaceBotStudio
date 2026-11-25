@@ -15286,6 +15286,7 @@ async function startServer() {
       const issues: ValidationIssue[] = [];
       const email = readRequiredString(body, "email", issues, { label: "Email", maxLength: 254 });
       const password = readRequiredString(body, "password", issues, { label: "Password", maxLength: 512 });
+      const attendeeOnly = readBooleanWithDefault(body, "attendee_only", false, issues);
       if (email && !isValidCustomerEmail(email)) {
         issues.push({ field: "email", message: "Enter a valid email address" });
       }
@@ -15312,9 +15313,9 @@ async function startServer() {
       }
       const staff = isVerifiedCustomer(account) ? await appDb.getUserByStaffCustomerAccount(account.id) : undefined;
       const hasStaffAccess = canSignInAsStaff(staff);
-      if (hasStaffAccess) {
+      if (!attendeeOnly && hasStaffAccess) {
         await openStaffLoginSession(req, res, staff, { id: account.id, passwordHash: currentPasswordHash });
-      } else if (req.auth) {
+      } else if (!attendeeOnly && req.auth) {
         await appDb.deleteSession(req.auth.tokenHash);
         clearSessionCookie(res, req);
         clearCsrfCookie(res, req);
@@ -15517,6 +15518,7 @@ async function startServer() {
       const staff = isVerifiedCustomer(account) ? await appDb.getUserByStaffCustomerAccount(account.id) : undefined;
       return res.set("Cache-Control", "private, no-store").json({
         account: { ...toPublicCustomerAccount(account), has_staff_access: canSignInAsStaff(staff) },
+        has_staff_session: Boolean(req.auth),
       });
     } catch (error) {
       console.error("Could not load customer account:", error);

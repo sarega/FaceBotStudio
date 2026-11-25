@@ -1807,10 +1807,37 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
     const customerLogin = (password: string) => jsonPost("/api/customer/account/login", { email: attendeeEmail, password });
     const staffLogin = (username: string, password: string) => jsonPost("/api/auth/login", { username, password });
     const activate = (password: string) => jsonPost("/api/auth/staff-email/confirm", { purpose: "invite", token: invite, password, invite_mode: "link_attendee" });
+    const switchToAttendee = async (hasStaffAccess: boolean) => {
+      const staffCookie = "fbs_session=test-reviewer";
+      const login = await fetch(origin + "/api/customer/account/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: staffCookie, Origin: origin },
+        body: JSON.stringify({ email: attendeeEmail, password: attendeePassword, attendee_only: true }),
+      });
+      assert.equal(login.status, 200, await login.clone().text());
+      const sessionCookies = login.headers.getSetCookie().map(cookie => cookie.split(";")[0]);
+      assert.ok(sessionCookies.some(cookie => cookie.startsWith("fbs_customer_session=")));
+      assert.ok(!sessionCookies.some(cookie => cookie.startsWith("fbs_session=")));
+      const customerMe = await fetch(origin + "/api/customer/account/me", {
+        headers: { Cookie: [staffCookie, ...sessionCookies].join("; ") },
+      });
+      assert.equal(customerMe.status, 200);
+      const data = await customerMe.json();
+      assert.equal(data.account.id, dualAccount.id);
+      assert.equal(data.account.has_staff_access, hasStaffAccess);
+      assert.equal(data.has_staff_session, true);
+      assert.equal((await fetch(origin + "/api/auth/me", { headers: { Cookie: staffCookie } })).status, 200);
+      const customerOnly = await fetch(origin + "/api/customer/account/me", {
+        headers: { Cookie: sessionCookies.join("; ") },
+      });
+      assert.equal((await customerOnly.json()).has_staff_session, false);
+    };
     assert.equal((await (await customerLogin(attendeePassword)).json()).account.has_staff_access, false);
+    await switchToAttendee(false);
     assert.equal((await staffLogin(attendeeEmail, attendeePassword)).status, 401);
     assert.equal((await activate("WrongSeparatePassword")).status, 403);
     assert.equal((await activate(attendeePassword)).status, 200);
+    await switchToAttendee(true);
     assert.equal((await activate(attendeePassword)).status, 400);
     assert.equal((await staffLogin("promoted-attendee", "OldStaffCredential")).status, 401);
     const byEmail = await staffLogin(" TEST-OWNER@EXAMPLE.COM ", attendeePassword);
