@@ -1,3 +1,4 @@
+import { EVENT_FILTERS, eventMatchesFilter, eventMatchesText, type EventFilter } from "./src/lib/eventFilters";
 import { isOptionalAttendeePhone } from "./src/lib/attendeePhone";
 import { parseCarpoolUpdate } from "./backend/carpoolPlan";
 import { parseRoomingPlan } from "./backend/roomingPlan";
@@ -746,6 +747,7 @@ async function assertAutomatedConversationScope(channel: string, eventId: string
     if (normalizedRouteId !== `public-event:${normalizedEventId}`) {
       throw new ConversationScopeError("Public conversation route does not match the current event");
     }
+    if ((await appDb.getEventById(normalizedEventId))?.effective_status !== "active") throw new ConversationScopeError("Public conversation event is no longer active");
     return;
   }
 
@@ -16548,6 +16550,14 @@ async function startServer() {
         const assignedEventIds = new Set(req.rolePreview?.assignedEventIds ?? await appDb.listUserEventIds(req.auth.user.id));
         events = events.filter((event) => assignedEventIds.has(event.id));
       }
+      const paginated = req.query.page !== undefined || req.query.limit !== undefined || req.query.filter !== undefined || req.query.q !== undefined;
+      const filter = String(req.query.filter || "all") as EventFilter;
+      if (paginated && (!EVENT_FILTERS.some(item => item.id === filter) || filter === "assigned")) return res.status(400).json({ error: "Invalid event filter" });
+      if (paginated) events = events.filter(event => eventMatchesFilter(event, filter) && eventMatchesText(event, String(req.query.q || "")));
+      const total = events.length;
+      const page = Math.max(1, Math.min(100000, Number.parseInt(String(req.query.page || "1"), 10) || 1));
+      const limit = Math.max(1, Math.min(100, Number.parseInt(String(req.query.limit || "25"), 10) || 25));
+      if (paginated) events = events.slice((page-1)*limit, page*limit);
       const enrichedEvents = await Promise.all(
         events.map(async (event) => {
           const settings = await getSettingsMap(event.id);
@@ -16557,11 +16567,32 @@ async function startServer() {
           };
         }),
       );
-      return res.json(enrichedEvents);
+      return res.json(paginated ? { events: enrichedEvents, total, page, limit } : enrichedEvents);
     } catch (error) {
       console.error("Failed to fetch events:", error);
       return res.status(500).json({ error: "Failed to fetch events" });
     }
+  });
+
+  app.post("/api/events/bulk-archive", requireRoles(["owner"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const ids = normalizeEventAssignmentIds(readObjectBody(req).event_ids);
+      if (!ids?.length || ids.length > 100) return res.status(400).json({error:"Select 1–100 events"});
+      const rows = await Promise.all(ids.map(id=>appDb.getEventById(id)));
+      if (rows.some(event=>!event || event.organizer_id!==req.auth!.user.organization_id || event.is_default || !["closed","cancelled","archived"].includes(event.effective_status))) return res.status(400).json({error:"Only completed or cancelled non-default events in your organization may be archived in bulk"});
+      const archived:string[]=[]; const failed:string[]=[];
+      for (const id of ids) {
+        try {
+          const current=await appDb.getEventById(id);
+          if (!current || !["closed","cancelled","archived"].includes(current.effective_status)) {failed.push(id);continue;}
+          await appDb.upsertSettings({event_public_bot_enabled:"0"},id);
+          if (!await appDb.updateEvent(id,{status:"archived"})) {failed.push(id);continue;}
+          archived.push(id);
+          await recordAudit(req,"event.archived","event",id,{bulk:true});
+        } catch {if(!archived.includes(id)) failed.push(id);}
+      }
+      return res.json({archived,failed});
+    } catch(error) {console.error("Bulk archive failed",error);return res.status(500).json({error:"Bulk archive failed"});}
   });
 
   app.post("/api/events", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {

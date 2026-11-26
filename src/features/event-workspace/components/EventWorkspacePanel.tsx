@@ -1,11 +1,12 @@
+import type { EventFilter } from "../../../lib/eventFilters";
 import { CalendarRange, ChevronDown, PanelRightClose, Plus, RefreshCw, Search, X } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import { ActionButton, SelectionMarker, StatusBadge, StatusLine, type BadgeTone } from "../../../components/shared/AppUi";
 import type { EventRecord, EventStatus, OrganizerProfileRecord } from "../../../types";
 
 type EventWorkspaceSort = "event_start_desc" | "name_asc" | "modified_desc";
-type EventWorkspaceFilter = "all" | EventStatus;
+type EventWorkspaceFilter = Exclude<EventFilter, "assigned">;
 
 type EventWorkspaceCounts = {
   all: number;
@@ -31,6 +32,7 @@ type HistoryEventGroup = {
 
 type EventWorkspacePanelProps = {
   onCollapse: () => void;
+  onBulkArchive?: (ids:string[])=>Promise<void>;
   eventCreateOpen: boolean;
   onToggleEventCreate: () => void;
   onRefresh: () => unknown;
@@ -186,6 +188,7 @@ function EventWorkspaceRow({
 
 export function EventWorkspacePanel({
   onCollapse,
+  onBulkArchive,
   eventCreateOpen,
   onToggleEventCreate,
   onRefresh,
@@ -241,6 +244,16 @@ export function EventWorkspacePanel({
   getRegistrationAvailabilityLabel,
 }: EventWorkspacePanelProps) {
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [bulkOpen,setBulkOpen]=useState(false);
+  const [bulkIds,setBulkIds]=useState<string[]>([]);
+  const [page,setPage]=useState(0);
+  useEffect(()=>setPage(0),[eventWorkspaceFilter,deferredEventListQuery,eventWorkspaceSort]);
+  const pageSize=20;
+  const pageCount=Math.max(1,Math.ceil(filteredEventWorkspaceEvents.length/pageSize));
+  const currentPage=Math.min(page,pageCount-1);
+  const visibleIds=new Set(filteredEventWorkspaceEvents.slice(currentPage*pageSize,(currentPage+1)*pageSize).map(e=>e.id));
+  const eligible=filteredEventWorkspaceEvents.filter(e=>!e.is_default&&["closed","cancelled"].includes(e.effective_status));
+
   const showArchivedEvents = archivedOpen || Boolean(deferredEventListQuery) || eventWorkspaceFilter === "archived";
   const singleEventMode = filteredEventWorkspaceEvents.length === 1 && !eventListQuery.trim() &&
     !eventCreateOpen && eventWorkspaceFilter === "all";
@@ -436,6 +449,9 @@ export function EventWorkspacePanel({
           <span>{eventWorkspaceCounts.closed + eventWorkspaceCounts.cancelled} in history</span>
         </div>
       </div>}
+      {onBulkArchive && <div className="space-y-2"><button type="button" className="rounded-lg border px-3 py-1 text-xs" onClick={()=>{setBulkOpen(v=>!v);setBulkIds([]);}}>Bulk archive</button>
+        {bulkOpen&&<div className="rounded-lg border p-2 space-y-2"><p className="text-xs">Select completed or cancelled events only. Data and assignments are preserved.</p><div className="max-h-44 overflow-y-auto">{eligible.map(e=><label key={e.id} className="flex gap-2 p-1 text-xs"><input type="checkbox" checked={bulkIds.includes(e.id)} onChange={()=>setBulkIds(ids=>ids.includes(e.id)?ids.filter(id=>id!==e.id):[...ids,e.id])}/>{e.name}</label>)}</div>{!eligible.length&&<p className="text-xs">Choose Past to find eligible events.</p>}<button type="button" className="rounded-lg border px-3 py-1 text-xs" disabled={!bulkIds.length||bulkIds.length>100||eventLoading} onClick={async()=>{if(window.confirm("Archive "+bulkIds.length+" events?")){await onBulkArchive(bulkIds);setBulkIds([]);}}}>Archive selected ({bulkIds.length})</button></div>}</div>}
+      {pageCount>1&&<div className="flex justify-between text-xs"><button type="button" disabled={currentPage===0} onClick={()=>setPage(currentPage-1)}>Previous</button><span>Page {currentPage+1} / {pageCount}</span><button type="button" disabled={currentPage===pageCount-1} onClick={()=>setPage(currentPage+1)}>Next</button></div>}
       {singleEvent && <div className="min-h-0">
         <EventWorkspaceRow event={singleEvent} compact selected={selectedEventId === singleEvent.id}
           searchFocused={isSearchFocused(singleEvent.id)}
@@ -455,14 +471,14 @@ export function EventWorkspacePanel({
           </div>
         ) : (
           <>
-            {filteredWorkingEvents.length > 0 && (
+            {filteredWorkingEvents.some(e=>visibleIds.has(e.id)) && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-slate-700">{liveWorkspaceHeading}</p>
                   <span className="text-xs font-medium text-slate-500">{filteredWorkingEvents.length} events</span>
                 </div>
                 <div className="space-y-2">
-                  {filteredWorkingEvents.map((event) => (
+                  {filteredWorkingEvents.filter(e=>visibleIds.has(e.id)).map((event) => (
                     <EventWorkspaceRow
                       key={event.id}
                       event={event}
@@ -480,14 +496,14 @@ export function EventWorkspacePanel({
               </div>
             )}
 
-            {filteredInactiveEvents.length > 0 && (
+            {filteredInactiveEvents.some(e=>visibleIds.has(e.id)) && (
               <div className="space-y-2 border-t border-slate-100 pt-5">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-slate-700">{inactiveWorkspaceHeading}</p>
                   <span className="text-xs font-medium text-slate-500">{filteredInactiveEvents.length} events</span>
                 </div>
                 <div className="space-y-2">
-                  {filteredInactiveEvents.map((event) => (
+                  {filteredInactiveEvents.filter(e=>visibleIds.has(e.id)).map((event) => (
                     <EventWorkspaceRow
                       key={event.id}
                       event={event}
@@ -505,7 +521,7 @@ export function EventWorkspacePanel({
               </div>
             )}
 
-            {filteredArchivedEvents.length > 0 && (
+            {filteredArchivedEvents.some(e=>visibleIds.has(e.id)) && (
               <div className="space-y-2 border-t border-slate-100 pt-5">
                 <button
                   type="button"
@@ -521,7 +537,7 @@ export function EventWorkspacePanel({
                 </button>
                 {showArchivedEvents && (
                   <div className="space-y-2">
-                    {filteredArchivedEvents.map((event) => (
+                    {filteredArchivedEvents.filter(e=>visibleIds.has(e.id)).map((event) => (
                       <EventWorkspaceRow
                         key={event.id}
                         event={event}
@@ -540,14 +556,14 @@ export function EventWorkspacePanel({
               </div>
             )}
 
-            {recentHistoricalEvents.length > 0 && (
+            {recentHistoricalEvents.some(e=>visibleIds.has(e.id)) && (
               <div className="space-y-2 border-t border-slate-100 pt-5">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-slate-700">{historyWorkspaceHeading}</p>
                   <span className="text-xs font-medium text-slate-500">{recentHistoricalEvents.length} events</span>
                 </div>
                 <div className="space-y-2">
-                  {recentHistoricalEvents.map((event) => (
+                  {recentHistoricalEvents.filter(e=>visibleIds.has(e.id)).map((event) => (
                     <EventWorkspaceRow
                       key={event.id}
                       event={event}
@@ -572,7 +588,7 @@ export function EventWorkspacePanel({
                   <span className="text-xs font-medium text-slate-500">{historyEventGroups.length} groups</span>
                 </div>
                 <div className="space-y-2">
-                  {historyEventGroups.map((group) => {
+                  {historyEventGroups.filter(group=>group.events.some(e=>visibleIds.has(e.id))).map((group) => {
                     const open = Boolean(deferredEventListQuery) || eventHistoryOpenKeys.includes(group.key);
                     return (
                       <div key={group.key} className="rounded-2xl border border-slate-200 bg-slate-50">
@@ -594,7 +610,7 @@ export function EventWorkspacePanel({
                         </button>
                         {open && (
                           <div className="space-y-2 border-t border-slate-200 p-2">
-                            {group.events.map((event) => (
+                            {group.events.filter(e=>visibleIds.has(e.id)).map((event) => (
                               <EventWorkspaceRow
                                 key={event.id}
                                 event={event}

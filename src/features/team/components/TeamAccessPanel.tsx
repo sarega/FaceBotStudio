@@ -3,6 +3,7 @@ import { CalendarRange, RefreshCw, Save, Shield, Trash2, UserPlus } from "lucide
 
 import { ActionButton, StatusLine } from "../../../components/shared/AppUi";
 import type { AuthUser, EventRecord, UserRole } from "../../../types";
+import { EventAccessSelector } from "../../../components/shared/EventAccessSelector";
 import { isEventAssignedRole } from "../../../lib/staffRoles";
 
 function roleLabel(role: UserRole) {
@@ -230,26 +231,10 @@ export function TeamAccessPanel({
                         )}
                       </div>
                       {ownerEditing && draftRole === "admin" && <select aria-label="Admin event scope" className="mt-3 w-full rounded-lg border p-2 text-sm" value={draftScope} onChange={event => setDraftScopes(current => ({ ...current, [user.id]: event.target.value as "all" | "selected" }))}><option value="all">All Events</option><option value="selected">Selected Events Only</option></select>}
-                      {(!ownerEditing || draftScope === "selected") && <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        {events.map((event) => {
-                          const selected = (draftEventIds[user.id] || user.assigned_event_ids || []).includes(event.id);
-                          return (
-                            <label key={event.id} className="flex items-start gap-2 rounded-lg border border-slate-100 px-2.5 py-2 text-xs text-slate-700">
-                              <input
-                                type="checkbox"
-                                checked={selected}
-                                onChange={() => setDraftEventIds((current) => ({
-                                  ...current,
-                                  [user.id]: toggleEventId(current[user.id] || user.assigned_event_ids || [], event.id),
-                                }))}
-                                disabled={!canManageTargetAccess(user) || teamLoading}
-                                className="mt-0.5 accent-blue-600"
-                              />
-                              <span>{event.name}</span>
-                            </label>
-                          );
-                        })}
-                      </div>}
+                      {(!ownerEditing || draftScope === "selected") && <EventAccessSelector preferenceKey={authUser?.id ? "meetrix-event-access-filter:"+authUser.id : undefined} events={events}
+                        selectedIds={draftEventIds[user.id] || user.assigned_event_ids || []}
+                        onChange={ids=>setDraftEventIds(current=>({...current,[user.id]:ids}))}
+                        disabled={!canManageTargetAccess(user)||teamLoading}/>}
                       {!events.length && <p className="mt-2 text-xs text-amber-700">No Event is available to assign.</p>}
                     </div>
                   )}
@@ -305,20 +290,7 @@ export function TeamAccessPanel({
                 <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3">
                   <p className="text-xs font-semibold text-slate-800">Event access</p>
                   <p className="mt-1 text-[11px] text-slate-500">เลือก Event ที่บัญชีนี้จะเข้าถึงได้เท่านั้น</p>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {events.map((event) => (
-                      <label key={event.id} className="flex items-start gap-2 rounded-lg border border-blue-100 bg-white px-2.5 py-2 text-xs text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={newUserEventIds.includes(event.id)}
-                          onChange={() => onNewUserEventIdsChange(toggleEventId(newUserEventIds, event.id))}
-                          disabled={teamLoading}
-                          className="mt-0.5 accent-blue-600"
-                        />
-                        <span>{event.name}</span>
-                      </label>
-                    ))}
-                  </div>
+                  <EventAccessSelector preferenceKey={authUser?.id ? "meetrix-event-access-filter:"+authUser.id : undefined} events={events} selectedIds={newUserEventIds} onChange={onNewUserEventIdsChange} disabled={teamLoading}/>
                   {!events.length && <p className="mt-2 text-xs text-amber-700">No Event is available to assign.</p>}
                 </div>
               )}

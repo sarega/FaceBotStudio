@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.21 - 2026-11-26
+
+- Add searchable event access selector with lifecycle filters, local per-user preferences and paginated selection.
+- Default Event Workspace to current events; add workspace pagination and searchable header switching.
+- Add owner bulk archive for completed and cancelled events without deleting records or assignments.
+- Add optional filtered/paginated event API responses; preserve legacy list clients.
+- Reject public automated conversations for non-active events.
+
 ## 0.11.20 - 2026-11-26
 
 - Simplify publishing visibility to Public, Unlisted, or Private (public page disabled). New public pages are listed when active; existing visibility remains unchanged.

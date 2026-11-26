@@ -1,3 +1,4 @@
+import { EventAccessSelector } from "../shared/EventAccessSelector";
 import type { ReactNode } from "react";
 import {
   Bot,
@@ -161,30 +162,12 @@ export function AdminWorkspaceHeader({
                 <CalendarRange className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">
-                <select
-                  id="event-selector"
-                  value={selectedEventAvailableInSelector ? selectedEventId : ""}
-                  onChange={(event) => {
-                    if (!onSelectEvent(event.target.value)) {
-                      event.currentTarget.value = selectedEventId;
-                    }
-                  }}
-                  disabled={!selectorEvents.length || eventLoading}
-                  className="min-w-0 w-full truncate bg-transparent text-sm font-semibold leading-none text-slate-900 outline-none disabled:opacity-60"
-                >
-                  <option value="" disabled>
-                    {selectorPlaceholderLabel}
-                  </option>
-                  {selectorEvents.map((event) => (
-                    <option key={event.id} value={event.id}>
-                      {event.name} ({getEventStatusLabel(event.effective_status)}
-                      {event.registration_availability && event.registration_availability !== "open"
-                        ? ` • ${getRegistrationAvailabilityLabel(event.registration_availability)}`
-                        : ""}
-                      )
-                    </option>
-                  ))}
-                </select>
+                <details className="relative">
+                  <summary id="event-selector" className="cursor-pointer truncate text-sm font-semibold">{selectedEvent?.name || selectorPlaceholderLabel}</summary>
+                  <div className="absolute right-0 z-50 mt-2 w-[min(90vw,25rem)] rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+                    <EventAccessSelector single events={selectorEvents} selectedIds={selectedEventId?[selectedEventId]:[]} disabled={eventLoading} onChange={ids=>{if(ids[0]&&onSelectEvent(ids[0]))document.getElementById("event-selector")?.parentElement?.removeAttribute("open");}}/>
+                  </div>
+                </details>
               </div>
             </div>
           </div>

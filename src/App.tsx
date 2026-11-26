@@ -1,3 +1,4 @@
+import { EVENT_FILTERS, eventMatchesFilter, type EventFilter } from "./lib/eventFilters";
 import { PaidCarpoolPanel } from "./features/registrations/components/PaidCarpoolPanel";
 import { NotificationInbox, type InboxEntry, type NotificationFilter } from "./features/notifications/NotificationInbox";
 import type { AdminNotificationMutation } from "../backend/db/types";
@@ -214,7 +215,7 @@ type RegistrationAvailabilityUiState = RegistrationWindowUiState | "full";
 type AppTab = "notifications" | "event" | "mail" | "design" | "test" | "agent" | "organizer" | "logs" | "settings" | "team" | "customers" | "registrations" | "logistics" | "direct_tickets" | "reports" | "checkin" | "inbox" | "outreach";
 type AgentWorkspaceView = "console" | "setup";
 type EventWorkspaceView = "setup" | "public";
-type EventWorkspaceFilter = "all" | EventStatus;
+type EventWorkspaceFilter = Exclude<EventFilter, "assigned">;
 type EventWorkspaceSort = "event_start_desc" | "name_asc" | "modified_desc";
 type BadgeTone = "neutral" | "blue" | "emerald" | "amber" | "rose" | "violet";
 type ActionTone = BadgeTone;
@@ -3403,7 +3404,7 @@ export default function App() {
   const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [eventListQuery, setEventListQuery] = useState("");
-  const [eventWorkspaceFilter, setEventWorkspaceFilter] = useState<EventWorkspaceFilter>("all");
+  const [eventWorkspaceFilter, setEventWorkspaceFilter] = useState<EventWorkspaceFilter>("current");
   const [eventWorkspaceSort, setEventWorkspaceSort] = useState<EventWorkspaceSort>("event_start_desc");
   const [registrationListQuery, setRegistrationListQuery] = useState("");
   const [documentListQuery, setDocumentListQuery] = useState("");
@@ -3517,6 +3518,7 @@ export default function App() {
   const isPublicEventCatalogRoute = currentPathname === "/events" || currentPathname === "/events/";
   const isCustomerAccountRoute = currentPathname === "/account" || currentPathname.startsWith("/account/");
   const isCustomerAppRoute = currentPathname === "/app" || currentPathname.startsWith("/app/");
+  useEffect(()=>{if(!authUser?.id)return;try{const saved=localStorage.getItem("meetrix-workspace-filter:"+authUser.id);if(saved!=="assigned"&&EVENT_FILTERS.some(f=>f.id===saved))setEventWorkspaceFilter(saved as EventWorkspaceFilter);}catch{}},[authUser?.id]);
   const role = authUser?.role;
   const logisticsOnly = role === "logistics";
   const canEditSettings = role === "owner" || role === "admin";
@@ -3977,7 +3979,7 @@ export default function App() {
     archived: queryMatchedEvents.filter((event) => event.effective_status === "archived").length,
   };
   const filteredEventWorkspaceEvents = queryMatchedEvents.filter((event) =>
-    eventWorkspaceFilter === "all" ? true : event.effective_status === eventWorkspaceFilter,
+    eventMatchesFilter(event, eventWorkspaceFilter),
   );
   const filteredWorkingEvents = filteredEventWorkspaceEvents.filter(
     (event) => event.effective_status === "active" || event.effective_status === "pending",
@@ -4016,6 +4018,9 @@ export default function App() {
       return rightTimestamp - leftTimestamp;
     });
   const eventWorkspaceFilterOptions: Array<{ id: EventWorkspaceFilter; label: string; count: number }> = [
+    { id: "current", label: "Current", count: eventWorkspaceCounts.active + eventWorkspaceCounts.pending },
+    { id: "upcoming", label: "Upcoming", count: queryMatchedEvents.filter(event=>eventMatchesFilter(event,"upcoming")).length },
+    { id: "past", label: "Past", count: eventWorkspaceCounts.closed + eventWorkspaceCounts.cancelled },
     { id: "all", label: "All", count: eventWorkspaceCounts.all },
     { id: "active", label: "Live", count: eventWorkspaceCounts.active },
     { id: "pending", label: "Pending", count: eventWorkspaceCounts.pending },
@@ -4038,7 +4043,7 @@ export default function App() {
       : "Recent History";
   const inactiveWorkspaceHeading = eventWorkspaceFilter === "inactive" ? "Inactive Workspaces" : "Inactive";
   const archivedWorkspaceHeading = eventWorkspaceFilter === "archived" ? "Archived Workspaces" : "Archived";
-  const selectorEvents = [...(logisticsOnly ? events : nonHistoricalEvents)].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
+  const selectorEvents = [...events].sort((left, right) => compareEventWorkspaceRecords(left, right, eventWorkspaceSort));
   const selectedEventAvailableInSelector = Boolean(
     selectedEvent && selectorEvents.some((event) => event.id === selectedEvent.id),
   );
@@ -10984,6 +10989,7 @@ export default function App() {
               publicContactPhoneHref={publicContactPhoneHref}
               eventWorkspacePanel={(
                 <EventWorkspacePanel
+                  onBulkArchive={role==="owner"?async ids=>{setEventLoading(true);try{const response=await apiFetch("/api/events/bulk-archive",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event_ids:ids})});const data=await response.json();if(!response.ok)throw new Error(data.error);setEventMessage("Archived "+data.archived.length+" events; failed "+data.failed.length);await fetchEvents();}catch(error){setEventMessage(String(error));}finally{setEventLoading(false);}}:undefined}
                   onCollapse={() => toggleSectionCollapsed(COLLAPSIBLE_SECTION_KEYS.eventWorkspaceBrowser)}
                   eventCreateOpen={eventCreateOpen}
                   onToggleEventCreate={() => setEventCreateOpen((current) => !current)}
@@ -11015,7 +11021,7 @@ export default function App() {
                   onEventWorkspaceSortChange={setEventWorkspaceSort}
                   eventWorkspaceFilterOptions={eventWorkspaceFilterOptions}
                   eventWorkspaceFilter={eventWorkspaceFilter}
-                  onEventWorkspaceFilterChange={setEventWorkspaceFilter}
+                  onEventWorkspaceFilterChange={value=>{setEventWorkspaceFilter(value);if(authUser?.id)try{localStorage.setItem("meetrix-workspace-filter:"+authUser.id,value);}catch{}}}
                   filteredEventWorkspaceEvents={filteredEventWorkspaceEvents}
                   eventWorkspaceCounts={eventWorkspaceCounts}
                   deferredEventListQuery={deferredEventListQuery}
