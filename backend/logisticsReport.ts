@@ -49,12 +49,12 @@ export function buildLogisticsReportHtml({ kind, plan, language, eventName, font
     summary = t(`${plan.cars.length} คัน · จัดรถแล้ว ${assigned.size} คน · รอรถ ${waiting.length} คน`,
       `${plan.cars.length} cars · ${assigned.size} passengers assigned · ${waiting.length} waiting`);
     body = boxes(plan.cars.flatMap((car, index) => {
-      const driver = byId.get(car.driverId) ?? t("ตรวจสอบชื่อคนขับ", "Check driver record");
+      const driver = car.kind==="shared" ? car.driverName || t("รอระบุคนขับ","Driver pending") : byId.get(car.driverId) ?? t("ตรวจสอบชื่อคนขับ", "Check driver record");
       const vacant = car.seats - car.passengers.length;
       const seats = t(`ที่นั่งผู้โดยสาร ${car.seats} · ว่าง ${vacant}`, `${car.seats} passenger seats · ${vacant} open`);
-      const detail = car.pickup ? `${seats} · ${t("จุดนัดพบ", "Pickup")} ${car.pickup}` : seats;
+      const detail = [seats,car.pickup && `${t("จุดนัดพบ","Pickup")} ${car.pickup}`,car.departure && `${t("เวลาออก","Departure")} ${car.departure}`,car.note && `${t("หมายเหตุ","Note")} ${car.note}`].filter(Boolean).join(" · ");
       const passengers = car.passengers.map(id => byId.get(id) ?? t("ตรวจสอบชื่อผู้โดยสาร", "Check passenger record"));
-      return cards(t(`รถคันที่ ${index + 1} · คนขับ ${driver}`, `Car ${index + 1} · Driver ${driver}`), detail, passengers);
+      return cards(car.kind==="shared"?`${car.label} · ${t("คนขับ","Driver")} ${driver}`:t(`รถคันที่ ${index + 1} · คนขับ ${driver}`, `Car ${index + 1} · Driver ${driver}`), detail, passengers);
     }));
     if (waiting.length) {
       body += boxes(cards(t("ผู้โดยสารที่ยังไม่ได้จัดรถ", "Unassigned passengers"), "", waiting.map(attendee => attendee.name)));

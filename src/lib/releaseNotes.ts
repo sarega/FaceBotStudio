@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.26",date:"2026-11-26",title:"Shared vehicle logistics",features:["Create hired vans and shared vehicles","Assign passengers with capacity checks","Export pickup, departure and notes to CSV and PDF"]},
   {version:"0.11.25",date:"2026-11-26",title:"Event appearance and branding",features:["Customize the event logo, header background and layout","Preview desktop and mobile appearance before saving","Reset appearance independently of registration settings"]},
   {version:"0.11.24",date:"2026-11-26",title:"Public event language switching",features:["Publish approved translations immediately","Reload event content in the selected language","Show a flag and language name in the public header"]},
   {version:"0.11.23",date:"2026-11-26",title:"Editable multilingual event content",features:["Switch languages directly in Event Setup","Edit translated descriptions with the existing rich HTML editor","Keep published translations unchanged until new edits are approved"]},

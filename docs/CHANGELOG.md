@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.26 - 2026-11-26
+
+- Add shared and hired vehicles to carpool planning with independent capacity and external driver details.
+- Assign passengers across private and shared vehicles, with departure and notes.
+- Include shared vehicles and logistics details in CSV and PDF reports.
+
 ## 0.11.25 - 2026-11-26
 
 - Add independent event logo, header background and three public page layouts.

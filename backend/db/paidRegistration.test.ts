@@ -799,11 +799,15 @@ test("carpool maps booking answers by attendee and excludes cancellations", asyn
     const driver = plan.attendees.find(attendee => attendee.defaultRole === "driver")!;
     const passenger = plan.attendees.find(attendee => attendee.defaultRole === "passenger")!;
     const car = { driverId: driver.id, seats: 1, pickup: "Station", passengers: [passenger.id] };
-    await db.paidCarpoolPlan(event.id, organizationId, { version: 0, cars: [car], roles: {} });
+    const van = {driverId:"shared-van1",kind:"shared" as const,label:"Van 1",driverName:"External driver",seats:10,pickup:"Lobby",departure:"07:00",note:"Meet early",passengers:[]};
+    await db.paidCarpoolPlan(event.id, organizationId, { version: 0, cars: [car,van], roles: {} });
+    const withVan=(await db.paidCarpoolPlan(event.id,organizationId))!;
+    assert.deepEqual(withVan.cars.find(c=>c.kind==="shared"),van);
+    await db.paidCarpoolPlan(event.id,organizationId,{version:withVan.version,cars:[{...car,passengers:[]},{...van,passengers:[passenger.id]}],roles:{}});
     await db.cancelOwnedPaidBooking(event.id, passengerBooking.id, customer.id);
     const afterCancel = (await db.paidCarpoolPlan(event.id, organizationId))!;
     assert.ok(!afterCancel.attendees.some(attendee => attendee.id === passenger.id));
-    assert.deepEqual(afterCancel.cars, [{ ...car, passengers: [] }]);
+    assert.deepEqual(afterCancel.cars, [{ ...car, passengers: [] },van]);
     await assert.rejects(db.paidCarpoolPlan(event.id, "another-org"), /event_not_found/);
   } finally {
     db.close();

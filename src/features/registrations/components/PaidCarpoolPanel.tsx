@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, RefreshCw, Save } from "lucide-react";
+import { Download, RefreshCw, Save, Plus, Trash2 } from "lucide-react";
 import {
   attendeeCarpoolRole, carpoolRoles, MAX_CARPOOL_SEATS,
   type CarpoolAttendee, type CarpoolCar, type CarpoolLayout, type CarpoolRole, type PaidCarpoolPlan,
@@ -18,8 +18,8 @@ type Props = {
 function carpoolLayoutKey({ roles, cars }: CarpoolLayout) {
   // The server trims pickup text. Car and passenger order does not affect assignments.
   const assignments = cars
-    .filter(car => car.seats || car.pickup.trim())
-    .map(({ driverId, seats, pickup, passengers }) => [driverId, seats, pickup.trim(), [...passengers].sort()] as const)
+    .filter(car => car.kind==="shared" || car.seats || car.pickup.trim() || car.departure?.trim() || car.note?.trim())
+    .map(({ driverId, seats, pickup, passengers,kind,label,driverName,departure,note }) => [driverId, seats, pickup.trim(), [...passengers].sort(),kind||"",label?.trim()||"",driverName?.trim()||"",departure?.trim()||"",note?.trim()||""] as const)
     .sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify([Object.entries(roles).sort(([a], [b]) => a.localeCompare(b)), assignments]);
 }
@@ -98,11 +98,22 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
   function changeCar(car: CarpoolCar) {
     if (!draft || car.seats < car.passengers.length) return;
     const cars = draft.cars.filter(previous => previous.driverId !== car.driverId);
-    if (car.seats || car.pickup) cars.push(car);
+    if (car.kind==="shared" || car.seats || car.pickup || car.departure || car.note) cars.push(car);
     setDraft({ ...draft, cars });
     setMessage("");
   }
 
+  function addSharedCar(seats=10) {
+    if (!draft || busy) return;
+    const count=draft.cars.filter(car=>car.kind==="shared").length+1;
+    const car:CarpoolCar={driverId:"shared-"+crypto.randomUUID(),kind:"shared",label:t("รถตู้ "+count,"Van "+count),driverName:"",seats,pickup:"",departure:"",note:"",passengers:[]};
+    setDraft({...draft,cars:[...draft.cars,car]});setMessage("");
+  }
+  function removeSharedCar(car:CarpoolCar) {
+    if (!draft || busy || !window.confirm(t("ลบรถคันนี้และคืนผู้โดยสารเข้ารายการรอรถ?","Remove this vehicle and return its passengers to the waiting list?"))) return;
+    setDraft({...draft,cars:draft.cars.filter(c=>c.driverId!==car.driverId)});setMessage("");
+  }
+  const sharedCars=draft?.cars.filter(car=>car.kind==="shared")??[];
   function assign(attendeeId: string, driverId: string) {
     if (!draft || assignments.get(attendeeId) === driverId) return;
     const target = carByDriver.get(driverId);
@@ -120,17 +131,18 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
   function exportCsv() {
     const rows = [[t("ชื่อผู้ลงทะเบียน", "Attendee"), t("เลขใบจอง", "Booking reference"),
       t("สถานะลงทะเบียน", "Registration status"), t("การเดินทาง", "Transport"),
-      t("คนขับ", "Driver"), t("จุดนัดพบ", "Pickup"), t("ที่นั่งว่างในรถ", "Open seats")]];
+      t("คนขับ", "Driver"), t("จุดนัดพบ", "Pickup"), t("ที่นั่งว่างในรถ", "Open seats"),t("รถ","Vehicle"),t("เวลาออก","Departure"),t("หมายเหตุ","Notes")]];
     for (const role of carpoolRoles) {
       for (const attendee of groups[role]) {
         const driverId = role === "driver" ? attendee.id : assignments.get(attendee.id);
         const car = driverId ? carByDriver.get(driverId) : undefined;
         rows.push([attendee.name, attendee.reference,
           rosterStatusLabel(getRosterStatus(attendee.bookingState, attendee.checkedIn), language), roleLabels[role],
-          driverId ? byId.get(driverId)?.name ?? "" : "", car?.pickup ?? "",
-          role === "driver" ? String(car ? car.seats - car.passengers.length : 0) : ""]);
+          driverId ? car?.kind==="shared"?car.driverName||"":byId.get(driverId)?.name ?? "" : "", car?.pickup ?? "",
+          role === "driver" ? String(car ? car.seats - car.passengers.length : 0) : "",car?.label||"",car?.departure||"",car?.note||""]);
       }
     }
+    for(const car of sharedCars) rows.push(["","", "",t("รถส่วนกลาง","Shared vehicle"),car.driverName||"",car.pickup,String(car.seats-car.passengers.length),car.label||"",car.departure||"",car.note||""]);
     downloadRegistrationCsv(`carpool-${eventId.replace(/[^\w-]/g, "-")}.csv`, rows);
   }
 
@@ -165,11 +177,11 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
         <button type="button" className={control} disabled={busy} onClick={() => void request()}>
           <RefreshCw size={14} aria-hidden="true" />{t("โหลดใหม่", "Reload")}
         </button>
-        <button type="button" className={control} disabled={busy || dirty || !draft?.attendees.length} onClick={exportCsv}>
+        <button type="button" className={control} disabled={busy || dirty || (!draft?.attendees.length&&!draft?.cars.length)} onClick={exportCsv}>
           <Download size={14} aria-hidden="true" /> CSV
         </button>
         <LogisticsPdfButton path={path} language={language} filename="carpool-plan.pdf" apiFetch={apiFetch}
-          ready={!busy && !!saved?.attendees.length} dirty={dirty} />
+          ready={!busy && !!(saved?.attendees.length||saved?.cars.length)} dirty={dirty} />
         <button type="button" className={`${control} registration-admin-control-primary`} disabled={busy || !dirty} onClick={() => void request(true)}>
           <Save size={14} aria-hidden="true" />{t("บันทึก", "Save")}
         </button>
@@ -180,6 +192,17 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
       {busy && !draft && <p role="status">{t("กำลังโหลดรายชื่อ…", "Loading attendees…")}</p>}
       {saved === null && <p>{t("ยังไม่ได้เปิดระบบลงทะเบียนแบบชำระเงินสำหรับงานนี้", "Paid registration is not configured for this event.")}</p>}
       {draft && !draft.attendees.length && <p>{t("ยังไม่มีรายชื่อผู้ลงทะเบียน", "No attendees yet.")}</p>}
+      {draft&&<section className="carpool-group rounded-xl border p-3 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{t("รถส่วนกลาง / รถเช่า","Shared / hired vehicles")} · {sharedCars.length}</h3><button type="button" disabled={busy} className={control} onClick={()=>addSharedCar()}><Plus size={14}/>{t("สร้างรถใหม่","New Car")}</button></div>
+        <p className="text-xs opacity-75">{t("จำนวนที่นั่งไม่รวมคนขับ สามารถสร้างรถก่อนมีรายชื่อผู้โดยสารได้","Passenger seats exclude the driver. Create vehicles before assigning passengers.")}</p>
+        <div className="grid gap-3 lg:grid-cols-2">{sharedCars.map(car=><article key={car.driverId} className="carpool-attendee rounded-lg border p-3 space-y-2">
+          <div className="flex items-center gap-2"><input aria-label={t("ชื่อรถ","Vehicle name")} className={`${control} min-w-0 flex-1`} maxLength={120} value={car.label||""} disabled={busy} onChange={e=>changeCar({...car,label:e.target.value})}/><button type="button" aria-label={t("ลบรถ","Remove vehicle")} disabled={busy} className={control} onClick={()=>removeSharedCar(car)}><Trash2 size={14}/></button></div>
+          <div className="flex flex-wrap gap-2 items-center"><label className="text-xs">{t("ที่นั่งผู้โดยสาร","Passenger seats")} <select className={control} disabled={busy} value={car.seats} onChange={e=>changeCar({...car,seats:Number(e.target.value)})}>{Array.from({length:MAX_CARPOOL_SEATS+1-car.passengers.length},(_,i)=>i+car.passengers.length).map(n=><option key={n}>{n}</option>)}</select></label><span className="text-xs">{car.passengers.length}/{car.seats} · {t("ว่าง","Open")} {car.seats-car.passengers.length}</span></div>
+          {([["driverName",t("คนขับ / เบอร์ติดต่อ","Driver / contact"),120],["pickup",t("จุดนัดพบ","Pickup point"),200],["departure",t("วันและเวลาออก","Departure date / time"),120],["note",t("หมายเหตุ","Notes"),1000]] as const).map(([field,label,max])=><label key={field} className="block text-xs">{label}{field==="note"?<textarea className={`${control} w-full`} rows={2} disabled={busy} maxLength={max} value={car[field]||""} onChange={e=>changeCar({...car,[field]:e.target.value})}/>:<input className={`${control} w-full`} disabled={busy} maxLength={max} value={car[field]||""} onChange={e=>changeCar({...car,[field]:e.target.value})}/>}</label>)}
+          <select aria-label={t("เพิ่มผู้โดยสาร","Add passenger")} className={`${control} w-full`} value="" disabled={busy||car.passengers.length>=car.seats} onChange={e=>{if(e.target.value)assign(e.target.value,car.driverId);}}><option value="">{t("+ เพิ่มผู้โดยสาร","+ Add passenger")}</option>{groups.passenger.filter(p=>!assignments.has(p.id)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
+          <ul className="flex flex-wrap gap-1">{car.passengers.map(id=><li key={id}><button className={control} disabled={busy} type="button" onClick={()=>assign(id,"")}>{byId.get(id)?.name||id} ×</button></li>)}</ul>
+        </article>)}</div>
+      </section>}
       {!!draft?.attendees.length && <>
         <input type="search" className={`${control} w-full sm:max-w-xs`} value={search} onChange={event => setSearch(event.target.value)}
           aria-label={t("ค้นหาผู้ลงทะเบียน", "Find an attendee")} placeholder={t("ค้นหาชื่อหรือเลขใบจอง", "Search name or booking reference")} />
@@ -207,6 +230,7 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
                       onChange={event => changeCar({ ...car, pickup: event.target.value })}
                       aria-label={t("จุดนัดพบ", "Pickup point")} placeholder={t("จุดนัดพบ", "Pickup point")} />
                   </div>
+                  <div className="grid gap-2 sm:grid-cols-2"><input className={control} maxLength={120} disabled={busy} value={car.departure||""} onChange={e=>changeCar({...car,departure:e.target.value})} placeholder={t("วันและเวลาออก","Departure date / time")} aria-label={t("วันและเวลาออก","Departure date / time")}/><input className={control} maxLength={1000} disabled={busy} value={car.note||""} onChange={e=>changeCar({...car,note:e.target.value})} placeholder={t("หมายเหตุ","Notes")} aria-label={t("หมายเหตุ","Notes")}/></div>
                   {!!car.passengers.length && <ul className="flex flex-wrap gap-1.5">
                     {car.passengers.map(id => <li key={id}>
                       <button type="button" className={control} disabled={busy} onClick={() => assign(id, "")}
@@ -221,6 +245,7 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
                   <select className={`${control} min-w-0 max-w-full`} value={assignments.get(attendee.id) ?? ""} disabled={busy}
                     onChange={event => assign(attendee.id, event.target.value)}>
                     <option value="">{t("ยังไม่จัดรถ", "Unassigned")}</option>
+                    {sharedCars.map(car=><option key={car.driverId} value={car.driverId} disabled={car.seats<=car.passengers.length&&assignments.get(attendee.id)!==car.driverId}>{car.label} · {t("ว่าง","Open")} {car.seats-car.passengers.length}</option>)}
                     {groups.driver.map(driver => {
                       const option = carByDriver.get(driver.id);
                       const available = option ? option.seats - option.passengers.length : 0;

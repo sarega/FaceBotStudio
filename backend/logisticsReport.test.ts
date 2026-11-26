@@ -41,3 +41,8 @@ test("the carpool report groups passengers by car and lists waiting riders separ
   assert.match(report, /ผู้โดยสารที่ยังไม่ได้จัดรถ[\s\S]*<li>แขกรอรถ<\/li>/);
   assert.doesNotMatch(report, /booking-secret|แขกเดินทางเอง/);
 });
+
+test("shared vehicle report includes external driver and departure notes",()=>{
+ const report=buildLogisticsReportHtml({...options,kind:"carpool",plan:{version:1,roles:{},attendees:[],cars:[{driverId:"shared-van1",kind:"shared",label:"Van 1",driverName:"External driver",seats:10,pickup:"Lobby",departure:"07:00",note:"Meet early",passengers:[]}]}});
+ for(const value of ["Van 1","External driver","Lobby","07:00","Meet early"])assert.ok(report.includes(value));
+});

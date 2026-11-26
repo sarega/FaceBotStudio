@@ -14,6 +14,11 @@ export type CarpoolAttendee = {
 
 export type CarpoolCar = {
   driverId: string;
+  kind?: "shared";
+  label?: string;
+  driverName?: string;
+  departure?: string;
+  note?: string;
   seats: number;
   pickup: string;
   passengers: string[];
@@ -58,12 +63,22 @@ export function parseCarpoolUpdate(input: Record<string, unknown>): PaidCarpoolU
         !Number.isInteger(car.seats) || car.seats < 0 || car.seats > MAX_CARPOOL_SEATS ||
         typeof car.pickup !== "string" || car.pickup.length > 200 ||
         !Array.isArray(car.passengers) || car.passengers.length > car.seats) return null;
+    if (car.kind !== undefined && car.kind !== "shared") return null;
+    if (car.kind === "shared" && (!car.driverId.startsWith("shared-") || typeof car.label !== "string" || !car.label.trim())) return null;
+    if (car.kind !== "shared" && car.driverId.startsWith("shared-")) return null;
+    for (const [field,max] of [["label",120],["driverName",120],["departure",120],["note",1000]] as const) {
+      if (car[field] !== undefined && (typeof car[field] !== "string" || car[field].length > max)) return null;
+    }
     for (const id of car.passengers) {
       if (!isId(id) || id === car.driverId || passengers.has(id)) return null;
       passengers.add(id);
     }
     drivers.add(car.driverId);
-    parsed.push({ driverId: car.driverId, seats: car.seats, pickup: car.pickup.trim(), passengers: car.passengers });
+    parsed.push({ driverId: car.driverId, seats: car.seats, pickup: car.pickup.trim(), passengers: car.passengers,
+      ...(car.kind==="shared"?{kind:"shared" as const,label:car.label.trim(),driverName:(car.driverName||"").trim()}:{}),
+      ...(car.departure?.trim()?{departure:car.departure.trim()}:{}),
+      ...(car.note?.trim()?{note:car.note.trim()}:{}),
+    });
   }
   return { version, roles: Object.fromEntries(entries), cars: parsed };
 }

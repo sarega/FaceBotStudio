@@ -1751,7 +1751,7 @@ export function* paidCarpoolPlan(eventId: string, update?: PaidCarpoolUpdate): P
     const attendee = byId.get(id);
     return attendee && attendeeCarpoolRole(attendee, roles) === role;
   }
-  const cars = layout.cars.filter(car => matchesRole(car.driverId, "driver"))
+  const cars = layout.cars.filter(car => car.kind === "shared" || matchesRole(car.driverId, "driver"))
     .map(car => ({ ...car, passengers: car.passengers.filter(id => matchesRole(id, "passenger")) }));
   if (!update) return { version, attendees, roles, cars };
   if (Object.keys(roles).length !== Object.keys(update.roles).length || cars.length !== update.cars.length ||
