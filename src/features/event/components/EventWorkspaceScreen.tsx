@@ -808,6 +808,14 @@ export function EventWorkspaceScreen({
                   </div>
 
                   <div className="md:col-span-2">
+                    <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Event type</label>
+                    <select value={settings.event_type} onChange={(event) => setSettings({ ...settings, event_type: event.target.value as typeof settings.event_type })} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                      <option value="single">Single Event</option><option value="recurring">Recurring Event</option><option value="campaign">Ongoing Campaign</option>
+                    </select>
+                    {settings.event_type === "campaign" && <p className="mt-1 text-xs text-slate-500">Agent scope: This Campaign Only. The existing Global System Prompt is inherited. Add campaign-specific instructions in Event Context. No booking tools.</p>}
+                    {settings.event_type !== "single" && <label className="mt-3 block text-xs font-bold uppercase text-slate-500">Recurring schedule (local time)<textarea value={settings.event_recurring_schedule} onChange={(event) => setSettings({ ...settings, event_recurring_schedule: event.target.value })} placeholder="Every Sunday, 10:00–12:00" className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm normal-case font-normal" /></label>}
+                  </div>
+                  <div className="md:col-span-2">
                     <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Organizer</label>
                             {organizerProfiles.length > 0 ? (
                               <select
@@ -851,7 +859,7 @@ export function EventWorkspaceScreen({
                       </div>
                     </div>
                     <p className="mt-1 text-[11px] text-slate-500">
-                      Event Ends auto-fills to 2 hours later after you set Event Starts. Adjust it if the session runs longer.
+                      {settings.event_type !== "single" ? "Leave the end date blank to keep this recurring activity or campaign active indefinitely." : "Event Ends auto-fills to 2 hours later after you set Event Starts. Adjust it if the session runs longer."}
                     </p>
                   </div>
 

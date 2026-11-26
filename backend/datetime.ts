@@ -133,16 +133,17 @@ export function getEventState(settings: Record<string, string>, now = new Date()
 
   const eventDate = zonedDateTimeToUtc(settings.event_date || "", timeZone);
   const eventEndDate = zonedDateTimeToUtc(settings.event_end_date || "", timeZone);
-  const eventCloseDate = eventEndDate || eventDate;
+  const ongoingCampaign = settings.event_type === "campaign" || settings.event_type === "recurring";
+  const eventCloseDate = eventEndDate || (ongoingCampaign ? null : eventDate);
   const eventScheduleStatus =
     eventDate && eventEndDate && eventEndDate.getTime() < eventDate.getTime() ? "invalid" : "valid";
-  let eventLifecycle = "unscheduled";
+  let eventLifecycle = ongoingCampaign ? "ongoing" : "unscheduled";
   if (eventDate || eventEndDate) {
     const lifecycleStart = eventDate || eventEndDate;
     const lifecycleEnd = eventCloseDate;
     if (lifecycleStart && now.getTime() < lifecycleStart.getTime()) {
       eventLifecycle = "upcoming";
-    } else if (eventDate && eventEndDate && lifecycleEnd && now.getTime() <= lifecycleEnd.getTime()) {
+    } else if ((ongoingCampaign && (!lifecycleEnd || now <= lifecycleEnd)) || (eventDate && eventEndDate && lifecycleEnd && now.getTime() <= lifecycleEnd.getTime())) {
       eventLifecycle = "ongoing";
     } else {
       eventLifecycle = "past";

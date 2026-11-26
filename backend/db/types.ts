@@ -812,6 +812,7 @@ export interface EventRow {
   organizer_name?: string;
   status: ManualEventStatus;
   effective_status: EventStatus;
+  event_type?: "single" | "recurring" | "campaign";
   event_date?: string;
   event_end_date?: string;
   event_timezone?: string;

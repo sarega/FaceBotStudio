@@ -115,6 +115,7 @@ export interface EventRecord {
   poster_url?: string;
   status: ManualEventStatus;
   effective_status: EventStatus;
+  event_type?: "single" | "recurring" | "campaign";
   event_date?: string;
   event_end_date?: string;
   event_timezone?: string;
@@ -334,6 +335,8 @@ export interface Settings {
   event_room_detail: string;
   event_location: string;
   event_map_url: string;
+  event_type: "single" | "recurring" | "campaign";
+  event_recurring_schedule: string;
   event_date: string;
   event_end_date: string;
   event_description: string;

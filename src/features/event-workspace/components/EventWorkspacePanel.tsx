@@ -39,6 +39,8 @@ type EventWorkspacePanelProps = {
   newEventOrganizerId: string;
   onNewEventOrganizerIdChange: (value: string) => void;
   newEventName: string;
+  newEventType: "single" | "recurring" | "campaign";
+  onNewEventTypeChange: (value: "single" | "recurring" | "campaign") => void;
   newEventMode: "free" | "paid";
   newEventPaymentMode: "promptpay" | "external_manual";
   onNewEventPaymentModeChange: (value: "promptpay" | "external_manual") => void;
@@ -152,7 +154,7 @@ function EventWorkspaceRow({
               {selected && <SelectionMarker />}
             </div>}
             <p className={compact ? "line-clamp-1 text-sm font-semibold leading-snug text-slate-900" :
-              "mt-2 line-clamp-2 text-sm font-semibold leading-snug text-slate-900 sm:mt-0"}>{event.name}</p>
+              "mt-2 line-clamp-2 text-sm font-semibold leading-snug text-slate-900 sm:mt-0"}>{event.name}{event.event_type === "campaign" ? " · Campaign" : event.event_type === "recurring" ? " · Recurring" : ""}</p>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
               <span className="inline-flex items-center gap-2">
                 <span className="font-mono">{event.slug}</span>
@@ -192,6 +194,8 @@ export function EventWorkspacePanel({
   newEventOrganizerId,
   onNewEventOrganizerIdChange,
   newEventName,
+  newEventType,
+  onNewEventTypeChange,
   newEventMode,
   onNewEventModeChange,
   newEventPaymentMode,
@@ -312,26 +316,33 @@ export function EventWorkspacePanel({
             </ActionButton>
           </div>
           <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3 text-sm sm:grid-cols-2">
-            <label className="font-medium">Registration type
+            <label className="font-medium">Event type
+              <select value={newEventType} onChange={(e) => onNewEventTypeChange(e.target.value as typeof newEventType)} className="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-2">
+                <option value="single">Single Event</option>
+                <option value="recurring">Recurring Event</option>
+                <option value="campaign">Ongoing Campaign — advertising / enquiries</option>
+              </select>
+            </label>
+            {newEventType === "campaign" ? <p className="rounded-xl bg-blue-50 p-3 text-xs text-blue-900">No end date required. Agent answers only from this campaign; registration tools are disabled.</p> : <label className="font-medium">Registration type
               <select value={newEventMode} onChange={(e) => onNewEventModeChange(e.target.value as "free" | "paid")}
                 className="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-2">
                 <option value="free">Free registration</option>
                 <option value="paid">Paid registration / Seminar</option>
               </select>
-            </label>
+            </label>}
             <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
               <input type="checkbox" checked={newEventWebPage} onChange={(e) => onNewEventWebPageChange(e.target.checked)} />
               Event web page + AI web chat (no Facebook required)
             </label>
             <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
               <input type="checkbox" checked={newEventOpenNow} onChange={(e) => onNewEventOpenNowChange(e.target.checked)} />
-              Activate event and open registration now
+              {newEventType === "campaign" ? "Activate campaign now" : "Activate event and open registration now"}
             </label>
             <p className="rounded-xl bg-blue-50 p-3 text-xs text-blue-900">
               This event is hidden from the public catalog. Share its direct URL only with attendees.
               The URL itself is not password-protected.
             </p>
-            {newEventMode === "paid" && <>
+            {newEventType !== "campaign" && newEventMode === "paid" && <>
               <fieldset className="sm:col-span-2 rounded-xl border-2 border-blue-200 p-3">
                 <legend className="px-2 font-bold">Payment method</legend>
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-white p-2">

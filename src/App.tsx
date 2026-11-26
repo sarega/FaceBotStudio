@@ -1559,7 +1559,7 @@ function describeEventTiming(settings: Settings) {
   const end = zonedDateTimeToUtcForUi(settings.reg_end || "", timeZone);
   const eventDate = zonedDateTimeToUtcForUi(settings.event_date || "", timeZone);
   const eventEndDate = zonedDateTimeToUtcForUi(settings.event_end_date || "", timeZone);
-  const eventCloseDate = eventEndDate || eventDate;
+  const eventCloseDate = eventEndDate || (settings.event_type !== "single" ? null : eventDate);
   const eventScheduleStatus =
     eventDate && eventEndDate && eventEndDate.getTime() < eventDate.getTime() ? "invalid" : "valid";
 
@@ -1572,7 +1572,7 @@ function describeEventTiming(settings: Settings) {
     registrationStatus = "closed";
   }
 
-  const eventLifecycle = !(eventDate || eventEndDate)
+  const eventLifecycle = settings.event_type !== "single" && (!eventEndDate || now <= eventEndDate) && (!eventDate || now >= eventDate) ? "ongoing" : !(eventDate || eventEndDate)
     ? "unscheduled"
     : eventDate && now.getTime() < eventDate.getTime()
     ? "upcoming"
@@ -2143,6 +2143,8 @@ const INITIAL_SETTINGS: Settings = {
   event_room_detail: "",
   event_location: "",
   event_map_url: "",
+  event_type: "single",
+  event_recurring_schedule: "",
   event_date: "",
   event_end_date: "",
   event_description: "",
@@ -2241,7 +2243,9 @@ function getBlankEventScopedSettings() {
     event_room_detail: "",
     event_location: "",
     event_map_url: "",
-    event_date: "",
+    event_type: "single",
+  event_recurring_schedule: "",
+  event_date: "",
     event_end_date: "",
     event_description: "",
     event_travel: "",
@@ -2337,6 +2341,8 @@ function getBlankEventScopedSettings() {
     | "event_room_detail"
     | "event_location"
     | "event_map_url"
+    | "event_type"
+    | "event_recurring_schedule"
     | "event_date"
     | "event_end_date"
     | "event_description"
@@ -2432,6 +2438,8 @@ const EVENT_SETUP_SETTINGS_KEYS = [
   "event_room_detail",
   "event_location",
   "event_map_url",
+  "event_type",
+  "event_recurring_schedule",
   "event_date",
   "event_end_date",
   "event_description",
@@ -2682,6 +2690,8 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
     event_room_detail: typeof data.event_room_detail === "string" ? data.event_room_detail : "",
     event_location: typeof data.event_location === "string" ? data.event_location : "",
     event_map_url: typeof data.event_map_url === "string" ? data.event_map_url : "",
+    event_type: data.event_type === "campaign" || data.event_type === "recurring" ? data.event_type : "single",
+    event_recurring_schedule: typeof data.event_recurring_schedule === "string" ? data.event_recurring_schedule : "",
     event_date: normalizeDateTimeLocalValue(typeof data.event_date === "string" ? data.event_date : ""),
     event_end_date: normalizeDateTimeLocalValue(typeof data.event_end_date === "string" ? data.event_end_date : ""),
     event_description: typeof data.event_description === "string" ? data.event_description : "",
@@ -3259,6 +3269,7 @@ export default function App() {
   const [eventLoading, setEventLoading] = useState(false);
   const [eventMessage, setEventMessage] = useState("");
   const [newEventName, setNewEventName] = useState("");
+  const [newEventType, setNewEventType] = useState<Settings["event_type"]>("single");
   const [newEventOrganizerId, setNewEventOrganizerId] = useState("");
   const [newEventMode, setNewEventMode] = useState<"free" | "paid">("free");
   const [newEventPaymentMode, setNewEventPaymentMode] = useState<"promptpay" | "external_manual">("external_manual");
@@ -6764,6 +6775,7 @@ export default function App() {
   const normalizedSavedSettings = normalizeSettingsForSave(savedSettings);
   const handleEventDateChange = (nextEventDate: string) => {
     setSettings((current) => {
+      if (current.event_type !== "single") return { ...current, event_date: nextEventDate };
       const previousSuggestedEnd = getDefaultEventEndDate(current.event_date);
       const previousSuggestedClose = getDefaultRegistrationCloseDate(current.event_date);
       const nextSuggestedEnd = getDefaultEventEndDate(nextEventDate);
@@ -9297,10 +9309,11 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name, event_public_organizer_profile_id: newEventOrganizerId,
-          registration_mode: newEventMode, payment_mode: newEventPaymentMode,
+          event_type: newEventType,
+          registration_mode: newEventType === "campaign" ? "free" : newEventMode, payment_mode: newEventPaymentMode,
           web_page_enabled: newEventWebPage,
           open_registration_now: newEventOpenNow,
-          ...(newEventMode === "paid" ? { price_thb: Number(newEventPrice), capacity: Number(newEventCapacity) } : {}),
+          ...(newEventType !== "campaign" && newEventMode === "paid" ? { price_thb: Number(newEventPrice), capacity: Number(newEventCapacity) } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -9308,6 +9321,7 @@ export default function App() {
         throw new Error(data?.error || "Failed to create event");
       }
       setNewEventName("");
+      setNewEventType("single");
       setNewEventOrganizerId("");
       setNewEventMode("free");
       setNewEventPrice("");
@@ -10962,6 +10976,8 @@ export default function App() {
                   newEventOrganizerId={newEventOrganizerId}
                   onNewEventOrganizerIdChange={setNewEventOrganizerId}
                   newEventName={newEventName}
+                  newEventType={newEventType}
+                  onNewEventTypeChange={setNewEventType}
                   onNewEventNameChange={setNewEventName}
                   newEventMode={newEventMode}
                   onNewEventModeChange={setNewEventMode}

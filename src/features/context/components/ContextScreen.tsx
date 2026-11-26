@@ -267,6 +267,10 @@ export function ContextScreen({
                     )}
                   </div>
                   <StatusLine items={[eventContextDirty ? "Unsaved changes" : "All changes saved"]} />
+                  {settings.event_type === "campaign" && <div className="mt-2 space-y-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-slate-700">
+                    <p><strong>Campaign only:</strong> your existing Global System Prompt is inherited. Use this Event Context for campaign facts, FAQs, response instructions and follow-up questions. Other events are not retrieved.</p>
+                    {canManageKnowledge && <details><summary className="cursor-pointer font-semibold">View inherited Global System Prompt (read only)</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-sans">{settings.global_system_prompt || "No global prompt configured."}</pre></details>}
+                  </div>}
                 </div>
                 <div className="flex w-full items-stretch gap-2 sm:w-auto lg:justify-end">
                   {!eventCollapsed && (

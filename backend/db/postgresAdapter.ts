@@ -1061,6 +1061,7 @@ export class PostgresAppDatabase implements AppDatabase {
     return {
       ...base,
       effective_status: effectiveStatus,
+      event_type: settings.event_type === "campaign" ? "campaign" as const : settings.event_type === "recurring" ? "recurring" as const : "single" as const,
       event_date: settings.event_date || "",
       event_end_date: settings.event_end_date || "",
       event_timezone: settings.event_timezone || "",

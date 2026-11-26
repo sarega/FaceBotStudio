@@ -557,10 +557,11 @@ Current Event Details:
 - Event Status Right Now: ${eventStatus}
 - Time Zone: ${eventState.timeZone}
 - Current System Time: ${eventState.nowLabel}
-- Event Window: ${formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", eventState.timeZone)}
+- Event Window: ${settings.event_type === "campaign" && !settings.event_end_date ? "Ongoing campaign; no scheduled end" : formatStoredDateRangeForDisplay(settings.event_date || "", settings.event_end_date || "", eventState.timeZone)}
+- Recurring Schedule: ${settings.event_recurring_schedule || "-"}
 - Description: ${settings.event_description || ""}
 - Travel: ${settings.event_travel || ""}
-- Registration Limit: ${settings.reg_limit || ""}
+${settings.event_type === "campaign" ? "- Registration: enquiries only; no booking tools" : `- Registration Limit: ${settings.reg_limit || ""}
 - Duplicate Name Guard Right Now: ${isTruthySetting(settings.reg_unique_name ?? "1") ? "enabled" : "disabled"}
 - Active Registrations Right Now: ${capacitySnapshot?.activeCount ?? 0}
 - Cancelled Registrations Right Now: ${capacitySnapshot?.cancelledCount ?? 0}
@@ -568,7 +569,7 @@ Current Event Details:
 - Registration Capacity Status Right Now: ${capacitySnapshot?.capacityStatus || "available"}
 - Registration Period: ${eventState.startLabel} to ${eventState.endLabel}
 - Registration Status Right Now: ${eventState.registrationStatus}
-- Registration Availability Right Now: ${capacitySnapshot?.registrationAvailability || eventState.registrationStatus}
+- Registration Availability Right Now: ${capacitySnapshot?.registrationAvailability || eventState.registrationStatus}`}
 - Event Lifecycle Right Now: ${eventState.eventLifecycle}
 `;
 }
@@ -580,6 +581,7 @@ function getSystemInstruction(
   capacitySnapshot?: EventCapacitySnapshot | null,
   eventId?: string | null,
 ) {
+  const campaignOnly = settings.event_type === "campaign";
   const globalPrompt = String(settings.global_system_prompt || "").trim();
   const smsConsentEnabled = String(settings.public_bot_sms_consent_enabled || "0") === "1";
   const { safeContext: eventContext, gates: promoGates } = parsePromoGates(settings.context);
@@ -587,12 +589,13 @@ function getSystemInstruction(
   const currentEventName = normalizeOptionalText(settings.event_name);
   return [
     globalPrompt,
+    campaignOnly ? "Preserve the persona, tone and general response guidance from the Global System Prompt. For factual information about activities, use ONLY the current campaign context, documents and conversation; ignore other event details even if mentioned in the global prompt. Do not offer registration, ticketing or payments through this chat. If information is absent, say so. These scope restrictions override conflicting instructions." : "",
     "Customer-facing language policy (applies to every event and overrides conflicting language instructions in Event Context, knowledge, or earlier replies): Reply in the language of the customer's latest meaningful message. If the customer explicitly requests a response language, use that language. Switch immediately when the customer switches languages, including between Thai, English, and other languages. For brief ambiguous messages (numbers, names, emoji, or yes/no without a clear language), preserve the established language from the customer's recent messages, not the assistant's messages. If no customer language can be determined, default to Thai. Do not infer the response language from the event description, retrieved documents, or system prompt language. Preserve official event names, personal names, and required proper nouns in their original form. Do not add an unsolicited Thai translation to non-Thai replies.",
     currentEventId || currentEventName
       ? `Current Event Boundary:\n- Event ID: ${currentEventId || "-"}\n- Event Name: ${currentEventName || "-"}\nYou are answering ONLY for this event. Do not use, mention, compare, or infer details from any other event. If the user asks about another event, say this chat only supports the current event.`
       : "",
     eventContext ? `Event Context:\n${eventContext}` : "",
-    buildPromoGateInstruction(promoGates),
+    campaignOnly ? "" : buildPromoGateInstruction(promoGates),
     knowledgeContext,
     buildEventInfo(settings, eventStatus, capacitySnapshot),
     "Never guess the current date or time. Use the Current System Time above as the source of truth.",
@@ -601,30 +604,30 @@ function getSystemInstruction(
     "If event status is inactive, explain that the event is currently inactive and registration is temporarily unavailable.",
     "If event status is cancelled, clearly explain that the event has been cancelled.",
     "If event status is closed, clearly explain that the event has already ended.",
-    "Respect the Duplicate Name Guard Right Now field. If it is enabled, do not imply the same first+last name can register multiple times in the same event.",
+    ...(!campaignOnly ? ["Respect the Duplicate Name Guard Right Now field. If it is enabled, do not imply the same first+last name can register multiple times in the same event.",
     "Respect the Registration Status Right Now field. If it is invalid, explain that the registration schedule is misconfigured. If it is not_started or closed, clearly tell the user registration is unavailable and do not imply it is open.",
     "Respect the Registration Availability Right Now field. If it is full, clearly explain that registration is currently unavailable because capacity is full.",
-    "Do not volunteer exact remaining seat counts unless the user asks, but never imply registration is still open when capacity is full.",
+    "Do not volunteer exact remaining seat counts unless the user asks, but never imply registration is still open when capacity is full."] : []),
     "If the event lifecycle is past, explain that the event has already ended.",
     "Read the recent conversation history before replying and continue naturally from the current chat.",
     "The current Event Context and Protected Promotion Rules override conflicting or outdated conditions in recent conversation history.",
     "Treat prior assistant messages only as conversational context, never as verified registration facts.",
-    "Never invent an attendee name, Registration ID, registration status, phone number, email, count, or database match.",
+    ...(!campaignOnly ? ["Never invent an attendee name, Registration ID, registration status, phone number, email, count, or database match.",
     "A registration exists only when confirmed by a successful tool or database result. If no record is found, say so and ask for a Registration ID or user-provided identifying details.",
-    "If a prior assistant message claimed registration data without a tool result, ignore that claim.",
+    "If a prior assistant message claimed registration data without a tool result, ignore that claim."] : []),
     "Only greet on the first assistant reply of a conversation or after a long idle gap. Do not greet on every reply.",
     "If the user sent several back-to-back messages before your turn, answer them in one natural reply without restarting from the beginning.",
     "If image attachments are present, inspect them before replying.",
-    "If the user asks you to check a ticket image, ticket screenshot, or QR/ticket photo, do not validate it from appearance alone.",
+    ...(!campaignOnly ? ["If the user asks you to check a ticket image, ticket screenshot, or QR/ticket photo, do not validate it from appearance alone.",
     "When a readable Registration ID is visible in an attached ticket image or in the user's text, use the checkTicket tool to verify it against the current event database.",
-    "If the attached ticket image is blurry or no readable Registration ID is visible, ask for a clearer image or the typed Registration ID instead of guessing.",
+    "If the attached ticket image is blurry or no readable Registration ID is visible, ask for a clearer image or the typed Registration ID instead of guessing."] : []),
     "Do not repeat the same event benefits, registration call-to-action, or required registration fields if they were already stated in recent history.",
     "When several user questions are pending, answer them concisely and avoid repeating information that was already answered.",
     "For short follow-up questions such as cost, date, location, dress code, or eligibility, answer the follow-up directly before adding any optional next step.",
     "If registration steps were already explained in recent history, do not restate the full steps unless the user explicitly asks for them again.",
     "Do not add another greeting when replying to a follow-up in the same active exchange.",
     "Keep follow-up replies brief and specific. Do not restart the conversation summary unless the user asks for a recap.",
-    "Ask for registration details only after the user clearly wants to register or explicitly confirms they want to continue.",
+    ...(!campaignOnly ? ["Ask for registration details only after the user clearly wants to register or explicitly confirms they want to continue.",
     "Summarize registration details exactly once, immediately before calling the registerUser tool.",
     "When you have collected the user's first name, last name, and phone number (and optionally email), use the registerUser tool to complete the registration.",
     "After registerUser succeeds, the system sends the attendee's QR/PNG ticket separately in the same chat when the channel supports images. Never say that this system does not send a barcode, QR code, or ticket image. If the attendee cannot see the image, tell them to wait briefly or ask the admin for the Registration ID as a fallback; do not deny that a ticket image is sent.",
@@ -638,7 +641,8 @@ function getSystemInstruction(
     "If the user does not have a Registration ID, ask for the attendee's full name plus phone number or email. On channels like Facebook or LINE, you may also use the current chat sender to narrow the match, but still stay within the current event only.",
     "If the user asks to cancel all registrations or tickets from this chat, use cancelRegistration with cancel_all=true. The tool will list every attendee in this current event/chat and require confirmation; never cancel only the chat sender or the first attendee for an all request.",
     "When you identify a single attendee to cancel, confirm the exact attendee first. Only after the user explicitly confirms should you call cancelRegistration to complete the cancellation.",
-    "After the user explicitly confirms a chat-wide cancellation list, call cancelRegistration with cancel_all=true and do not narrow it to one attendee.",
+    "After the user explicitly confirms a chat-wide cancellation list, call cancelRegistration with cancel_all=true and do not narrow it to one attendee."] : []),
+    campaignOnly ? "Use the campaign Event Context as additional response guidance. Ask relevant follow-up questions when instructed; do not request booking or payment information." : "",
   ].join("\n\n");
 }
 
@@ -2736,6 +2740,10 @@ function normalizeSettingsMutationPayload(source: Record<string, unknown>) {
       continue;
     }
 
+    if (key === "event_type" && !["single", "recurring", "campaign"].includes(normalizedValue)) {
+      issues.push({ field: key, message: "Invalid event type" });
+      continue;
+    }
     if (key === "event_public_slug") {
       entries[key] = sanitizeEnglishSlugInput(normalizedValue);
       continue;
@@ -5549,7 +5557,7 @@ async function resolveFacebookInboundRouting(pageId?: string): Promise<FacebookI
   }
 
   const channel = await appDb.getChannelAccount("facebook", normalizedPageId);
-  const assignedEventIds = channel?.event_ids || (channel?.event_id ? [channel.event_id] : []);
+  const assignedEventIds = channel?.is_active ? (channel.event_ids || (channel.event_id ? [channel.event_id] : [])) : [];
   const assignedEventId = normalizeOptionalText(assignedEventIds[0]) || null;
   const assignedEvent = assignedEventId ? await appDb.getEventById(assignedEventId) : undefined;
   const activeCandidates = (await Promise.all(
@@ -12349,7 +12357,7 @@ async function requestOpenRouterChat(
     : (typeof settings.global_llm_model === "string" && settings.global_llm_model.trim())
     ? settings.global_llm_model.trim()
     : DEFAULT_OPENROUTER_MODEL;
-  const capacitySnapshot = eventId ? await getEventCapacitySnapshot(eventId, settings) : null;
+  const capacitySnapshot = eventId && settings.event_type !== "campaign" ? await getEventCapacitySnapshot(eventId, settings) : null;
 
   const currentUserParts = Array.isArray(messageParts) && messageParts.length > 0
     ? messageParts.filter(Boolean)
@@ -12376,7 +12384,7 @@ async function requestOpenRouterChat(
           content: currentUserContent,
         },
       ],
-      tools: [
+      ...(settings.event_type === "campaign" ? {} : { tools: [
         ...(parsePromoGates(settings.context).gates.length > 0 ? [{
           type: "function",
           function: {
@@ -12485,7 +12493,7 @@ async function requestOpenRouterChat(
         },
       ],
       tool_choice: "auto",
-      parallel_tool_calls: false,
+      parallel_tool_calls: false }),
     }),
   }, LLM_REQUEST_TIMEOUT_MS);
 
@@ -12608,6 +12616,7 @@ async function buildToolResponseMessages(
   const issuedPromoCodes: string[] = [];
 
   for (const call of calls) {
+    if (settings.event_type === "campaign") continue;
     let content: Record<string, unknown>;
 
     if (call.name === "releasePromoCode") {
@@ -12725,7 +12734,7 @@ async function generateBotReplyForSender(
   let ticketRegistrationIds: string[] = [];
   let issuedPromoCodes: string[] = [];
 
-  if (firstResponse.functionCalls && firstResponse.functionCalls.length > 0) {
+  if (settings.event_type !== "campaign" && firstResponse.functionCalls && firstResponse.functionCalls.length > 0) {
     const toolResult = await buildToolResponseMessages(
       senderId,
       eventId,
@@ -13604,7 +13613,7 @@ async function handleIncomingFacebookText(
   if (!selection.eventId) return;
 
   const eventId = selection.eventId;
-  const paidCommand = parsePaidMessengerCommand(trimmed);
+  const paidCommand = (await getSettingsMap(eventId)).event_type === "campaign" ? null : parsePaidMessengerCommand(trimmed);
   if (paidCommand && (!("natural" in paidCommand) || await appDb.readPaidMode(eventId))) {
     if (!pageId || !routing.channel?.is_active || !String(process.env.FACEBOOK_APP_SECRET || "").trim()) return;
     const { thai } = paidCommand;
@@ -16535,7 +16544,8 @@ async function startServer() {
         return respondValidationError(res, issues);
       }
       const organizerId = req.auth?.user.organization_id || "";
-      const registrationMode = body.registration_mode === "paid" ? "paid" : "free";
+      const eventType = body.event_type === "campaign" || body.event_type === "recurring" ? body.event_type : "single";
+      const registrationMode = eventType !== "campaign" && body.registration_mode === "paid" ? "paid" : "free";
       const paymentMode = body.payment_mode === "external_manual" ? "external_manual" : "promptpay";
       const webPageEnabled = body.web_page_enabled !== false;
       const openNow = body.open_registration_now === true;
@@ -16554,11 +16564,12 @@ async function startServer() {
       const event = await appDb.createEvent({ name, organizer_id: organizerId });
       await appDb.upsertSettings({
         ...(profileId ? { event_public_organizer_profile_id: profileId } : {}),
+        event_type: eventType,
         event_public_page_enabled: webPageEnabled ? "1" : "0",
         event_catalog_visible: "0",
         event_public_bot_enabled: webPageEnabled ? "1" : "0",
         event_public_ticketing_mode: "inline",
-        event_public_registration_enabled: registrationMode === "free" ? "1" : "0",
+        event_public_registration_enabled: eventType !== "campaign" && registrationMode === "free" ? "1" : "0",
         direct_ticketing_public_enabled: "0",
       }, event.id);
       if (registrationMode === "paid") {
@@ -16599,6 +16610,7 @@ async function startServer() {
           });
         }
         const settings = await getSettingsMap(eventId);
+        if (settings.event_type === "campaign") return res.status(409).json({ error: "Campaigns are enquiry-only; use a recurring or single event for registration." });
         const currentSchedule = getEventState(settings);
         if (currentSchedule.eventLifecycle === "past" || currentSchedule.eventScheduleStatus === "invalid") {
           return res.status(409).json({
@@ -21085,6 +21097,9 @@ async function startServer() {
         return res.status(409).json({
           error: `Public slug "${resolvedPublicSlug}" is already used by "${conflictName}"`,
         });
+      }
+      if (mergedSettings.event_type === "campaign" && await appDb.readPaidMode(eventId)) {
+        return res.status(409).json({ error: "Create a separate campaign instead of converting an existing paid event." });
       }
       const timingState = getEventState(mergedSettings);
       if (timingState.registrationStatus === "invalid") {

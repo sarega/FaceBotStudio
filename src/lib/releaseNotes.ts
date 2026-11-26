@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.19",
+    date: "2026-11-26",
+    title: "Ongoing campaigns and recurring activities",
+    features: [
+      "Create an ongoing campaign or recurring event without a required end date",
+      "Keep the existing agent persona and add campaign instructions in Event Context",
+      "Use event-scoped knowledge and disable booking tools for enquiry-only campaigns",
+    ],
+  },
+  {
     version: "0.11.18",
     date: "2026-11-26",
     title: "Staff workspace switching and attendee roster totals",

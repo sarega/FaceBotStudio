@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.19 - 2026-11-26
+
+- Add Single Event, Recurring Event and Ongoing Campaign types to existing event creation and settings.
+- Keep recurring activities and campaigns active without an end date; provide a recurring schedule description.
+- Inherit the existing global agent prompt and use the campaign Event Context and event-scoped knowledge and conversation. Disable automated registration and ticket tools in enquiry-only campaigns.
+- Show the inherited prompt read-only in campaign Context; preserve existing paid events and channel assignments.
+
 ## 0.11.18 - 2026-11-26
 
 - Allow every staff role to switch to the attendee experience and make returning to the staff workspace visible.
