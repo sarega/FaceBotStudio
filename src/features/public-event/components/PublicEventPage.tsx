@@ -1,3 +1,4 @@
+import { getPublicHeaderForeground, resolvePublicHeaderColor, resolvePublicLayout } from "../../../lib/publicEventPageBranding";
 import { PublicCustomerMenu } from "./PublicCustomerMenu";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
@@ -400,6 +401,8 @@ export function PublicEventPage({
         .filter(Boolean)
     : [];
 
+  const layout = resolvePublicLayout(page?.appearance.layout);
+  const headerColor = resolvePublicHeaderColor(page?.appearance.header_color);
   const publicThemeStyle = page
     ? ({ "--public-theme": page.appearance.theme_color } as CSSProperties)
     : undefined;
@@ -407,9 +410,10 @@ export function PublicEventPage({
   return (
     <div className="public-event-themed public-page-selectable min-h-dvh bg-slate-50 text-slate-900 font-sans" style={publicThemeStyle}>
       <header className="sticky top-0 z-40 shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
-        <nav className="public-customer-nav relative z-50 border-b" aria-label="Attendee navigation">
+        <nav style={headerColor?{backgroundColor:headerColor,color:getPublicHeaderForeground(headerColor)}:undefined} className="public-customer-nav relative z-50 border-b" aria-label="Attendee navigation">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-1 px-3 py-1 sm:gap-3 sm:px-6 lg:px-8">
-            <a href="/events" className="public-customer-nav-link text-xs font-semibold sm:text-sm">
+            <a href="/events" style={headerColor?{color:getPublicHeaderForeground(headerColor)}:undefined} className="public-customer-nav-link flex items-center gap-2 text-xs font-semibold sm:text-sm">
+              {page?.appearance.event_logo_url&&<img src={page.appearance.event_logo_url} alt="" className="h-8 max-w-24 object-contain rounded bg-white p-0.5"/>}
               ← {locale === "th" ? "งานทั้งหมด" : "All events"}
             </a>
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 sm:gap-3">
@@ -440,14 +444,14 @@ export function PublicEventPage({
         ) : (
           <>
             {page.appearance.cover_url && (
-              <section className="relative mb-4 min-h-[8rem] overflow-hidden rounded-[1.75rem] bg-slate-900 shadow-sm sm:min-h-[12rem] lg:min-h-[14rem]">
+              <section className={`relative mb-4 overflow-hidden rounded-[1.75rem] bg-slate-900 shadow-sm ${layout==="compact"?"min-h-[6rem]":"min-h-[8rem] sm:min-h-[12rem] lg:min-h-[14rem]"}`}>
                 <img
                   src={page.appearance.cover_url}
                   alt={`${page.event.name} cover`}
                   className="absolute inset-0 h-full w-full object-cover"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/20 to-transparent" />
-                <div className="relative flex min-h-[8rem] items-end p-5 sm:min-h-[15rem] sm:p-7 lg:min-h-[18rem] lg:p-9">
+                <div className={`relative flex items-end p-5 sm:p-7 ${layout==="compact"?"min-h-[7rem]":"min-h-[8rem] sm:min-h-[15rem] lg:min-h-[18rem]"} ${layout==="centered"?"justify-center text-center":""}`}>
                   <div className="max-w-4xl">
                     <div className="mb-3 h-1 w-16 rounded-full bg-white/90" />
                     <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/75">Featured Event</p>
@@ -458,16 +462,16 @@ export function PublicEventPage({
                 </div>
               </section>
             )}
-            <section className={`grid gap-3 lg:items-start ${page.event.poster_url ? "lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]" : ""}`}>
+            <section className={`grid gap-3 lg:items-start ${page.event.poster_url && layout==="classic" ? "lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]" : ""}`}>
               {page.event.poster_url && (
                 <img
                   src={page.event.poster_url}
                   alt={`${page.event.name} poster`}
-                  className="mx-auto block h-auto w-full max-w-56 rounded-2xl lg:max-w-none"
+                  className={`mx-auto block h-auto w-full rounded-2xl ${layout==="classic"?"max-w-56 lg:max-w-none":layout==="compact"?"max-w-28":"max-w-64"}`}
                 />
               )}
 
-              <div className="surface-panel min-w-0 space-y-3 rounded-2xl p-3 sm:p-4">
+              <div className={`surface-panel min-w-0 space-y-3 rounded-2xl p-3 sm:p-4 ${layout==="centered"?"text-center":""}`}>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <StatusBadge tone={eventStatusTone}>
                     {locale === "th" && eventStatusLabel.toLowerCase() === "live" ? "กำลังเปิด" : eventStatusLabel}

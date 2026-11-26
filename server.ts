@@ -1,3 +1,4 @@
+import { resolvePublicHeaderColor, resolvePublicLayout } from "./src/lib/publicEventPageBranding";
 import { extractEventContent, normalizeLocale, eventContentFingerprint, parseEventLocalizations, localizeEventSettings } from "./src/lib/eventLocalization";
 import { EVENT_FILTERS, eventMatchesFilter, eventMatchesText, type EventFilter } from "./src/lib/eventFilters";
 import { isOptionalAttendeePhone } from "./src/lib/attendeePhone";
@@ -5185,6 +5186,9 @@ async function buildPublicEventPagePayload(
     appearance: {
       theme_color: resolvePublicThemeColor(settings.event_public_theme_color),
       cover_url: String(settings.event_public_cover_url || "").trim(),
+      event_logo_url: String(settings.event_public_event_logo_url || "").trim(),
+      header_color: resolvePublicHeaderColor(settings.event_public_header_color),
+      layout: resolvePublicLayout(settings.event_public_layout),
     },
     organizer: {
       name: organizer.display_name,

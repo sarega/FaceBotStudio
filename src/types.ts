@@ -348,6 +348,10 @@ export interface Settings {
   event_public_slug: string;
   event_public_poster_url: string;
   event_public_cover_url: string;
+  event_public_event_logo_url: string;
+  event_public_header_color: string;
+  event_public_layout: string;
+
   event_public_theme_color: string;
   event_public_summary: string;
   event_content_language: string;
@@ -554,6 +558,9 @@ export interface PublicEventPageResponse {
   appearance: {
     theme_color: string;
     cover_url: string;
+    event_logo_url?: string;
+    header_color?: string;
+    layout?: "classic"|"centered"|"compact";
   };
   organizer: {
     name: string;

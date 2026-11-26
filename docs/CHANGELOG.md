@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.25 - 2026-11-26
+
+- Add independent event logo, header background and three public page layouts.
+- Preview unsaved appearance in desktop and mobile widths.
+- Reset appearance without changing registration, poster or platform branding.
+
 ## 0.11.24 - 2026-11-26
 
 - Publish and unpublish approved translations immediately, without a second Save Event Setup action.

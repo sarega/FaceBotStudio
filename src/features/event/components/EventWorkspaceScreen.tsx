@@ -1,3 +1,4 @@
+import { resolvePublicHeaderColor, resolvePublicLayout, getPublicHeaderForeground } from "../../../lib/publicEventPageBranding";
 import { EventLocalizationPanel } from "./EventLocalizationPanel";
 import { EventDescriptionContent } from "../../../components/EventDescriptionContent";
 import type { CSSProperties } from "react";
@@ -548,6 +549,9 @@ export function EventWorkspaceScreen({
   const [publicSetupPanel, setPublicSetupPanel] = useState<PublicSetupPanel>("essentials");
   const publicBrandMode = resolvePublicBrandMode(settings.event_public_brand_mode);
   const publicThemeColor = resolvePublicThemeColor(settings.event_public_theme_color);
+  const publicHeaderColor = resolvePublicHeaderColor(settings.event_public_header_color);
+  const publicLayout = resolvePublicLayout(settings.event_public_layout);
+  const [previewDevice,setPreviewDevice]=useState<"desktop"|"mobile">("desktop");
   const publicBrandVisible = publicBrandMode !== "hidden";
   const publicBrandLabel = settings.event_public_brand_label.trim() || initialSettings.event_public_brand_label;
   const publicSectionEntries = parsePublicEventSections(settings.event_public_sections_json);
@@ -1499,6 +1503,17 @@ export function EventWorkspaceScreen({
                             </div>
                           </div>
 
+                          <div className="space-y-3">
+                            <label className="block text-xs font-bold uppercase text-slate-500">Header background</label>
+                            <div className="flex items-center gap-2">
+                              <input aria-label="Header background color" type="color" value={publicHeaderColor||"#ffffff"} onChange={e=>setSettings(current=>({...current,event_public_header_color:e.target.value}))} className="h-10 w-14 rounded-lg border p-1"/>
+                              <input aria-label="Header color hex" value={settings.event_public_header_color} placeholder="Default / auto" onChange={e=>setSettings(current=>({...current,event_public_header_color:e.target.value}))} onBlur={()=>setSettings(current=>({...current,event_public_header_color:resolvePublicHeaderColor(current.event_public_header_color)}))} className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm"/>
+                              <button type="button" onClick={()=>setSettings(current=>({...current,event_public_header_color:""}))} className="rounded-lg border px-2 py-2 text-xs">Auto</button>
+                            </div>
+                            <label className="block text-xs font-bold uppercase text-slate-500">Page layout</label>
+                            <div className="grid grid-cols-3 gap-1">{(["classic","centered","compact"] as const).map(value=><button type="button" key={value} aria-pressed={publicLayout===value} onClick={()=>setSettings(current=>({...current,event_public_layout:value}))} className={`rounded-lg border p-2 text-xs capitalize ${publicLayout===value?"border-blue-500 bg-blue-50 font-semibold text-blue-700":"border-slate-200"}`}><div aria-hidden="true" className="mx-auto mb-2 grid h-8 w-10 gap-1 rounded border p-1">{value==="classic"?<div className="grid grid-cols-[1fr_2fr] gap-1"><span className="bg-slate-300"/><span className="bg-slate-400"/></div>:<><span className={`mx-auto bg-slate-300 ${value==="compact"?"w-2":"w-4"}`}/><span className="bg-slate-400"/></>}</div>{value}</button>)}</div>
+                          </div>
+                          <UploadableImageField label="Event Logo (separate from platform and organizer)" value={settings.event_public_event_logo_url} placeholder="/uploads/event-public-assets/... or https://..." previewAlt="Event logo" uploading={publicMediaUploadKey==="event-logo"} onChange={value=>setSettings(current=>({...current,event_public_event_logo_url:value}))} onUploadFile={file=>void uploadPublicEventMediaForField({file,kind:"cover_image",uploadKey:"event-logo",applyUrl:url=>setSettings(current=>({...current,event_public_event_logo_url:url}))})}/>
                           <UploadableImageField
                             label="Header Cover Image"
                             value={settings.event_public_cover_url}
@@ -1516,6 +1531,13 @@ export function EventWorkspaceScreen({
                         </div>
                       </div>
 
+                      <div className={`${publicSetupPanel==="design"?"block":"hidden"} md:col-span-2`}>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <ActionButton tone="neutral" onClick={()=>setPublicSetupPanel("preview")}>Live appearance preview</ActionButton>
+                          <ActionButton tone="neutral" onClick={()=>{if(window.confirm("Reset header color, accent, layout, event logo and cover to defaults? Poster, branding and registration are unchanged."))setSettings(current=>({...current,event_public_header_color:"",event_public_theme_color:"#2563eb",event_public_layout:"classic",event_public_event_logo_url:"",event_public_cover_url:""}));}}>Reset appearance</ActionButton>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">Changes are local until Save Publishing. Platform branding is managed separately.</p>
+                      </div>
                       <div className={`${publicSetupPanel === "design" ? "block" : "hidden"} md:col-span-2 border-t border-slate-200 pt-5`}>
                         <div className="mb-4 flex items-start justify-between gap-3">
                           <div>
@@ -2262,9 +2284,13 @@ export function EventWorkspaceScreen({
                       </div>
 
                       <div className={`${publicSetupPanel === "preview" ? "block" : "hidden"} md:col-span-2`}>
-                        <div className="public-preview-card overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                          <div className="grid gap-4 p-4 sm:grid-cols-[5.5rem_minmax(0,1fr)] sm:p-5">
-                            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                        <div className="mb-3 flex flex-wrap items-center gap-2"><span className="text-xs text-slate-500">Live appearance preview (unsaved settings)</span>{(["desktop","mobile"] as const).map(device=><button type="button" key={device} aria-pressed={previewDevice===device} onClick={()=>setPreviewDevice(device)} className={`rounded-lg border px-3 py-1 text-xs capitalize ${previewDevice===device?"bg-blue-50 border-blue-500 text-blue-700":"border-slate-200"}`}>{device}</button>)}</div>
+                        <div className={`public-preview-card mx-auto overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${previewDevice==="mobile"?"max-w-[375px]":"w-full"}`}>
+                          <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs" style={{background:publicHeaderColor||"#ffffff",color:getPublicHeaderForeground(publicHeaderColor)}}><span className="flex items-center gap-2">{settings.event_public_event_logo_url&&<img src={settings.event_public_event_logo_url} alt="Event logo" className="h-8 max-w-24 rounded bg-white object-contain p-0.5"/>}← All events</span><span>🇹🇭 ไทย</span></div>
+                          {publicBrandVisible&&<div className="border-b px-3 py-2 text-xs text-slate-500">{publicBrandLabel}</div>}
+                          {settings.event_public_cover_url&&<div className={`relative overflow-hidden bg-slate-900 ${publicLayout==="compact"?"h-20":"h-32"}`}><img src={settings.event_public_cover_url} alt="Cover preview" className="absolute inset-0 h-full w-full object-cover"/><div className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 text-sm font-semibold text-white ${publicLayout==="centered"?"text-center":""}`}>{settings.event_name}</div></div>}
+                          <div className={`grid gap-4 p-4 ${previewDevice==="desktop"&&publicLayout==="classic"?"grid-cols-[5.5rem_minmax(0,1fr)]":""} ${publicLayout==="centered"?"text-center":""}`}>
+                            <div className={`overflow-hidden rounded-xl border border-slate-200 bg-slate-50 ${previewDevice==="mobile"||publicLayout!=="classic"?"mx-auto w-full "+(publicLayout==="compact"?"max-w-24":"max-w-40"):""}`}>
                               {publicPagePosterUrl ? (
                                 <img src={publicPagePosterUrl} alt="Event poster preview" className="aspect-[4/5] h-full w-full object-cover" />
                               ) : (
@@ -2288,6 +2314,7 @@ export function EventWorkspaceScreen({
                             </div>
                           </div>
 
+                          {publicRegistrationEnabled&&<div className="px-4 pb-3"><div className="rounded-lg px-3 py-2 text-center text-xs font-semibold" style={{background:publicThemeColor,color:getPublicHeaderForeground(publicThemeColor)}}>{settings.event_public_cta_label||"Register Now"}</div></div>}
                           {settings.event_description.trim() && publicSectionEntries.some((section) => section.id === "about" && section.enabled) && (
                             <section className="public-event-themed border-t border-slate-200 p-4" style={{ "--public-theme": publicThemeColor } as CSSProperties}>
                               <h4 className="mb-2 font-semibold text-slate-900">About This Event</h4>

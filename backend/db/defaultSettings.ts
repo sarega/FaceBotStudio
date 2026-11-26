@@ -63,6 +63,10 @@ export const DEFAULT_SETTINGS_ENTRIES = {
   event_public_slug: "",
   event_public_poster_url: "",
   event_public_cover_url: "",
+  event_public_event_logo_url: "",
+  event_public_header_color: "",
+  event_public_layout: "classic",
+
   event_public_theme_color: "#2563eb",
   event_public_summary: "",
   event_content_language: "",
@@ -163,6 +167,10 @@ export const NEW_EVENT_TEMPLATE_ENTRIES = {
   event_public_slug: "",
   event_public_poster_url: "",
   event_public_cover_url: "",
+  event_public_event_logo_url: "",
+  event_public_header_color: "",
+  event_public_layout: "classic",
+
   event_public_theme_color: DEFAULT_SETTINGS_ENTRIES.event_public_theme_color,
   event_public_summary: "",
   event_content_language: "",
@@ -260,6 +268,10 @@ export const EVENT_SETTING_KEYS = [
   "event_public_slug",
   "event_public_poster_url",
   "event_public_cover_url",
+  "event_public_event_logo_url",
+  "event_public_header_color",
+  "event_public_layout",
+
   "event_public_theme_color",
   "event_public_summary",
   "event_content_language",

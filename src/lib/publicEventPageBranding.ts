@@ -107,3 +107,18 @@ export function groupPublicSponsorsByTier(entries: PublicSponsorEntry[]) {
     items,
   }));
 }
+
+export function resolvePublicHeaderColor(value:unknown):string {
+  const color=normalizeText(value).toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(color)?color:"";
+}
+export function resolvePublicLayout(value:unknown):"classic"|"centered"|"compact" {
+  return value==="centered"||value==="compact"?value:"classic";
+}
+export function getPublicHeaderForeground(color:string):string {
+  const safe=resolvePublicHeaderColor(color);
+  if(!safe)return "#1e293b";
+  const linear=(v:number)=>{const n=v/255;return n<=.04045?n/12.92:Math.pow((n+.055)/1.055,2.4);};
+  const luminance=.2126*linear(parseInt(safe.slice(1,3),16))+.7152*linear(parseInt(safe.slice(3,5),16))+.0722*linear(parseInt(safe.slice(5,7),16));
+  return luminance>.179?"#000000":"#ffffff";
+}

@@ -2156,6 +2156,10 @@ const INITIAL_SETTINGS: Settings = {
   event_public_slug: "",
   event_public_poster_url: "",
   event_public_cover_url: "",
+    event_public_event_logo_url: "",
+    event_public_header_color: "",
+    event_public_layout: "classic",
+
   event_public_theme_color: "#2563eb",
   event_public_summary: "",
     event_content_language: "",
@@ -2258,6 +2262,10 @@ function getBlankEventScopedSettings() {
     event_public_slug: "",
     event_public_poster_url: "",
     event_public_cover_url: "",
+    event_public_event_logo_url: "",
+    event_public_header_color: "",
+    event_public_layout: "classic",
+
     event_public_theme_color: "#2563eb",
     event_public_summary: "",
     event_content_language: "",
@@ -2358,6 +2366,10 @@ function getBlankEventScopedSettings() {
     | "event_public_slug"
     | "event_public_poster_url"
     | "event_public_cover_url"
+    | "event_public_event_logo_url"
+    | "event_public_header_color"
+    | "event_public_layout"
+
     | "event_public_theme_color"
     | "event_public_summary"
     | "event_public_registration_enabled"
@@ -2503,6 +2515,10 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_slug",
   "event_public_poster_url",
   "event_public_cover_url",
+  "event_public_event_logo_url",
+  "event_public_header_color",
+  "event_public_layout",
+
   "event_public_theme_color",
   "event_public_summary",
   "event_content_language",
@@ -2728,6 +2744,9 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
       typeof data.event_public_poster_url === "string"
         ? data.event_public_poster_url
         : INITIAL_SETTINGS.event_public_poster_url,
+    event_public_event_logo_url: typeof data.event_public_event_logo_url === "string" ? data.event_public_event_logo_url : "",
+    event_public_header_color: typeof data.event_public_header_color === "string" ? data.event_public_header_color : "",
+    event_public_layout: typeof data.event_public_layout === "string" ? data.event_public_layout : "classic",
     event_public_cover_url:
       typeof data.event_public_cover_url === "string"
         ? data.event_public_cover_url
