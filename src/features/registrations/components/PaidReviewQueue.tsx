@@ -49,6 +49,35 @@ type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respon
 const inputClass = "mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2";
 const toolbarControl = "registration-admin-control";
 
+function RevokeSlip({attemptId,version,path,apiFetch,language,onUpdated}:{attemptId:string;version:number;path:string;apiFetch:ApiFetch;language:"th"|"en";onUpdated:()=>void}) {
+  const t=(th:string,en:string)=>language==="th"?th:en;
+  const [open,setOpen]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState("");
+  const [reason,setReason]=useState("");const [minutes,setMinutes]=useState(1440);
+  const command=useRef<{body:string;key:string}|null>(null);
+  async function submit(){
+    if(busy||!reason.trim()||!Number.isInteger(minutes)||minutes<5||minutes>43200)return;
+    if(!window.confirm(t("ยกเลิกการอนุมัติ ลบภาพสลิปผิด และเพิกถอน QR เดิม? ไม่มีการโอนเงินคืน","Revoke approval, remove the incorrect slip image and revoke existing QR passes? No money will be refunded.")))return;
+    setBusy(true);setError("");
+    const body=JSON.stringify({action:"revoke_slip",attempt_id:attemptId,version,reason,hold_minutes:minutes});
+    if(command.current?.body!==body)command.current={body,key:crypto.randomUUID()};
+    try{
+      const response=await apiFetch(path+"/manage",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":command.current!.key},body});
+      const result=await response.json();if(!response.ok)throw Error(result.error);
+      setOpen(false);onUpdated();
+    }catch(e){
+      const code=(e as Error).message;
+      setError(code==="already_checked_in"?t("มีผู้เช็กอินแล้ว ไม่สามารถยกเลิกได้","An attendee has checked in; reversal is blocked."):code==="multiple_verified_payments"?t("ใบจองมีหลายยอดที่อนุมัติแล้ว ต้องตรวจสอบแยกรายการก่อน","Multiple verified payments exist; review them separately before reversal."):code==="version_conflict"?t("ข้อมูลเปลี่ยนแล้ว กรุณาโหลดใหม่","Booking changed. Reload and retry."):t("ยกเลิกไม่สำเร็จ กรุณาตรวจสอบสถานะล่าสุด","Reversal failed. Check current booking status."));
+    }finally{setBusy(false);}
+  }
+  return <div className="mt-1"><button type="button" className="registration-admin-control text-rose-700" disabled={busy} onClick={()=>setOpen(!open)}><XCircle size={14}/>{t("ยกเลิกอนุมัติและลบสลิปผิด","Revoke approval & remove slip")}</button>{open&&<div className="mt-2 space-y-2 rounded-lg border border-rose-300 p-3">
+    <p className="text-xs">{t("คืนสถานะรอชำระเงิน (หรือรอตรวจหากมีสลิปอื่น) และคงรายชื่อเดิม ไม่คืนเงินอัตโนมัติ","Return to unpaid (or pending review if other slips remain), retain attendees, and do not issue a refund.")}</p>
+    <label className="block text-xs">{t("เหตุผล","Reason")}<textarea className={inputClass} rows={2} maxLength={1000} value={reason} disabled={busy} onChange={e=>setReason(e.target.value)}/></label>
+    <label className="block text-xs">{t("เปิดเวลาชำระใหม่อย่างน้อย (นาที)","Minimum renewed payment window (minutes)")}<input className={inputClass} type="number" min={5} max={43200} value={minutes} disabled={busy} onChange={e=>setMinutes(Number(e.target.value))}/></label>
+    <button type="button" className="registration-admin-control text-rose-700" disabled={busy||!reason.trim()||minutes<5||minutes>43200} onClick={()=>void submit()}>{t("ยืนยันยกเลิกอนุมัติ","Confirm reversal")}</button>
+    {error&&<p role="alert" className="text-sm text-rose-700">{error}</p>}
+  </div>}</div>;
+}
+
 function SlipStatus({ review, language }: { review: Review; language: "th" | "en" }) {
   const hasPendingSlip = review.proofs.length > 0;
   const hasPreviousSlip = review.previous_proofs.length > 0;
@@ -611,6 +640,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                           <span>{t(`เปิดสลิป ${index + 1}`, `Open slip ${index + 1}`)} · {status}</span>
                           {amount != null && <span className="font-semibold tabular-nums">{money.format(amount / 100)}</span>}
                         </a>
+                        {proof.status==="verified"&&review.booking_state==="confirmed"&&<RevokeSlip key={review.version} attemptId={proof.attempt_id} version={review.version} path={path} apiFetch={apiFetch} language={language} onUpdated={()=>refreshAfterUpdate(review.booking_reference)}/>}
                         {proof.supporting && review.balance_due_minor > 0 && <ApplySupportingSlip
                           key={review.version} attemptId={proof.attempt_id} claimedMinor={proof.claimed_minor}
                           balance={review.balance_due_minor} version={review.version} path={path} apiFetch={apiFetch}

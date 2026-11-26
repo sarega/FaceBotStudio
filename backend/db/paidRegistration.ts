@@ -1031,11 +1031,13 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
         randomUUID(), eventId, bookingId, String(id), now);
     }
     const customerId = String(booking.customer_id);
+    const [revokedApproval] = yield query("SELECT id FROM paid_audit_events WHERE booking_id=? AND action='admin_revoke_slip' ORDER BY occurred_ms DESC LIMIT 1",bookingId);
+    const confirmationSuffix = revokedApproval ? ":"+String(revokedApproval.id) : "";
     yield query(
       `INSERT INTO notification_deliveries (id,channel,kind,recipient,related_type,related_id,payload_json,idempotency_key)
        VALUES (?,'email','paid_booking.confirmed',?,'paid_booking',?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,
       randomUUID(), customerId, bookingId,
-      JSON.stringify({ eventId, customerId }), `paid_booking.confirmed:${bookingId}:email`,
+      JSON.stringify({ eventId, customerId }), `paid_booking.confirmed:${bookingId}:email${confirmationSuffix}`,
     );
     const [origin] = yield query(
       `SELECT o.page_id,o.sender_id,o.language,o.inbound_ms FROM paid_messenger_booking_origins o
@@ -1048,7 +1050,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
          VALUES (?,'facebook','paid_booking.messenger_confirmed',?,'paid_booking',?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,
         randomUUID(), String(origin.sender_id), bookingId, JSON.stringify({
           eventId, customerId, pageId: origin.page_id, senderId: origin.sender_id, language: origin.language, inboundMs: Number(origin.inbound_ms),
-        }), `paid_booking.confirmed:${bookingId}:facebook`,
+        }), `paid_booking.confirmed:${bookingId}:facebook${confirmationSuffix}`,
       );
     }
   }
@@ -1414,8 +1416,8 @@ export function* confirmPaidMessengerDraft(input: PaidMessengerConfirmInput, org
 
 export interface PaidAdminAction {
   eventId: string; bookingId: string; organizationId: string; actorId: string;
-  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone";
-  reason: string; holdMinutes?: number; refundReference?: string; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
+  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip";
+  reason: string; holdMinutes?: number; refundReference?: string; attemptId?: string; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
 }
 
 export function* readPaidAdminBooking(eventId: string, organizationId: string, reference: string): PaidCommand<PaidRow | undefined> {
@@ -1451,18 +1453,20 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
 }
 
 export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status:string; payment_status:string; version:number; due_at:string; total_minor?:number; balance_due_minor?:number }> {
-  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone } = input;
+  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone, attemptId } = input;
   const couponCode = normalizeCouponCode(input.couponCode ?? "");
   if (!key || key.length>128 || !reason?.trim() || reason.length>1000 || !Number.isSafeInteger(version) || version<1 ||
-      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone"].includes(action) ||
-      (["extend","reinstate"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
+      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip"].includes(action) ||
+      (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
       (["correct_price", "flag_price", "clear_price_flag"].includes(action) && !attendeeId) ||
+      (action==="revoke_slip" && (!attemptId || attemptId.length>128)) ||
       (action==="set_attendee_phone" && (!attendeeId || !isOptionalAttendeePhone(attendeePhone))) ||
       (action==="correct_price" && (!Number.isSafeInteger(unitMinor) || unitMinor! < 1 || unitMinor! > 2_147_483_647)) ||
       (action==="refund" && (!refundReference?.trim() || refundReference.length>255))) throw new PaidBookingError("invalid_admin_action");
   if (action === "apply_coupon" && !isValidCouponCode(couponCode)) throw new PaidBookingError("coupon_invalid");
   const principal="staff:"+actorId;
   const digest=createHash("sha256").update(JSON.stringify([bookingId,version,action,reason,holdMinutes,refundReference,
+    ...(action === "revoke_slip" ? [attemptId] : []),
     ...(action === "correct_price" ? [attendeeId,unitMinor] : []),
     ...(action === "set_attendee_phone" ? [attendeeId,attendeePhone?.trim()] : []),
     ...(action === "apply_coupon" ? [couponCode] : []),
@@ -1488,7 +1492,27 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   let correction: { total_minor: number; balance_due_minor: number } | undefined;
   let couponConfirmed = false;
   let auditReason = reason.trim();
-  if (action === "set_attendee_phone") {
+  if (action === "revoke_slip") {
+    if (previous!=="confirmed" || payment!=="verified" || Number(booking.total_minor)<=0) throw new PaidBookingError("state_conflict");
+    const [scanned]=yield query("SELECT id FROM paid_attendees WHERE booking_id=? AND checked_in_ms IS NOT NULL LIMIT 1",bookingId);
+    if(scanned)throw new PaidBookingError("already_checked_in");
+    const [settlement]=yield query("SELECT a.id,a.observed_minor,a.trusted_reference,p.checksum FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id WHERE a.id=? AND a.booking_id=? AND a.event_id=? AND a.status='verified' AND p.deleted_ms IS NULL",attemptId!,bookingId,eventId);
+    if(!settlement)throw new PaidBookingError("attempt_not_found");
+    const [other]=yield query("SELECT id FROM paid_payment_attempts WHERE booking_id=? AND id<>? AND status='verified' LIMIT 1",bookingId,attemptId!);
+    if(other)throw new PaidBookingError("multiple_verified_payments");
+    const [refund]=yield query("SELECT id FROM paid_refunds WHERE booking_id=? LIMIT 1",bookingId);
+    const [credit]=yield query("SELECT booking_id FROM paid_booking_credits WHERE booking_id=?",bookingId);
+    if(refund||credit)throw new PaidBookingError("state_conflict");
+    yield query("DELETE FROM paid_verified_proof_checksums WHERE attempt_id=?",attemptId!);
+    yield query("UPDATE paid_payment_attempts SET status='rejected',observed_minor=NULL,observed_transfer_ms=NULL,trusted_reference=NULL,receiver_namespace=NULL,reviewed_by=?,reviewed_ms=?,reason=? WHERE id=?",actorId,now,"Incorrect approval revoked: "+reason.trim(),attemptId!);
+    yield query("UPDATE paid_proofs SET content=NULL,deleted_ms=? WHERE attempt_id=?",now,attemptId!);
+    yield query("UPDATE paid_credentials SET revoked_ms=? WHERE booking_id=? AND revoked_ms IS NULL",now,bookingId);
+    state=Number(booking.pending_proofs)>0?"verification_pending":"awaiting_payment";
+    payment=state==="verification_pending"?"proof_submitted":"unpaid";
+    due=Math.max(due,now+holdMinutes!*60000);
+    auditReason=reason.trim().slice(0,600)+" · attempt "+attemptId+" · reversed minor "+String(settlement.observed_minor??0)+" · reference "+String(settlement.trusted_reference??"").slice(0,150);
+    yield query("UPDATE notification_deliveries SET status='failed',last_error='Payment approval revoked',attempt_count=100 WHERE related_type='paid_booking' AND related_id=? AND kind IN ('paid_booking.confirmed','paid_booking.messenger_confirmed') AND status='queued'",bookingId);
+  } else if (action === "set_attendee_phone") {
     if (previous === "cancelled" || payment === "refunded") throw new PaidBookingError("state_conflict");
     const [attendee] = yield query("SELECT contact_json FROM paid_attendees WHERE id=? AND booking_id=? AND event_id=? AND cancelled_ms IS NULL",
       attendeeId!, bookingId, eventId);

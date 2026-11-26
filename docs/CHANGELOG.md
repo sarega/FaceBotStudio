@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.27 - 2026-11-26
+
+- Allow scoped administrators to revoke an incorrectly approved single payment slip, reopen payment and release the duplicate-proof claim.
+- Remove the incorrect image, retain an audit record, revoke old QR passes and issue new passes after correct approval.
+- Protect checked-in bookings and multiple verified payments from unsafe reversal.
+
 ## 0.11.26 - 2026-11-26
 
 - Add shared and hired vehicles to carpool planning with independent capacity and external driver details.

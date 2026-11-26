@@ -813,3 +813,40 @@ test("carpool maps booking answers by attendee and excludes cancellations", asyn
     db.close();
   }
 });
+
+test("incorrect verified slip can be revoked and reused on its rightful booking", async()=>{
+ process.env.PAID_PROOF_ENCRYPTION_KEY="01".repeat(32);
+ const db=new SqliteAppDatabase(":memory:");
+ try{
+  await db.initialize();
+  const organizationId="org_default";
+  const event=await db.createEvent({name:"Slip correction",organizer_id:organizationId});
+  await db.updateEvent(event.id,{status:"active"});
+  const customer=await db.createCustomerAccount({email:"correction@example.com",normalized_email:"correction@example.com",password_hash:"fixture",first_name:"Buyer",last_name:"Guest",phone:"",normalized_phone:"",accepted_terms_at:new Date(),accepted_privacy_at:new Date()});
+  await db.savePaidSettings(event.id,{organizationId,version:0,capacity:4,holdMinutes:30,cutoffMs:null,published:true,categories:[{id:"adult",label:"Adult",unitMinor:25000,quota:null}]});
+  const base={eventId:event.id,customerId:customer.id,pricingVersion:1,contact:{name:"Buyer"},receiver:{id:"0812345678",name:"Organizer",profileVersion:1}};
+  const a=await db.createPaidBooking({...base,key:"wrong",attendees:[{categoryId:"adult",firstName:"Wrong",lastName:"Guest"}]});
+  const b=await db.createPaidBooking({...base,key:"right",attendees:[{categoryId:"adult",firstName:"Right",lastName:"Guest"}]});
+  const proof={eventId:event.id,customerId:customer.id,method:"promptpay" as const,claimedMinor:25000,claimedTransferMs:Date.now(),reference:"TRANSFER-ONE",mime:"image/png" as const,content:Buffer.from("rightful slip fixture")};
+  const slip=await db.submitPaidProof({...proof,bookingId:a.id,key:"wrong-slip",version:1});
+  const approve={eventId:event.id,organizationId,reviewerId:"staff",decision:"approve" as const,reason:"Bank verified"};
+  const confirmed=await db.reviewPaidProof({...approve,bookingId:a.id,attemptId:slip.attempt_id,version:slip.version,key:"approve-wrong"});
+  const detail=await db.readOwnedPaidBooking(event.id,a.id,customer.id);
+  const attendee=(detail!.attendees as {id:string}[])[0];
+  const oldQr=await db.readPaidCredential(event.id,a.id,attendee.id,customer.id);
+  assert.ok(oldQr);
+  const revoke={eventId:event.id,bookingId:a.id,organizationId,actorId:"staff",key:"revoke",version:confirmed.version,action:"revoke_slip" as const,reason:"Wrong booking",holdMinutes:1440,attemptId:slip.attempt_id};
+  const result=await db.managePaidBooking(revoke);
+  assert.equal(result.status,"awaiting_payment");
+  assert.equal(result.payment_status,"unpaid");
+  assert.deepEqual(await db.managePaidBooking(revoke),result);
+  assert.equal(await db.readPaidCredential(event.id,a.id,attendee.id,customer.id),undefined);
+  assert.equal(await db.readPaidProof(event.id,a.id,slip.attempt_id,organizationId),undefined);
+  const right=await db.submitPaidProof({...proof,bookingId:b.id,key:"right-slip",version:1});
+  assert.equal((await db.reviewPaidProof({...approve,bookingId:b.id,attemptId:right.attempt_id,version:right.version,key:"approve-right"})).status,"confirmed");
+  const replacement=await db.submitPaidProof({...proof,bookingId:a.id,key:"replacement-slip",version:result.version,reference:"TRANSFER-TWO",content:Buffer.from("replacement fixture")});
+  assert.equal((await db.reviewPaidProof({...approve,bookingId:a.id,attemptId:replacement.attempt_id,version:replacement.version,key:"approve-replacement"})).status,"confirmed");
+  const newQr=await db.readPaidCredential(event.id,a.id,attendee.id,customer.id);
+  assert.ok(newQr && newQr!==oldQr);
+ }finally{db.close();}
+});
