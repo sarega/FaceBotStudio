@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.18 - 2026-11-26
+
+- Allow every staff role to switch to the attendee experience and make returning to the staff workspace visible.
+- Export active attendee rosters (confirmed and pending) to CSV and PDF.
+- Include paid and outstanding payment totals in attendee roster exports, counting each booking once.
+
 ## 0.11.17 - 2026-11-25
 
 - Add the event-scoped Room & Transport Coordinator role for staff who manage room assignments and carpools.

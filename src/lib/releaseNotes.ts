@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.18",
+    date: "2026-11-26",
+    title: "Staff workspace switching and attendee roster totals",
+    features: [
+      "Switch between staff and attendee workspaces from every staff role",
+      "Export active attendee rosters to CSV and PDF",
+      "Include paid and outstanding payment totals in attendee roster exports",
+    ],
+  },
+  {
     version: "0.11.17",
     date: "2026-11-25",
     title: "Room and transport coordination",
