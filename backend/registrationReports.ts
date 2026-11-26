@@ -172,27 +172,35 @@ export function buildRegistrationReportHtml({
       if (/^(?:vegetarian|มังสวิรัติ)(?:\s*\/|$)/i.test(value)) return t(["มังสวิรัติ", "Vegetarian"]);
       return value;
     };
-    const mealSection = (title: Copy, rows: { cells: string[]; food: string }[]) => {
-      const mealCounts = new Map<string, number>();
-      for (const { food } of rows) mealCounts.set(food, (mealCounts.get(food) ?? 0) + 1);
-      const totals = [...mealCounts].map(([food, count]) => `${food} ${count}`).join(" · ");
-      return section(title, `${rows.length} ${t(["คน", "attendees"])}${totals ? ` · ${totals}` : ""}`,
-        table([labels.person, labels.category, ["อาหาร", "Meal"], labels.reference], rows.map(row => row.cells)));
-    };
-    const rows = paid.filter(row => !cancelled(row) && active(row));
-    const mapRow = (row: PaidRow) => ({ food: meal(row), cells: [cell(name(row)), cell(row.category_label), cell(meal(row)), cell(row.booking_reference)] });
-    body = mealSection(["ยืนยันแล้ว / ลงทะเบียนแล้ว", "Confirmed / registered"], [
-      ...rows.filter(row => row.booking_state === "confirmed").map(mapRow),
+    const vegetarian = t(["มังสวิรัติ", "Vegetarian"]);
+    const nonVegetarian = t(["ไม่มังสวิรัติ", "Non-vegetarian"]);
+    const unspecified = t(["ยังไม่ระบุ", "Unspecified"]);
+    const rows = paid.filter(row => !cancelled(row) && active(row) && row.payment_state !== "refunded");
+    const people = [
+      ...rows.map(row => ({ name: name(row), food: meal(row), confirmed: row.booking_state === "confirmed" })),
       ...legacy.filter(row => row.status === "registered" || row.status === "checked-in").map(row => ({
-        food: t(["ยังไม่ระบุ", "Unspecified"]),
-        cells: [cell(fullName(row.first_name, row.last_name)), cell(t(["ลงทะเบียนทั่วไป", "General registration"])), cell(t(["ยังไม่ระบุ", "Unspecified"])), cell(row.id)],
+        name: fullName(row.first_name, row.last_name), food: unspecified, confirmed: true,
       })),
-    ]) + mealSection(["ยังรอยืนยัน", "Not yet confirmed"], rows.filter(row => row.booking_state !== "confirmed").map(mapRow));
+    ];
+    const foodTypes = [...new Set([vegetarian, nonVegetarian, ...people.map(person => person.food)])]
+      .filter(food => food !== unspecified).concat(unspecified);
+    const count = (food: string, confirmed?: boolean) => people.filter(person => person.food === food &&
+      (confirmed === undefined || person.confirmed === confirmed)).length;
+    body = `<div class="meal-grand-total"><strong>${people.length}</strong> ${t(["คนทั้งหมด", "Total attendees"])}<span>${people.filter(p=>p.confirmed).length} ${t(["ยืนยันแล้ว", "confirmed"])} · ${people.filter(p=>!p.confirmed).length} ${t(["รอยืนยัน", "not yet confirmed"])}</span></div>
+      <div class="meal-totals">${foodTypes.map(food=>`<div class="meal-total"><h2>${escape(food)}</h2><strong>${count(food)}</strong><p>${count(food,true)} ${t(["ยืนยันแล้ว","confirmed"])} · ${count(food,false)} ${t(["รอยืนยัน","pending"])}</p></div>`).join("")}</div>
+      <p class="meal-note">${t(["รวมผู้ลงทะเบียนที่ยังมีใบจอง รอยืนยันแสดงแยกไว้สำหรับวางแผนอาหาร ไม่รวมรายการยกเลิก หมดอายุ หรือคืนเงิน","Includes active bookings. Pending attendees are shown separately for catering estimates. Cancelled, expired and refunded bookings are excluded."])}</p>`;
+    body += foodTypes.filter(food=>count(food)>0).map(food=>{
+      const matches=people.filter(person=>person.food===food);
+      matches.sort((a,b)=>Number(b.confirmed)-Number(a.confirmed)||a.name.localeCompare(b.name,locale));
+      return section([food,food],`${matches.length} ${t(["คน","attendees"])} · ${count(food,true)} ${t(["ยืนยันแล้ว","confirmed"])} · ${count(food,false)} ${t(["รอยืนยัน","pending"])}`,
+        `<table class="meal-roster"><colgroup><col style="width:8%"><col style="width:68%"><col style="width:24%"></colgroup><thead><tr><th>${t(["ลำดับ","No."])}</th><th>${t(labels.person)}</th><th>${t(["สถานะ","Status"])}</th></tr></thead><tbody>${matches.map((person,index)=>`<tr><td>${index+1}</td><td>${cell(person.name)}</td><td>${person.confirmed?t(["ยืนยันแล้ว","Confirmed"]):t(["รอยืนยัน","Pending"])}</td></tr>`).join("")}</tbody></table>`);
+    }).join("");
+
   }
 
   return `<!doctype html><html lang="${language}"><meta charset="utf-8"><style>
     ${fontCss}
-    @page { size: A4 landscape; margin: 13mm; }
+    @page { size: A4 ${kind === "attendees" ? "portrait" : "landscape"}; margin: 13mm; }
     body { font: 11px "Noto Sans Thai", sans-serif; color: #17253a; }
     header { border-bottom: 3px solid #255a91; padding-bottom: 9px; margin-bottom: 14px; }
     h1 { font-size: 22px; margin: 0; } h2 { font-size: 15px; margin: 12px 0 4px; break-after: avoid; }
@@ -203,6 +211,23 @@ export function buildRegistrationReportHtml({
     .totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 12px; }
     .roster-totals { grid-template-columns: repeat(4, 1fr); }
     .totals div { background: #edf3fa; padding: 6px 9px; } .totals strong { display: block; font-size: 15px; }
+    ${kind === "attendees" ? `
+    body { font-size: 12pt; line-height: 1.45; }
+    h1 { font-size: 21pt; } h2 { font-size: 15pt; margin-top: 14px; }
+    header p { font-size: 11pt; }
+    .meal-grand-total { padding: 10px 12px; border-bottom: 2px solid #255a91; font-weight: 700; }
+    .meal-grand-total strong { font-size: 26pt; margin-right: 6px; }
+    .meal-grand-total span { display: block; font-size: 11pt; font-weight: 400; }
+    .meal-totals { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin: 10px 0; }
+    .meal-total { border: 1px solid #94a3b8; border-radius: 6px; padding: 8px; break-inside: avoid; }
+    .meal-total h2 { font-size: 12pt; margin: 0; }
+    .meal-total strong { font-size: 25pt; color: #173d61; line-height: 1.4; }
+    .meal-total p,.meal-note { font-size: 10pt; }
+    .meal-roster th,.meal-roster td { padding: 5px 8px; }
+    .meal-roster td:nth-child(2) { font-weight: 600; }
+    .meal-roster td:last-child { font-size: 11pt; }
+    .meal-roster thead { display: table-header-group; }
+    ` : ""}
   </style><header><h1>${escape(t(registrationReportTitles[kind]))}</h1>
     <p>${escape(eventName)}</p><p>${t(["ขอบเขตทั้งอีเวนต์", "Scope: entire event"])} · ${escape(date(generatedAt))} (ICT)</p></header>${body}</html>`;
 }

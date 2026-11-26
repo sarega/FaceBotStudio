@@ -1,3 +1,4 @@
+import { downloadFilename } from "../../../lib/reportFilenames";
 import { useState } from "react";
 import type { AppLanguage } from "../../../lib/i18n";
 
@@ -28,7 +29,7 @@ export function PaidTransferReportExport({ eventId, apiFetch, language }: {
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || "transfers.pdf";
+      link.download = downloadFilename(response.headers.get("Content-Disposition"),"Payment-Transfer-Verification.pdf");
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (error) {

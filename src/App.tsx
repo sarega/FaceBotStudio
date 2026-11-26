@@ -11379,8 +11379,8 @@ export default function App() {
           {activeTab === "logistics" && logisticsOnly && (
             <div key="logistics" className="grid gap-2">
               {selectedEventId && selectedEvent ? <>
-                <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
-                <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+                <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
+                <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
               </> : !eventLoading && <p className="text-sm text-slate-600">
                 {eventMessage || (language === "th" ? "ยังไม่มีอีเวนต์ที่ได้รับมอบหมาย" : "No events have been assigned to you.")}
               </p>}
@@ -11475,10 +11475,10 @@ export default function App() {
                 onResendRegistrationTicket={resendRegistrationTicket}
               />
               {selectedEventId && canReviewPaidSlips && (
-                <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+                <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
               )}
               {selectedEventId && canReviewPaidSlips && (
-                <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} language={language} />
+                <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
               )}
             </motion.div>
           )}

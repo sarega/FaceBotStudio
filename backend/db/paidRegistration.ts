@@ -53,14 +53,33 @@ const verifiedCash = `COALESCE((SELECT SUM(paid.observed_minor) FROM paid_paymen
 const pendingEvidence = `(SELECT COUNT(*) FROM paid_payment_attempts pending JOIN paid_proofs evidence ON evidence.attempt_id=pending.id
   WHERE pending.booking_id=b.id AND pending.status IN ('proof_submitted','exception') AND evidence.deleted_ms IS NULL)`;
 const confirmedCashPayment = `b.state='confirmed' AND b.payment_state='verified' AND ${verifiedCash}>0`;
+const confirmedBalance = `CASE WHEN b.state='confirmed' AND b.payment_state='verified'
+  AND b.total_minor>${verifiedCash} THEN b.total_minor-${verifiedCash} ELSE 0 END`;
+
+// An amount warning is evidence for staff review, not proof of an incorrect bank transfer.
+const paymentAmountMismatch = `(
+  (b.state='confirmed' AND EXISTS (
+    SELECT 1 FROM paid_payment_attempts va WHERE va.booking_id=b.id AND va.status='verified'
+    AND va.observed_minor IS NOT NULL AND va.claimed_minor IS NOT NULL
+    AND va.observed_minor<>va.claimed_minor
+    AND NOT EXISTS (SELECT 1 FROM paid_payment_attempts vb WHERE vb.booking_id=b.id AND vb.id<>va.id AND vb.status='verified')
+  ))
+  OR (b.state IN ('verification_pending','confirmed') AND ${pendingEvidence}>0
+    AND NOT EXISTS (SELECT 1 FROM paid_payment_attempts pa JOIN paid_proofs pp ON pp.attempt_id=pa.id WHERE pa.booking_id=b.id AND pa.status IN ('proof_submitted','exception') AND pp.deleted_ms IS NULL AND pa.claimed_minor IS NULL)
+    AND (SELECT SUM(pa.claimed_minor) FROM paid_payment_attempts pa JOIN paid_proofs pp ON pp.attempt_id=pa.id WHERE pa.booking_id=b.id AND pa.status IN ('proof_submitted','exception') AND pp.deleted_ms IS NULL)
+       <> CASE WHEN b.state='confirmed' THEN ${confirmedBalance} ELSE b.total_minor END
+    AND (b.state<>'confirmed' OR ${confirmedBalance}>0))
+)`;
+const bookingPriceFlag = `EXISTS (SELECT 1 FROM paid_attendees fa JOIN paid_attendee_price_flags ff ON ff.attendee_id=fa.id WHERE fa.booking_id=b.id AND fa.cancelled_ms IS NULL)`;
+const bookingPaymentWarning = `(b.state NOT IN ('cancelled','expired') AND (${bookingPriceFlag} OR ${paymentAmountMismatch} OR b.payment_state='underpaid' OR b.state='payment_exception' OR ${confirmedBalance}>0))`;
+
 const currentPaymentNotice = `FROM paid_audit_events notice WHERE notice.booking_id=b.id AND notice.action='admin_payment_notice'
   AND notice.occurred_ms>=COALESCE((SELECT MAX(correction.occurred_ms) FROM paid_audit_events correction
     WHERE correction.booking_id=b.id AND correction.action='admin_correct_price'),0)
   ORDER BY notice.occurred_ms DESC,notice.id DESC LIMIT 1`;
 const paymentNoticeFields = `(SELECT notice.reason ${currentPaymentNotice}) AS payment_notice,
   (SELECT notice.id ${currentPaymentNotice}) AS payment_notice_id`;
-const confirmedBalance = `CASE WHEN b.state='confirmed' AND b.payment_state='verified'
-  AND b.total_minor>${verifiedCash} THEN b.total_minor-${verifiedCash} ELSE 0 END`;
+
 
 const unpaidWithoutAttempts = `b.state='awaiting_payment' AND b.payment_state='unpaid'
   AND NOT EXISTS (SELECT 1 FROM paid_payment_attempts attempt WHERE attempt.booking_id=b.id)`;
@@ -706,9 +725,15 @@ export const OWNED_BOOKING_LIST_SQL = `
   ORDER BY b.created_ms DESC,b.id DESC LIMIT ? OFFSET ?
 `;
 
-export function serializePaidBookingList(rows: PaidRow[]): PaidRow[] {
+export function serializePaidBookingList(rows: PaidRow[], attendeeRows: PaidRow[] = []): PaidRow[] {
+  const names = new Map<string,string[]>();
+  for (const row of attendeeRows) {
+    const id=String(row.booking_id);
+    const name=[row.first_name,row.last_name].filter(Boolean).join(" ").trim();
+    if(name) names.set(id,[...(names.get(id)??[]),name]);
+  }
   return rows.map(({ due_ms, updated_ms, ...booking }) => ({
-    ...booking, updated_at: new Date(Number(updated_ms)).toISOString(),
+    ...booking, attendee_names:names.get(String(booking.id))??[], updated_at: new Date(Number(updated_ms)).toISOString(),
     balance_due_minor: Number(booking.balance_due_minor), pending_proofs: Number(booking.pending_proofs),
     credit_used_minor: Number(booking.credit_used_minor), credit_issued_minor: Number(booking.credit_issued_minor),
     refunded_minor: Number(booking.refunded_minor), attendee_count: Number(booking.attendee_count), total_due_minor: Number(booking.total_due_minor), due_at: new Date(Number(due_ms)).toISOString(),
@@ -1163,6 +1188,7 @@ export function* listPaidReviewQueue(
        CASE WHEN b.state='awaiting_payment' AND b.due_ms<=? THEN 'expired' ELSE b.state END AS booking_state,
        CASE WHEN ${confirmedCashPayment} THEN 1 ELSE 0 END AS cash_confirmed,
        b.event_id,b.customer_id,b.created_ms AS booking_created_ms,b.due_ms,${confirmedBalance} AS balance_due_minor,
+       ${paymentAmountMismatch} AS amount_mismatch, ${bookingPaymentWarning} AS payment_warning,
        ${appliedCouponFields},
        e.name AS event_name,c.first_name AS customer_first_name,c.last_name AS customer_last_name,
        c.email AS customer_email,c.phone AS customer_phone,
@@ -1184,10 +1210,10 @@ export function* listPaidReviewQueue(
        (b.state='verification_pending' AND a.id IS NOT NULL)
        OR (a.id IS NOT NULL AND ${confirmedCashPayment})
        OR ${confirmedBalance}>0
-       OR (b.state='confirmed' AND ${activePriceFlags})
+       OR ${bookingPaymentWarning}
        OR (b.state='awaiting_payment' AND b.due_ms>? AND es.payment_mode='external_manual')
      )`}
-     ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 WHEN ${activePriceFlags} OR ${confirmedBalance}>0 THEN 1 ELSE 2 END,
+     ORDER BY CASE WHEN a.id IS NOT NULL THEN 0 WHEN ${bookingPaymentWarning} THEN 1 ELSE 2 END,
        COALESCE(a.created_ms,b.created_ms) ${direction},b.id ${direction},a.id ${direction} LIMIT 21 OFFSET ?`,
     now, eventId, reference || now, offset,
   );
@@ -1241,7 +1267,7 @@ export function* listPaidReviewQueue(
       ...row, proofs: pendingProofs,
       previous_proofs: uploadedProofs.filter(proof => !pendingProofs.includes(proof)),
       coupon_discount_minor: row.coupon_discount_minor == null ? null : Number(row.coupon_discount_minor),
-      cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor), receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),
+      amount_mismatch: Number(row.amount_mismatch) === 1, payment_warning: Number(row.payment_warning) === 1, cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor), receiver_last_four: String(receiver_id ?? "").slice(-4), total_minor: Number(row.total_minor),
       attendees: bookingAttendees, attendee_names: bookingAttendees.map(attendee => attendee.name),
       attendee_count: bookingAttendees.length, matching_proofs: Number(row.matching_proofs),
       claimed_minor: row.claimed_minor == null ? null : Number(row.claimed_minor),
@@ -1689,6 +1715,7 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000,includeReport
        b.state AS booking_state,b.payment_state,b.version AS booking_version,b.created_ms AS booked_ms,b.due_ms,
        b.total_minor AS booking_total_minor,
        EXISTS (SELECT 1 FROM paid_attendee_price_flags f WHERE f.attendee_id=a.id) AS price_flagged,
+       ${bookingPriceFlag} AS booking_price_flagged, ${paymentAmountMismatch} AS amount_mismatch, ${bookingPaymentWarning} AS payment_warning, ${confirmedBalance} AS balance_due_minor,
        ${includeReportFields ? `
          ${appliedCouponFields},
          ${verifiedCash} AS verified_cash_minor,
@@ -1727,6 +1754,7 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000,includeReport
     const expired=row.booking_state==="awaiting_payment" && Number(row.due_ms)<=now;
     const state=row.cancelled_ms!=null?"cancelled":expired?"expired":String(row.booking_state);
     return {...row,booking_state:state,booking_version:Number(row.booking_version),
+      price_flagged:Number(row.price_flagged)===1, booking_price_flagged:Number(row.booking_price_flagged)===1, amount_mismatch:Number(row.amount_mismatch)===1, payment_warning:!["cancelled","expired"].includes(state)&&Number(row.payment_warning)===1,
       ...(includeReportFields ? { report_booking_state: expired ? "expired" : row.booking_state } : {}),
       ordinal:Number(row.ordinal),unit_minor:Number(row.unit_minor),
       booked_ms:Number(row.booked_ms),due_ms:Number(row.due_ms),
@@ -1886,6 +1914,7 @@ export function* readPaidEventSummary(
      ), bookings AS (
        SELECT b.total_minor,b.payment_state,${confirmedBalance} AS balance_due_minor,
          ${pendingEvidence} AS pending_proofs,
+         ${bookingPaymentWarning} AS payment_warning,
          CASE WHEN b.state='verification_pending' OR ${confirmedBalance}>0 THEN (SELECT SUM(COALESCE(pa.observed_minor,pa.claimed_minor)) FROM paid_payment_attempts pa
          WHERE pa.event_id=b.event_id AND pa.booking_id=b.id AND pa.status IN ('proof_submitted','exception')
          ) END AS pending_slip_minor,
@@ -1905,6 +1934,7 @@ export function* readPaidEventSummary(
          COALESCE(SUM(CASE WHEN state='awaiting_payment' THEN 1 ELSE 0 END),0) AS awaiting_payment_bookings,
          COALESCE(SUM(CASE WHEN state='awaiting_payment' AND NOT has_slip THEN attendees ELSE 0 END),0) AS awaiting_payment_attendees,
          COALESCE(SUM(CASE WHEN state='verification_pending' OR (state='confirmed' AND pending_proofs>0) THEN 1 ELSE 0 END),0) AS pending_review_bookings,
+         COALESCE(SUM(CASE WHEN payment_warning AND state NOT IN ('cancelled','expired') THEN 1 ELSE 0 END),0) AS warning_bookings,
          CAST(COALESCE(SUM(CASE WHEN state='confirmed' AND payment_state='verified' THEN total_minor-balance_due_minor ELSE credited_cash END),0) AS TEXT) AS accepted_minor,
          CAST(COALESCE(SUM(CASE WHEN state='awaiting_payment' THEN total_minor ELSE balance_due_minor END),0) AS TEXT) AS awaiting_payment_due_minor,
          CAST(COALESCE(SUM(pending_slip_minor),0) AS TEXT) AS pending_slip_minor,

@@ -2761,3 +2761,17 @@ html.theme-dark .registration-admin-section.registration-admin-carpool {
   .registration-admin-carpool .registration-section-toggle { flex-basis: 100%; }
   .registration-admin-carpool .registration-section-actions { flex-wrap: wrap; padding: 0 0 6px; }
 }
+
+/* Payment warnings must remain visible before expanding a booking. */
+.registration-section-indicators { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:5px; }
+.registration-slip-state,.registration-payment-flag { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:6px; font-size:11px; font-weight:750; line-height:1.4; white-space:normal; border:1px solid transparent; }
+.registration-slip-state[data-slip-tone="pending"] { background:#fef3c7; color:#78350f; border-color:#d97706; }
+.registration-slip-state[data-slip-tone="verified"] { background:#dcfce7; color:#14532d; border-color:#16a34a; }
+.registration-slip-state[data-slip-tone="missing"] { background:#e2e8f0; color:#334155; border-color:#94a3b8; }
+.registration-slip-state[data-slip-tone="rejected"],.registration-payment-flag { background:#fee2e2; color:#991b1b; border-color:#dc2626; }
+tr[data-payment-warning="true"] > :first-child { box-shadow:inset 4px 0 #dc2626; }
+.paid-review-item[data-payment-warning="true"] { border-color:#dc2626; border-inline-start:4px solid #dc2626; }
+html.theme-dark .registration-payment-flag,html.theme-dark .registration-slip-state[data-slip-tone="rejected"] { background:#4c1820;color:#fecaca;border-color:#f87171; }
+html.theme-dark .registration-slip-state[data-slip-tone="pending"] { background:#422006;color:#fde68a;border-color:#f59e0b; }
+html.theme-dark .registration-slip-state[data-slip-tone="verified"] { background:#052e16;color:#bbf7d0;border-color:#22c55e; }
+html.theme-dark .registration-slip-state[data-slip-tone="missing"] { background:#334155;color:#e2e8f0;border-color:#94a3b8; }

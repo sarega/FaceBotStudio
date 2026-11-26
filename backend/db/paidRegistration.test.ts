@@ -286,6 +286,7 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     assert.equal((await db.listOwnedPaidBookings(customer.id, 20, 0)).length, 2);
     const bookings = await db.listOwnedPaidBookings(customer.id, 20, 0);
     const active = bookings.find((booking) => booking.status === "awaiting_payment")!;
+    assert.deepEqual(active.attendee_names, ["One Guest","Two Guest"]);
     const proof = {
       eventId: event.id, bookingId: String(active.id), customerId: customer.id, key: "slip", version: 1,
       method: "promptpay" as const, claimedMinor: 50000, claimedTransferMs: Date.now(), reference: null,
@@ -836,6 +837,8 @@ test("incorrect verified slip can be revoked and reused on its rightful booking"
   const oldQr=await db.readPaidCredential(event.id,a.id,attendee.id,customer.id);
   assert.ok(oldQr);
   const revoke={eventId:event.id,bookingId:a.id,organizationId,actorId:"staff",key:"revoke",version:confirmed.version,action:"revoke_slip" as const,reason:"Wrong booking",holdMinutes:1440,attemptId:slip.attempt_id};
+  const flagged=await db.managePaidBooking({...revoke,action:"flag_price",key:"flag-before-revoke",attendeeId:attendee.id});
+  revoke.version=flagged.version;
   const result=await db.managePaidBooking(revoke);
   assert.equal(result.status,"awaiting_payment");
   assert.equal(result.payment_status,"unpaid");
@@ -844,7 +847,10 @@ test("incorrect verified slip can be revoked and reused on its rightful booking"
   assert.equal(await db.readPaidProof(event.id,a.id,slip.attempt_id,organizationId),undefined);
   const right=await db.submitPaidProof({...proof,bookingId:b.id,key:"right-slip",version:1});
   assert.equal((await db.reviewPaidProof({...approve,bookingId:b.id,attemptId:right.attempt_id,version:right.version,key:"approve-right"})).status,"confirmed");
-  const replacement=await db.submitPaidProof({...proof,bookingId:a.id,key:"replacement-slip",version:result.version,reference:"TRANSFER-TWO",content:Buffer.from("replacement fixture")});
+  const roster=(await db.listPaidAttendeeRoster(event.id,organizationId));
+  assert.equal(roster.find(row=>row.attendee_id===attendee.id)?.payment_warning,true);
+  const cleared=await db.managePaidBooking({...revoke,action:"clear_price_flag",key:"clear-after-revoke",version:result.version,attendeeId:attendee.id});
+  const replacement=await db.submitPaidProof({...proof,bookingId:a.id,key:"replacement-slip",version:cleared.version,reference:"TRANSFER-TWO",content:Buffer.from("replacement fixture")});
   assert.equal((await db.reviewPaidProof({...approve,bookingId:a.id,attemptId:replacement.attempt_id,version:replacement.version,key:"approve-replacement"})).status,"confirmed");
   const newQr=await db.readPaidCredential(event.id,a.id,attendee.id,customer.id);
   assert.ok(newQr && newQr!==oldQr);

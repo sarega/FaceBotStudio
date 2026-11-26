@@ -39,8 +39,14 @@ test("registration PDFs count financial amounts once per booking and keep attend
   assert.match(report("coupons"), /Mali Tester · VIP/);
   assert.match(report("coupons"), /Boon Tester · Standard/);
   assert.doesNotMatch(report("coupons"), /Removed/);
-  assert.match(report("attendees"), /Vegetarian 2/);
-  assert.match(report("attendees"), /Not yet confirmed<\/h2><p>1 attendees · Unspecified 1/);
+  const meals=report("attendees");
+  assert.match(meals, /Vegetarian<\/h2><strong>2<\/strong>/);
+  assert.match(meals, /Unspecified<\/h2><strong>1<\/strong>/);
+  assert.match(meals, /Non-vegetarian<\/h2><strong>0<\/strong>/);
+  assert.match(meals, /Mali Tester/);
+  assert.match(meals, /Slip holder/);
+  assert.doesNotMatch(meals, /booking-reference-|Removed/);
+  assert.match(meals, /A4 portrait/);
 });
 
 test("active PDF and CSV use the same roster, including unpaid bookings", () => {

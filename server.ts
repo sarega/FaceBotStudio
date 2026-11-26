@@ -1,3 +1,4 @@
+import { reportFilename, reportNames, rosterNames } from "./src/lib/reportFilenames";
 import { resolvePublicHeaderColor, resolvePublicLayout } from "./src/lib/publicEventPageBranding";
 import { extractEventContent, normalizeLocale, eventContentFingerprint, parseEventLocalizations, localizeEventSettings } from "./src/lib/eventLocalization";
 import { EVENT_FILTERS, eventMatchesFilter, eventMatchesText, type EventFilter } from "./src/lib/eventFilters";
@@ -17761,7 +17762,7 @@ async function startServer() {
             await page.setContent(html, { waitUntil: "load" });
             const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
             return res.set("Cache-Control", "private, no-store")
-              .attachment(`${kind === "rooms" ? "room-assignments" : "carpool-plan"}.pdf`)
+              .attachment(reportFilename(kind === "rooms" ? "Hotel-Room-Assignments" : "Vehicle-and-Passenger-Assignments",event.slug||event.name,"pdf"))
               .type("application/pdf").send(Buffer.from(pdf));
           } finally {
             await browser.close();
@@ -18508,7 +18509,7 @@ async function startServer() {
           const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
           await recordAudit(req, "paid_registration.daily_transfer_report", "event", eventId, { period, count: transfers.length });
           return res.set("Cache-Control", "private, no-store")
-            .attachment(`transfers-${filename}.pdf`).type("application/pdf").send(Buffer.from(pdf));
+            .attachment(reportFilename("Payment-Transfer-Verification",event?.slug||event?.name||"Event","pdf",filename)).type("application/pdf").send(Buffer.from(pdf));
         } finally {
           await browser.close();
         }
@@ -20635,7 +20636,7 @@ async function startServer() {
           const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
           await recordAudit(req, "registration.report_downloaded", "event", eventId, { kind, paid: paid.length, legacy: legacy.length });
           return res.set("Cache-Control", "private, no-store")
-            .attachment(`registrations-${kind}.pdf`).type("application/pdf").send(Buffer.from(pdf));
+            .attachment(reportFilename(reportNames[kind],event?.slug||event?.name||"Event","pdf")).type("application/pdf").send(Buffer.from(pdf));
         } finally {
           await browser.close();
         }
@@ -20675,8 +20676,7 @@ async function startServer() {
       }
       const eventName = (await appDb.getSettingValue("event_name", eventId)) || event?.name || "event";
       const rosterCsv = isRosterCsvKind(roster) ? buildRegistrationRosterCsv(rows, paid, roster, language === "th" ? "th" : "en") : null;
-      const baseFilename = buildRegistrationExportFilename(eventName);
-      const filename = rosterCsv ? baseFilename.replace(/\.csv$/, `-${roster}.csv`) : baseFilename;
+      const filename = reportFilename(isRosterCsvKind(roster)?rosterNames[roster]:req.auth!.user.role==="checker"?"Check-In-Roster":"Full-Registration-Export",event?.slug||eventName,"csv");
       const csvWithBOM = rosterCsv?.csv ?? (req.auth!.user.role === "checker"
         ? buildCheckinRosterCsv(rows, paid)
         : buildUnifiedAttendeesCsvWithBom(eventName,rows,paid));

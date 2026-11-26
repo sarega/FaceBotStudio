@@ -1,3 +1,4 @@
+import { reportFilename } from "../../../lib/reportFilenames";
 import { useState } from "react";
 import { Download, RefreshCw, Save, Plus, Trash2 } from "lucide-react";
 import {
@@ -11,6 +12,7 @@ import { getRosterStatus, RegistrationStatusTag, rosterStatusLabel } from "./Reg
 
 type Props = {
   eventId: string;
+  eventName?: string;
   language: "th" | "en";
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
@@ -24,7 +26,7 @@ function carpoolLayoutKey({ roles, cars }: CarpoolLayout) {
   return JSON.stringify([Object.entries(roles).sort(([a], [b]) => a.localeCompare(b)), assignments]);
 }
 
-export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
+export function PaidCarpoolPanel({ eventId, eventName, language, apiFetch }: Props) {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const [open, setOpen] = useState(false);
   const [saved, setSaved] = useState<PaidCarpoolPlan | null>();
@@ -143,7 +145,7 @@ export function PaidCarpoolPanel({ eventId, language, apiFetch }: Props) {
       }
     }
     for(const car of sharedCars) rows.push(["","", "",t("รถส่วนกลาง","Shared vehicle"),car.driverName||"",car.pickup,String(car.seats-car.passengers.length),car.label||"",car.departure||"",car.note||""]);
-    downloadRegistrationCsv(`carpool-${eventId.replace(/[^\w-]/g, "-")}.csv`, rows);
+    downloadRegistrationCsv(reportFilename("Vehicle-and-Passenger-Assignments",eventName||"Event","csv"), rows);
   }
 
   function attendeeLabel(attendee: CarpoolAttendee) {

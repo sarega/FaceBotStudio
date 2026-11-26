@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.28 - 2026-11-26
+
+- Display payment warnings in attendee rows and collapsed booking summaries; refresh review counts independently every 15 seconds.
+- Allow clearing manual price flags after reopening payment.
+- Show actual attendee names on customer orders and beside payment slip upload forms.
+- Simplify the meal roster into readable portrait pages with food-group totals and names, without booking references.
+- Name registration and logistics exports by report purpose, event and Bangkok date.
+
 ## 0.11.27 - 2026-11-26
 
 - Allow scoped administrators to revoke an incorrectly approved single payment slip, reopen payment and release the duplicate-proof claim.

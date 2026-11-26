@@ -1,3 +1,4 @@
+import { downloadFilename } from "../../../lib/reportFilenames";
 import { useState } from "react";
 import { FileText } from "lucide-react";
 
@@ -23,7 +24,7 @@ export function LogisticsPdfButton({ path, language, filename, ready, dirty, api
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = filename;
+      link.download = downloadFilename(response.headers.get("Content-Disposition"),filename);
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {

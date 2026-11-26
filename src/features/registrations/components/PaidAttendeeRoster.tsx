@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Check, Copy, Pencil } from "lucide-react";
+import { Check, Copy, Pencil, Flag } from "lucide-react";
 import { paidSeminarFields } from "../../../../backend/paidSeminarFields";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import type { AppLanguage } from "../../../lib/i18n";
@@ -159,11 +159,12 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
             shownBookings.add(person.booking_id);
             const canCancel = firstInBooking && status === "awaiting_payment" &&
               ["unpaid", "rejected"].includes(person.payment_state) && Number.isSafeInteger(person.booking_version);
-            return <tr key={person.attendee_id} data-registration-status={status}>
+            return <tr key={person.attendee_id} data-registration-status={status} data-payment-warning={!checkerMode&&person.payment_warning?"true":undefined}>
               <td className="break-words p-2 align-top font-semibold text-slate-900">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span>{person.first_name} {person.last_name}</span>
                   <RegistrationStatusTag status={status} language={language} />
+                  {!checkerMode&&person.payment_warning&&<button type="button" className="registration-payment-flag" title={t("เปิดใบจองเพื่อตรวจสอบ","Open booking for review")} onClick={()=>onManageBooking?.(person.booking_reference)}><Flag size={14} fill="currentColor"/>{person.amount_mismatch?t("ยอดสลิปไม่ตรง","Amount mismatch"):person.booking_price_flagged?t("ปักธงราคา","Price flagged"):t("ต้องตรวจสอบ","Needs review")}</button>}
                 </div>
                 {!checkerMode && person.attendee_phone && <a className="mt-1 block text-xs font-normal text-blue-700 underline"
                   href={`tel:${person.attendee_phone.replace(/[^+0-9]/g, "")}`}

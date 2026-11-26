@@ -1860,7 +1860,9 @@ export class SqliteAppDatabase implements AppDatabase {
   async listOwnedPaidBookings(customerId: string, limit: number, offset: number, reference = "", confirmedOnly = false, awaitingPaymentOnly = false) {
     const now = Date.now();
     const rows = this.db.prepare(OWNED_BOOKING_LIST_SQL).all(now, customerId, reference, reference, confirmedOnly ? 1 : 0, awaitingPaymentOnly ? 1 : 0, now, limit, offset) as PaidRow[];
-    return serializePaidBookingList(rows);
+    const ids=rows.map(row=>String(row.id));
+    const attendeeRows=ids.length?this.db.prepare(`SELECT a.booking_id,a.first_name,a.last_name FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id WHERE b.customer_id=? AND a.cancelled_ms IS NULL AND a.booking_id IN (${ids.map(()=>"?").join(",")}) ORDER BY a.booking_id,a.ordinal`).all(customerId,...ids) as PaidRow[]:[];
+    return serializePaidBookingList(rows,attendeeRows);
   }
 
   async readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: import("./paidRegistration").PaidPreferenceEdit) {

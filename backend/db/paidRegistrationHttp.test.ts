@@ -1,3 +1,5 @@
+import { reportNames } from "../../src/lib/reportFilenames";
+import type { ReportKind } from "../../src/lib/registrationReportKinds";
 import sharp from "sharp";
 import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
@@ -690,8 +692,8 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
       writeFileSync(process.env.FACEBOT_TEST_REPORT_PDF, pdf);
       for (const [query, filename] of [
-        [`from=${reportDate}&to=${reportDate}`, `transfers-${reportDate}.pdf`],
-        ["all=1", "transfers-all.pdf"],
+        [`from=${reportDate}&to=${reportDate}`, `_${reportDate}_`],
+        ["all=1", "_all_"],
       ]) {
         const exportResponse = await fetch(reportPath + "?" + query, { headers: staffHeaders });
         assert.equal(exportResponse.status, 200);
@@ -1284,7 +1286,7 @@ test("paid booking HTTP covers group capacity, proof review and admission", { ti
       for (const kind of ["accounting", "coupons", "followup", "attendees", "active_roster"]) {
         const response = await fetch(registrationReport + "&kind=" + kind, { headers: staffCreateHeaders });
         assert.equal(response.status, 200, await response.clone().text().then(body => body.slice(0, 150)));
-        assert.match(response.headers.get("content-disposition") ?? "", new RegExp(`registrations-${kind}\\.pdf`));
+        assert.match(response.headers.get("content-disposition") ?? "", new RegExp(`${reportNames[kind as ReportKind]}_.*\\.pdf`));
         assert.equal(Buffer.from(await response.arrayBuffer()).subarray(0, 5).toString(), "%PDF-");
       }
     }

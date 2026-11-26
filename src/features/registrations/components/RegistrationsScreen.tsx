@@ -1,3 +1,4 @@
+import { downloadFilename } from "../../../lib/reportFilenames";
 import { useEffect, useMemo, useState } from "react";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
 import { PaidAttendeeRoster } from "./PaidAttendeeRoster";
@@ -218,8 +219,7 @@ export function RegistrationsScreen({
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ||
-        (kind ? `registrations-${kind}.${pdf ? "pdf" : "csv"}` : "registrations.csv");
+      link.download = downloadFilename(response.headers.get("Content-Disposition"),kind ? `registrations-${kind}.${pdf ? "pdf" : "csv"}` : "registrations.csv");
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {

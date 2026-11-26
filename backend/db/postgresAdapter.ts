@@ -970,7 +970,9 @@ export class PostgresAppDatabase implements AppDatabase {
     let index = 0;
     const sql = OWNED_BOOKING_LIST_SQL.replace(/\?/g, () => `$${++index}`);
     const { rows } = await this.pool.query<Record<string, unknown>>(sql, [now, customerId, reference, reference, confirmedOnly ? 1 : 0, awaitingPaymentOnly ? 1 : 0, now, limit, offset]);
-    return serializePaidBookingList(rows);
+    const ids=rows.map(row=>String(row.id));
+    const attendeeRows=ids.length?(await this.pool.query(`SELECT a.booking_id,a.first_name,a.last_name FROM paid_attendees a JOIN paid_bookings b ON b.id=a.booking_id WHERE b.customer_id=$1 AND a.cancelled_ms IS NULL AND a.booking_id=ANY($2::text[]) ORDER BY a.booking_id,a.ordinal`,[customerId,ids])).rows:[];
+    return serializePaidBookingList(rows,attendeeRows);
   }
 
   async readOwnedPaidBooking(eventId: string, id: string, customerId: string, edit?: import("./paidRegistration").PaidPreferenceEdit) {

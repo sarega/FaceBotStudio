@@ -1,3 +1,4 @@
+import { reportFilename } from "../../../lib/reportFilenames";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { BedDouble, BedSingle, Download, Plus, Sofa, GripVertical, Lock, RefreshCw, Save, Unlock, WandSparkles } from "lucide-react";
 import { MAX_ROOM_BEDS, ROOM_BED_COUNTS, draftRoomingPlan, isRoomBedCount, moveRoomingGuest, parseRoomingPlan, type RoomingRoom } from "../../../../backend/roomingPlan";
@@ -9,6 +10,7 @@ import { RegistrationStatusTag, getRosterStatus, rosterStatusLabel } from "./Reg
 
 type Props = {
   eventId: string;
+  eventName?: string;
   language: "th" | "en";
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
@@ -22,7 +24,7 @@ function roomTypeForBeds(beds: number) {
 const roomIcons = { single: BedSingle, twin: BedDouble, suite: Sofa, custom: BedDouble };
 type BedPosition = { roomId: string; slot: number };
 
-export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
+export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Props) {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const roomLabels = {
     single: t("ห้องเดี่ยว", "Single room"),
@@ -262,7 +264,7 @@ export function PaidRoomingPanel({ eventId, language, apiFetch }: Props) {
           : room.locked ? t("ล็อกแล้ว", "Locked") : t("ร่าง", "Draft"), guest ? labelStatus(guest) : ""]);
     }));
     for (const guest of unassigned) rows.push(["", "", guest.name, guest.category, guest.preference, t("ยังไม่ได้จัดห้อง", "Unassigned"), labelStatus(guest)]);
-    downloadRegistrationCsv(`rooming-${eventId.replace(/[^\w-]/g, "-")}.csv`, rows);
+    downloadRegistrationCsv(reportFilename("Hotel-Room-Assignments",eventName||"Event","csv"), rows);
   }
 
   const button = "registration-admin-control";

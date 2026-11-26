@@ -2,6 +2,7 @@ export type PaidRosterPerson = {
   attendee_id:string;event_id:string;booking_id:string;
   first_name:string;last_name:string;category_label:string;
   attendee_phone?:string;
+  price_flagged?:boolean; booking_price_flagged?:boolean; amount_mismatch?:boolean; payment_warning?:boolean;
   customer_first_name:string;customer_last_name:string;customer_email:string;
   booking_reference:string;booking_state:string;payment_state:string;booking_version:number;
   checked_in_ms:number|null;

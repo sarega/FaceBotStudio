@@ -32,6 +32,7 @@ type Review = {
   coupon_discount_minor?: number | null;
   booking_state: string;
   cash_confirmed: boolean;
+  amount_mismatch?:boolean; payment_warning?:boolean;
   previous_proofs: { attempt_id: string; status: string; observed_minor: number | null; claimed_minor: number | null; supporting?: boolean }[];
   proofs: { attempt_id: string; proof_id: string; claimed_minor: number | null; matching_proofs: number }[];
   claimed_transfer_ms: number | null;
@@ -80,19 +81,14 @@ function RevokeSlip({attemptId,version,path,apiFetch,language,onUpdated}:{attemp
 
 function SlipStatus({ review, language }: { review: Review; language: "th" | "en" }) {
   const hasPendingSlip = review.proofs.length > 0;
-  const hasPreviousSlip = review.previous_proofs.length > 0;
-  const rejectedOnly = hasPreviousSlip && review.previous_proofs.every(proof => proof.status === "rejected");
-  const [Icon, status, th, en] = hasPendingSlip ? [FileClock, "verification_pending", "มีสลิป รอตรวจ", "Slip pending"]
-    : rejectedOnly ? [FileX, "cancelled", "สลิปถูกปฏิเสธ", "Slip rejected"]
-      : hasPreviousSlip ? [FileCheck, "confirmed", "มีสลิปแล้ว", "Slip attached"]
-        : [FileMinus, "expired", "ยังไม่มีสลิป", "No slip"];
-  const label = language === "th" ? th : en;
-  return <span className="registration-status-tag shrink-0" data-registration-status={status} title={label}>
-    <span className="flex items-center gap-1">
-      <Icon className="size-3.5" aria-hidden="true" />
-      <span className="sr-only @min-[44rem]:not-sr-only">{label}</span>
-    </span>
-  </span>;
+  const hasVerifiedSlip = review.previous_proofs.some(proof=>proof.status==="verified");
+  const rejectedOnly = review.previous_proofs.length>0&&review.previous_proofs.every(proof=>proof.status==="rejected");
+  const [Icon,tone,th,en] = hasPendingSlip ? [FileClock,"pending","รอตรวจสลิป","Review slip"]
+    : hasVerifiedSlip ? [FileCheck,"verified","ตรวจสลิปแล้ว","Slip verified"]
+    : rejectedOnly ? [FileX,"rejected","สลิปถูกปฏิเสธ","Slip rejected"]
+    : [FileMinus,"missing","ไม่มีสลิป","No slip"];
+  const label=language==="th"?th:en;
+  return <span className="registration-slip-state" data-slip-tone={tone}><Icon size={14}/>{label}</span>;
 }
 
 function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
@@ -298,6 +294,32 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   fetchRef.current = apiFetch;
   const prefix = `/api/events/${encodeURIComponent(eventId)}/paid-registration`;
 
+  // Poll the event's own summary even while this section is collapsed, independently of notification settings.
+  const [liveSummary,setLiveSummary]=useState<{eventId:string;pending:number;warnings:number}|null>(null);
+  const [summaryUnavailable,setSummaryUnavailable]=useState(false);
+  useEffect(()=>{
+    const controller=new AbortController();let inFlight=false;
+    async function load(){
+      if(inFlight||controller.signal.aborted)return;
+      inFlight=true;
+      try{
+        const response=await fetchRef.current(prefix+"/summary",{signal:controller.signal,cache:"no-store"});
+        if(!response.ok)throw Error("summary");
+        const result=await response.json();const data=result.summary??result;
+        if(!controller.signal.aborted){
+          setLiveSummary({eventId,pending:Number(data.pending_review_bookings??0),warnings:Number(data.warning_bookings??0)});setSummaryUnavailable(false);
+        }
+      }catch{if(!controller.signal.aborted)setSummaryUnavailable(true);}finally{inFlight=false;}
+    }
+    void load();
+    const timer=window.setInterval(()=>{if(document.visibilityState==="visible")void load();},15000);
+    window.addEventListener("focus",load);window.addEventListener("meetrix:paid-booking-updated",load);
+    return()=>{controller.abort();window.clearInterval(timer);window.removeEventListener("focus",load);window.removeEventListener("meetrix:paid-booking-updated",load);};
+  },[prefix,eventId,refresh]);
+  const localSummary=liveSummary?.eventId===eventId?liveSummary:null;
+  const pendingCount=localSummary?.pending??Number(summary?.pending_review_bookings??0);
+  const warningCount=localSummary?.warnings??Number(summary?.warning_bookings??0);
+
   function showFullQueue() {
     setUploadedBooking("");
     setRows(undefined);
@@ -381,9 +403,10 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
     <section id="paid-review-queue" ref={sectionRef} className="registration-admin-section registration-admin-review scroll-mt-20">
       <RegistrationSectionHeader tone="review" title={t("ใบจองและตรวจสลิป", "Bookings & Slip Review")}
         subtitle={summary
-          ? t(`รอตรวจสลิป ${Number(summary.pending_review_bookings)} ใบจอง · ยังไม่ส่งสลิป ${Number(summary.awaiting_payment_attendees)} คน`,
-              `${Number(summary.pending_review_bookings)} bookings to review · ${Number(summary.awaiting_payment_attendees)} attendees awaiting payment`)
+          ? t(`รอตรวจสลิป ${pendingCount} ใบจอง · ยังไม่ส่งสลิป ${Number(summary.awaiting_payment_attendees)} คน`,
+              `${pendingCount} bookings to review · ${Number(summary.awaiting_payment_attendees)} attendees awaiting payment`)
           : t("ตรวจสลิปและยืนยันการชำระเงิน", "Review slips and confirm payments")} open={open} onToggle={()=>setOpen(!open)}
+        indicators={<>{pendingCount>0&&<span className="registration-slip-state" data-slip-tone="pending"><FileClock size={15}/>{pendingCount} {t("รอตรวจ","to review")}</span>}{warningCount>0&&<span className="registration-payment-flag"><Flag size={14} fill="currentColor"/>{warningCount} {t("มีปัญหา","flagged")}</span>}{summaryUnavailable&&<span className="text-xs text-rose-700">{t("ข้อมูลอาจไม่ล่าสุด","Refresh unavailable")}</span>}</>}
         actions={<button type="button" className={toolbarControl} onClick={() => setRefresh(value => value + 1)}>{t("โหลดใหม่", "Refresh")}</button>} />
       {open && <div className="registration-section-content space-y-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -455,17 +478,17 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           const customerName = `${review.customer_first_name} ${review.customer_last_name}`.trim() || review.customer_email;
           const canUpload = review.booking_state === "awaiting_payment" ||
             review.booking_state === "verification_pending" || review.cash_confirmed || review.balance_due_minor > 0;
-          const hasFlag = review.attendees.some(attendee => attendee.price_flagged);
+          const hasFlag = review.payment_warning || review.attendees.some(attendee => attendee.price_flagged);
           const bookingStatus = getRosterStatus(review.booking_state);
           return <details key={review.booking_id} open={reference ? true : undefined}
-            className="paid-review-item group/review rounded-lg border border-slate-200">
+            className="paid-review-item group/review rounded-lg border border-slate-200" data-payment-warning={hasFlag?"true":undefined}>
             <summary className="grid min-h-10 cursor-pointer list-none grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto_auto] items-center gap-2 rounded-lg px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-emerald-600 sm:gap-4 sm:px-3 [&::-webkit-details-marker]:hidden">
               <span className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-900" title={customerName}>
-                {hasFlag && <Flag className="size-4 shrink-0 text-rose-600" aria-label={t("มีราคาที่ต้องแก้", "Price correction flagged")} />}
+                {hasFlag && <Flag className="size-4 shrink-0 text-rose-600 fill-rose-600" aria-label={t("ต้องตรวจสอบการชำระเงิน", "Payment needs review")} />}
                 <span className="truncate">{customerName}</span>
-                <SlipStatus review={review} language={language} />
+
               </span>
-              <span className="truncate text-slate-600" title={review.event_name}>{review.event_name}</span>
+              <span className="flex flex-wrap items-center gap-1"><SlipStatus review={review} language={language}/>{hasFlag&&<span className="registration-payment-flag">{review.amount_mismatch?t("ยอดไม่ตรง","Amount mismatch"):t("ต้องตรวจสอบ","Needs review")}</span>}</span>
               <span className="whitespace-nowrap text-right font-semibold tabular-nums text-slate-900">{money.format(review.total_minor/100)}</span>
               <ChevronDown className="h-4 w-4 text-slate-500 group-open/review:rotate-180" aria-hidden="true" />
             </summary>
@@ -519,8 +542,8 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                           <td className="wrap-anywhere py-1 pr-2">{attendee.category_label}</td>
                           <td className="wrap-anywhere py-1 text-right font-semibold tabular-nums">
                             {money.format(attendee.unit_minor / 100)}
-                            {review.cash_confirmed && <div className="flex justify-end gap-1">
-                              <button type="button" className="inline-flex size-7 items-center justify-center rounded text-rose-700 hover:bg-rose-100 focus-visible:outline-2"
+                            {(review.cash_confirmed || attendee.price_flagged) && <div className="flex flex-wrap justify-end gap-1">
+                              {review.cash_confirmed && <button type="button" className="inline-flex size-7 items-center justify-center rounded text-rose-700 hover:bg-rose-100 focus-visible:outline-2"
                                 aria-label={t(`แก้ราคาที่ปักธง · ${attendee.name}`, `Flag or correct price · ${attendee.name}`)}
                                 title={attendee.price_flagged ? t("แก้ราคาที่ปักธง", "Correct flagged price") : t("ปักธงราคาที่ผิด", "Flag incorrect price")}
                                 disabled={!!flagBusy}
@@ -528,12 +551,12 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                                   ? openEditor(review.booking_reference, { action: "correct_price", attendeeId: attendee.id })
                                   : void updatePriceFlag(review, attendee.id, false)}>
                                 <Flag className={`size-4 ${attendee.price_flagged ? "fill-current" : ""}`} aria-hidden="true" />
-                              </button>
-                              {attendee.price_flagged && <button type="button" className="inline-flex size-7 items-center justify-center rounded text-slate-600 hover:bg-slate-100 focus-visible:outline-2"
+                              </button>}
+                              {attendee.price_flagged && <button type="button" className="registration-admin-control inline-flex items-center gap-1 text-rose-700"
                                 aria-label={t(`เอาธงออก · ${attendee.name}`, `Clear price flag · ${attendee.name}`)}
                                 title={t("เอาธงออก", "Clear price flag")} disabled={!!flagBusy}
                                 onClick={() => void updatePriceFlag(review, attendee.id, true)}>
-                                <FlagOff className="size-4" aria-hidden="true" />
+                                <FlagOff className="size-4" aria-hidden="true" />{t("เอาธงออก","Clear flag")}
                               </button>}
                             </div>}
                           </td>

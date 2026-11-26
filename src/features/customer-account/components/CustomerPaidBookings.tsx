@@ -14,6 +14,7 @@ type Booking = {
   event_slug: string;
   reference: string;
   attendee_count?: number;
+  attendee_names?: string[];
   status: string;
   payment_status: string;
   credit_used_minor?: number;
@@ -84,6 +85,15 @@ type Detail = { attendee_phones_editable?: boolean; payment_notice?: string | nu
 type Page = { bookings: Booking[]; next_offset: number | null };
 const baht = (minor: number, locale: CustomerLocale) =>
   new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB" }).format(minor / 100);
+function BookingAttendees({names,locale,reference,amount,upload=false}:{names:string[];locale:CustomerLocale;reference?:string;amount?:number;upload?:boolean}) {
+  const t=(th:string,en:string)=>locale==="th"?th:en;
+  return <section className="rounded-lg border border-slate-300 bg-slate-50 p-3 text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">
+    <p className="mb-1 text-sm font-bold">{upload?t("กำลังอัปโหลดสลิปให้ผู้เข้าร่วมต่อไปนี้","Upload slip for these attendees"):t("ผู้เข้าร่วมในใบจองนี้","Attendees in this booking")} · {names.length} {t("คน","people")}</p>
+    {names.length?<ol className="list-decimal space-y-1 pl-5 font-semibold">{names.map((name,index)=><li key={index} className="break-words">{name}</li>)}</ol>:<p role="status" className="text-sm">{t("ยังไม่พบรายชื่อผู้เข้าร่วม กรุณาเปิดรายละเอียดเพื่อตรวจสอบ","Attendee names unavailable. Open booking details to verify.")}</p>}
+    {reference&&<p className="mt-2 break-all text-xs">{t("เลขใบจอง","Booking reference")} {reference}</p>}
+    {amount!=null&&<p className="mt-2 text-sm font-bold">{t("ยอดของใบจองนี้","Amount for this booking")}: {baht(amount,locale)}</p>}
+  </section>;
+}
 function Step({n,title,children,emphasis=false}:{n:number;title:string;children:ReactNode;emphasis?:boolean}) {
   return <section className={"rounded-xl border p-3 sm:p-4 "+(emphasis?
     "border-blue-400/50 bg-blue-500/10":"border-slate-200 bg-slate-50")}>
@@ -209,7 +219,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
       if (request.signal.aborted) return;
       setDetail(result);
       setPage((current) => current && { ...current, bookings: current.bookings.map((booking) =>
-        booking.id === selected.id ? { ...booking, status: result.status, payment_status: result.payment_state, due_at: result.due_at, total_due_minor: result.total_due_minor, balance_due_minor: result.balance_due_minor } : booking) });
+        booking.id === selected.id ? { ...booking, status: result.status, payment_status: result.payment_state, due_at: result.due_at, total_due_minor: result.total_due_minor, balance_due_minor: result.balance_due_minor, attendee_names: result.attendees.map(a=>[a.first_name,a.last_name].filter(Boolean).join(" ").trim()), attendee_count:result.attendees.length } : booking) });
     }).catch(() => { if (!request.signal.aborted) setError(["โหลดรายละเอียดการจองไม่สำเร็จ", "Could not load booking details."]); });
     return () => request.abort();
   }, [selected]);
@@ -302,6 +312,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
       {page?.bookings.map((booking) => (
         <article key={booking.id} className="space-y-2 border-t border-slate-200 pt-3 text-sm">
           <h3 className="font-semibold">{booking.event_name}</h3>
+          <BookingAttendees names={booking.attendee_names??[]} locale={locale}/>
           <p className="break-all text-xs text-slate-600">{t("เลขใบจอง", "Booking")} {booking.reference}
             {booking.attendee_count != null && ` · ${booking.attendee_count} ${t("คน", booking.attendee_count === 1 ? "attendee" : "attendees")}`}</p>
           <p className="font-semibold" aria-live="polite">{baht(booking.total_due_minor, locale)} · {
@@ -404,7 +415,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
             <details open className="rounded-lg border border-slate-200 p-3 text-sm">
               <summary className="cursor-pointer font-medium text-slate-700">{t("ผู้เข้าร่วมและรายละเอียดการจอง", "Attendees and booking details")}</summary>
               <div className="mt-3 space-y-3">
-            {detail.registrant_name && <p>{t("ผู้จอง", "Booked by")} <strong>{detail.registrant_name}</strong></p>}
+            {detail.registrant_name && <p className="text-xs text-slate-500">{t("ผู้ติดต่อใบจอง (ไม่ใช่รายชื่อผู้เข้าร่วม)", "Booking contact (not the attendee list)")} · {detail.registrant_name}</p>}
             {(detail.registrant_email || detail.registrant_phone) && <p className="break-words">{[detail.registrant_email, detail.registrant_phone].filter(Boolean).join(" · ")}</p>}
             {detail.registration_answers?.map(({ key, label, value }) => <p key={key}>{t(seminarLabels[key] ?? label, paidSeminarFields[key]?.label ?? label)} · {key === "accommodation" && value === "yes" ? t("ต้องการ", "Yes") : key === "accommodation" && value === "no" ? t("ไม่ต้องการ", "No") : value}</p>)}
             <ul className="space-y-2">{detail.attendees.map((attendee) => (
@@ -471,6 +482,7 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
                     </div>}
               </Step>
               <div ref={slipAnchorRef} className="scroll-mt-24"><Step n={3} title={t("อัปโหลดสลิปหลังโอน", "Upload slip")} emphasis>
+                <BookingAttendees upload names={detail.attendees.map(a=>[a.first_name,a.last_name].filter(Boolean).join(" ").trim())} locale={locale} reference={booking.reference} amount={detail.total_due_minor}/>
                 <PaidProofForm locale={locale} key={booking.id} path={"/api/customer/paid-bookings/" + encodeURIComponent(booking.event_id) + "/" + encodeURIComponent(booking.id)}
                   paymentMode={detail.payment_mode} submitRequest={customerApi} version={detail.version} totalMinor={booking.total_due_minor} onSubmitted={() => {
                     const updated = { ...booking, status: "verification_pending", payment_status: "proof_submitted" };
@@ -501,7 +513,8 @@ export function CustomerPaidBookings({ locale = "th", overview = false, tickets 
               <details className="rounded-lg border border-slate-200 p-3">
                 <summary className="cursor-pointer font-semibold text-blue-700">{detail.balance_due_minor && !detail.pending_proofs
                   ? t("อัปโหลดสลิปส่วนต่าง", "Upload balance payment slip") : t("แนบสลิปเพิ่ม", "Add another slip")}</summary>
-                <div className="mt-3">
+                <div className="mt-3 space-y-3">
+                  <BookingAttendees upload names={detail.attendees.map(a=>[a.first_name,a.last_name].filter(Boolean).join(" ").trim())} locale={locale} reference={booking.reference} amount={detail.balance_due_minor||detail.total_due_minor}/>
                   <PaidProofForm locale={locale} key={detail.version} path={`/api/customer/paid-bookings/${encodeURIComponent(booking.event_id)}/${encodeURIComponent(booking.id)}`}
                     paymentMode={detail.payment_mode} submitRequest={customerApi} version={detail.version}
                     totalMinor={detail.balance_due_minor || detail.total_due_minor}

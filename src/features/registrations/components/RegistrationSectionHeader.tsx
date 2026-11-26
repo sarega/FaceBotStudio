@@ -9,6 +9,7 @@ type Props = {
   open: boolean;
   onToggle: () => void;
   actions?: ReactNode;
+  indicators?: ReactNode;
 };
 
 const icons = {
@@ -21,7 +22,7 @@ const icons = {
 
 /** A single keyboard-accessible section header for paid-registration administration. */
 export function RegistrationSectionHeader({
-  tone, title, subtitle, open, onToggle, actions,
+  tone, title, subtitle, open, onToggle, actions, indicators,
 }: Props) {
   const Icon = icons[tone];
   return (
@@ -33,6 +34,7 @@ export function RegistrationSectionHeader({
           <span className="registration-section-heading-title">{title}</span>
           {subtitle && <span className="registration-section-heading-subtitle">{subtitle}</span>}
         </span>
+        {indicators&&<span className="registration-section-indicators">{indicators}</span>}
         <ChevronDown size={16} strokeWidth={2}
           className={`registration-section-chevron${open ? " is-open" : ""}`} aria-hidden="true"/>
       </button>
