@@ -2158,6 +2158,8 @@ const INITIAL_SETTINGS: Settings = {
   event_public_cover_url: "",
   event_public_theme_color: "#2563eb",
   event_public_summary: "",
+    event_content_language: "",
+    event_translations_json: "",
   event_public_registration_enabled: "1",
   direct_ticketing_public_enabled: "0",
   customer_ticketing_enabled: "0",
@@ -2258,6 +2260,8 @@ function getBlankEventScopedSettings() {
     event_public_cover_url: "",
     event_public_theme_color: "#2563eb",
     event_public_summary: "",
+    event_content_language: "",
+    event_translations_json: "",
     event_public_registration_enabled: "1",
     direct_ticketing_public_enabled: "0",
     customer_ticketing_enabled: "0",
@@ -2397,6 +2401,8 @@ function getBlankEventScopedSettings() {
     | "event_public_organizer_line_url"
     | "event_public_organizer_contact_text"
     | "event_public_sponsors_json"
+    | "event_content_language"
+    | "event_translations_json"
     | "event_public_sections_json"
     | "event_public_speakers_json"
     | "direct_ticket_artwork_url"
@@ -2496,6 +2502,8 @@ const EVENT_PUBLIC_SETTINGS_KEYS = [
   "event_public_cover_url",
   "event_public_theme_color",
   "event_public_summary",
+  "event_content_language",
+  "event_translations_json",
   "event_public_registration_enabled",
   "direct_ticketing_public_enabled",
   "customer_ticketing_enabled",
@@ -2722,6 +2730,8 @@ function buildSettingsFromResponse(previous: Settings, data: Partial<Settings> |
         ? data.event_public_cover_url
         : INITIAL_SETTINGS.event_public_cover_url,
     event_public_theme_color: resolvePublicThemeColor(data.event_public_theme_color),
+    event_content_language: typeof data.event_content_language === "string" ? data.event_content_language : "",
+    event_translations_json: typeof data.event_translations_json === "string" ? data.event_translations_json : "",
     event_public_summary:
       typeof data.event_public_summary === "string"
         ? truncatePublicSummary(data.event_public_summary)
@@ -5411,6 +5421,15 @@ export default function App() {
       cancelled = true;
     };
   }, [publicEventSlug]);
+
+  useEffect(() => {
+    if (!publicEventSlug || publicEventLoading || !publicEventPage) return;
+    let cancelled=false;
+    void apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}?locale=${encodeURIComponent(attendeeLocale)}`)
+      .then(async res=>{if(res.ok&&!cancelled){const data=await res.json();if(!cancelled)setPublicEventPage(data as PublicEventPageResponse);}})
+      .catch(()=>{});
+    return ()=>{cancelled=true;};
+  }, [publicEventSlug, attendeeLocale, publicEventLoading]);
 
   useEffect(() => {
     if (!publicEventSlug) return;

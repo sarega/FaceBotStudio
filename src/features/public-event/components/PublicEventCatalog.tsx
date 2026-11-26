@@ -68,7 +68,9 @@ export function PublicEventCatalog({ locale, languageControl }: { locale: "th" |
 
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/public/events", { credentials: "same-origin" })
+    setLoading(true);
+    setErrorMessage("");
+    void fetch("/api/public/events?locale="+encodeURIComponent(locale), { credentials: "same-origin" })
       .then(async (response) => {
         const data = await response.json().catch(() => ({})) as Partial<PublicEventCatalogResponse> & { error?: string };
         if (!response.ok) throw new Error(data.error || "Failed to load events");
@@ -83,7 +85,7 @@ export function PublicEventCatalog({ locale, languageControl }: { locale: "th" |
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [locale]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const filteredEvents = normalizedQuery

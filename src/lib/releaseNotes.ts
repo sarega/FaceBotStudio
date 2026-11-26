@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.22",date:"2026-11-26",title:"Multilingual event content",features:["Generate editable AI translation drafts","Approve translations and save publishing settings","Switch public event and catalog content between Thai and English"]},
   {version:"0.11.21",date:"2026-11-26",title:"Event lifecycle and searchable selectors",features:["Search and filter assigned events without losing selections","Navigate current, upcoming, past and archived workspaces","Bulk archive completed events without deleting data"]},
   {
     version: "0.11.20",

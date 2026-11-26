@@ -350,6 +350,8 @@ export interface Settings {
   event_public_cover_url: string;
   event_public_theme_color: string;
   event_public_summary: string;
+  event_content_language: string;
+  event_translations_json: string;
   event_public_registration_enabled: string;
   direct_ticketing_public_enabled: string;
   customer_ticketing_enabled: string;

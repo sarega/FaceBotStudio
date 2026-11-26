@@ -1,3 +1,4 @@
+import { EventLocalizationPanel } from "./EventLocalizationPanel";
 import { EventDescriptionContent } from "../../../components/EventDescriptionContent";
 import type { CSSProperties } from "react";
 import {
@@ -1840,6 +1841,7 @@ export function EventWorkspaceScreen({
                             </p>
                           </div>
 
+                          <EventLocalizationPanel key={selectedEventId} settings={settings} onChange={patch=>setSettings(current=>({...current,...patch}))} apiFetch={apiFetch} eventId={selectedEventId}/>
                           <div className="md:col-span-2">
                             <div className="mb-1 flex items-center justify-between gap-2">
                               <label className="block text-xs font-bold uppercase text-slate-500">Public Summary</label>

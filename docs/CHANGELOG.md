@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.22 - 2026-11-26
+
+- Add event-scoped source language and persisted multilingual public content.
+- Generate editable translation drafts through OpenRouter, review and explicitly publish or unpublish.
+- Flag changes to source content; retain original content as fallback.
+- Localize public catalog and event detail without changing stable slugs, maps, prices or registration data.
+
 ## 0.11.21 - 2026-11-26
 
 - Add searchable event access selector with lifecycle filters, local per-user preferences and paginated selection.
