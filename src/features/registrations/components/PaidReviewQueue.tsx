@@ -5,7 +5,7 @@ import { getRosterStatus, RegistrationStatusTag } from "./RegistrationStatusTag"
 import { PaidBookingOperations, type BookingEditRequest } from "./PaidBookingOperations";
 import { PaidProofForm } from "../../../components/PaidProofForm";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, FileCheck, FileClock, FileMinus, FileX, Flag, FlagOff, Send, Search, SlidersHorizontal, UploadCloud, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, FileCheck, FileClock, FileMinus, FileX, Flag, FlagOff, Send, Search, SlidersHorizontal, UploadCloud, XCircle, Maximize2, ZoomIn, ZoomOut, X } from "lucide-react";
 
 type Review = {
   booking_id: string;
@@ -49,6 +49,56 @@ type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respon
 
 const inputClass = "mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2";
 const toolbarControl = "registration-admin-control";
+
+function SlipImage({url,label,language}:{url:string;label:string;language:"th"|"en"}){
+ const t=(th:string,en:string)=>language==="th"?th:en;
+ const dialog=useRef<HTMLDialogElement>(null);
+ const [zoom,setZoom]=useState(1);
+ const [failed,setFailed]=useState(false);
+ return <div className="paid-slip-preview">
+  <button type="button" className="paid-slip-image-button" onClick={()=>{setZoom(1);dialog.current?.showModal();}} aria-label={t("ขยายภาพสลิป","Enlarge slip")}>
+    {!failed?<img src={url} alt={label} loading="lazy" onError={()=>setFailed(true)}/>:<span>{t("โหลดภาพไม่สำเร็จ","Image unavailable")}</span>}
+  </button>
+  <div className="flex flex-wrap items-center justify-between gap-2 p-2">
+   <button type="button" className="registration-admin-control" onClick={()=>{setZoom(1);dialog.current?.showModal();}}><Maximize2 size={16}/>{t("ขยายเต็มหน้าจอ","Full screen")}</button>
+   <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-blue-700 underline">{t("เปิดภาพต้นฉบับ","Original image")}</a>
+  </div>
+  <dialog ref={dialog} className="paid-slip-dialog" onClick={e=>{if(e.target===e.currentTarget)dialog.current?.close();}}>
+   <div className="paid-slip-dialog-inner">
+    <div className="paid-slip-dialog-toolbar"><strong>{label}</strong><div className="flex flex-wrap items-center gap-2">
+      <button type="button" className="registration-admin-control" aria-label={t("ย่อภาพ","Zoom out")} onClick={()=>setZoom(z=>Math.max(1,z-.25))} disabled={zoom<=1}><ZoomOut size={18}/></button>
+      <button type="button" className="registration-admin-control" onClick={()=>setZoom(1)}>{Math.round(zoom*100)}%</button>
+      <button type="button" className="registration-admin-control" aria-label={t("ขยายภาพ","Zoom in")} onClick={()=>setZoom(z=>Math.min(4,z+.25))} disabled={zoom>=4}><ZoomIn size={18}/></button>
+      <button type="button" className="registration-admin-control" onClick={()=>dialog.current?.close()} autoFocus><X size={18}/>{t("ปิด","Close")}</button>
+    </div></div>
+    <div className="paid-slip-dialog-scroll"><img src={url} alt={label} loading="lazy" style={{width:zoom===1?"auto":(zoom*100)+"%",maxWidth:zoom===1?"100%":"none",maxHeight:zoom===1?"calc(100dvh - 100px)":"none"}}/></div>
+   </div>
+  </dialog>
+ </div>;
+}
+
+function CorrectSlipAmount({attemptId,amount,version,path,apiFetch,language,onUpdated,verified=false}:{attemptId:string;amount:number|null;version:number;path:string;apiFetch:ApiFetch;language:"th"|"en";onUpdated:()=>void;verified?:boolean}){
+ const t=(th:string,en:string)=>language==="th"?th:en;
+ const [value,setValue]=useState(amount==null?"":(amount/100).toFixed(2));
+ const [reason,setReason]=useState("");const [busy,setBusy]=useState(false);const [error,setError]=useState("");
+ const command=useRef<{body:string;key:string}|undefined>(undefined);
+ async function submit(e:FormEvent<HTMLFormElement>){
+  e.preventDefault();if(busy||!reason.trim()||!/^\d+(?:\.\d{1,2})?$/.test(value))return;
+  const minor=Math.round(Number(value)*100);if(!Number.isSafeInteger(minor)||minor<=0)return;
+  if(!window.confirm(t("ยืนยันยอดเงินจริงตามภาพสลิปและรายการเงินเข้าธนาคาร?","Confirm actual transfer amount against the slip and bank records?")))return;
+  const body=JSON.stringify({action:"correct_slip_amount",attempt_id:attemptId,version,slip_amount_minor:minor,reason});
+  if(command.current?.body!==body)command.current={body,key:crypto.randomUUID()};
+  setBusy(true);setError("");
+  try{const res=await apiFetch(path+"/manage",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":command.current.key},body});const result=await res.json();if(!res.ok)throw Error(result.error);onUpdated();}
+  catch(e){const code=(e as Error).message;setError(code==="amount_exceeds_total"?t("ยอดเกินยอดใบจอง กรุณาตรวจการจัดสรรเงินก่อน","Amount exceeds the booking total; check allocation first."):code==="multiple_verified_payments"?t("มีหลายสลิปที่อนุมัติร่วมกัน ต้องตรวจการจัดสรรก่อน","Combined payments require separate allocation review."):t("บันทึกไม่สำเร็จ กรุณาโหลดข้อมูลและตรวจสถานะอีกครั้ง","Could not save. Refresh and verify booking status."));}
+  finally{setBusy(false);}
+ }
+ return <details className="mt-2 rounded-lg border border-slate-300 p-2"><summary className="cursor-pointer font-semibold text-blue-700">{t("แก้ยอดเงินในสลิป","Correct slip amount")}</summary><form className="mt-2 space-y-2" onSubmit={submit}>
+ <p className="text-xs">{verified?t("แก้ยอดรับเงินจริงที่อนุมัติแล้ว โดยคงภาพสลิปและ QR เดิม","Correct recorded verified cash while preserving the slip image and QR passes."):t("แก้ยอดที่อ่านจากสลิป ก่อนอนุมัติ","Correct the recorded slip amount before approval.")}</p>
+ <label className="block">{t("ยอดเงินจริง (บาท)","Actual amount (THB)")}<input className={inputClass} type="number" min="0.01" step="0.01" required value={value} onChange={e=>setValue(e.target.value)}/></label>
+ <label className="block">{t("เหตุผลที่แก้ไข","Correction reason")}<textarea className={inputClass} required maxLength={1000} value={reason} onChange={e=>setReason(e.target.value)}/></label>
+ <button type="submit" disabled={busy||!reason.trim()} className="registration-admin-control registration-admin-control-primary">{t("บันทึกยอดสลิปที่ถูกต้อง","Save corrected slip amount")}</button>{error&&<p role="alert" className="text-rose-700">{error}</p>}</form></details>;
+}
 
 function RevokeSlip({attemptId,version,path,apiFetch,language,onUpdated}:{attemptId:string;version:number;path:string;apiFetch:ApiFetch;language:"th"|"en";onUpdated:()=>void}) {
   const t=(th:string,en:string)=>language==="th"?th:en;
@@ -632,17 +682,16 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                 </button>}
               </div>
               <div className="min-w-0 space-y-2">
-                <div className={review.proofs.length > 1 ? "grid gap-2 sm:grid-cols-2" : ""}>
+                <div className="grid gap-4">
                   {review.proofs.map((proof, index) => {
                     const url = path + "/proofs/" + encodeURIComponent(proof.attempt_id);
                     const label = t(`สลิปใบที่ ${index + 1}`, `Slip ${index + 1}`);
-                    return <a key={proof.attempt_id} href={url} target="_blank" rel="noopener noreferrer" className="block space-y-1">
-                      <img src={url} alt={label} loading="lazy" className="max-h-56 w-full rounded-lg border border-slate-200 bg-white object-contain" />
+                    return <div key={proof.attempt_id}><SlipImage url={url} label={label} language={language}/><div className="flex flex-wrap justify-between gap-2 py-1">
                       <span className="font-semibold text-blue-700 underline">
-                        {review.proofs.length > 1 ? label : t("เปิดภาพสลิปขนาดเต็ม", "Open full-size slip")}
+                        {label}
                       </span>
-                      {review.proofs.length > 1 && proof.claimed_minor != null && <span className="ml-2">{money.format(proof.claimed_minor / 100)}</span>}
-                    </a>;
+                      {proof.claimed_minor != null && <span className="ml-2">{money.format(proof.claimed_minor / 100)}</span>}
+                    </div><CorrectSlipAmount key={review.version} attemptId={proof.attempt_id} amount={proof.claimed_minor} version={review.version} path={path} apiFetch={apiFetch} language={language} onUpdated={()=>refreshAfterUpdate(review.booking_reference)}/></div>;
                   })}
                 </div>
                 {review.attempt_id && <ReviewForm key={review.version} review={review} path={path} apiFetch={apiFetch} language={language}
@@ -655,14 +704,9 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                       const status = proof.supporting ? t("หลักฐานประกอบ", "Supporting evidence") : proof.status === "verified" ? t("ตรวจแล้ว", "Reviewed") :
                         proof.status === "rejected" ? t("ปฏิเสธแล้ว", "Rejected") : t("ส่งแล้ว", "Submitted");
                       return <li key={proof.attempt_id}>
-                        <a className="flex flex-wrap items-center justify-between gap-x-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-blue-700 hover:underline"
-                          href={path + "/proofs/" + encodeURIComponent(proof.attempt_id)} target="_blank" rel="noopener noreferrer">
-                          {review.proofs.length === 0 && <img className="max-h-40 w-full rounded bg-white object-contain"
-                            src={path + "/proofs/" + encodeURIComponent(proof.attempt_id)}
-                            alt={t(`สลิปก่อนหน้า ${index + 1}`, `Previous slip ${index + 1}`)} loading="lazy" />}
-                          <span>{t(`เปิดสลิป ${index + 1}`, `Open slip ${index + 1}`)} · {status}</span>
-                          {amount != null && <span className="font-semibold tabular-nums">{money.format(amount / 100)}</span>}
-                        </a>
+                        <SlipImage url={path + "/proofs/" + encodeURIComponent(proof.attempt_id)} label={t(`สลิปก่อนหน้า ${index + 1}`,`Previous slip ${index + 1}`)} language={language}/>
+                        <div className="flex flex-wrap justify-between gap-2 py-1 font-semibold"><span>{status}</span>{amount != null && <span>{money.format(amount / 100)}</span>}</div>
+                        {proof.status==="verified"&&review.booking_state==="confirmed"&&<CorrectSlipAmount verified key={"amount-"+review.version} attemptId={proof.attempt_id} amount={proof.claimed_minor??proof.observed_minor} version={review.version} path={path} apiFetch={apiFetch} language={language} onUpdated={()=>refreshAfterUpdate(review.booking_reference)}/>}
                         {proof.status==="verified"&&review.booking_state==="confirmed"&&<RevokeSlip key={review.version} attemptId={proof.attempt_id} version={review.version} path={path} apiFetch={apiFetch} language={language} onUpdated={()=>refreshAfterUpdate(review.booking_reference)}/>}
                         {proof.supporting && review.balance_due_minor > 0 && <ApplySupportingSlip
                           key={review.version} attemptId={proof.attempt_id} claimedMinor={proof.claimed_minor}

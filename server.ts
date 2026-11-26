@@ -18559,14 +18559,15 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
             Number(body.hold_minutes) < 5 || Number(body.hold_minutes) > 43200)) ||
           (["correct_price", "flag_price", "clear_price_flag", "set_attendee_phone"].includes(action) &&
             (typeof body.attendee_id !== "string" || !body.attendee_id.trim() || body.attendee_id.length > 128)) ||
-          (action === "revoke_slip" && (typeof body.attempt_id !== "string" || !body.attempt_id.trim() || body.attempt_id.length>128)) ||
+          (["revoke_slip","correct_slip_amount"].includes(action) && (typeof body.attempt_id !== "string" || !body.attempt_id.trim() || body.attempt_id.length>128)) ||
+          (action === "correct_slip_amount" && (!Number.isSafeInteger(body.slip_amount_minor)||Number(body.slip_amount_minor)<1||Number(body.slip_amount_minor)>2147483647)) ||
           (action === "set_attendee_phone" && !isOptionalAttendeePhone(body.attendee_phone)) ||
           (action === "correct_price" && !Number.isSafeInteger(body.unit_minor)) ||
           (action === "apply_coupon" && (typeof body.coupon_code !== "string" || body.coupon_code.length > 64)) ||
@@ -18577,9 +18578,10 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip"|"correct_slip_amount",reason:body.reason.trim(),
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
           attemptId:typeof body.attempt_id === "string" ? body.attempt_id : undefined,
+          slipAmountMinor:typeof body.slip_amount_minor === "number" ? body.slip_amount_minor : undefined,
           attendeeId: typeof body.attendee_id === "string" ? body.attendee_id : undefined,
           attendeePhone: typeof body.attendee_phone === "string" ? body.attendee_phone : undefined,
           unitMinor: typeof body.unit_minor === "number" ? body.unit_minor : undefined,

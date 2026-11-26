@@ -1442,8 +1442,8 @@ export function* confirmPaidMessengerDraft(input: PaidMessengerConfirmInput, org
 
 export interface PaidAdminAction {
   eventId: string; bookingId: string; organizationId: string; actorId: string;
-  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip";
-  reason: string; holdMinutes?: number; refundReference?: string; attemptId?: string; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
+  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip" | "correct_slip_amount";
+  reason: string; holdMinutes?: number; refundReference?: string; attemptId?: string; slipAmountMinor?: number; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
 }
 
 export function* readPaidAdminBooking(eventId: string, organizationId: string, reference: string): PaidCommand<PaidRow | undefined> {
@@ -1479,13 +1479,14 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
 }
 
 export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status:string; payment_status:string; version:number; due_at:string; total_minor?:number; balance_due_minor?:number }> {
-  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone, attemptId } = input;
+  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone, attemptId, slipAmountMinor } = input;
   const couponCode = normalizeCouponCode(input.couponCode ?? "");
   if (!key || key.length>128 || !reason?.trim() || reason.length>1000 || !Number.isSafeInteger(version) || version<1 ||
-      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip"].includes(action) ||
+      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount"].includes(action) ||
       (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
       (["correct_price", "flag_price", "clear_price_flag"].includes(action) && !attendeeId) ||
-      (action==="revoke_slip" && (!attemptId || attemptId.length>128)) ||
+      (["revoke_slip","correct_slip_amount"].includes(action) && (!attemptId || attemptId.length>128)) ||
+      (action==="correct_slip_amount" && (!Number.isSafeInteger(slipAmountMinor) || slipAmountMinor!<1 || slipAmountMinor!>2_147_483_647)) ||
       (action==="set_attendee_phone" && (!attendeeId || !isOptionalAttendeePhone(attendeePhone))) ||
       (action==="correct_price" && (!Number.isSafeInteger(unitMinor) || unitMinor! < 1 || unitMinor! > 2_147_483_647)) ||
       (action==="refund" && (!refundReference?.trim() || refundReference.length>255))) throw new PaidBookingError("invalid_admin_action");
@@ -1493,6 +1494,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   const principal="staff:"+actorId;
   const digest=createHash("sha256").update(JSON.stringify([bookingId,version,action,reason,holdMinutes,refundReference,
     ...(action === "revoke_slip" ? [attemptId] : []),
+    ...(action === "correct_slip_amount" ? [attemptId,slipAmountMinor] : []),
     ...(action === "correct_price" ? [attendeeId,unitMinor] : []),
     ...(action === "set_attendee_phone" ? [attendeeId,attendeePhone?.trim()] : []),
     ...(action === "apply_coupon" ? [couponCode] : []),
@@ -1518,7 +1520,24 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   let correction: { total_minor: number; balance_due_minor: number } | undefined;
   let couponConfirmed = false;
   let auditReason = reason.trim();
-  if (action === "revoke_slip") {
+  if (action === "correct_slip_amount") {
+    if (!["confirmed","verification_pending"].includes(previous) || payment==="refunded") throw new PaidBookingError("state_conflict");
+    const [slip]=yield query("SELECT a.id,a.status,a.claimed_minor,a.observed_minor FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id WHERE a.id=? AND a.event_id=? AND a.booking_id=? AND p.deleted_ms IS NULL AND a.status IN ('verified','proof_submitted','exception')",attemptId!,eventId,bookingId);
+    if(!slip)throw new PaidBookingError("attempt_not_found");
+    if(slip.status==="verified"){
+      // Do not allocate a supporting slip as cash implicitly or double count combined evidence.
+      const [other]=yield query("SELECT id FROM paid_payment_attempts WHERE booking_id=? AND status='verified' AND id<>? LIMIT 1",bookingId,attemptId!);
+      if(previous!=="confirmed"||payment!=="verified"||other||slip.observed_minor==null)throw new PaidBookingError("multiple_verified_payments");
+      const total=Number(booking.total_minor);
+      if(slipAmountMinor!>total)throw new PaidBookingError("amount_exceeds_total");
+      // Keep the actual payment amount explicit; underpayment remains visible as an outstanding balance.
+      yield query("UPDATE paid_payment_attempts SET claimed_minor=?,observed_minor=?,reviewed_by=?,reviewed_ms=? WHERE id=?",slipAmountMinor!,slipAmountMinor!,actorId,now,attemptId!);
+      correction={total_minor:total,balance_due_minor:total-slipAmountMinor!};
+    }else{
+      yield query("UPDATE paid_payment_attempts SET claimed_minor=?,observed_minor=NULL,reviewed_by=?,reviewed_ms=? WHERE id=?",slipAmountMinor!,actorId,now,attemptId!);
+    }
+    auditReason=reason.trim().slice(0,650)+" · slip "+attemptId+" · claimed "+String(slip.claimed_minor??"unknown")+" · verified "+String(slip.observed_minor??"unknown")+" → "+slipAmountMinor+" THB minor units";
+  } else if (action === "revoke_slip") {
     if (previous!=="confirmed" || payment!=="verified" || Number(booking.total_minor)<=0) throw new PaidBookingError("state_conflict");
     const [scanned]=yield query("SELECT id FROM paid_attendees WHERE booking_id=? AND checked_in_ms IS NOT NULL LIMIT 1",bookingId);
     if(scanned)throw new PaidBookingError("already_checked_in");

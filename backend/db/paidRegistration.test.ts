@@ -836,7 +836,13 @@ test("incorrect verified slip can be revoked and reused on its rightful booking"
   const attendee=(detail!.attendees as {id:string}[])[0];
   const oldQr=await db.readPaidCredential(event.id,a.id,attendee.id,customer.id);
   assert.ok(oldQr);
-  const revoke={eventId:event.id,bookingId:a.id,organizationId,actorId:"staff",key:"revoke",version:confirmed.version,action:"revoke_slip" as const,reason:"Wrong booking",holdMinutes:1440,attemptId:slip.attempt_id};
+  const correctionBase={eventId:event.id,bookingId:a.id,organizationId,actorId:"staff",reason:"Verified actual transfer"};
+  const price=await db.managePaidBooking({...correctionBase,key:"raise-price",version:confirmed.version,action:"correct_price",attendeeId:attendee.id,unitMinor:31000});
+  const corrected=await db.managePaidBooking({...correctionBase,key:"fix-amount",version:price.version,action:"correct_slip_amount",attemptId:slip.attempt_id,slipAmountMinor:31000});
+  assert.equal(corrected.balance_due_minor,0);
+  assert.equal(await db.readPaidCredential(event.id,a.id,attendee.id,customer.id),oldQr);
+  assert.deepEqual((await db.readPaidProof(event.id,a.id,slip.attempt_id,organizationId))?.content,proof.content);
+  const revoke={eventId:event.id,bookingId:a.id,organizationId,actorId:"staff",key:"revoke",version:corrected.version,action:"revoke_slip" as const,reason:"Wrong booking",holdMinutes:1440,attemptId:slip.attempt_id};
   const flagged=await db.managePaidBooking({...revoke,action:"flag_price",key:"flag-before-revoke",attendeeId:attendee.id});
   revoke.version=flagged.version;
   const result=await db.managePaidBooking(revoke);

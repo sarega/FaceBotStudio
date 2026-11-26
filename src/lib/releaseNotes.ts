@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.29",date:"2026-11-26",title:"Payment slip corrections and readable previews",features:["Correct slip amounts with audit history","Recalculate outstanding balances without replacing evidence","Larger slip previews and full-screen zoom"]},
   {version:"0.11.28",date:"2026-11-26",title:"Registration clarity and practical reports",features:["Visible payment flags and live review counts","Clear flags on unpaid bookings","Actual attendee names on orders and slip uploads","Readable meal rosters and descriptive report filenames"]},
   {version:"0.11.27",date:"2026-11-26",title:"Correct incorrect slip approvals",features:["Revoke mistaken approval and remove the incorrect slip","Reopen payment without cancelling attendees","Release duplicate-proof claims and reissue QR passes after approval"]},
   {version:"0.11.26",date:"2026-11-26",title:"Shared vehicle logistics",features:["Create hired vans and shared vehicles","Assign passengers with capacity checks","Export pickup, departure and notes to CSV and PDF"]},

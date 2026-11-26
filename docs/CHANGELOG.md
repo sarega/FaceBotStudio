@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.29 - 2026-11-26
+
+- Correct recorded slip amounts before or after approval with audit history and preserved evidence.
+- Recalculate outstanding balances after correcting a single verified payment.
+- Enlarge payment slip previews and add a full-screen viewer with independent zoom.
+
 ## 0.11.28 - 2026-11-26
 
 - Display payment warnings in attendee rows and collapsed booking summaries; refresh review counts independently every 15 seconds.
