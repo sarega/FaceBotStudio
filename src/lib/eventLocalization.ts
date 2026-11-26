@@ -3,7 +3,7 @@ export const TRANSLATABLE_EVENT_FIELDS = [
 ] as const;
 export type EventTranslationField = typeof TRANSLATABLE_EVENT_FIELDS[number];
 export type EventContent = Partial<Record<EventTranslationField,string>>;
-export type EventTranslation = { fields: EventContent; sourceFingerprint: string; published: boolean };
+export type EventTranslation = { fields: EventContent; sourceFingerprint: string; published: boolean; publishedFields?: EventContent };
 export type EventLocalizations = Record<string,EventTranslation>;
 export function normalizeLocale(value:unknown):string {
   return typeof value==="string" && /^[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,2}$/i.test(value.trim()) ? value.trim().toLowerCase() : "";
@@ -27,7 +27,9 @@ export function parseEventLocalizations(raw:unknown):EventLocalizations {
       if(v.fields&&typeof v.fields==="object")for(const field of TRANSLATABLE_EVENT_FIELDS){
         const val=(v.fields as Record<string,unknown>)[field];if(typeof val==="string")fields[field]=val.slice(0,60000);
       }
-      result[locale]={fields,sourceFingerprint:typeof v.sourceFingerprint==="string"?v.sourceFingerprint.slice(0,64):"",published:v.published===true};
+      const publishedFields:EventContent={};
+      if(v.publishedFields&&typeof v.publishedFields==="object")for(const field of TRANSLATABLE_EVENT_FIELDS){const val=(v.publishedFields as Record<string,unknown>)[field];if(typeof val==="string")publishedFields[field]=val.slice(0,60000);}
+      result[locale]={fields,...(v.publishedFields&&typeof v.publishedFields==="object"?{publishedFields}:{}),sourceFingerprint:typeof v.sourceFingerprint==="string"?v.sourceFingerprint.slice(0,64):"",published:v.published===true};
     }return result;
   }catch{return {};}
 }
@@ -36,5 +38,5 @@ export function localizeEventSettings<T extends Record<string,string>>(settings:
   if(!target||!primary||target===primary)return settings;
   const translation=parseEventLocalizations(settings.event_translations_json)[target];
   if(!translation?.published)return settings;
-  return {...settings,...Object.fromEntries(Object.entries(translation.fields).filter(([key,value])=>value.trim()&&String(settings[key]||"").trim()))};
+  return {...settings,...Object.fromEntries(Object.entries(translation.publishedFields??translation.fields).filter(([key,value])=>value.trim()))};
 }

@@ -2438,6 +2438,9 @@ function getBlankEventScopedSettings() {
 }
 
 const EVENT_SETUP_SETTINGS_KEYS = [
+  "event_content_language",
+  "event_translations_json",
+  "event_public_summary",
   "event_public_organizer_profile_id",
   "event_name",
   "event_timezone",

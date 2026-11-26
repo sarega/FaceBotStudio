@@ -798,15 +798,7 @@ export function EventWorkspaceScreen({
                 )}
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div className="md:col-span-2">
-                    <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Event Name</label>
-                    <input
-                      value={settings.event_name}
-                      onChange={(event) => setSettings({ ...settings, event_name: event.target.value })}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="e.g. AI Innovation Summit 2026"
-                    />
-                  </div>
+                  <EventLocalizationPanel key={selectedEventId} settings={settings} onChange={patch=>setSettings(current=>({...current,...patch}))} apiFetch={apiFetch} eventId={selectedEventId} onUploadImage={file=>handlePublicEventMediaUpload(file,"description_image")}/>
 
                   <div className="md:col-span-2">
                     <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Event type</label>
@@ -862,20 +854,6 @@ export function EventWorkspaceScreen({
                     <p className="mt-1 text-[11px] text-slate-500">
                       {settings.event_type !== "single" ? "Leave the end date blank to keep this recurring activity or campaign active indefinitely." : "Event Ends auto-fills to 2 hours later after you set Event Starts. Adjust it if the session runs longer."}
                     </p>
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-                      <div>
-                        <label className="block text-xs font-bold uppercase text-slate-500">Description</label>
-                        <p className="mt-1 text-[11px] text-slate-500">Write plain text or format a professional event page with safe HTML.</p>
-                      </div>
-                    </div>
-                    <EventDescriptionHtmlEditor
-                      value={settings.event_description}
-                      onChange={(value) => setSettings({ ...settings, event_description: value })}
-                      onUploadImage={(file) => handlePublicEventMediaUpload(file, "description_image")}
-                    />
                   </div>
 
                   <div>
@@ -1841,7 +1819,6 @@ export function EventWorkspaceScreen({
                             </p>
                           </div>
 
-                          <EventLocalizationPanel key={selectedEventId} settings={settings} onChange={patch=>setSettings(current=>({...current,...patch}))} apiFetch={apiFetch} eventId={selectedEventId}/>
                           <div className="md:col-span-2">
                             <div className="mb-1 flex items-center justify-between gap-2">
                               <label className="block text-xs font-bold uppercase text-slate-500">Public Summary</label>

@@ -20,3 +20,8 @@ test("fingerprint changes with source content but not operational settings",()=>
  assert.notEqual(eventContentFingerprint(original),eventContentFingerprint({...original,event_description:"new"}));
  assert.equal(eventContentFingerprint(extractEventContent(original)),eventContentFingerprint(original));
 });
+test("published translation remains stable while draft edits are saved",()=>{
+ const settings={...original,event_translations_json:JSON.stringify({en:{fields:{event_name:"New draft"},published:true,publishedFields:{event_name:"Approved title"}}})};
+ assert.equal(localizeEventSettings(settings,"en").event_name,"Approved title");
+ assert.equal(parseEventLocalizations(settings.event_translations_json).en.fields.event_name,"New draft");
+});

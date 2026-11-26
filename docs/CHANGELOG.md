@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.23 - 2026-11-26
+
+- Move language-specific event title, summary and rich HTML description editing into Event Setup.
+- Preserve the last approved translation while editing or generating a new draft.
+- Save language drafts and explicit publication through Event Setup.
+
 ## 0.11.22 - 2026-11-26
 
 - Add event-scoped source language and persisted multilingual public content.
