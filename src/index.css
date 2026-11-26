@@ -2778,11 +2778,11 @@ html.theme-dark .registration-slip-state[data-slip-tone="missing"] { background:
 
 /* Readable payment evidence, without browser-wide zoom. */
 .paid-slip-preview { border:1px solid #94a3b8; border-radius:10px; overflow:hidden; }
-.paid-slip-image-button { display:flex; justify-content:center; width:100%; padding:0; background:#fff; cursor:zoom-in; }
-.paid-slip-image-button img { display:block; width:100%; height:auto; max-width:100%; object-fit:contain; }
+.paid-slip-image-button { display:flex; justify-content:center; width:100%; padding:8px; background:#fff; cursor:zoom-in; }
+.paid-slip-image-button img { display:block; width:auto; height:auto; max-width:100%; max-height:min(420px,60dvh); object-fit:contain; }
 .paid-slip-dialog { position:fixed; inset:0; margin:auto; width:min(96vw,1100px); max-width:96vw; max-height:96dvh; padding:0; border:1px solid #64748b; border-radius:12px; background:#fff; color:#17253a; }
 .paid-slip-dialog::backdrop { background:rgba(0,0,0,.8); }
 .paid-slip-dialog-toolbar { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; padding:10px; border-bottom:1px solid #cbd5e1; }
 .paid-slip-dialog-scroll { overflow:auto; max-height:calc(96dvh - 76px); background:#e2e8f0; }
 .paid-slip-dialog-scroll img { display:block; margin:0 auto; object-fit:contain; }
-@container (min-width: 760px) { .paid-review-details { grid-template-columns:minmax(0, 2fr) minmax(0, 3fr); } }
+@container (min-width: 760px) { .paid-review-details { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); } }

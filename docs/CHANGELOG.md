@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.30 - 2026-11-26
+
+- Balance slip preview size with a responsive 420px height limit and equal-width booking and slip columns. Keep full-screen zoom available.
+
 ## 0.11.29 - 2026-11-26
 
 - Correct recorded slip amounts before or after approval with audit history and preserved evidence.
