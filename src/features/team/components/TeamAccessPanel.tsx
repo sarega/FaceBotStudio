@@ -33,6 +33,7 @@ type TeamAccessPanelProps = {
   canManageTargetAccess: (user: AuthUser) => boolean;
   canDeleteTeamUser: (user: AuthUser) => boolean;
   onRefresh: () => void | Promise<void>;
+  onUserPermissionsChange: (userId: string, role: UserRole, scope: "all" | "selected", eventIds: string[]) => void | Promise<void>;
   onUserRoleChange: (userId: string, role: UserRole) => void | Promise<void>;
   onUserEventAccessChange: (userId: string, eventIds: string[]) => void | Promise<void>;
   onUserAccessToggle: (userId: string, nextIsActive: boolean) => void | Promise<void>;
@@ -65,15 +66,20 @@ export function TeamAccessPanel({
   canDeleteTeamUser,
   onRefresh,
   onUserRoleChange,
+  onUserPermissionsChange,
   onUserEventAccessChange,
   onUserAccessToggle,
   onDeleteUser,
   onCreateUser,
   onResendInvite,
 }: TeamAccessPanelProps) {
+  const [draftRoles, setDraftRoles] = useState<Record<string, UserRole>>({});
+  const [draftScopes, setDraftScopes] = useState<Record<string, "all" | "selected">>({});
   const [draftEventIds, setDraftEventIds] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
+    setDraftRoles(Object.fromEntries(teamUsers.map(user => [user.id, user.role])));
+    setDraftScopes(Object.fromEntries(teamUsers.map(user => [user.id, user.role === "admin" && user.event_scope !== "selected" ? "all" : "selected"])));
     setDraftEventIds(Object.fromEntries(teamUsers.map((user) => [user.id, user.assigned_event_ids || []])));
   }, [teamUsers]);
 
@@ -87,7 +93,7 @@ export function TeamAccessPanel({
           <div>
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <Shield className="w-5 h-5 text-blue-600" />
-              Team Access
+              User & Permission Manager
             </h2>
             <p className="mt-1 text-sm text-slate-500">Session-based admin access with roles stored in the database.</p>
             <p className="mt-2 text-xs text-amber-700">
@@ -121,7 +127,11 @@ export function TeamAccessPanel({
                 No users loaded yet.
               </div>
             ) : (
-              teamUsers.map((user) => (
+              teamUsers.map((user) => {
+                const ownerEditing = role === "owner" && canManageTargetRole(user);
+                const draftRole = draftRoles[user.id] || user.role;
+                const draftScope = draftRole === "admin" ? draftScopes[user.id] || "all" : "selected";
+                return (
                 <div key={user.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2.5">
                   <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                     <div className="min-w-0">
@@ -145,13 +155,14 @@ export function TeamAccessPanel({
                     <div>
                       {canManageTargetRole(user) ? (
                         <select
-                          value={user.role}
-                          onChange={(event) => void onUserRoleChange(user.id, event.target.value as UserRole)}
+                          aria-label="Account role"
+                          value={ownerEditing ? draftRole : user.role}
+                          onChange={(event) => { const next = event.target.value as UserRole; if (ownerEditing) { setDraftRoles(current => ({ ...current, [user.id]: next })); if (next !== "admin") setDraftScopes(current => ({ ...current, [user.id]: "selected" })); } else void onUserRoleChange(user.id, next); }}
                           className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                           disabled={teamLoading}
                         >
                           {manageableRoles
-                            .filter((roleOption) => authUser?.role === "owner" || (roleOption !== "owner" && roleOption !== "admin"))
+                            .filter((roleOption) => roleOption !== "owner" && (authUser?.role === "owner" || roleOption !== "admin"))
                             .map((roleOption) => (
                               <option key={roleOption} value={roleOption}>
                                 {roleLabel(roleOption)}
@@ -194,7 +205,7 @@ export function TeamAccessPanel({
                     )}
                   </div>
 
-                  {isEventAssignedRole(user.role) && (
+                  {(ownerEditing || isEventAssignedRole(user.role)) && (
                     <div className="rounded-xl border border-blue-100 bg-white p-3">
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex items-center gap-2">
@@ -202,23 +213,24 @@ export function TeamAccessPanel({
                           <div>
                             <p className="text-xs font-semibold text-slate-800">Event access</p>
                             <p className="text-[11px] text-slate-500">
-                              {(draftEventIds[user.id] || user.assigned_event_ids || []).length} selected Event(s)
+                              {draftScope === "all" && ownerEditing ? "All Events" : `${(draftEventIds[user.id] || user.assigned_event_ids || []).length} selected Event(s)`}
                             </p>
                           </div>
                         </div>
                         {canManageTargetAccess(user) && (
                           <ActionButton
-                            onClick={() => void onUserEventAccessChange(user.id, draftEventIds[user.id] || user.assigned_event_ids || [])}
+                            onClick={() => void (ownerEditing ? onUserPermissionsChange(user.id, draftRole, draftScope, draftEventIds[user.id] || []) : onUserEventAccessChange(user.id, draftEventIds[user.id] || user.assigned_event_ids || []))}
                             disabled={teamLoading}
                             tone="blue"
                             className="text-xs"
                           >
                             <Save className="h-3.5 w-3.5" />
-                            Save Event Access
+                            {ownerEditing ? "Save Role & Access" : "Save Event Access"}
                           </ActionButton>
                         )}
                       </div>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {ownerEditing && draftRole === "admin" && <select aria-label="Admin event scope" className="mt-3 w-full rounded-lg border p-2 text-sm" value={draftScope} onChange={event => setDraftScopes(current => ({ ...current, [user.id]: event.target.value as "all" | "selected" }))}><option value="all">All Events</option><option value="selected">Selected Events Only</option></select>}
+                      {(!ownerEditing || draftScope === "selected") && <div className="mt-3 grid gap-2 sm:grid-cols-2">
                         {events.map((event) => {
                           const selected = (draftEventIds[user.id] || user.assigned_event_ids || []).includes(event.id);
                           return (
@@ -237,12 +249,12 @@ export function TeamAccessPanel({
                             </label>
                           );
                         })}
-                      </div>
+                      </div>}
                       {!events.length && <p className="mt-2 text-xs text-amber-700">No Event is available to assign.</p>}
                     </div>
                   )}
                 </div>
-              ))
+              ); })
             )}
           </div>
         </div>

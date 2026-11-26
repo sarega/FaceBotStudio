@@ -45,6 +45,7 @@ export interface AuthUser {
   username: string;
   display_name: string;
   role: UserRole;
+  event_scope?: "all" | "selected";
   assigned_event_ids?: string[];
   organization_id: string;
   organization_name: string;
@@ -598,7 +599,7 @@ export interface PublicEventCatalogEntry {
     logo_url: string;
   };
   availability: {
-    state: "open" | "not_started" | "closed" | "full" | "invalid" | "tickets_available" | "tickets_unavailable" | "external";
+    state: "open" | "not_started" | "closed" | "full" | "invalid" | "tickets_available" | "tickets_unavailable" | "external" | "information";
     label: string;
     registration_enabled: boolean;
     external_ticket_url: string;

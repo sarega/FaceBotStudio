@@ -9763,6 +9763,22 @@ export default function App() {
     }
   };
 
+  const handleUserPermissionsChange = async (userId: string, role: UserRole, scope: "all" | "selected", eventIds: string[]) => {
+    setTeamLoading(true);
+    setTeamMessage("");
+    try {
+      const res = await apiFetch(`/api/auth/users/${encodeURIComponent(userId)}/permissions`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, event_scope: scope, event_ids: eventIds }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to save permissions");
+      setTeamMessage("Permissions saved. Member must sign in again.");
+      await fetchTeamUsers();
+    } catch (err) { setTeamMessage(err instanceof Error ? err.message : "Failed to save permissions"); }
+    finally { setTeamLoading(false); }
+  };
+
   const handleUserRoleChange = async (userId: string, role: UserRole) => {
     setTeamLoading(true);
     setTeamMessage("");
@@ -10224,6 +10240,7 @@ export default function App() {
       canDeleteTeamUser={canDeleteTeamUser}
       onRefresh={fetchTeamUsers}
       onUserRoleChange={handleUserRoleChange}
+      onUserPermissionsChange={handleUserPermissionsChange}
       onUserEventAccessChange={handleUserEventAccessChange}
       onUserAccessToggle={handleUserAccessToggle}
       onDeleteUser={handleDeleteUser}

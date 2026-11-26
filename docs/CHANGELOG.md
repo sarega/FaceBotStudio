@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.20 - 2026-11-26
+
+- Simplify publishing visibility to Public, Unlisted, or Private (public page disabled). New public pages are listed when active; existing visibility remains unchanged.
+- Include information-only events in the public catalog without requiring registration or ticket sales.
+- Let owners save staff roles and event assignments together. Admins may have all events or selected events; existing admins retain all-event access until changed.
+- Revoke staff sessions after permission updates and audit changes. Restrict scoped admins from organization-wide actions.
+
 ## 0.11.19 - 2026-11-26
 
 - Add Single Event, Recurring Event and Ongoing Campaign types to existing event creation and settings.

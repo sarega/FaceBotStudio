@@ -33,3 +33,7 @@ test("public catalog keeps external URLs safe and resolves action labels", () =>
     { state: "tickets_unavailable", label: "Tickets unavailable" },
   );
 });
+
+test("information-only public events have a useful availability label", () => {
+  assert.deepEqual(resolvePublicCatalogAvailability({ registrationEnabled: false, registrationAvailability: "open", externalTicketUrl: "", directTicketingEnabled: false, availableSeatCount: 0 }), { state: "information", label: "Event information" });
+});

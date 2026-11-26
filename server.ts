@@ -29,7 +29,7 @@ import { parseOutreachCsv } from "./backend/outreachCsv";
 import { buildRegistrationReportHtml } from "./backend/registrationReports";
 import { buildRegistrationRosterCsv } from "./backend/registrationRosterCsv";
 import { buildLogisticsReportHtml } from "./backend/logisticsReport";
-import { isEventAssignedRole } from "./src/lib/staffRoles";
+import { isEventAssignedRole, isEventScopedUser } from "./src/lib/staffRoles";
 import { isRegistrationReportKind, isRosterCsvKind } from "./src/lib/registrationReportKinds";
 import { buildStoredZipArchive, createStoredZipWriter } from "./backend/zipArchive";
 import {
@@ -188,7 +188,7 @@ import { verifyTicketAccessToken, type TicketImageFormat } from "./backend/ticke
 import { resolveEnglishPublicSlug, resolvePublicSummary, sanitizeEnglishSlugInput } from "./src/lib/publicEventPage";
 import { parsePublicSponsorEntries, resolvePublicBrandMode, resolvePublicThemeColor } from "./src/lib/publicEventPageBranding";
 import { parsePublicEventSections, parsePublicSpeakerEntries } from "./src/lib/publicEventPageLayout";
-import { hasPublicCatalogAction, normalizePublicExternalTicketUrl, resolvePublicCatalogAvailability } from "./backend/publicCatalog";
+import { normalizePublicExternalTicketUrl, resolvePublicCatalogAvailability } from "./backend/publicCatalog";
 import { calculateOrderPricing, parseFeeType, parseMoney } from "./backend/commerce";
 
 dotenv.config();
@@ -3034,7 +3034,7 @@ function resolveEventScopeContext(req: AuthenticatedRequest, options?: EventScop
 }
 
 function requireEventScope(options?: EventScopeOptions) {
-  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  const middleware = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.auth?.user && !req.checkinAccess) {
       await recordSecurityEvent(req, "security.event_scope_denied", {
         reason: "missing_auth_context",
@@ -3067,7 +3067,7 @@ function requireEventScope(options?: EventScopeOptions) {
 
     if (req.auth?.user) {
       const role = req.auth.user.role;
-      const requiresEventAssignment = isEventAssignedRole(role);
+      const requiresEventAssignment = isEventScopedUser(req.auth.user);
       if (requiresEventAssignment) {
         const assigned = req.rolePreview
           ? req.rolePreview.assignedEventIds.includes(scope.eventId)
@@ -3101,6 +3101,7 @@ function requireEventScope(options?: EventScopeOptions) {
     req.eventScope = scope;
     return next();
   };
+  return Object.assign(middleware, { eventScopeGuard: true });
 }
 
 function verifyFacebookWebhookSignature(req: RawBodyRequest) {
@@ -3212,6 +3213,7 @@ function toPublicAuthUser(user: AuthUserRow) {
     organization_id: user.organization_id,
     organization_name: user.organization_name,
     is_active: user.is_active,
+    event_scope: isEventScopedUser(user) ? "selected" : "all",
     assigned_event_ids: user.assigned_event_ids || [],
     staff_email: user.staff_email ?? null,
     has_customer_account: Boolean(user.staff_customer_account_id),
@@ -3297,6 +3299,7 @@ async function attachSession(req: AuthenticatedRequest, res: Response, next: Nex
     }
 
     let user = session.user;
+    if (isEventScopedUser(user)) user = { ...user, assigned_event_ids: await appDb.listUserEventIds(user.id) };
     if (previewRole !== undefined) {
       if (user.role !== "owner" || !isStaffPreviewRole(previewRole)) {
         return res.status(403).json({ error: "Role preview is available to owners only" });
@@ -3445,6 +3448,12 @@ function requireRoles(allowedRoles: UserRole[]) {
         required_roles: allowedRoles,
       });
       return res.status(401).json({ error: "Authentication required" });
+    }
+    if (req.auth.user.role === "admin" && isEventScopedUser(req.auth.user)) {
+      const path = String(req.route?.path || "");
+      const guarded = Array.isArray(req.route?.stack) && req.route.stack.some((layer: any) => layer.handle?.eventScopeGuard === true);
+      const safe = ["/api/llm/models", "/api/admin-agent/dashboard", "/api/admin-agent/history/reset"].includes(path);
+      if (!guarded && !safe) return res.status(403).json({ error: "Organization-wide action requires an unrestricted administrator" });
     }
     if (!userHasRole(req.auth.user.role, allowedRoles)) {
       void recordSecurityEvent(req, "security.role_denied", {
@@ -5107,7 +5116,7 @@ async function buildPublicEventPagePayload(
         || "Registration complete. Save your ticket image to your phone now.",
       date: String(settings.event_date || "").trim(),
       end_date: String(settings.event_end_date || "").trim(),
-      date_label: formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
+      date_label: settings.event_recurring_schedule || formatTicketDate(settings.event_date || "", settings.event_end_date || "", settings.event_timezone),
       timezone: normalizeTimeZone(settings.event_timezone),
       registration_enabled: ticketingMode === "inline" && isTruthySetting(settings.event_public_registration_enabled ?? "1"),
       ticketing_mode: ticketingMode,
@@ -5217,7 +5226,7 @@ async function buildPublicEventCatalogEntry(
 
   const paidMode = await appDb.readPaidMode(event.id);
   const paidCatalog = paidMode?.published && paidPublicEnrollmentEnabled(paidMode.paymentMode) ? await appDb.readPaidCatalog(event.id) : undefined;
-  if (paidMode && !paidCatalog?.categories.length) return null;
+
   const customerTicketingSelected = !paidMode && settings.event_public_ticketing_mode === "customer";
   const externalTicketUrl = !paidMode && settings.event_public_ticketing_mode === "external"
     ? normalizePublicExternalTicketUrl(settings.event_public_external_ticket_url)
@@ -5226,7 +5235,7 @@ async function buildPublicEventCatalogEntry(
     && isTruthySetting(settings.event_public_registration_enabled ?? "1"));
   const directTicketingEnabled = customerTicketingSelected && isPublicDirectTicketingEnabled(settings);
   const customerCheckoutEnabled = customerTicketingSelected && isCustomerPaidCheckoutEnabled(settings);
-  if (!hasPublicCatalogAction({ registrationEnabled, externalTicketUrl, directTicketingEnabled })) return null;
+
 
   const [organizerProfile, directPerformances, directSeats] = await Promise.all([
     resolveEventOrganizerProfile(event, settings),
@@ -15180,6 +15189,7 @@ async function startServer() {
   });
 
   app.get("/api/private-media/:scope/:fileName", privateMediaRateLimit, async (req: AuthenticatedRequest, res) => {
+    if (req.auth?.user.role === "admin" && isEventScopedUser(req.auth.user)) return res.status(403).json({ error: "Restricted media access" });
     const scope = String(req.params.scope || "").trim() as PrivateMediaScope;
     const fileName = path.basename(String(req.params.fileName || "").trim());
     if (scope !== "channel" && scope !== "admin-agent") {
@@ -15992,7 +16002,7 @@ async function startServer() {
 
   app.get("/api/auth/users", requireRoles(["owner", "admin"]), async (_req: AuthenticatedRequest, res) => {
     try {
-      const users = await appDb.listUsers();
+      const users = (await appDb.listUsers()).filter(user => user.organization_id === _req.auth!.user.organization_id);
       const usersWithAssignments = await Promise.all(users.map(async (user) => ({
         ...user,
         assigned_event_ids: await appDb.listUserEventIds(user.id),
@@ -16116,7 +16126,8 @@ async function startServer() {
       if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "role")) {
         return res.status(403).json({ error: "You cannot change this user's role" });
       }
-      if (req.auth.user.role === "admin" && (normalizedRole === "owner" || normalizedRole === "admin")) {
+      if (normalizedRole === "owner") return res.status(403).json({ error: "Owner role cannot be assigned here" });
+      if (req.auth.user.role === "admin" && normalizedRole === "admin") {
         return res.status(403).json({ error: "Admins can only assign event-scoped roles" });
       }
 
@@ -16125,7 +16136,7 @@ async function startServer() {
         return res.status(409).json({ error: "Verify the staff email before changing this account's role" });
       }
 
-      const updated = await appDb.updateUserRole(userId, normalizedRole);
+      const updated = await appDb.updateUserPermissions(userId, normalizedRole, "selected", await appDb.listUserEventIds(userId));
       if (!updated) return res.status(404).json({ error: "User not found" });
 
       await recordAudit(req, "auth.role_updated", "user", userId, { role: normalizedRole });
@@ -16134,6 +16145,24 @@ async function startServer() {
       console.error("Failed to update user role:", error);
       return res.status(500).json({ error: "Failed to update user role" });
     }
+  });
+
+  app.post("/api/auth/users/:id/permissions", requireRoles(["owner"]), async (req: AuthenticatedRequest, res) => {
+    const target = await appDb.getUserById(String(req.params.id));
+    const actor = req.auth!.user;
+    if (!target || !canManageTargetUser(actor, target, "role")) return res.status(403).json({ error: "Cannot manage this account" });
+    const body = readObjectBody(req);
+    const role = body.role as UserRole;
+    if (!ALL_USER_ROLES.includes(role) || role === "owner") return res.status(400).json({ error: "Invalid staff role" });
+    if (role === "admin" && body.event_scope !== "all" && body.event_scope !== "selected") return res.status(400).json({ error: "Invalid event scope" });
+    const scope = role === "admin" && body.event_scope === "all" ? "all" : "selected";
+    const ids = normalizeEventAssignmentIds(body.event_ids);
+    if (!ids || !(await eventIdsBelongToOrganization(ids, actor.organization_id))) return res.status(400).json({ error: "Invalid event assignments" });
+    if (role !== target.role && role !== "checker" && !target.staff_email && target.staff_email_purpose !== "invite") return res.status(409).json({ error: "Verify staff email before changing role" });
+    if (!await appDb.updateUserPermissions(target.id, role, scope, scope === "all" ? [] : ids)) return res.status(409).json({ error: "Permission update failed" });
+    await appDb.deleteSessionsForUser(target.id);
+    await recordAudit(req, "auth.permissions_updated", "user", target.id, { role, event_scope: scope, event_ids: scope === "all" ? [] : ids });
+    return res.json({ status: "ok" });
   });
 
   app.post("/api/auth/users/:id/status", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {
@@ -16187,7 +16216,7 @@ async function startServer() {
       if (!req.auth?.user || !canManageTargetUser(req.auth.user, targetUser, "status")) {
         return res.status(403).json({ error: "You cannot change this user's event access" });
       }
-      if (!isEventAssignedRole(targetUser.role)) {
+      if (!isEventScopedUser(targetUser)) {
         return res.status(400).json({ error: "Only event-scoped accounts can have event assignments" });
       }
       if (!(await eventIdsBelongToOrganization(eventIds, req.auth.user.organization_id))) {
@@ -16515,7 +16544,7 @@ async function startServer() {
   app.get("/api/events", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       let events = await appDb.listEvents(req.auth?.user.organization_id);
-      if (req.auth?.user && isEventAssignedRole(req.auth.user.role)) {
+      if (req.auth?.user && isEventScopedUser(req.auth.user)) {
         const assignedEventIds = new Set(req.rolePreview?.assignedEventIds ?? await appDb.listUserEventIds(req.auth.user.id));
         events = events.filter((event) => assignedEventIds.has(event.id));
       }
@@ -16566,7 +16595,7 @@ async function startServer() {
         ...(profileId ? { event_public_organizer_profile_id: profileId } : {}),
         event_type: eventType,
         event_public_page_enabled: webPageEnabled ? "1" : "0",
-        event_catalog_visible: "0",
+        event_catalog_visible: webPageEnabled ? "1" : "0",
         event_public_bot_enabled: webPageEnabled ? "1" : "0",
         event_public_ticketing_mode: "inline",
         event_public_registration_enabled: eventType !== "campaign" && registrationMode === "free" ? "1" : "0",
@@ -20044,7 +20073,7 @@ async function startServer() {
     const assignees = [];
     for (const user of users) {
       if (!user.is_active || ["checker", "viewer"].includes(user.role)) continue;
-      if (user.role === "owner" || user.role === "admin" || await appDb.isUserAssignedToEvent(user.id, eventId)) assignees.push(toPublicAuthUser(user));
+      if (!isEventScopedUser(user) || await appDb.isUserAssignedToEvent(user.id, eventId)) assignees.push(toPublicAuthUser(user));
     }
     return res.json(assignees);
   });
@@ -21055,6 +21084,9 @@ async function startServer() {
       const eventId = getRequestedEventId(req);
       const input = readObjectBody(req);
       const { entries: body, issues } = normalizeSettingsMutationPayload(input);
+      if (req.auth?.user.role === "admin" && isEventScopedUser(req.auth.user) && Object.keys(body).some(key => (GLOBAL_SETTING_KEYS as readonly string[]).includes(key))) {
+        return res.status(403).json({ error: "Global settings require unrestricted administrator access" });
+      }
       if (issues.length > 0) {
         return respondValidationError(res, issues);
       }
@@ -23048,7 +23080,7 @@ async function startServer() {
     async (req: AuthenticatedRequest, res) => {
       try {
         const selectedEventId = normalizeOptionalText(req.query?.event_id);
-        const allowedEventIds = req.auth?.user && isEventAssignedRole(req.auth.user.role)
+        const allowedEventIds = req.auth?.user && isEventScopedUser(req.auth.user)
           ? req.rolePreview?.assignedEventIds ?? await appDb.listUserEventIds(req.auth.user.id)
           : undefined;
         const dashboard = await buildAdminAgentDashboard(selectedEventId, getRequestOrganizationId(req), allowedEventIds);
@@ -23184,7 +23216,7 @@ async function startServer() {
           source: "admin_agent_planner",
           metadata: { mode: "ui" },
           historyScopeKey: `ui:${req.auth?.user.id || "anonymous"}`,
-          forceSingleEvent: Boolean(req.auth?.user && isEventAssignedRole(req.auth.user.role)),
+          forceSingleEvent: Boolean(req.auth?.user && isEventScopedUser(req.auth.user)),
         });
         const effectiveEventId = normalizeOptionalText(execution.eventId) || requestedEventId;
 

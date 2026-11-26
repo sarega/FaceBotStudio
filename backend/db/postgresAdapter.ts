@@ -3997,6 +3997,7 @@ export class PostgresAppDatabase implements AppDatabase {
         u.created_at::text AS created_at,
         u.last_login_at::text AS last_login_at,
         m.role,
+        m.event_scope,
         o.id AS organization_id,
         o.name AS organization_name
        FROM users u
@@ -4107,6 +4108,20 @@ export class PostgresAppDatabase implements AppDatabase {
     return user;
   }
 
+  async updateUserPermissions(userId: string, role: UserRole, scope: "all" | "selected", eventIds: string[]) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query("UPDATE memberships SET role=$1,event_scope=$2 WHERE user_id=$3 AND organization_id=$4 AND role<>'owner'", [role, scope, userId, DEFAULT_ORGANIZATION_ID]);
+      if (!result.rowCount) { await client.query("ROLLBACK"); return false; }
+      await client.query("DELETE FROM user_event_assignments WHERE user_id=$1", [userId]);
+      for (const id of new Set(eventIds)) await this.assignUserToEvent(userId, id, client);
+      await client.query("COMMIT");
+      return true;
+    } catch (error) { await client.query("ROLLBACK"); throw error; }
+    finally { client.release(); }
+  }
+
   async updateUserRole(userId: string, role: UserRole) {
     const result = await this.pool.query(
       "UPDATE memberships SET role = $1 WHERE organization_id = $2 AND user_id = $3",
@@ -4172,6 +4187,7 @@ export class PostgresAppDatabase implements AppDatabase {
         u.created_at::text AS created_at,
         u.last_login_at::text AS last_login_at,
         m.role,
+        m.event_scope,
         o.id AS organization_id,
         o.name AS organization_name
        FROM sessions s
@@ -4817,6 +4833,7 @@ export class PostgresAppDatabase implements AppDatabase {
         u.created_at::text AS created_at,
         u.last_login_at::text AS last_login_at,
         m.role,
+        m.event_scope,
         o.id AS organization_id,
         o.name AS organization_name
        FROM users u
@@ -4840,6 +4857,7 @@ export class PostgresAppDatabase implements AppDatabase {
       staff_email_purpose: row.staff_email_purpose == null ? null : String(row.staff_email_purpose),
       display_name: String(row.display_name),
       role: String(row.role) as UserRole,
+      event_scope: row.event_scope === "selected" ? "selected" as const : "all" as const,
       organization_id: String(row.organization_id),
       organization_name: String(row.organization_name),
       is_active: Boolean(row.is_active),

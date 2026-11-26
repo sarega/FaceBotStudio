@@ -339,8 +339,7 @@ export function EventWorkspacePanel({
               {newEventType === "campaign" ? "Activate campaign now" : "Activate event and open registration now"}
             </label>
             <p className="rounded-xl bg-blue-50 p-3 text-xs text-blue-900">
-              This event is hidden from the public catalog. Share its direct URL only with attendees.
-              The URL itself is not password-protected.
+              New live events with a public page appear in All Events. Change visibility in Event Settings before activating an internal event.
             </p>
             {newEventType !== "campaign" && newEventMode === "paid" && <>
               <fieldset className="sm:col-span-2 rounded-xl border-2 border-blue-200 p-3">

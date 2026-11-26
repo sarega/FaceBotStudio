@@ -1,5 +1,15 @@
 export const RELEASE_NOTES = [
   {
+    version: "0.11.20",
+    date: "2026-11-26",
+    title: "Publishing visibility and staff permissions",
+    features: [
+      "Choose Public, Unlisted or Private visibility in one control",
+      "Show information-only events in All Events",
+      "Owners can save staff roles and selected Event access together",
+    ],
+  },
+  {
     version: "0.11.19",
     date: "2026-11-26",
     title: "Ongoing campaigns and recurring activities",

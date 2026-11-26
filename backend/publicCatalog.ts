@@ -6,7 +6,8 @@ export type PublicCatalogAvailabilityState =
   | "invalid"
   | "tickets_available"
   | "tickets_unavailable"
-  | "external";
+  | "external"
+  | "information";
 
 export function normalizePublicExternalTicketUrl(value: unknown) {
   const raw = String(value || "").trim();
@@ -46,6 +47,7 @@ export function resolvePublicCatalogAvailability(input: {
   if (input.directTicketingEnabled) {
     return { state: "tickets_unavailable", label: "Tickets unavailable" };
   }
+  if (!input.registrationEnabled) return { state: "information", label: "Event information" };
   if (input.registrationAvailability === "not_started") {
     return { state: "not_started", label: "Opens soon" };
   }

@@ -728,6 +728,7 @@ export interface AuthUserRow {
   pending_staff_email?: string | null;
   staff_email_purpose?: string | null;
   role: UserRole;
+  event_scope?: "all" | "selected";
   assigned_event_ids?: string[];
   organization_id: string;
   organization_name: string;
@@ -1325,6 +1326,7 @@ export interface AppDatabase {
   consumeStaffEmail(tokenHash: string, now: string, userId: string | null, passwordHash: string | null, customer?: { id: string; passwordHash: string }, separatePassword?: boolean): Promise<string | null>;
   createUser(input: CreateUserInput): Promise<AuthUserRow>;
   updateUserRole(userId: string, role: UserRole): Promise<boolean>;
+  updateUserPermissions(userId: string, role: UserRole, scope: "all" | "selected", eventIds: string[]): Promise<boolean>;
   setUserActive(userId: string, isActive: boolean): Promise<boolean>;
   removeUser(userId: string): Promise<boolean>;
   createSession(userId: string, tokenHash: string, expiresAt: Date, customerProof?: { id: string; passwordHash: string }): Promise<void>;

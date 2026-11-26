@@ -1306,32 +1306,15 @@ export function EventWorkspaceScreen({
                         >
                           Enable web registration + AI chat now (Free Event)
                         </button>
-                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            checked={publicPageEnabled}
-                            onChange={(event) =>
-                              setSettings({
-                                ...settings,
-                                event_public_page_enabled: event.target.checked ? "1" : "0",
-                              })}
-                          />
-                          Public page enabled
-                        </label>
-                        <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            checked={settings.event_catalog_visible === "1"}
-                            disabled={!publicPageEnabled}
-                            onChange={(event) =>
-                              setSettings({
-                                ...settings,
-                                event_catalog_visible: event.target.checked ? "1" : "0",
-                              })}
-                          />
-                          Show in event catalog
+                        <label className="block w-full rounded-xl border border-blue-200 bg-white p-3 text-sm font-semibold">
+                          Event visibility
+                          <select className="mt-2 block w-full rounded-lg border border-slate-200 p-2" value={!publicPageEnabled ? "private" : settings.event_catalog_visible === "1" ? "public" : "unlisted"}
+                            onChange={(event) => setSettings({ ...settings, event_public_page_enabled: event.target.value === "private" ? "0" : "1", event_catalog_visible: event.target.value === "public" ? "1" : "0" })}>
+                            <option value="public">Public — show in All Events when Live</option>
+                            <option value="unlisted">Unlisted — direct link only</option>
+                            <option value="private">Private — public page disabled</option>
+                          </select>
+                          <span className="mt-1 block text-xs font-normal text-slate-500">Registration and ticketing are optional. Save Publishing settings to apply visibility.</span>
                         </label>
                         {settings.event_public_ticketing_mode === "inline" && <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
                           <input

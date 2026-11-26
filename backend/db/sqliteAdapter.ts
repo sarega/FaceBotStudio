@@ -1262,6 +1262,7 @@ export class SqliteAppDatabase implements AppDatabase {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_direct_tickets_active_seat ON direct_tickets (seat_id) WHERE status IN ('held', 'issued', 'checked_in');
     `);
 
+    this.ensureColumn("memberships", "event_scope", "TEXT NOT NULL DEFAULT 'all'");
     this.ensureColumn("users", "staff_email", "TEXT");
     this.ensureColumn("users", "pending_staff_email", "TEXT");
     this.ensureColumn("users", "staff_email_token_hash", "TEXT");
@@ -4580,6 +4581,7 @@ export class SqliteAppDatabase implements AppDatabase {
         u.created_at,
         u.last_login_at,
         m.role,
+        m.event_scope,
         o.id AS organization_id,
         o.name AS organization_name
        FROM users u
@@ -4679,6 +4681,17 @@ export class SqliteAppDatabase implements AppDatabase {
     return user;
   }
 
+  async updateUserPermissions(userId: string, role: UserRole, scope: "all" | "selected", eventIds: string[]) {
+    return this.db.transaction(() => {
+      const result = this.db.prepare("UPDATE memberships SET role=?,event_scope=? WHERE user_id=? AND organization_id=? AND role<>'owner'").run(role, scope, userId, DEFAULT_ORGANIZATION_ID);
+      if (!result.changes) return false;
+      this.db.prepare("DELETE FROM user_event_assignments WHERE user_id=?").run(userId);
+      const insert = this.db.prepare("INSERT INTO user_event_assignments (id,user_id,event_id) VALUES (?,?,?)");
+      for (const id of new Set(eventIds)) insert.run(generateEntityId("uea"), userId, id);
+      return true;
+    })();
+  }
+
   async updateUserRole(userId: string, role: UserRole) {
     const result = this.db.prepare(
       "UPDATE memberships SET role = ? WHERE organization_id = ? AND user_id = ?",
@@ -4738,6 +4751,7 @@ export class SqliteAppDatabase implements AppDatabase {
         u.created_at,
         u.last_login_at,
         m.role,
+        m.event_scope,
         o.id AS organization_id,
         o.name AS organization_name
        FROM sessions s
@@ -5419,6 +5433,7 @@ export class SqliteAppDatabase implements AppDatabase {
         u.created_at,
         u.last_login_at,
         m.role,
+        m.event_scope,
         o.id AS organization_id,
         o.name AS organization_name
        FROM users u
@@ -5442,6 +5457,7 @@ export class SqliteAppDatabase implements AppDatabase {
       staff_email_purpose: row.staff_email_purpose == null ? null : String(row.staff_email_purpose),
       display_name: String(row.display_name),
       role: String(row.role) as UserRole,
+      event_scope: row.event_scope === "selected" ? "selected" as const : "all" as const,
       organization_id: String(row.organization_id),
       organization_name: String(row.organization_name),
       is_active: Boolean(row.is_active),

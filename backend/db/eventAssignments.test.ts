@@ -31,3 +31,18 @@ test("event-scoped accounts keep only explicit Event assignments", async () => {
 
   await db.close();
 });
+
+test("admin scope and role changes persist together and do not affect owner", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  await db.initialize();
+  const event = await db.createEvent({ name: "Scoped admin event", organizer_id: "org_default" });
+  const admin = await db.createUser({ username: "scope-admin", display_name: "Scope Admin", password_hash: "test", role: "admin" });
+  assert.equal(admin.event_scope, "all");
+  assert.equal(await db.updateUserPermissions(admin.id, "admin", "selected", [event.id]), true);
+  assert.equal((await db.getUserById(admin.id))?.event_scope, "selected");
+  assert.deepEqual(await db.listUserEventIds(admin.id), [event.id]);
+  assert.equal(await db.updateUserPermissions(admin.id, "operator", "selected", []), true);
+  assert.equal((await db.getUserById(admin.id))?.role, "operator");
+  assert.deepEqual(await db.listUserEventIds(admin.id), []);
+  await db.close();
+});
