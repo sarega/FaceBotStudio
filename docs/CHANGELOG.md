@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.24 - 2026-11-26
+
+- Publish and unpublish approved translations immediately, without a second Save Event Setup action.
+- Request the selected public locale on initial load and on language changes; cancel stale requests and bypass cached event content.
+- Show the current language using a flag and language name in the public header.
+
 ## 0.11.23 - 2026-11-26
 
 - Move language-specific event title, summary and rich HTML description editing into Event Setup.

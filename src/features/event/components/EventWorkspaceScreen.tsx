@@ -139,6 +139,7 @@ type EventWorkspaceScreenProps = {
   getRegistrationAvailabilityLabel: (status: EventRecord["registration_availability"]) => string;
   eventSetupDirty: boolean;
   saveEventDetails: () => unknown;
+  saveEventLocalization: (patch: Pick<Settings,"event_content_language"|"event_translations_json">)=>Promise<void>;
   saving: boolean;
   handleUpdateEvent: (changes: {
     status?: MutableEventStatus;
@@ -457,6 +458,7 @@ export function EventWorkspaceScreen({
   getRegistrationAvailabilityLabel,
   eventSetupDirty,
   saveEventDetails,
+  saveEventLocalization,
   saving,
   handleUpdateEvent,
   handleEnableWebRegistration,
@@ -798,7 +800,7 @@ export function EventWorkspaceScreen({
                 )}
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <EventLocalizationPanel key={selectedEventId} settings={settings} onChange={patch=>setSettings(current=>({...current,...patch}))} apiFetch={apiFetch} eventId={selectedEventId} onUploadImage={file=>handlePublicEventMediaUpload(file,"description_image")}/>
+                  <EventLocalizationPanel key={selectedEventId} settings={settings} onChange={patch=>setSettings(current=>({...current,...patch}))} apiFetch={apiFetch} eventId={selectedEventId} onSave={saveEventLocalization} onUploadImage={file=>handlePublicEventMediaUpload(file,"description_image")}/>
 
                   <div className="md:col-span-2">
                     <label className="mb-1 block text-xs font-bold uppercase text-slate-500">Event type</label>

@@ -17376,7 +17376,7 @@ async function startServer() {
         const settings = await appDb.getSettingsMap(event.id);
         return buildPublicEventCatalogEntry(event, settings, req.query.locale);
       }))).filter(Boolean);
-      res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=300");
+      res.setHeader("Cache-Control", "no-store");
       return res.json({ events: entries });
     } catch (error) {
       console.error("Failed to fetch public event catalog:", error);
@@ -17396,7 +17396,7 @@ async function startServer() {
         return res.status(404).json({ error: "Public event page unavailable" });
       }
 
-      return res.json(payload);
+      return res.set("Cache-Control","no-store").json(payload);
     } catch (error) {
       console.error("Failed to fetch public event page:", error);
       return res.status(500).json({ error: "Failed to load public event page" });

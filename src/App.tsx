@@ -5385,7 +5385,7 @@ export default function App() {
         attendee_name: "",
       });
       try {
-        const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}`);
+        const res = await apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}?locale=${encodeURIComponent(attendeeLocale)}`, {cache:"no-store"});
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error((data as { error?: string }).error || "Failed to load public event page");
@@ -5426,12 +5426,12 @@ export default function App() {
   }, [publicEventSlug]);
 
   useEffect(() => {
-    if (!publicEventSlug || publicEventLoading || !publicEventPage) return;
-    let cancelled=false;
-    void apiFetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}?locale=${encodeURIComponent(attendeeLocale)}`)
-      .then(async res=>{if(res.ok&&!cancelled){const data=await res.json();if(!cancelled)setPublicEventPage(data as PublicEventPageResponse);}})
-      .catch(()=>{});
-    return ()=>{cancelled=true;};
+    if (!publicEventSlug || publicEventLoading) return;
+    const controller=new AbortController();
+    void fetch(`/api/public/events/${encodeURIComponent(publicEventSlug)}?locale=${encodeURIComponent(attendeeLocale)}`, {cache:"no-store",signal:controller.signal})
+      .then(async res=>{if(!res.ok)throw Error("Could not load event language");const data=await res.json();if(!controller.signal.aborted)setPublicEventPage(data as PublicEventPageResponse);})
+      .catch(error=>{if(!controller.signal.aborted)console.error("Event localization request failed",error);});
+    return ()=>controller.abort();
   }, [publicEventSlug, attendeeLocale, publicEventLoading]);
 
   useEffect(() => {
@@ -10942,6 +10942,14 @@ export default function App() {
               getRegistrationAvailabilityLabel={getRegistrationAvailabilityLabel}
               eventSetupDirty={eventSetupDirty}
               saveEventDetails={saveEventDetails}
+              saveEventLocalization={async (patch) => {
+                const eventId=selectedEventId;
+                const response=await apiFetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...patch,event_id:eventId})});
+                if(!response.ok){const data=await response.json().catch(()=>({}));throw Error(data.error||"Could not save translation");}
+                if(selectedEventIdRef.current!==eventId)return;
+                setSettings(current=>({...current,...patch}));
+                setSavedSettings(current=>({...current,...patch}));
+              }}
               saving={saving}
               handleUpdateEvent={handleUpdateEvent}
               handleEnableWebRegistration={handleEnableWebRegistration}
