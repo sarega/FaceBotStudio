@@ -1495,7 +1495,7 @@ export class SqliteAppDatabase implements AppDatabase {
     await this.deleteExpiredCustomerAccountTokens();
 
     this.db.transaction(() => {
-      for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql", "050_paid_external_payment.sql", "051_paid_payment_display.sql"]) {
+      for (const name of ["040_paid_registration_core.sql", "042_paid_payment_evidence.sql", "043_paid_admission.sql", "044_paid_receiver_snapshot.sql", "045_paid_messenger_identity.sql", "046_paid_messenger_drafts.sql", "047_paid_messenger_booking_origin.sql", "048_paid_seminar_forms.sql", "049_paid_refunds.sql", "069_paid_surplus_settlements.sql", "050_paid_external_payment.sql", "051_paid_payment_display.sql"]) {
         if (name === "050_paid_external_payment.sql" && (this.db.pragma("table_info(paid_event_settings)") as { name: string }[]).some((column) => column.name === "payment_mode")) continue;
         const migration = readFileSync(new URL(`./migrations/${name}`, import.meta.url), "utf8");
         this.db.exec(name === "042_paid_payment_evidence.sql"
@@ -2517,6 +2517,10 @@ export class SqliteAppDatabase implements AppDatabase {
  e.name AS event_name,e.slug AS event_slug,c.first_name AS customer_first_name,
  c.last_name AS customer_last_name,c.email AS customer_email,c.phone AS customer_phone,
  b.state,b.payment_state,b.total_minor,b.created_ms,b.due_ms,
+ COALESCE((SELECT SUM(p.observed_minor) FROM paid_payment_attempts p WHERE p.booking_id=b.id AND p.status='verified'),0) AS verified_cash_minor,
+ COALESCE((SELECT SUM(s.amount_minor) FROM paid_surplus_settlements s WHERE s.booking_id=b.id AND s.kind='external'),0) AS external_allocated_minor,
+ COALESCE((SELECT SUM(s.amount_minor) FROM paid_surplus_settlements s WHERE s.booking_id=b.id AND s.kind='refund'),0) AS partial_refunded_minor,
+ COALESCE((SELECT SUM(r.amount_minor) FROM paid_refunds r WHERE r.booking_id=b.id),0) AS refunded_minor,
  (SELECT COUNT(*) FROM paid_attendees a WHERE a.booking_id=b.id AND a.cancelled_ms IS NULL) AS attendee_count,
  (SELECT MAX(p.claimed_transfer_ms) FROM paid_payment_attempts p
   WHERE p.booking_id=b.id AND p.status IN ('proof_submitted','verified','exception')) AS claimed_transfer_ms,

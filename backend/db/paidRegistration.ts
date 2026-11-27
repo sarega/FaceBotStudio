@@ -52,9 +52,10 @@ const verifiedCash = `COALESCE((SELECT SUM(paid.observed_minor) FROM paid_paymen
   WHERE paid.booking_id=b.id AND paid.status='verified'),0)`;
 const pendingEvidence = `(SELECT COUNT(*) FROM paid_payment_attempts pending JOIN paid_proofs evidence ON evidence.attempt_id=pending.id
   WHERE pending.booking_id=b.id AND pending.status IN ('proof_submitted','exception') AND evidence.deleted_ms IS NULL)`;
+const settledSurplus = `COALESCE((SELECT SUM(amount_minor) FROM paid_surplus_settlements ss WHERE ss.booking_id=b.id),0)`;
 const confirmedCashPayment = `b.state='confirmed' AND b.payment_state='verified' AND ${verifiedCash}>0`;
 const confirmedBalance = `CASE WHEN b.state='confirmed' AND b.payment_state='verified'
-  AND b.total_minor>${verifiedCash} THEN b.total_minor-${verifiedCash} ELSE 0 END`;
+  AND b.total_minor>${verifiedCash}-${settledSurplus} THEN b.total_minor-${verifiedCash}+${settledSurplus} ELSE 0 END`;
 
 // An amount warning is evidence for staff review, not proof of an incorrect bank transfer.
 const paymentAmountMismatch = `(
@@ -1443,13 +1444,13 @@ export function* confirmPaidMessengerDraft(input: PaidMessengerConfirmInput, org
 
 export interface PaidAdminAction {
   eventId: string; bookingId: string; organizationId: string; actorId: string;
-  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip" | "correct_slip_amount" | "edit_registration_answer" | "set_registration_field_lock";
-  reason: string; holdMinutes?: number; refundReference?: string; attemptId?: string; slipAmountMinor?: number; answerKey?: PaidSeminarKey; answerValue?: string; fieldLocked?: boolean; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
+  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip" | "correct_slip_amount" | "edit_registration_answer" | "set_registration_field_lock" | "settle_surplus" | "adjust_room";
+  reason: string; settlementKind?: "external" | "refund"; settlementMinor?: number; holdMinutes?: number; refundReference?: string; attemptId?: string; slipAmountMinor?: number; answerKey?: PaidSeminarKey; answerValue?: string; fieldLocked?: boolean; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
 }
 
 export function* readPaidAdminBooking(eventId: string, organizationId: string, reference: string): PaidCommand<PaidRow | undefined> {
   const [row] = yield query(
-    `SELECT b.id,b.reference,b.state,b.payment_state,b.total_minor,b.version,b.due_ms,${confirmedBalance} AS balance_due_minor,${pendingEvidence} AS pending_proofs,${paymentNoticeFields},
+    `SELECT b.id,b.reference,b.state,b.payment_state,b.total_minor,b.version,b.due_ms,${verifiedCash} AS verified_cash_minor,${settledSurplus} AS settled_surplus_minor,${confirmedBalance} AS balance_due_minor,${pendingEvidence} AS pending_proofs,${paymentNoticeFields},
     CASE WHEN ${confirmedCashPayment} THEN 1 ELSE 0 END AS cash_confirmed,
     CASE WHEN ${unpaidWithoutAttempts} THEN 1 ELSE 0 END AS unpaid_without_attempts,
     ${appliedCouponFields},
@@ -1463,6 +1464,7 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
   );
   if (!row) return undefined;
   const refunds = yield query("SELECT amount_minor,reference,recorded_ms FROM paid_refunds WHERE booking_id=?", String(row.id));
+  const surplusSettlements=yield query("SELECT kind,amount_minor,reference,reason,recorded_ms FROM paid_surplus_settlements WHERE booking_id=? ORDER BY recorded_ms,id",String(row.id));
   const attendeePrices = yield query(
     "SELECT id,first_name,last_name,category_label,unit_minor,contact_json FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL ORDER BY ordinal", String(row.id),
   );
@@ -1477,7 +1479,7 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
   const [contactRow]=yield query("SELECT contact_json FROM paid_bookings WHERE id=?",String(row.id));
   const answers=(raw:unknown)=>Object.fromEntries((JSON.parse(String(raw||"{}")).answers??[]).map((a:{key:string;value:string})=>[a.key,a.value]));
   const locks=(raw:unknown)=>{const value=JSON.parse(String(raw||"{}")).admin_locked_fields;return Array.isArray(value)?value.filter((k:unknown)=>typeof k==="string"):[];};
-  return { ...row, proofs, can_apply_coupon: canApplyCoupon, registration_fields:fields, registration_locked_fields:locks(contactRow?.contact_json),
+  return { ...row, surplus_settlements:surplusSettlements, surplus_minor:Math.max(0,Number(row.verified_cash_minor)-Number(row.total_minor)-Number(row.settled_surplus_minor)), proofs, can_apply_coupon: canApplyCoupon, registration_fields:fields, registration_locked_fields:locks(contactRow?.contact_json),
     registration_answers:answers(contactRow?.contact_json),
     coupon_discount_minor: row.coupon_discount_minor == null ? null : Number(row.coupon_discount_minor), pending_proofs: Number(row.pending_proofs), cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor),
     attendee_prices: attendeePrices.map(({contact_json,...attendee}) => ({ ...attendee, unit_minor: Number(attendee.unit_minor), registration_answers:answers(contact_json), registration_locked_fields:locks(contact_json) })), credit_used_minor:Number(row.credit_used_minor),credit_issued_minor:Number(row.credit_issued_minor), total_minor:Number(row.total_minor),version:Number(row.version),due_ms:Number(row.due_ms),
@@ -1488,7 +1490,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone, attemptId, slipAmountMinor, answerKey, answerValue, fieldLocked } = input;
   const couponCode = normalizeCouponCode(input.couponCode ?? "");
   if (!key || key.length>128 || !reason?.trim() || reason.length>1000 || !Number.isSafeInteger(version) || version<1 ||
-      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock"].includes(action) ||
+      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock","settle_surplus","adjust_room"].includes(action) ||
       (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
       (["correct_price", "flag_price", "clear_price_flag"].includes(action) && !attendeeId) ||
       (["revoke_slip","correct_slip_amount"].includes(action) && (!attemptId || attemptId.length>128)) ||
@@ -1497,6 +1499,8 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
       (action==="edit_registration_answer" && (typeof answerKey!=="string" || typeof answerValue!=="string" || answerValue.length>500)) ||
       (action==="set_attendee_phone" && (!attendeeId || !isOptionalAttendeePhone(attendeePhone))) ||
       (action==="correct_price" && (!Number.isSafeInteger(unitMinor) || unitMinor! < 1 || unitMinor! > 2_147_483_647)) ||
+      (action==="settle_surplus" && (!["external","refund"].includes(input.settlementKind??"") || !Number.isSafeInteger(input.settlementMinor) || input.settlementMinor!<=0 || !refundReference?.trim() || refundReference.length>255)) ||
+      (action==="adjust_room" && (!attendeeId || answerKey!=="room_preference" || typeof answerValue!=="string" || !Number.isSafeInteger(unitMinor) || unitMinor!<0 || unitMinor!>2147483647)) ||
       (action==="refund" && (!refundReference?.trim() || refundReference.length>255))) throw new PaidBookingError("invalid_admin_action");
   if (action === "apply_coupon" && !isValidCouponCode(couponCode)) throw new PaidBookingError("coupon_invalid");
   const principal="staff:"+actorId;
@@ -1506,6 +1510,8 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
     ...(action === "edit_registration_answer" ? [attendeeId,answerKey,answerValue] : []),
     ...(action === "set_registration_field_lock" ? [attendeeId,answerKey,fieldLocked] : []),
     ...(action === "correct_price" ? [attendeeId,unitMinor] : []),
+    ...(action === "adjust_room" ? [attendeeId,answerValue,unitMinor] : []),
+    ...(action === "settle_surplus" ? [input.settlementKind,input.settlementMinor] : []),
     ...(action === "set_attendee_phone" ? [attendeeId,attendeePhone?.trim()] : []),
     ...(action === "apply_coupon" ? [couponCode] : []),
     ...(["flag_price", "clear_price_flag"].includes(action) ? [attendeeId] : [])])).digest("hex");
@@ -1516,7 +1522,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
     return JSON.parse(String(replay.result_json));
   }
   const [booking]=yield query(`SELECT b.state,b.payment_state,b.due_ms,b.total_minor,b.version,b.customer_id,b.contact_json,
-    ${verifiedCash} AS paid_minor,${confirmedBalance} AS balance_due_minor,${pendingEvidence} AS pending_proofs,
+    ${verifiedCash} AS paid_minor,${settledSurplus} AS settled_minor,${confirmedBalance} AS balance_due_minor,${pendingEvidence} AS pending_proofs,
     CASE WHEN ${unpaidWithoutAttempts} THEN 1 ELSE 0 END AS unpaid_without_attempts,
     (SELECT code FROM paid_coupon_redemptions WHERE booking_id=b.id) AS coupon_code
     FROM paid_bookings b
@@ -1530,7 +1536,42 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   let correction: { total_minor: number; balance_due_minor: number } | undefined;
   let couponConfirmed = false;
   let auditReason = reason.trim();
-  if (action === "edit_registration_answer" || action === "set_registration_field_lock") {
+  const settled=Number(booking.settled_minor??0);
+  if((settled>0&&["revoke_slip","correct_slip_amount","refund","credit"].includes(action))||(Number(booking.paid_minor)>Number(booking.total_minor)&&["refund","credit"].includes(action)))throw new PaidBookingError("surplus_already_settled");
+  if(action==="settle_surplus"){
+    if(previous!=="confirmed"||payment!=="verified"||Number(booking.pending_proofs)>0)throw new PaidBookingError("state_conflict");
+    const available=Math.max(0,Number(booking.paid_minor)-Number(booking.total_minor)-settled);
+    if(input.settlementMinor!>available)throw new PaidBookingError("amount_exceeds_surplus");
+    yield query("INSERT INTO paid_surplus_settlements (id,event_id,booking_id,kind,amount_minor,reference,recorded_by,reason,recorded_ms) VALUES (?,?,?,?,?,?,?,?,?)",randomUUID(),eventId,bookingId,input.settlementKind!,input.settlementMinor!,refundReference!.trim().normalize("NFKC").toUpperCase(),actorId,reason.trim(),now);
+  }else if(action==="adjust_room"){
+    if(previous!=="confirmed"||payment!=="verified"||Number(booking.pending_proofs)>0)throw new PaidBookingError("state_conflict");
+    const fields=yield* readPaidSeminarForm(eventId);
+    const field=fields.find(f=>f.key==="room_preference"&&f.scope==="attendee");
+    const [attendee]=yield query("SELECT unit_minor,contact_json FROM paid_attendees WHERE id=? AND booking_id=? AND event_id=? AND cancelled_ms IS NULL",attendeeId!,bookingId,eventId);
+    if(!field||!attendee)throw new PaidBookingError("invalid_seminar_answers");
+    const contact=JSON.parse(String(attendee.contact_json||"{}"));
+    if(contact.admin_locked_fields?.includes("room_preference"))throw new PaidBookingError("registration_field_locked");
+    const answers=normalizePaidSeminarAnswers([field],"attendee",{room_preference:answerValue});
+    if(!answers)throw new PaidBookingError("invalid_seminar_answers");
+    const oldUnit=Number(attendee.unit_minor);
+    const delta=unitMinor!-oldUnit;
+    const total=Number(booking.total_minor)+delta;
+    if(!Number.isSafeInteger(total)||total<0||total>2147483647)throw new PaidBookingError("invalid_total");
+    const oldRoom=contact.answers?.find((a:{key:string})=>a.key==="room_preference")?.value??"";
+    contact.answers=[...(contact.answers??[]).filter((a:{key:string})=>a.key!=="room_preference"),...answers];
+    const surcharge=roomSurchargeMinor(fields,Object.fromEntries(contact.answers.map((a:{key:string;value:string})=>[a.key,a.value])));
+    contact.pricing={...contact.pricing,room_surcharge_minor:surcharge,base_minor:unitMinor!-surcharge+Number(contact.pricing?.accommodation_discount_minor??0)};
+    const buyer=JSON.parse(String(booking.contact_json||"{}"));
+    if(buyer.coupon){
+      buyer.coupon.subtotal_minor=Number(buyer.coupon.subtotal_minor)+delta;
+      yield query("UPDATE paid_coupon_redemptions SET subtotal_minor=? WHERE event_id=? AND booking_id=?",buyer.coupon.subtotal_minor,eventId,bookingId);
+    }
+    yield query("UPDATE paid_attendees SET unit_minor=?,contact_json=? WHERE id=? AND booking_id=?",unitMinor!,JSON.stringify(contact),attendeeId!,bookingId);
+    yield query("DELETE FROM paid_attendee_price_flags WHERE attendee_id=?",attendeeId!);
+    yield query("UPDATE paid_bookings SET total_minor=?,contact_json=? WHERE id=? AND event_id=?",total,JSON.stringify(buyer),bookingId,eventId);
+    correction={total_minor:total,balance_due_minor:Math.max(0,total-Number(booking.paid_minor)+settled)};
+    auditReason=reason.trim().slice(0,400)+" · "+attendeeId+" · "+oldRoom+" → "+answerValue+" · "+oldUnit+" → "+unitMinor;
+  }else if (action === "edit_registration_answer" || action === "set_registration_field_lock") {
     if(previous==="cancelled"||payment==="refunded")throw new PaidBookingError("state_conflict");
     const fields=yield* readPaidSeminarForm(eventId);
     const field=fields.find(f=>f.key===answerKey&&f.scope===(attendeeId?"attendee":"booking"));
@@ -1678,7 +1719,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
     }
     yield query("UPDATE paid_bookings SET total_minor=?,contact_json=? WHERE id=? AND event_id=?",
       total, JSON.stringify(buyerContact), bookingId, eventId);
-    correction = { total_minor: total, balance_due_minor: total - Number(booking.paid_minor) };
+    correction = { total_minor: total, balance_due_minor: Math.max(0,total - Number(booking.paid_minor)+settled) };
     auditReason = `${reason.trim().slice(0, 820)} · attendee ${attendeeId}: ${oldUnit} → ${unitMinor} THB minor units`;
   } else if (action==="extend" || action==="reinstate") {
     if (!(yield* paidEnrollmentOpen(eventId,now))) throw new PaidBookingError("registration_unavailable");
@@ -1771,6 +1812,9 @@ export function* listPaidAttendeeRoster(eventId:string,limit=10000,includeReport
        ${includeReportFields ? `
          ${appliedCouponFields},
          ${verifiedCash} AS verified_cash_minor,
+         ${settledSurplus} AS settled_surplus_minor,
+         COALESCE((SELECT SUM(amount_minor) FROM paid_surplus_settlements WHERE booking_id=b.id AND kind='external'),0) AS external_allocated_minor,
+         COALESCE((SELECT SUM(amount_minor) FROM paid_surplus_settlements WHERE booking_id=b.id AND kind='refund'),0) AS partial_refunded_minor,
          ${pendingEvidence} AS report_pending_proofs,
          COALESCE((SELECT amount_minor FROM paid_booking_credit_uses WHERE booking_id=b.id),0) AS credit_used_minor,
          COALESCE((SELECT amount_minor FROM paid_booking_credits WHERE booking_id=b.id),0) AS credit_issued_minor,

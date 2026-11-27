@@ -1688,6 +1688,10 @@ export class PostgresAppDatabase implements AppDatabase {
  e.name AS event_name,e.slug AS event_slug,c.first_name AS customer_first_name,
  c.last_name AS customer_last_name,c.email AS customer_email,c.phone AS customer_phone,
  b.state,b.payment_state,b.total_minor,b.created_ms,b.due_ms,
+ COALESCE((SELECT SUM(p.observed_minor) FROM paid_payment_attempts p WHERE p.booking_id=b.id AND p.status='verified'),0) AS verified_cash_minor,
+ COALESCE((SELECT SUM(s.amount_minor) FROM paid_surplus_settlements s WHERE s.booking_id=b.id AND s.kind='external'),0) AS external_allocated_minor,
+ COALESCE((SELECT SUM(s.amount_minor) FROM paid_surplus_settlements s WHERE s.booking_id=b.id AND s.kind='refund'),0) AS partial_refunded_minor,
+ COALESCE((SELECT SUM(r.amount_minor) FROM paid_refunds r WHERE r.booking_id=b.id),0) AS refunded_minor,
  (SELECT COUNT(*) FROM paid_attendees a WHERE a.booking_id=b.id AND a.cancelled_ms IS NULL) AS attendee_count,
  (SELECT MAX(p.claimed_transfer_ms) FROM paid_payment_attempts p
   WHERE p.booking_id=b.id AND p.status IN ('proof_submitted','verified','exception')) AS claimed_transfer_ms,

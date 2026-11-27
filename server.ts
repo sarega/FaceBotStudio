@@ -18559,7 +18559,7 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock","settle_surplus","adjust_room"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
@@ -18580,7 +18580,9 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip"|"correct_slip_amount"|"edit_registration_answer"|"set_registration_field_lock",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip"|"correct_slip_amount"|"edit_registration_answer"|"set_registration_field_lock"|"settle_surplus"|"adjust_room",reason:body.reason.trim(),
+          settlementKind:body.settlement_kind as "external"|"refund",
+          settlementMinor:typeof body.settlement_minor==="number"?body.settlement_minor:undefined,
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
           attemptId:typeof body.attempt_id === "string" ? body.attempt_id : undefined,
           answerKey:body.answer_key as import("./backend/paidSeminarFields").PaidSeminarKey,
@@ -21402,6 +21404,10 @@ async function startServer() {
           customer_id:safeCell(row.customer_id),
           attendees:Number(row.attendee_count),
           amount_thb:(Number(row.total_minor)/100).toFixed(2),
+          gross_received_thb:(Number(row.verified_cash_minor)/100).toFixed(2),
+          external_disbursements_thb:(Number(row.external_allocated_minor)/100).toFixed(2),
+          refunds_thb:((Number(row.refunded_minor)+Number(row.partial_refunded_minor))/100).toFixed(2),
+          unsettled_surplus_thb:(row.state==="confirmed"?Math.max(0,Number(row.verified_cash_minor)-Number(row.total_minor)-Number(row.external_allocated_minor)-Number(row.partial_refunded_minor))/100:0).toFixed(2),
           booking_status:safeCell(row.state),payment_status:safeCell(row.payment_state),
           booked_at:new Date(Number(row.created_ms)).toISOString(),
           payment_due_at:new Date(Number(row.due_ms)).toISOString(),
@@ -21409,7 +21415,7 @@ async function startServer() {
           slip_uploaded_at:row.slip_uploaded_ms==null?"":new Date(Number(row.slip_uploaded_ms)).toISOString(),
         }));
         const fields=["event","event_id","booking_reference","booking_id","customer_name",
-          "customer_email","customer_phone","customer_id","attendees","amount_thb",
+          "customer_email","customer_phone","customer_id","attendees","amount_thb","gross_received_thb","external_disbursements_thb","refunds_thb","unsettled_surplus_thb",
           "booking_status","payment_status","booked_at","payment_due_at",
           "transferred_at","slip_uploaded_at"];
         const csv=new Parser({fields}).parse(rows);

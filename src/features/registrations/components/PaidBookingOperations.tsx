@@ -6,6 +6,7 @@ type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respon
 type Booking = {
   id: string; reference: string; state: string; payment_state: string; version: number;
   total_minor: number; balance_due_minor: number;
+  verified_cash_minor?:number; surplus_minor?:number; settled_surplus_minor?:number; surplus_settlements?:{kind:string;amount_minor:number;reference:string;reason:string}[];
   cash_confirmed: boolean; pending_proofs: number; payment_notice?: string;
   can_apply_coupon: boolean;
   registration_locked_fields?:string[]; registration_fields?:PaidSeminarField[]; registration_answers?:Record<string,string>;
@@ -16,6 +17,8 @@ type Booking = {
 };
 type Copy = [string, string];
 const actionLabels: Record<string, Copy> = {
+  adjust_room:["เปลี่ยนประเภทห้องและปรับราคา","Adjust room and price"],
+  settle_surplus:["จัดการเงินส่วนเกิน","Settle surplus"],
   apply_coupon: ["ใช้คูปองแทนผู้จอง", "Apply coupon for customer"],
   payment_notice: ["ส่งข้อความแจ้งชำระส่วนต่าง", "Send a balance reminder"],
   correct_price: ["แก้ราคาผู้เข้าร่วมและเรียกเก็บส่วนต่าง", "Correct attendee price and collect the difference"],
@@ -26,6 +29,8 @@ const actionLabels: Record<string, Copy> = {
   credit: ["ยกเลิกและเก็บเป็นเครดิต", "Cancel and keep as credit"],
 };
 const errorLabels: Record<string, Copy> = {
+  amount_exceeds_surplus:["ยอดเกินเงินส่วนเกินที่เหลือ","Amount exceeds remaining surplus"],
+  surplus_already_settled:["มีรายการจัดการเงินส่วนเกินแล้ว ต้องตรวจสอบบัญชีก่อนแก้สลิปหรือยกเลิกใบจอง","Surplus has been settled; reconcile before reversing payment or cancelling."],
   coupon_invalid: ["รูปแบบรหัสคูปองไม่ถูกต้อง", "Enter a valid coupon code."],
   coupon_not_found: ["ไม่พบคูปองนี้สำหรับงานนี้", "This event has no coupon with that code."],
   coupon_disabled: ["คูปองนี้ถูกปิดใช้งาน", "This coupon is disabled."],
@@ -138,7 +143,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
       setError(errorLabels.invalid_price_correction);
       return;
     }
-    const label = action === "correct_price"
+    const label = action === "adjust_room" ? t("เปลี่ยนห้องและราคาของผู้เข้าร่วม โดยรักษาสลิปเดิม","Change room and attendee price while retaining original slip") : action === "settle_surplus" ? t("บันทึกการจ่ายเงินส่วนเกินที่ดำเนินการแล้ว","Record completed surplus settlement") : action === "correct_price"
       ? `${attendee?.first_name} ${attendee?.last_name}: ${money.format((attendee?.unit_minor ?? 0) / 100)} → ${money.format(unitMinor / 100)}`
       : action === "refund"
       ? t("บันทึกการคืนเงินเต็มจำนวนที่โอนแล้วและยกเลิกบัตรคิวอาร์ทั้งหมด", "Record the completed full refund and revoke all QR tickets")
@@ -146,6 +151,8 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
     if (action !== "payment_notice" && !window.confirm(`${label}${action === "apply_coupon" ? ` · ${couponCode}` : ""}?\n${t("ใบจอง", "Booking")} ${booking.reference}\n${t("เหตุผล", "Reason")} ${reason}`)) return;
     const body = {
       action, reason, version: booking.version,
+      ...(action==="adjust_room"?{attendee_id:attendee?.id,answer_key:"room_preference",answer_value:String(values.get("room_preference")||""),unit_minor:unitMinor}:{}),
+      ...(action==="settle_surplus"?{settlement_kind:String(values.get("settlement_kind")),settlement_minor:Math.round(Number(values.get("settlement_amount"))*100),refund_reference:String(values.get("settlement_reference")||"").trim()}:{}),
       ...(["extend", "reinstate"].includes(action) ? { hold_minutes: Number(values.get("hold_minutes")) } : {}),
       ...(action === "correct_price" ? { attendee_id: attendee?.id, unit_minor: unitMinor } : {}),
       ...(action === "apply_coupon" ? { coupon_code: couponCode } : {}),
@@ -190,10 +197,10 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
   }
   const actions = booking?.state === "expired" ? ["reinstate"] :
     booking?.state === "confirmed" && booking.payment_state === "verified"
-      ? booking.total_minor > (booking.balance_due_minor ?? 0)
-        ? [...(booking.balance_due_minor === 0 && booking.pending_proofs ? [] : ["correct_price"]),
+      ? booking.cash_confirmed || booking.total_minor > (booking.balance_due_minor ?? 0)
+        ? [...(booking.pending_proofs ? [] : ["correct_price",...(booking.registration_fields?.some(f=>f.key==="room_preference"&&f.scope==="attendee")?["adjust_room"]:[]),...(Number(booking.surplus_minor)>0?["settle_surplus"]:[])]),
           ...(booking.balance_due_minor > 0 && !booking.pending_proofs ? ["payment_notice"] : []),
-          ...(booking.checked_in || booking.balance_due_minor > 0 || booking.pending_proofs ? [] : ["refund", "credit"])]
+          ...(booking.checked_in || booking.balance_due_minor > 0 || booking.pending_proofs || Number(booking.settled_surplus_minor)>0 || Number(booking.surplus_minor)>0 ? [] : ["refund", "credit"])]
         : booking.credit_used_minor > 0 && !booking.checked_in ? ["credit"] : [] :
     booking?.state === "awaiting_payment" && booking.due_ms > Date.now() ? [...(booking.can_apply_coupon ? ["apply_coupon"] : []), "extend", "cancel"] :
     booking?.state === "verification_pending" || booking?.state === "payment_exception" ? ["cancel"] : [];
@@ -228,6 +235,12 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
             {booking.registration_fields?.filter(f=>f.scope==="attendee").map(field=><AnswerEditor key={field.key+"-"+booking.version} field={field} initial={person.registration_answers?.[field.key]??""} language={language} busy={busy} locked={person.registration_locked_fields?.includes(field.key)??false} onLock={locked=>setFieldLock(field,locked,person.id)} onSave={value=>saveAnswer(field,value,person.id)}/>)}
           </div>)}
         </section>}
+        {!!booking.cash_confirmed&&<div className="rounded-lg border border-slate-200 p-2 text-sm grid gap-1">
+          <div>{t("ยอดรับจริง","Verified cash received")}: <strong>{money.format(Number(booking.verified_cash_minor||0)/100)}</strong></div>
+          <div>{t("ยอดตามใบจองปัจจุบัน","Current booking value")}: <strong>{money.format(booking.total_minor/100)}</strong></div>
+          <div>{t("ส่วนเกินรอจัดการ","Unsettled surplus")}: <strong>{money.format(Number(booking.surplus_minor||0)/100)}</strong></div>
+          {booking.surplus_settlements?.map((item,i)=><div key={i} className="text-xs">{item.kind==="external"?t("จ่ายภายนอก","External disbursement"):t("คืนเงินบางส่วน","Partial refund")}: {money.format(item.amount_minor/100)} · {item.reference} · {item.reason}</div>)}
+        </div>}
         <h3 className="font-semibold">{t("จัดการการเงินและใบจอง","Payment and booking operations")}</h3>
         {actions.length === 0 && <p className="text-slate-600">{t("สถานะนี้ไม่มีรายการให้แก้ไข", "No edits available for this status.")}</p>}
         {actions.length > 0 && <form key={selectedAction} onSubmit={manage} className="grid max-w-xl gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-2">
@@ -239,6 +252,18 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
           {selectedAction === "apply_coupon" && <label>{t("รหัสคูปอง", "Coupon code")}
             <input name="coupon_code" required maxLength={32} autoCapitalize="characters" spellCheck={false} className={input} />
           </label>}
+          {selectedAction==="adjust_room"&&<>
+            <label>{t("ผู้เข้าร่วม","Attendee")}<select required className={input} value={attendee?.id||""} onChange={e=>setAttendeeId(e.target.value)}>{booking.attendee_prices.map(item=><option key={item.id} value={item.id}>{item.first_name} {item.last_name} · {money.format(item.unit_minor/100)}</option>)}</select></label>
+            <label>{t("ประเภทห้องใหม่","New room preference")}<select key={attendee?.id} required name="room_preference" className={input} defaultValue={attendee?.registration_answers?.room_preference||""}><option value="">{t("เลือกห้อง","Choose room")}</option>{booking.registration_fields?.find(f=>f.key==="room_preference"&&f.scope==="attendee")?.options?.map(option=><option key={option}>{option}</option>)}</select></label>
+            <label>{t("ราคาใหม่ต่อคน (บาท)","New attendee price (THB)")}<input key={attendee?.id} type="number" name="unit_price" min="0" step="0.01" required className={input} defaultValue={Number(attendee?.unit_minor||0)/100}/></label>
+            <p className="text-xs sm:col-span-2">{t("ราคานี้ปรับยอดใบจอง ส่วนเกินจะรอดำเนินการ สลิปและ QR เดิมไม่เปลี่ยน","This adjusts booking value. Surplus remains pending; original slip and QR are retained.")}</p>
+          </>}
+          {selectedAction==="settle_surplus"&&<>
+            <label>{t("ประเภทการจ่าย","Settlement type")}<select name="settlement_kind" className={input}><option value="external">{t("จ่ายค่าใช้จ่ายภายนอกแล้ว","External disbursement completed")}</option><option value="refund">{t("คืนเงินบางส่วนแล้ว","Partial refund completed")}</option></select></label>
+            <label>{t("จำนวนเงิน (บาท)","Amount (THB)")}<input name="settlement_amount" type="number" required min="0.01" max={Number(booking.surplus_minor||0)/100} step="0.01" defaultValue={Number(booking.surplus_minor||0)/100} className={input}/></label>
+            <label>{t("เลขอ้างอิงการจ่าย","Settlement reference")}<input name="settlement_reference" required maxLength={255} className={input}/></label>
+            <p className="text-xs sm:col-span-2">{t("บันทึกหลังจ่ายเงินจริงเท่านั้น ไม่ใช่คำสั่งโอนเงิน","Record only after payment is completed. This does not transfer money.")}</p>
+          </>}
           {selectedAction === "correct_price" && <>
             <label>{t("ผู้เข้าร่วมที่ต้องแก้ราคา", "Attendee to correct")}
               <select required className={input} value={attendee?.id ?? ""} onChange={event => setAttendeeId(event.target.value)}>

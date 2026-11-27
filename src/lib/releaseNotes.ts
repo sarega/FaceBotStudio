@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.35",date:"2026-11-27",title:"Booking adjustment and surplus settlement",features:["Change confirmed room and price","Retain original slip and QR","Record partial refunds and external disbursements","Separate gross receipts and surplus in reports"]},
   {version:"0.11.34",date:"2026-11-27",title:"Customer account administration",features:["Account actions and password reset","Suspend, reactivate and revoke sessions","Server-side search and pagination","Organization scope and staff identity protection"]},
   {version:"0.11.33",date:"2026-11-27",title:"Compact room assignment workspace",features:["Expanded viewport rooming workspace","Independent guest and room scrolling","Single Add room menu and grouped Actions","Persistent draft while exiting focus mode"]},
   {version:"0.11.32",date:"2026-11-27",title:"Workflow-first navigation and event bot assignments",features:["Daily operations and customers first","Registrations as default admin workspace","Bot Simulator under Agent","Assign reusable bots and channels directly in Event Setup"]},

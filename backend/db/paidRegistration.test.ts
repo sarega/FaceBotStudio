@@ -873,3 +873,40 @@ test("incorrect verified slip can be revoked and reused on its rightful booking"
   assert.ok(newQr && newQr!==oldQr);
  }finally{db.close();}
 });
+
+test("confirmed room downgrade preserves evidence and settles surplus independently",async()=>{
+ process.env.PAID_PROOF_ENCRYPTION_KEY="01".repeat(32);
+ const db=new SqliteAppDatabase(":memory:");
+ try{
+  await db.initialize();
+  const organizationId="org_default";
+  const event=await db.createEvent({name:"Room adjustment",organizer_id:organizationId});
+  await db.updateEvent(event.id,{status:"active"});
+  const customer=await db.createCustomerAccount({email:"room-change@example.com",normalized_email:"room-change@example.com",password_hash:"fixture",first_name:"Buyer",last_name:"Guest",phone:"",normalized_phone:"",accepted_terms_at:new Date(),accepted_privacy_at:new Date()});
+  await db.savePaidSettings(event.id,{organizationId,version:0,capacity:4,holdMinutes:30,cutoffMs:null,published:true,categories:[{id:"adult",label:"Adult",unitMinor:340000,quota:null}],fields:[{key:"room_preference",scope:"attendee",required:true,options:["Single","Twin"],surcharge:{option:"Single",minor:130000}}]});
+  const booking=await db.createPaidBooking({eventId:event.id,customerId:customer.id,pricingVersion:1,key:"room-booking",contact:{name:"Buyer"},receiver:{id:"0812345678",name:"Organizer",profileVersion:1},attendees:[{categoryId:"adult",firstName:"Room",lastName:"Guest",answers:{room_preference:"Single"}}]});
+  assert.equal(booking.totalMinor,470000);
+  const proof=Buffer.from("room adjustment fixture");
+  const slip=await db.submitPaidProof({eventId:event.id,customerId:customer.id,bookingId:booking.id,key:"room-slip",version:1,method:"promptpay",claimedMinor:470000,claimedTransferMs:Date.now(),reference:"ROOM-TRANSFER",mime:"image/png",content:proof});
+  const confirmed=await db.reviewPaidProof({eventId:event.id,organizationId,bookingId:booking.id,attemptId:slip.attempt_id,version:slip.version,key:"room-confirm",reviewerId:"staff",decision:"approve",reason:"Verified"});
+  const guest=(await db.paidRoomingPlan(event.id,organizationId))!.guests[0];
+  assert.equal(guest.single,true);
+  const qr=await db.readPaidCredential(event.id,booking.id,guest.id,customer.id);
+  const base={eventId:event.id,organizationId,bookingId:booking.id,actorId:"staff",reason:"Room change"};
+  const adjusted=await db.managePaidBooking({...base,key:"room-downgrade",version:confirmed.version,action:"adjust_room",attendeeId:guest.id,answerKey:"room_preference",answerValue:"Twin",unitMinor:340000});
+  assert.equal(adjusted.total_minor,340000);
+  assert.equal(adjusted.balance_due_minor,0);
+  assert.equal((await db.paidRoomingPlan(event.id,organizationId))!.guests[0].single,false);
+  assert.equal(await db.readPaidCredential(event.id,booking.id,guest.id,customer.id),qr);
+  assert.deepEqual((await db.readPaidProof(event.id,booking.id,slip.attempt_id,organizationId))?.content,proof);
+  const settlement={...base,key:"van-payment",version:adjusted.version,action:"settle_surplus" as const,settlementKind:"external" as const,settlementMinor:130000,refundReference:"VAN-001"};
+  const done=await db.managePaidBooking(settlement);
+  assert.deepEqual(await db.managePaidBooking(settlement),done);
+  await assert.rejects(db.managePaidBooking({...settlement,key:"extra",version:done.version,refundReference:"VAN-002"}),/amount_exceeds_surplus/);
+  assert.equal(await db.readPaidCredential(event.id,booking.id,guest.id,customer.id),qr);
+  const roster=await db.listPaidAttendeeRoster(event.id,organizationId,10000,true);
+  assert.equal(Number(roster[0].verified_cash_minor),470000);
+  assert.equal(Number(roster[0].external_allocated_minor),130000);
+  assert.equal(Number(roster[0].balance_due_minor),0);
+ }finally{await db.close();}
+});

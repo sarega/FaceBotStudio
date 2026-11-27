@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.35 - 2026-11-27
+
+- Adjust confirmed attendee room preference and price without replacing verified slips or QR credentials.
+- Record completed partial refunds and external disbursements separately from booking receipts, with outstanding surplus and audit history.
+- Separate actual receipts, booking value and surplus settlement in accounting PDF and CSV reports.
+
 ## 0.11.34 - 2026-11-27
 
 - Add customer profile editing, password reset requests, suspension, reactivation and session revocation.

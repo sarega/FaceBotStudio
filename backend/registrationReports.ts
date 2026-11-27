@@ -47,7 +47,9 @@ export function buildRegistrationReportHtml({
   const bookings = [...byId.values()];
   const active = (row: PaidRow) => !["cancelled", "expired"].includes(text(row.report_booking_state ?? row.booking_state));
   const cash = (row: PaidRow) => number(row.verified_cash_minor);
-  const due = (row: PaidRow) => Math.max(0, number(row.booking_total_minor) - cash(row));
+  const settled = (row: PaidRow) => number(row.settled_surplus_minor);
+  const surplus = (row: PaidRow) => Math.max(0,cash(row)-number(row.booking_total_minor)-settled(row));
+  const due = (row: PaidRow) => Math.max(0, number(row.booking_total_minor) - cash(row)+settled(row));
   const name = (row: PaidRow) => fullName(row.first_name, row.last_name);
   const confirmation = (state: unknown) => state === "confirmed"
     ? t(["ยืนยันแล้ว", "Confirmed"]) : state === "cancelled" ? t(["ยกเลิก", "Cancelled"])
@@ -95,7 +97,7 @@ export function buildRegistrationReportHtml({
     const { fields, rows, totals, bookingCount, partialBookings } = buildRegistrationRoster(legacy, paid, "active", language);
     body = `<div class="totals roster-totals">${[
       [t(["ยอดรวมตามใบจอง", "Total booking value"]), money(totals.total)],
-      [t(["ตรวจยืนยันแล้ว", "Verified payments"]), money(totals.received)],
+      [t(["ยอดรับจัดสรรให้ใบจอง", "Receipts applied to bookings"]), money(totals.received)],
       [t(["ยอดตามสลิปรอตรวจ", "Slips under review"]), money(totals.review)],
       [t(["ยอดคงค้างทั้งหมด", "Total outstanding"]), money(totals.outstanding)],
     ].map(([label, value]) => `<div>${escape(label)}<strong>${escape(value)}</strong></div>`).join("")}</div>` +
@@ -113,7 +115,8 @@ export function buildRegistrationReportHtml({
     const sum = (read: (row: PaidRow) => number) => bookings.reduce((total, item) => total + read(item.row), 0);
     const discount = (row: PaidRow) => number(row.coupon_discount_minor);
     const credit = (row: PaidRow) => number(row.credit_used_minor);
-    const refund = (row: PaidRow) => number(row.refunded_minor);
+    const refund = (row: PaidRow) => number(row.refunded_minor)+number(row.partial_refunded_minor);
+    const external=(row:PaidRow)=>number(row.external_allocated_minor);
     const subtotal = (row: PaidRow) => number(row.booking_total_minor) + discount(row) + credit(row);
     const issuedCredit = (row: PaidRow) => number(row.credit_issued_minor);
     body = `<div class="totals">${[
@@ -122,16 +125,18 @@ export function buildRegistrationReportHtml({
       [t(["เครดิตที่ใช้", "Credits used"]), money(sum(credit))],
       [t(["ยอดรับที่ตรวจแล้ว", "Verified receipts"]), money(sum(cash))],
       [t(["บันทึกคืนเงิน", "Recorded refunds"]), money(sum(refund))],
-      [t(["ยอดรับหลังคืนเงิน", "Receipts after refunds"]), money(sum(cash) - sum(refund))],
+      [t(["จ่ายภายนอกแล้ว","External disbursements"]),money(sum(external))],
+      [t(["เงินส่วนเกินรอจัดการ","Unsettled surplus"]),money(sum(row=>active(row)?surplus(row):0))],
+      [t(["เงินรับสุทธิหลังจ่ายออก","Receipts net of disbursements"]), money(sum(cash) - sum(refund)-sum(external))],
       [t(["เครดิตที่ออก", "Credits issued"]), money(sum(issuedCredit))],
       [t(["ค้างสุทธิ (ใบจองที่ยังมีผล)", "Outstanding (active bookings)"]), money(sum(row => active(row) ? due(row) : 0))],
     ].map(([label, value]) => `<div>${escape(label)}<strong>${escape(value)}</strong></div>`).join("")}</div>` +
       table([labels.reference, labels.attendees, labels.registered, labels.payment, ["ก่อนคูปองและเครดิต", "Before coupon & credit"], labels.coupon,
-        ["เครดิตที่ใช้", "Credit used"], ["ยอดเรียกเก็บ", "Cash due"], ["รับแล้ว / คืนแล้ว", "Received / refunded"], labels.outstanding],
+        ["เครดิตที่ใช้", "Credit used"], ["ยอดเรียกเก็บ", "Cash due"], ["รับแล้ว / คืนแล้ว", "Received / refunded"], ["จ่ายภายนอก / ส่วนเกินรอจัดการ","External / pending surplus"], labels.outstanding],
       bookings.map(({ row, people }) => [
         cell(row.booking_reference), cell(...people.map(name)), cell(confirmation(row.report_booking_state)), cell(payment(row)),
         cell(money(subtotal(row))), cell(money(discount(row))), cell(money(credit(row))), cell(money(number(row.booking_total_minor))),
-        cell(money(cash(row)), money(refund(row))), cell(active(row) ? money(due(row)) : "—"),
+        cell(money(cash(row)), money(refund(row))),cell(money(external(row)),money(active(row)?surplus(row):0)), cell(active(row) ? money(due(row)) : "—"),
       ]));
   } else if (kind === "followup") {
     body = (Object.entries(paymentGroups) as [PaymentGroup, Copy][]).map(([key, label]) => {

@@ -31,8 +31,8 @@ type RosterAmounts = {
 };
 
 export const rosterAmountLabels = {
-  th: ["ยอดตามใบจอง (บาท)", "ตรวจยืนยันแล้ว (บาท)", "ยอดสลิปรอตรวจ (บาท)", "คงค้างรวมรอตรวจ (บาท)"],
-  en: ["Booking value (THB)", "Verified payments (THB)", "Slips under review (THB)", "Outstanding incl. review (THB)"],
+  th: ["ยอดตามใบจอง (บาท)", "ยอดรับจัดสรรให้ใบจอง (บาท)", "ยอดสลิปรอตรวจ (บาท)", "คงค้างรวมรอตรวจ (บาท)"],
+  en: ["Booking value (THB)", "Receipts applied to booking (THB)", "Slips under review (THB)", "Outstanding incl. review (THB)"],
 } as const;
 
 const amountCells = (amounts: RosterAmounts) =>
@@ -114,20 +114,24 @@ export function buildRegistrationRoster(
     if (row.flagged || kind === "confirmed" && !confirmed || kind === "pending" && confirmed) continue;
     rows.push(row.cells);
     const id = text(row.booking?.booking_id);
-    let money = ["", "", "", ""];
+    let money = ["", "", "", "", "", "", "", ""];
     if (id && row.booking) {
       const included = includedBookings.get(id) ?? 0;
       includedBookings.set(id, included + 1);
       if (included === 0) {
         const total = Math.max(0, Number(row.booking.booking_total_minor) || 0);
-        const received = Math.min(total, Math.max(0, Number(row.booking.verified_cash_minor) || 0));
+        const gross=Math.max(0,Number(row.booking.verified_cash_minor)||0);
+        const external=Number(row.booking.external_allocated_minor)||0;
+        const refund=Number(row.booking.partial_refunded_minor)||0;
+        const received = Math.min(total, Math.max(0,gross-external-refund));
         const review = Math.max(0, Number(row.booking.pending_slip_minor) || 0);
         const amounts = { total, received, review, outstanding: total - received };
         totals.total += amounts.total;
         totals.received += amounts.received;
         totals.review += amounts.review;
         totals.outstanding += amounts.outstanding;
-        money = amountCells(amounts);
+        const extra=[gross,external,refund,Math.max(0,gross-external-refund-total)];
+        money = [...extra.map(n=>(n/100).toFixed(2)),...amountCells(amounts)];
       }
     }
     financialRows.push([...row.cells, ...money]);
@@ -144,7 +148,8 @@ export function buildRegistrationRosterCsv(
   legacy: RegistrationRow[], paid: PaidRow[], kind: RosterCsvKind, language: "th" | "en",
 ) {
   const { fields, rows, financialRows, totals, bookingCount, partialBookings } = buildRegistrationRoster(legacy, paid, kind, language);
-  const exportFields = [...fields, ...rosterAmountLabels[language]];
+  const extraLabels=language==="th"?["รับเงินจริง (บาท)","จ่ายภายนอก (บาท)","คืนบางส่วน (บาท)","ส่วนเกินรอจัดการ (บาท)"]:["Gross receipts (THB)","External disbursements (THB)","Partial refunds (THB)","Unsettled surplus (THB)"];
+  const exportFields = [...fields,...extraLabels, ...rosterAmountLabels[language]];
   const records = financialRows.map(cells => Object.fromEntries(exportFields.map((field, index) => {
     const value = cells[index];
     return [field, /^\s*[=+@-]/.test(value) ? "'" + value : value];
@@ -154,7 +159,7 @@ export function buildRegistrationRosterCsv(
     const detail = language === "th"
       ? `${bookingCount} ใบจอง${partialBookings ? ` (มี ${partialBookings} ใบจองที่แสดงรายชื่อบางส่วน ยอดเป็นของทั้งใบจอง)` : ""}`
       : `${bookingCount} bookings${partialBookings ? ` (${partialBookings} partially listed; amounts cover the whole booking)` : ""}`;
-    const summary = [label, "", detail, "", "", "", "", "", ...amountCells(totals)];
+    const summary = [label, "", detail, "", "", "", "", "", ...Array.from({length:4},(_,i)=>(financialRows.reduce((n,row)=>n+Math.round((Number(row[fields.length+i])||0)*100),0)/100).toFixed(2)),...amountCells(totals)];
     records.push(Object.fromEntries(exportFields.map((field, index) => [field, summary[index]])));
   }
   return { csv: "\uFEFF" + new Parser({ fields: exportFields }).parse(records), count: rows.length };
