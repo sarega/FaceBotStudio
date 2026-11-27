@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.39 - 2026-11-27
+
+- Improve dark-theme contrast for registration pricing notes, labels, options and status messages.
+- Group seminar questions into accommodation, travel and dates, and meals and additional information.
+- Align question controls at the top and adapt to available workspace width.
+
 ## 0.11.38 - 2026-11-27
 
 - Make attendee roster and chat ticket batches collapsible with compact summary headers.

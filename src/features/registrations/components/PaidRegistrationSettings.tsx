@@ -151,7 +151,7 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
   }
 
   return (
-    <form onSubmit={save} className="space-y-3">
+    <form onSubmit={save} className="paid-registration-form space-y-3">
       <h3 className="font-bold">{t("ตั้งค่าและเปิดรับสมัครได้ในหน้านี้", "Configure and publish registration here")}</h3>
       {settings?.published === 1 && <p role="status" className="rounded-lg border border-green-300 p-2 font-semibold text-green-800">{t("เปิดรับสมัครแล้ว", "Registration published")}</p>}
       <fieldset disabled={busy} className="space-y-3">
@@ -188,7 +188,7 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
               <div className="flex flex-wrap gap-2">
                 {[[30, t("30 นาที", "30 minutes")], [1440, t("24 ชั่วโมง", "24 hours")], [10080, t("7 วัน", "7 days")]].map(([minutes, label]) => (
                   <button key={minutes} type="button" aria-pressed={holdDuration === minutes}
-                    className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-700"
+                    className="registration-admin-control"
                     onClick={() => setHoldDuration(Number(minutes))}>{label}</button>
                 ))}
               </div>
@@ -225,14 +225,20 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
         </fieldset>)}
         {categories.length < 100 && <button type="button" className="text-blue-700 underline"
           onClick={() => setCategories((current) => [...current, { id: crypto.randomUUID(), label: "", price: "", discount: "0", quota: "" }])}>{t("เพิ่มประเภท", "Add category")}</button>}
-        <p className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+        <p className="paid-pricing-note rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
           {t("ส่วนลดสำหรับผู้ไม่พักจะเปิดคำถามเรื่องที่พักแบบบังคับต่อผู้เข้าร่วม และใช้คำตอบคำนวณยอดในใบแจ้งชำระ", "A no-accommodation discount makes the accommodation question required for each attendee. Their answer determines the invoice amount.")}
         </p>
-        <fieldset className="space-y-2 rounded-lg border border-slate-200 p-3 text-slate-900">
+        <fieldset className="paid-seminar-questions space-y-3 rounded-lg border border-slate-200 p-3">
           <legend className="px-1">{t("คำถามสำหรับผู้สมัคร", "Seminar questions")}</legend>
-          {(Object.keys(paidSeminarFields) as PaidSeminarKey[]).map((key) => {
+          {([
+            {title:t("ที่พักและประเภทห้อง","Accommodation and room type"),keys:["accommodation","room_preference"]},
+            {title:t("การเดินทางและกำหนดวัน","Travel and dates"),keys:["transport","arrival","departure"]},
+            {title:t("อาหารและข้อมูลเพิ่มเติม","Meals and additional information"),keys:["food","notes"]},
+          ] as {title:string;keys:PaidSeminarKey[]}[]).map(group=><section key={group.keys[0]} className="paid-question-group">
+            <h4 className="paid-question-group-title">{group.title}</h4>
+            {group.keys.map((key) => {
             const configured = seminar.find((item) => item.key === key);
-            return <div key={key} className="grid items-end gap-2 sm:grid-cols-[minmax(10rem,1fr)_1fr]">
+            return <div key={key} className="paid-question-row grid items-start gap-2">
               <label>{t(seminarLabelsTh[key], paidSeminarFields[key].label)}
                 <select className={field} value={configured?.scope ?? ""} onChange={(event) => {
                   const scope = event.target.value;
@@ -245,7 +251,7 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
                   <option value="">{t("ซ่อน", "Hidden")}</option><option value="booking">{t("ถามครั้งเดียวต่อใบจอง", "Once per booking")}</option><option value="attendee">{t("ถามผู้เข้าร่วมแต่ละคน", "For each attendee")}</option>
                 </select>
               </label>
-              {configured && <div className="space-y-2 rounded-lg bg-slate-50 p-2">
+              {configured && <div className="paid-question-options min-w-0 space-y-2 rounded-lg bg-slate-50 p-2">
                 <label className="flex gap-2">
                   <input type="checkbox" checked={configured.required} onChange={(event) =>
                     updateSeminar(key,{required:event.target.checked})} />
@@ -315,7 +321,7 @@ function SettingsForm({ language, settings, path, eventId, apiFetch, onSaved }: 
                   </label>}
               </div>}
             </div>;
-          })}
+          })}</section>)}
         </fieldset>
         <div className="flex flex-wrap gap-1.5 border-t pt-2">
           <button type="submit" name="action" value="publish" className="registration-admin-control registration-admin-control-primary">

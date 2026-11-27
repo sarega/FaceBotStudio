@@ -2855,3 +2855,25 @@ html.theme-dark .paid-attendee-roster > div.overflow-x-auto {
   background: #17263b !important;
   border-color: #3d7469 !important;
 }
+
+/* Registration settings: explicit contrast pairs, scoped to this form. */
+.paid-registration-form { color: #1e293b; container-type: inline-size; }
+.paid-question-group { border:1px solid #cbd5e1; border-radius:10px; overflow:hidden; }
+.paid-question-group-title { background:#eaf0f8; color:#1e3a5f; padding:8px 10px; font-size:13px; font-weight:700; }
+.paid-question-row { padding:10px; border-top:1px solid #e2e8f0; }
+.paid-question-row > label { min-width:0; font-weight:600; }
+.paid-question-options { border:1px solid #e2e8f0; }
+@container (min-width: 38rem) {
+  .paid-question-row { grid-template-columns:minmax(10rem, .8fr) minmax(0, 1.2fr); }
+}
+html.theme-dark .registration-admin-settings .paid-registration-form { color:#e2e8f0; }
+html.theme-dark .registration-admin-settings .paid-registration-form :is(label,legend,h3,h4,strong) { color:#e2e8f0; }
+html.theme-dark .registration-admin-settings .paid-registration-form :is(a,button).text-blue-700 { color:#93c5fd !important; }
+html.theme-dark .registration-admin-settings .paid-registration-form .paid-pricing-note { background:#172e4d !important; color:#dbeafe !important; border-color:#5278ad !important; }
+html.theme-dark .registration-admin-settings .paid-registration-form .text-green-800 { color:#a7f3d0 !important; background:#13362c !important; border-color:#397a65 !important; }
+html.theme-dark .registration-admin-settings .paid-registration-form .text-red-700 { color:#fca5a5 !important; }
+html.theme-dark .registration-admin-settings .paid-question-group { border-color:#52647d; }
+html.theme-dark .registration-admin-settings .paid-question-group-title { background:#24364d; color:#dbeafe; }
+html.theme-dark .registration-admin-settings .paid-question-row { border-color:#40536b; }
+html.theme-dark .registration-admin-settings .paid-question-options { background:#1b2c42 !important; border-color:#465a72; }
+html.theme-dark .registration-admin-settings .paid-registration-form select option { background:#111e31; color:#f8fafc; }

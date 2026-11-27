@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.39",date:"2026-11-27",title:"Registration settings readability",features:["Dark-theme pricing and form contrast","Grouped accommodation, travel and meal questions","Responsive question layout"]},
   {version:"0.11.38",date:"2026-11-27",title:"Collapsible registration sections",features:["Collapsible attendee roster and chat batches","Summary and report actions stay visible","Continuous page scrolling","Auto-expand for search and status filters"]},
   {version:"0.11.37",date:"2026-11-27",title:"Registration workspace redesign",features:["Attendee roster first","Sticky collapsible event statistics","Full-screen room and carpool workspaces","Preserve logistics drafts when returning"]},
   {version:"0.11.36",date:"2026-11-27",title:"Payment adjustment dashboard",features:["Existing surplus and additional payments visible","Gross receipts, refunds and net cash","Increase or decrease attendee prices","Accounting follow-up worklists"]},
