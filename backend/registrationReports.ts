@@ -127,6 +127,8 @@ export function buildRegistrationReportHtml({
       [t(["บันทึกคืนเงิน", "Recorded refunds"]), money(sum(refund))],
       [t(["จ่ายภายนอกแล้ว","External disbursements"]),money(sum(external))],
       [t(["เงินส่วนเกินรอจัดการ","Unsettled surplus"]),money(sum(row=>active(row)?surplus(row):0))],
+      [t(["ยอดเรียกเก็บเพิ่ม (ใบจองยืนยันแล้ว)","Additional payment due (confirmed)"]),money(sum(row=>row.report_booking_state==="confirmed"?due(row):0))],
+      [t(["ยอดรอชำระใบจองใหม่","New bookings awaiting payment"]),money(sum(row=>row.report_booking_state==="awaiting_payment"?due(row):0))],
       [t(["เงินรับสุทธิหลังจ่ายออก","Receipts net of disbursements"]), money(sum(cash) - sum(refund)-sum(external))],
       [t(["เครดิตที่ออก", "Credits issued"]), money(sum(issuedCredit))],
       [t(["ค้างสุทธิ (ใบจองที่ยังมีผล)", "Outstanding (active bookings)"]), money(sum(row => active(row) ? due(row) : 0))],
@@ -138,6 +140,8 @@ export function buildRegistrationReportHtml({
         cell(money(subtotal(row))), cell(money(discount(row))), cell(money(credit(row))), cell(money(number(row.booking_total_minor))),
         cell(money(cash(row)), money(refund(row))),cell(money(external(row)),money(active(row)?surplus(row):0)), cell(active(row) ? money(due(row)) : "—"),
       ]));
+    body+=section(["รายการรอคืนเงิน / ส่วนเกิน","Refund payable / unsettled surplus"],"",table([labels.reference,labels.attendees,["รับเงินจริง","Gross receipts"],["ยอดใบจองปัจจุบัน","Current booking value"],["รอคืน / จัดการ","Refund / settlement pending"]],bookings.filter(({row})=>active(row)&&surplus(row)>0).map(({row,people})=>[cell(row.booking_reference),cell(...people.map(name)),cell(money(cash(row))),cell(money(number(row.booking_total_minor))),cell(money(surplus(row)))])));
+    body+=section(["รายการรอเรียกเก็บเพิ่ม","Additional payment due"],"",table([labels.reference,labels.attendees,["ยอดใบจองปัจจุบัน","Current booking value"],labels.outstanding],bookings.filter(({row})=>row.report_booking_state==="confirmed"&&due(row)>0).map(({row,people})=>[cell(row.booking_reference),cell(...people.map(name)),cell(money(number(row.booking_total_minor))),cell(money(due(row)))])));
   } else if (kind === "followup") {
     body = (Object.entries(paymentGroups) as [PaymentGroup, Copy][]).map(([key, label]) => {
       const matches = bookings.filter(({ row }) => paymentGroup(row) === key);

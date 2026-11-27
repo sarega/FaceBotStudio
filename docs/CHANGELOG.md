@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.36 - 2026-11-27
+
+- Show existing and new refund liabilities, additional payments due, gross receipts and net cash in event statistics and reports.
+- Separate new booking balances from confirmed booking adjustments.
+- Allow ordinary attendee price corrections in both directions and include refund and additional-payment worklists in accounting PDF.
+
 ## 0.11.35 - 2026-11-27
 
 - Adjust confirmed attendee room preference and price without replacing verified slips or QR credentials.

@@ -899,6 +899,11 @@ test("confirmed room downgrade preserves evidence and settles surplus independen
   assert.equal((await db.paidRoomingPlan(event.id,organizationId))!.guests[0].single,false);
   assert.equal(await db.readPaidCredential(event.id,booking.id,guest.id,customer.id),qr);
   assert.deepEqual((await db.readPaidProof(event.id,booking.id,slip.attempt_id,organizationId))?.content,proof);
+  const before=await db.readPaidEventSummary(event.id,organizationId);
+  assert.equal(String(before?.refund_pending_minor),"130000");
+  assert.equal(String(before?.gross_received_minor),"470000");
+  assert.equal(String(before?.current_booking_minor),"340000");
+  assert.equal(String(before?.additional_due_minor),"0");
   const settlement={...base,key:"van-payment",version:adjusted.version,action:"settle_surplus" as const,settlementKind:"external" as const,settlementMinor:130000,refundReference:"VAN-001"};
   const done=await db.managePaidBooking(settlement);
   assert.deepEqual(await db.managePaidBooking(settlement),done);
@@ -908,5 +913,16 @@ test("confirmed room downgrade preserves evidence and settles surplus independen
   assert.equal(Number(roster[0].verified_cash_minor),470000);
   assert.equal(Number(roster[0].external_allocated_minor),130000);
   assert.equal(Number(roster[0].balance_due_minor),0);
+  const after=await db.readPaidEventSummary(event.id,organizationId);
+  assert.equal(String(after?.refund_pending_minor),"0");
+  assert.equal(String(after?.net_received_minor),"340000");
+  const raised=await db.managePaidBooking({...base,key:"price-up",version:done.version,action:"correct_price",attendeeId:guest.id,unitMinor:470000});
+  assert.equal(raised.balance_due_minor,130000);
+  const due=await db.readPaidEventSummary(event.id,organizationId);
+  assert.equal(String(due?.additional_due_minor),"130000");
+  assert.equal(String(due?.new_booking_due_minor),"0");
+  const lowered=await db.managePaidBooking({...base,key:"price-down",version:raised.version,action:"correct_price",attendeeId:guest.id,unitMinor:340000});
+  assert.equal(lowered.balance_due_minor,0);
+
  }finally{await db.close();}
 });

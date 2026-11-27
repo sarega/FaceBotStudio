@@ -29,6 +29,7 @@ type ReportSummary = {
     pending_review_bookings: number;
     expired_bookings: number;
     accepted_minor: string;
+    current_booking_minor:string; gross_received_minor:string; refunds_paid_minor:string; external_paid_minor:string; net_received_minor:string; refund_pending_minor:string; refund_pending_bookings:number; additional_due_minor:string; additional_due_bookings:number; new_booking_due_minor:string;
     pending_slip_minor: string;
     awaiting_payment_due_minor: string;
     by_day: DailyActivity;
@@ -169,13 +170,23 @@ export function ReportsScreen({ eventId, apiFetch, canExportDirectTickets, canEx
             helper={label(`${number(paid.checked_in_attendees)} จาก ${number(paid.confirmed_attendees)} คนที่ยืนยันแล้ว`, `${number(paid.checked_in_attendees)} of ${number(paid.confirmed_attendees)} confirmed attendees`)} tone="emerald" />
           <MetricCard icon={BarChart3} label={label("ที่นั่งว่าง", "Available capacity")} value={`${number(paid.available_attendees)} / ${number(paid.capacity)}`}
             helper={label(`${number(paid.held_attendees)} ที่นั่งกันไว้ระหว่างชำระเงินหรือตรวจสลิป`, `${number(paid.held_attendees)} seats held for payment or review`)} tone="violet" />
-          <MetricCard icon={WalletCards} label={label("ยอดชำระที่ยืนยันแล้ว", "Verified payments")} value={paidMoney(paid.accepted_minor)}
+          <MetricCard icon={WalletCards} label={label("เงินรับจริงทั้งหมด", "Gross receipts")} value={paidMoney(paid.gross_received_minor??paid.accepted_minor)}
             helper={label("ยอดจากใบจองที่ยืนยันแล้ว", "Total from confirmed bookings")} tone="amber" />
         </div>
         <div className="grid gap-2 sm:grid-cols-3">
-          <p className="rounded-xl bg-slate-50 p-3 text-sm">{label("รอชำระเงิน", "Awaiting payment")} · {number(paid.awaiting_payment_bookings)}<br />{paidMoney(paid.awaiting_payment_due_minor)}</p>
+          <p className="rounded-xl bg-slate-50 p-3 text-sm">{label("รอชำระเงิน", "Awaiting payment")} · {number(paid.awaiting_payment_bookings)}<br />{paidMoney(paid.new_booking_due_minor??paid.awaiting_payment_due_minor)}</p>
           <p className="rounded-xl bg-slate-50 p-3 text-sm">{label("รอตรวจสลิป", "Pending slip review")} · {number(paid.pending_review_bookings)}<br />{paidMoney(paid.pending_slip_minor)}</p>
           <p className="rounded-xl bg-slate-50 p-3 text-sm">{label("ใบจองหมดอายุ", "Expired bookings")} · {number(paid.expired_bookings)}</p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {[
+            [label("ยอดใบจองปัจจุบัน","Current booking value"),paid.current_booking_minor],
+            [label("เงินส่วนเกินรอคืน","Surplus pending refund"),paid.refund_pending_minor],
+            [label("ยอดเรียกเก็บเพิ่ม","Additional payment due"),paid.additional_due_minor],
+            [label("คืนเงินแล้ว","Refunds paid"),paid.refunds_paid_minor],
+            [label("จ่ายภายนอกแล้ว","External disbursements"),paid.external_paid_minor],
+            [label("รับสุทธิหลังจ่ายออก","Net cash received"),paid.net_received_minor],
+          ].map(([name,value])=><div key={name} className="rounded-xl border border-slate-200 p-3 text-sm"><p>{name}</p><strong className="text-lg tabular-nums">{paidMoney(value??"0")}</strong></div>)}
         </div>
         {canExportPaidTransfers && <PaidTransferReportExport eventId={eventId} apiFetch={apiFetch} language={language} />}
       </section>}

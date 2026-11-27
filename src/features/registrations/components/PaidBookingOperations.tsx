@@ -21,7 +21,7 @@ const actionLabels: Record<string, Copy> = {
   settle_surplus:["จัดการเงินส่วนเกิน","Settle surplus"],
   apply_coupon: ["ใช้คูปองแทนผู้จอง", "Apply coupon for customer"],
   payment_notice: ["ส่งข้อความแจ้งชำระส่วนต่าง", "Send a balance reminder"],
-  correct_price: ["แก้ราคาผู้เข้าร่วมและเรียกเก็บส่วนต่าง", "Correct attendee price and collect the difference"],
+  correct_price: ["ปรับราคาผู้เข้าร่วม (เพิ่ม/ลด)", "Adjust attendee price (increase/decrease)"],
   extend: ["ขยายเวลาชำระเงิน", "Extend payment deadline"],
   cancel: ["ยกเลิกใบจอง", "Cancel booking"],
   reinstate: ["เปิดใบจองที่หมดอายุอีกครั้ง", "Reinstate expired booking"],
@@ -39,7 +39,7 @@ const errorLabels: Record<string, Copy> = {
   coupon_exhausted: ["คูปองนี้ถึงโควตาการใช้แล้ว", "The coupon usage limit has been reached."],
   coupon_already_applied: ["ใบจองนี้ใช้คูปองแล้ว", "This booking already has a coupon."],
   pending_supporting_proof: ["กรุณาตรวจสลิปที่แนบไว้ก่อนแก้ราคา", "Review the attached slip before changing the price."],
-  invalid_price_correction: ["ราคาใหม่ต้องสูงกว่าราคาเดิม", "The corrected price must be higher than the current price."],
+  invalid_price_correction: ["ราคาใหม่ต้องแตกต่างจากราคาเดิมและมากกว่าศูนย์", "New price must differ from the current price and be positive."],
   credit_changed: ["เครดิตเดิมถูกใช้ไปแล้ว ให้สร้างใบจองใหม่", "The original credit is no longer available. Create a new booking."],
   booking_not_found: ["ไม่พบใบจอง", "Booking not found."],
   version_conflict: ["ใบจองนี้มีการแก้ไข กรุณาค้นหาใหม่", "This booking has changed. Look it up again."],
@@ -139,7 +139,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
     const copy = actionLabels[action];
     if (!copy) return;
     const unitMinor = Math.round(Number(values.get("unit_price")) * 100);
-    if (action === "correct_price" && (!attendee || !Number.isSafeInteger(unitMinor) || unitMinor <= attendee.unit_minor)) {
+    if (action === "correct_price" && (!attendee || !Number.isSafeInteger(unitMinor) || (unitMinor <= 0 || unitMinor === attendee.unit_minor))) {
       setError(errorLabels.invalid_price_correction);
       return;
     }
@@ -273,7 +273,7 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
               </select>
             </label>
             <label>{t("ราคาที่ถูกต้อง (บาท)", "Correct price (THB)")}
-              <input key={attendee?.id} name="unit_price" type="number" required min={((attendee?.unit_minor ?? 0) + 1) / 100} step="0.01"
+              <input key={attendee?.id} name="unit_price" type="number" required min="0.01" step="0.01"
                 placeholder={((attendee?.unit_minor ?? 0) / 100).toFixed(2)} className={input} />
             </label>
           </>}

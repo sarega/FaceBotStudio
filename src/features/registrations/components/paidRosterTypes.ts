@@ -11,6 +11,7 @@ export type PaidRosterPerson = {
 };
 export type PaidRosterSummary = {
   capacity:number;bookings:number;attendees:number;confirmed_attendees:number;
+  current_booking_minor:string; gross_received_minor:string; refunds_paid_minor:string; external_paid_minor:string; net_received_minor:string; refund_pending_minor:string; refund_pending_bookings:number; additional_due_minor:string; additional_due_bookings:number; new_booking_due_minor:string;
   accepted_minor:string; unsettled_due_minor:string; awaiting_payment_due_minor:string; pending_slip_minor:string; slip_shortfall_minor:string;
   held_attendees:number;checked_in_attendees:number;confirmed_bookings:number;
   awaiting_payment_bookings:number;pending_review_bookings:number;

@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.36",date:"2026-11-27",title:"Payment adjustment dashboard",features:["Existing surplus and additional payments visible","Gross receipts, refunds and net cash","Increase or decrease attendee prices","Accounting follow-up worklists"]},
   {version:"0.11.35",date:"2026-11-27",title:"Booking adjustment and surplus settlement",features:["Change confirmed room and price","Retain original slip and QR","Record partial refunds and external disbursements","Separate gross receipts and surplus in reports"]},
   {version:"0.11.34",date:"2026-11-27",title:"Customer account administration",features:["Account actions and password reset","Suspend, reactivate and revoke sessions","Server-side search and pagination","Organization scope and staff identity protection"]},
   {version:"0.11.33",date:"2026-11-27",title:"Compact room assignment workspace",features:["Expanded viewport rooming workspace","Independent guest and room scrolling","Single Add room menu and grouped Actions","Persistent draft while exiting focus mode"]},

@@ -1705,7 +1705,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
     const oldUnit = Number(attendee.unit_minor);
     const delta = unitMinor! - oldUnit;
     const total = Number(booking.total_minor) + delta;
-    if (delta <= 0 || total > 2_147_483_647) throw new PaidBookingError("invalid_price_correction");
+    if (delta === 0 || total < 0 || total > 2_147_483_647) throw new PaidBookingError("invalid_price_correction");
     const attendeeContact = JSON.parse(String(attendee.contact_json ?? "{}"));
     if (typeof attendeeContact.pricing?.base_minor === "number") attendeeContact.pricing.base_minor += delta;
     yield query("UPDATE paid_attendees SET unit_minor=?,contact_json=? WHERE id=? AND booking_id=?",
@@ -2009,6 +2009,11 @@ export function* readPaidEventSummary(
        FROM paid_attendees WHERE event_id=? AND cancelled_ms IS NULL GROUP BY booking_id
      ), bookings AS (
        SELECT b.total_minor,b.payment_state,${confirmedBalance} AS balance_due_minor,
+         ${verifiedCash} AS gross_receipts,
+         ${settledSurplus} AS settled_surplus,
+         COALESCE((SELECT SUM(amount_minor) FROM paid_surplus_settlements WHERE booking_id=b.id AND kind='external'),0) AS external_paid,
+         COALESCE((SELECT SUM(amount_minor) FROM paid_surplus_settlements WHERE booking_id=b.id AND kind='refund'),0) AS partial_refunds,
+         COALESCE((SELECT SUM(amount_minor) FROM paid_refunds WHERE booking_id=b.id),0) AS full_refunds,
          ${pendingEvidence} AS pending_proofs,
          ${bookingPaymentWarning} AS payment_warning,
          CASE WHEN b.state='verification_pending' OR ${confirmedBalance}>0 THEN (SELECT SUM(COALESCE(pa.observed_minor,pa.claimed_minor)) FROM paid_payment_attempts pa
@@ -2032,6 +2037,16 @@ export function* readPaidEventSummary(
          COALESCE(SUM(CASE WHEN state='verification_pending' OR (state='confirmed' AND pending_proofs>0) THEN 1 ELSE 0 END),0) AS pending_review_bookings,
          COALESCE(SUM(CASE WHEN payment_warning AND state NOT IN ('cancelled','expired') THEN 1 ELSE 0 END),0) AS warning_bookings,
          CAST(COALESCE(SUM(CASE WHEN state='confirmed' AND payment_state='verified' THEN total_minor-balance_due_minor ELSE credited_cash END),0) AS TEXT) AS accepted_minor,
+         CAST(COALESCE(SUM(CASE WHEN state IN ('confirmed','awaiting_payment','verification_pending','payment_exception') THEN total_minor ELSE 0 END),0) AS TEXT) AS current_booking_minor,
+         CAST(COALESCE(SUM(gross_receipts),0) AS TEXT) AS gross_received_minor,
+         CAST(COALESCE(SUM(partial_refunds+full_refunds),0) AS TEXT) AS refunds_paid_minor,
+         CAST(COALESCE(SUM(external_paid),0) AS TEXT) AS external_paid_minor,
+         CAST(COALESCE(SUM(gross_receipts-partial_refunds-full_refunds-external_paid),0) AS TEXT) AS net_received_minor,
+         CAST(COALESCE(SUM(CASE WHEN state='confirmed' AND payment_state='verified' AND gross_receipts>total_minor+settled_surplus THEN gross_receipts-total_minor-settled_surplus ELSE 0 END),0) AS TEXT) AS refund_pending_minor,
+         COALESCE(SUM(CASE WHEN state='confirmed' AND payment_state='verified' AND gross_receipts>total_minor+settled_surplus THEN 1 ELSE 0 END),0) AS refund_pending_bookings,
+         CAST(COALESCE(SUM(CASE WHEN state='confirmed' THEN balance_due_minor ELSE 0 END),0) AS TEXT) AS additional_due_minor,
+         COALESCE(SUM(CASE WHEN state='confirmed' AND balance_due_minor>0 THEN 1 ELSE 0 END),0) AS additional_due_bookings,
+         CAST(COALESCE(SUM(CASE WHEN state='awaiting_payment' THEN total_minor ELSE 0 END),0) AS TEXT) AS new_booking_due_minor,
          CAST(COALESCE(SUM(CASE WHEN state='awaiting_payment' THEN total_minor ELSE balance_due_minor END),0) AS TEXT) AS awaiting_payment_due_minor,
          CAST(COALESCE(SUM(pending_slip_minor),0) AS TEXT) AS pending_slip_minor,
          CAST(COALESCE(SUM(CASE WHEN pending_slip_minor < CASE WHEN state='confirmed' THEN balance_due_minor ELSE total_minor END
