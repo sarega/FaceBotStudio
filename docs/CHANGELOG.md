@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.33 - 2026-11-27
+
+- Open room assignments in an expanded viewport workspace with independently scrolling guest and room lists.
+- Consolidate room creation into one menu and move exports, automatic drafting and reload into Actions.
+- Keep Save, search fields and assignment counts visible; preserve the draft when exiting the expanded workspace.
+
 ## 0.11.32 - 2026-11-27
 
 - Prioritize daily operations and customer management in the sidebar, with registrations as the default admin workspace.

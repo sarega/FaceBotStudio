@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.33",date:"2026-11-27",title:"Compact room assignment workspace",features:["Expanded viewport rooming workspace","Independent guest and room scrolling","Single Add room menu and grouped Actions","Persistent draft while exiting focus mode"]},
   {version:"0.11.32",date:"2026-11-27",title:"Workflow-first navigation and event bot assignments",features:["Daily operations and customers first","Registrations as default admin workspace","Bot Simulator under Agent","Assign reusable bots and channels directly in Event Setup"]},
   {version:"0.11.31",date:"2026-11-27",title:"Attendee-first reviews and registration editing",features:["Actual attendee names in booking and slip review","Operational reports without proxy account names or contacts","Compact registration answer editing","Persistent field locks and audit history"]},
   {version:"0.11.30",date:"2026-11-26",title:"Balanced payment slip preview",features:["Responsive slip previews up to 420px tall","Balanced booking and slip columns","Retain full-screen zoom"]},

@@ -1,6 +1,7 @@
+import { createPortal } from "react-dom";
 import { reportFilename } from "../../../lib/reportFilenames";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type MouseEvent } from "react";
-import { BedDouble, BedSingle, Download, Plus, Sofa, GripVertical, Lock, RefreshCw, Save, Unlock, WandSparkles } from "lucide-react";
+import { BedDouble, BedSingle, Download, Plus, Sofa, GripVertical, Lock, RefreshCw, Save, Unlock, WandSparkles, Maximize2, Minimize2, Ellipsis, ChevronDown } from "lucide-react";
 import { MAX_ROOM_BEDS, ROOM_BED_COUNTS, draftRoomingPlan, isRoomBedCount, moveRoomingGuest, parseRoomingPlan, type RoomingRoom } from "../../../../backend/roomingPlan";
 import type { PaidRoomingPlan } from "../../../../backend/db/paidRegistration";
 import { downloadRegistrationCsv } from "./registrationCsv";
@@ -36,6 +37,24 @@ export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Pro
   request.current = apiFetch;
   const path = `/api/events/${encodeURIComponent(eventId)}/paid-registration/rooms`;
   const [open, setOpen] = useState(false);
+  const [focusMode,setFocusMode]=useState(false);
+  const [actionsOpen,setActionsOpen]=useState(false);
+  const actionMenu=useRef<HTMLDivElement>(null);
+  const sectionRef=useRef<HTMLElement>(null);
+  useEffect(()=>{
+    if(!focusMode)return;
+    const previous=document.body.style.overflow;
+    document.body.style.overflow="hidden";
+    const escape=(e:KeyboardEvent)=>{if(e.key==="Escape"&&!e.defaultPrevented&&!roomMenu.current?.matches(":popover-open")){setActionsOpen(false);setFocusMode(false);}};
+    document.addEventListener("keydown",escape);
+    return ()=>{document.body.style.overflow=previous;document.removeEventListener("keydown",escape);};
+  },[focusMode]);
+  useEffect(()=>{
+    if(!actionsOpen)return;
+    const close=(e:PointerEvent)=>{if(!actionMenu.current?.contains(e.target as Node))setActionsOpen(false);};
+    document.addEventListener("pointerdown",close);
+    return ()=>document.removeEventListener("pointerdown",close);
+  },[actionsOpen]);
   const [plan, setPlan] = useState<PaidRoomingPlan | null>();
   const [rooms, setRooms] = useState<RoomingRoom[]>([]);
   const [selected, setSelected] = useState("");
@@ -83,7 +102,7 @@ export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Pro
   }, [loadRequest, path]);
 
   const byId = new Map(plan?.guests.map((guest) => [guest.id, guest]));
-  const assigned = new Set(rooms.flatMap((room) => room.slots));
+  const assigned = new Set(rooms.flatMap((room) => room.slots).filter((id):id is string=>!!id));
   const unassigned = (plan?.guests ?? []).filter((guest) => !assigned.has(guest.id));
   const bookingCounts = new Map<string, number>();
   for (const guest of plan?.guests ?? []) bookingCounts.set(guest.bookingId, (bookingCounts.get(guest.bookingId) ?? 0) + 1);
@@ -318,55 +337,46 @@ export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Pro
     </button>;
   }
 
-  return <section className="registration-admin-section">
+  const workspace=<section ref={sectionRef} className={`registration-admin-section ${focusMode?"rooming-focus-panel":""}`}>
     <RegistrationSectionHeader tone="rooming" title={t("จัดห้องพัก", "Room assignments")} open={open} onToggle={() => {
       if (busy) return;
+      if (focusMode){setFocusMode(false);setActionsOpen(false);return;}
       if (open) roomMenu.current?.hidePopover();
       if (!open) setLoadRequest({ replacePlan: !plan });
       setOpen(!open);
-    }} />
-    <div hidden={!open} className="registration-section-content rooming-workspace space-y-2">
-      {plan && <div role="group" aria-label={t("เพิ่มห้อง", "Add room")} className="flex flex-wrap items-center gap-1.5">
-        {ROOM_BED_COUNTS.map(beds => {
-          const type = roomTypeForBeds(beds);
-          const Icon = roomIcons[type];
-          return <button type="button" key={beds} className={`${button} room-type-add`} data-room-type={type}
-            disabled={busy} onClick={() => addRoom(beds)}
-            aria-label={t(`เพิ่ม${roomLabels[type]} ${beds} เตียง`, `Add ${roomLabels[type].toLowerCase()} with ${beds} ${beds === 1 ? "bed" : "beds"}`)}>
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            <Icon className="h-4 w-4" aria-hidden="true" />
-            {roomLabels[type]}
-            <span className="room-type-count">{beds}</span>
-          </button>;
-        })}
-      </div>}
-      <div className="flex flex-wrap items-center gap-2">
-        {plan && <>
-          <button type="button" className={button} disabled={busy || !unassigned.length} onClick={() => {
-            const next = draftRoomingPlan(rooms, plan.guests, () => crypto.randomUUID());
-            setRooms(next);
-            setMessage(next.length === rooms.length ? t("ยังไม่มีคู่ที่จัดอัตโนมัติได้", "No pairs to draft automatically.")
-              : t(`เพิ่มห้องร่าง ${next.length - rooms.length} ห้อง`, `Added ${next.length - rooms.length} draft rooms.`));
-          }}><WandSparkles className="h-4 w-4" aria-hidden="true" /> {t("จัดร่างอัตโนมัติ", "Draft rooms")}</button>
-          <button type="button" className={button} disabled={busy || (!rooms.length && !unassigned.length)} onClick={exportRooms}><Download className="h-4 w-4" aria-hidden="true" /> {t("ส่งออก CSV", "Export CSV")}</button>
-          <LogisticsPdfButton path={path} language={language} filename="room-assignments.pdf" apiFetch={apiFetch}
-            ready={!busy && !!plan.rooms.length} dirty={dirty} />
-          <button type="button" className={`${button} registration-admin-control-primary`} disabled={busy || !dirty} onClick={() => void save()}><Save className="h-4 w-4" aria-hidden="true" /> {t("บันทึกผัง", "Save plan")}</button>
+      if(!open)setFocusMode(true);
+    }} actions={<button type="button" className={button} onClick={()=>{setFocusMode(v=>!v);setActionsOpen(false);}} title={focusMode?t("กลับหน้าลงทะเบียน","Return to registrations"):t("เปิดพื้นที่จัดห้องเต็มจอ","Open room workspace")} aria-label={focusMode?t("ออกจากเต็มจอ","Exit expanded workspace"):t("ขยายพื้นที่จัดห้อง","Expand workspace")}>{focusMode?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>}/>
+    <div hidden={!open} className="registration-section-content rooming-workspace">
+      <div className="rooming-toolbar flex flex-wrap items-center gap-1.5">
+        {plan&&<>
+          <button type="button" className={button} disabled={busy} popoverTarget={roomMenuId} aria-expanded={roomMenuOpen} onClick={event=>showRoomMenu(event,false)}><Plus size={16}/>{t("เพิ่มห้อง","Add room")}<ChevronDown size={13}/></button>
+          <button type="button" className={`${button} registration-admin-control-primary`} disabled={busy||!dirty} onClick={()=>void save()}><Save size={16}/>{t("บันทึก","Save")}</button>
+          <span className="text-xs text-slate-500">{t(`จัดแล้ว ${assigned.size}/${plan.guests.length} คน · ${rooms.length} ห้อง`,`${assigned.size}/${plan.guests.length} assigned · ${rooms.length} rooms`)}</span>
+          {dirty&&<span className="text-xs font-semibold text-amber-700">{t("ยังไม่บันทึก","Unsaved")}</span>}
         </>}
-        <button type="button" className={button} disabled={busy} onClick={() => {
-          if (!dirty || window.confirm(t("โหลดผังที่บันทึกไว้ และทิ้งการแก้ไขที่ยังไม่ได้บันทึกหรือไม่", "Reload the saved plan and discard unsaved changes?"))) {
-            setMessage("");
-            setLoadRequest({ replacePlan: true });
-          }
-        }}><RefreshCw className="h-4 w-4" aria-hidden="true" /> {t("โหลดใหม่", "Reload")}</button>
-        {plan && <span aria-hidden={!dirty} className={`text-xs font-semibold text-amber-700 ${dirty ? "" : "invisible"}`}>{t("ยังไม่บันทึก", "Unsaved changes")}</span>}
+        <div ref={actionMenu} className="relative ml-auto">
+          <button type="button" className={button} aria-expanded={actionsOpen} onClick={()=>setActionsOpen(v=>!v)}><Ellipsis size={16}/>{t("แอ็กชัน","Actions")}<ChevronDown size={13}/></button>
+          {actionsOpen&&<div className="absolute right-0 top-full z-30 mt-1 grid min-w-48 gap-1 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+            {plan&&<>
+              <button type="button" className={button} disabled={busy||!unassigned.length} onClick={()=>{
+                const next=draftRoomingPlan(rooms,plan.guests,()=>crypto.randomUUID());setRooms(next);
+                setMessage(next.length===rooms.length?t("ยังไม่มีคู่ที่จัดอัตโนมัติได้","No pairs to draft automatically."):t(`เพิ่มห้องร่าง ${next.length-rooms.length} ห้อง`,`Added ${next.length-rooms.length} draft rooms.`));setActionsOpen(false);
+              }}><WandSparkles size={16}/>{t("จัดร่างอัตโนมัติ","Draft rooms")}</button>
+              <button type="button" className={button} disabled={busy||(!rooms.length&&!unassigned.length)} onClick={()=>{exportRooms();setActionsOpen(false);}}><Download size={16}/>{t("ส่งออก CSV","Export CSV")}</button>
+              <LogisticsPdfButton path={path} language={language} filename="room-assignments.pdf" apiFetch={apiFetch} ready={!busy&&!!plan.rooms.length} dirty={dirty}/>
+            </>}
+            <button type="button" className={button} disabled={busy} onClick={()=>{if(!dirty||window.confirm(t("โหลดผังที่บันทึกไว้ และทิ้งการแก้ไขที่ยังไม่ได้บันทึกหรือไม่","Reload the saved plan and discard unsaved changes?"))){setMessage("");setLoadRequest({replacePlan:true});setActionsOpen(false);}}}><RefreshCw size={16}/>{t("โหลดใหม่","Reload")}</button>
+          </div>}
+        </div>
       </div>
       {busy && <p role="status" className="text-sm text-slate-600">{t("กำลังอัปเดตผัง…", "Updating room plan…")}</p>}
       {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
       {error && <p role="alert" className="text-sm font-medium text-rose-700">{errors[error] ?? errors.rooming_save_failed}</p>}
       {plan === null && !busy && <p className="text-sm text-slate-600">{t("เปิดใช้การลงทะเบียนแบบชำระเงินของงานนี้เพื่อจัดห้อง", "Enable paid registration for this event to assign rooms.")}</p>}
       {plan && <>
-        <p className="text-sm text-slate-600">{t("ลากผู้พักไปวางบนเตียง หรือเลือกชื่อแล้วแตะเตียงปลายทางเพื่อย้ายหรือสลับกัน ระบบจัดร่างจากใบจองเดียวกันและประเภทห้องที่ขอ ใบจองที่มีเด็กให้แอดมินตรวจและจัดเอง", "Drag a guest onto a bed, or select a name and tap a bed to move or swap. Drafts use booking groups and room preferences. Review and assign bookings with children manually.")}</p>
+        <div className="rooming-selection flex items-center gap-2 text-xs text-slate-600">
+          {selected?<><span className="text-blue-700 font-semibold">{t("เลือกแล้ว","Selected")} · {byId.get(selected)?.name||t("ผู้พัก","Guest")}</span>{assigned.has(selected)&&<button type="button" className={button} disabled={busy} onClick={()=>move(selected)}>{t("ย้ายกลับไปรายชื่อ","Unassign")}</button>}<button type="button" className={button} onClick={()=>setSelected("")}>{t("ยกเลิก","Clear")}</button></>:<span>{t("ลากชื่อไปยังเตียง หรือเลือกชื่อแล้วคลิกเตียง","Drag a guest to a bed, or select a name then click a bed.")}</span>}
+        </div>
         <div className="rooming-board">
           <aside className="rooming-pane rounded-xl border border-slate-200 bg-slate-50"
             data-rooming-drop-active={dropTarget === "unassigned" || undefined}
@@ -389,10 +399,6 @@ export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Pro
             <div className="space-y-2 border-b border-slate-200 p-2.5">
               <div className="flex flex-wrap items-center justify-between gap-1.5">
                 <h3 id={roomHeadingId} className="font-semibold text-slate-900">{t("ห้องพัก", "Rooms")} · {rooms.length}</h3>
-                <button type="button" className={button} disabled={busy} popoverTarget={roomMenuId} aria-expanded={roomMenuOpen}
-                  onClick={event => showRoomMenu(event, false)}>
-                  <Plus className="h-4 w-4" aria-hidden="true" /> {t("เพิ่มห้อง", "Add room")}
-                </button>
               </div>
               <input type="search" className="min-h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-900"
                 value={roomSearch} onChange={event => setRoomSearch(event.target.value)}
@@ -482,11 +488,8 @@ export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Pro
             </div>
           </div>
         </div>
-        <div className="flex min-h-8 flex-wrap items-center gap-2 text-sm">
-          {selected && <p className="text-blue-700" role="status">{t("เลือกแล้ว", "Selected")} · {byId.get(selected)?.name || t("ผู้พัก", "Guest")}</p>}
-          {selected && assigned.has(selected) && <button type="button" className={button} disabled={busy} onClick={() => move(selected)}>{t("ย้ายกลับไปรายชื่อ", "Unassign selected guest")}</button>}
-        </div>
       </>}
     </div>
   </section>;
+  return focusMode&&typeof document!=="undefined"?createPortal(<div className="rooming-focus-overlay" role="dialog" aria-modal="true" aria-label={t("พื้นที่จัดห้องพัก","Room assignment workspace")}>{workspace}</div>,document.body):workspace;
 }

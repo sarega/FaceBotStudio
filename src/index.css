@@ -2786,3 +2786,33 @@ html.theme-dark .registration-slip-state[data-slip-tone="missing"] { background:
 .paid-slip-dialog-scroll { overflow:auto; max-height:calc(96dvh - 76px); background:#e2e8f0; }
 .paid-slip-dialog-scroll img { display:block; margin:0 auto; object-fit:contain; }
 @container (min-width: 760px) { .paid-review-details { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); } }
+
+/* Dedicated room assignment workspace: keep the toolbar and both search headers
+   visible, and spend remaining viewport height on two independent scroll areas. */
+.rooming-focus-overlay {
+  position: fixed; inset: 0; z-index: 90; padding: 8px;
+  background: var(--app-bg, #f1f5f9); display: flex; min-width: 0;
+  height: 100dvh; box-sizing: border-box;
+}
+.rooming-focus-panel { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: white; }
+.rooming-focus-panel > .registration-section-heading { flex: none; }
+.rooming-focus-panel > .rooming-workspace:not([hidden]) { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 6px; padding: 8px; overflow: hidden; }
+.rooming-focus-panel .rooming-toolbar, .rooming-focus-panel .rooming-selection { flex: none; }
+.rooming-focus-panel .rooming-board {
+  flex: 1; min-height: 0; height: auto; gap: 8px;
+  grid-template-columns: minmax(12rem, 1fr) minmax(0, 2.5fr);
+  grid-template-rows: minmax(0,1fr);
+}
+.rooming-focus-panel .rooming-pane { overflow: hidden; }
+.rooming-focus-panel .rooming-scroll { flex: 1; height: auto; min-height: 0; overscroll-behavior: contain; }
+.rooming-focus-panel .rooming-room-list { grid-template-columns: repeat(auto-fill,minmax(min(100%,14rem),1fr)); }
+.rooming-focus-panel .rooming-pane > div:first-child { flex: none; padding: 6px 8px; }
+.rooming-focus-panel .rooming-scroll { padding: 6px; }
+html.theme-dark .rooming-focus-overlay { background: #101827; }
+html.theme-dark .rooming-focus-panel { background: #17263b; }
+@media(max-width: 560px) {
+  .rooming-focus-overlay { padding: 4px; }
+  .rooming-focus-panel .rooming-board { grid-template-columns: minmax(0,1fr) minmax(0,1.25fr); gap: 4px; }
+  .rooming-focus-panel .rooming-room-list { grid-template-columns: minmax(0,1fr); }
+  .rooming-focus-panel .rooming-scroll { padding: 4px; }
+}
