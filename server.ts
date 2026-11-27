@@ -21240,10 +21240,14 @@ async function startServer() {
       const rawLimit = Array.isArray(req.query?.limit) ? req.query.limit[0] : req.query?.limit;
       const limit = Math.min(Math.max(Number.parseInt(String(rawLimit || "200"), 10) || 200, 1), 500);
       const organizationId = req.auth?.user.organization_id || "";
-      const [accounts, events, deliveries, allPaidBookings] = await Promise.all([
-        appDb.listCustomerAccounts(limit),
+      const offset=Math.max(0,Math.min(1000000,Number.parseInt(String(req.query.offset||"0"),10)||0));
+      const search=String(req.query.search||"").trim().slice(0,254);
+      const status=String(req.query.status||"all");
+      const focusId=String(req.query.id||"").trim().slice(0,128);
+      const canManageAccounts=organizationId===DEFAULT_ORGANIZATION_ID;
+      const [accountPage, events, allPaidBookings] = await Promise.all([
+        appDb.listCustomerAccounts(limit+1,{organizationId:canManageAccounts?undefined:organizationId,search,status,offset,id:focusId||undefined}),
         appDb.listEvents(organizationId),
-        appDb.listNotificationDeliveries({ related_type: "customer_account", kind: "customer.email_verification", limit: Math.min(limit * 3, 1000) }),
         appDb.listOrganizationPaidBookings(organizationId,10000),
       ]);
       const eventById = new Map(events.map((event) => [event.id, event]));
@@ -21254,13 +21258,7 @@ async function startServer() {
         if(!bookingsByCustomer.has(id)) bookingsByCustomer.set(id,[]);
         bookingsByCustomer.get(id)!.push(booking);
       }
-      const latestDeliveryByAccount = new Map<string, typeof deliveries[number]>();
-      for (const delivery of deliveries) {
-        if (delivery.related_id && !latestDeliveryByAccount.has(delivery.related_id)) {
-          latestDeliveryByAccount.set(delivery.related_id, delivery);
-        }
-      }
-
+      const accounts=accountPage.slice(0,limit);
       const customers = await Promise.all(accounts.map(async (account) => {
         const orders = (await appDb.listCustomerOrders(account.id))
           .filter((order) => eventById.has(order.event_id))
@@ -21291,9 +21289,11 @@ async function startServer() {
           }));
         const registrations=bookingsByCustomer.get(account.id)??[];
         const paidOrders = orders.filter((order) => order.status === "paid");
-        const latestDelivery = latestDeliveryByAccount.get(account.id);
+        const [latestDelivery]=await appDb.listNotificationDeliveries({related_type:"customer_account",related_id:account.id,kind:"customer.email_verification",limit:1});
+        const linkedStaff=canManageAccounts?await appDb.getUserByStaffCustomerAccount(account.id):undefined;
         return {
           ...toPublicCustomerAccount(account),
+          can_manage_account:canManageAccounts&&!linkedStaff,
           email_delivery: latestDelivery
             ? {
                 status: latestDelivery.status,
@@ -21317,7 +21317,8 @@ async function startServer() {
       return res.json({
         generated_at: new Date().toISOString(),
         scope: { organization_id: organizationId, organization_name: req.auth?.user.organization_name || "" },
-        can_delete_unverified: organizationId === DEFAULT_ORGANIZATION_ID,
+        can_delete_unverified: canManageAccounts,
+        pagination:{offset,limit,has_more:accountPage.length>limit},
         email: {
           provider: getEmailConfig().provider,
           worker: RUN_EMBEDDED_WORKER ? "embedded" : "external",
@@ -21427,6 +21428,7 @@ async function startServer() {
     }
     const id = req.params.id.trim();
     try {
+      if(await appDb.getUserByStaffCustomerAccount(id))return res.status(403).json({error:"staff_account_protected"});
       const deleted = await appDb.deleteUnverifiedCustomerAccount(id);
       if (!deleted) return res.status(409).json({ error: "customer_delete_not_eligible" });
       await recordAudit(req, "customer.unverified_account_deleted", "customer_account", id);
@@ -21438,6 +21440,8 @@ async function startServer() {
 
   app.post("/api/admin/customers/:id/resend-verification", requireRoles(["owner", "admin"]), manualOutboundActionRateLimit, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      if(req.auth!.user.organization_id!==DEFAULT_ORGANIZATION_ID)return res.status(403).json({error:"customer_management_not_allowed"});
+      if(await appDb.getUserByStaffCustomerAccount(req.params.id))return res.status(403).json({error:"staff_account_protected"});
       const account = await appDb.getCustomerAccountById(String(req.params.id || "").trim());
       if (!account) return res.status(404).json({ error: "Customer account not found" });
       if (account.status !== "pending" || account.email_verified_at) {
@@ -21459,6 +21463,46 @@ async function startServer() {
       console.error("Failed to resend customer verification email:", error);
       return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to resend verification email" });
     }
+  });
+
+  // Account identity is global; organization staff may inspect their own customers,
+  // but only the default workspace may administer the shared identity.
+  app.post("/api/admin/customers/:id/manage", requireRoles(["owner","admin"]), manualOutboundActionRateLimit, async (req: AuthenticatedRequest,res:Response)=>{
+    if(req.auth!.user.organization_id!==DEFAULT_ORGANIZATION_ID)return res.status(403).json({error:"customer_management_not_allowed"});
+    const id=String(req.params.id||"").trim();
+    const body=readObjectBody(req);
+    const action=String(body.action||"");
+    const reason=String(body.reason||"").trim().slice(0,500);
+    if(!reason||!["profile","suspend","reactivate","reset_password","revoke_sessions"].includes(action))return res.status(400).json({error:"invalid_customer_action"});
+    try{
+      const account=await appDb.getCustomerAccountById(id);
+      if(!account)return res.status(404).json({error:"customer_not_found"});
+      if(await appDb.getUserByStaffCustomerAccount(id))return res.status(403).json({error:"staff_account_protected"});
+      if(action==="suspend"){
+        if(account.status==="disabled")return res.status(409).json({error:"account_already_disabled"});
+        await appDb.setCustomerAccountStatus(id,"disabled");
+      }else if(action==="reactivate"){
+        if(account.status!=="disabled")return res.status(409).json({error:"account_not_disabled"});
+        await appDb.setCustomerAccountStatus(id,account.email_verified_at?"active":"pending");
+      }else if(action==="revoke_sessions"){
+        await appDb.deleteCustomerSessions(id);
+      }else if(action==="reset_password"){
+        if(account.status==="disabled")return res.status(409).json({error:"account_disabled"});
+        if(!getEmailConfig().ready)return res.status(503).json({error:"email_not_configured"});
+        const token=createCustomerAccountToken();
+        const row=await appDb.createCustomerAccountToken({customer_account_id:id,kind:"password_reset",token_hash:token.tokenHash,expires_at:new Date(Date.now()+getCustomerAccountTokenTtlMs("password_reset"))});
+        await queueCustomerAccountEmail(account,"password_reset",token.rawToken,row.id);
+      }else{
+        const first=typeof body.first_name==="string"?body.first_name.trim():account.first_name;
+        const last=typeof body.last_name==="string"?body.last_name.trim():account.last_name;
+        const phone=typeof body.phone==="string"?body.phone.trim():account.phone;
+        if(!first||!last||first.length>120||last.length>120||!isValidCustomerPhone(phone))return res.status(400).json({error:"invalid_customer_profile"});
+        const updated=await appDb.updateCustomerProfile(id,{first_name:first,last_name:last,phone,normalized_phone:normalizeCustomerPhone(phone),address_line1:account.address_line1,address_line2:account.address_line2,district:account.district,subdistrict:account.subdistrict,province:account.province,postal_code:account.postal_code,country:account.country});
+        if(!updated)return res.status(409).json({error:"account_unavailable"});
+      }
+      await recordAudit(req,"customer.admin_"+action,"customer_account",id,{reason,previous_status:account.status});
+      return res.json({status:"ok",account:toPublicCustomerAccount((await appDb.getCustomerAccountById(id))!),queued:action==="reset_password"});
+    }catch(error){console.error("Customer management action failed",error);return res.status(500).json({error:"customer_action_failed"});}
   });
 
   app.get("/api/admin/email/status", requireRoles(["owner", "admin"]), async (req: AuthenticatedRequest, res) => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.34 - 2026-11-27
+
+- Add customer profile editing, password reset requests, suspension, reactivation and session revocation.
+- Protect staff-linked accounts and scope customer access by organization.
+- Add server-side search, filtering and pagination.
+
 ## 0.11.33 - 2026-11-27
 
 - Open room assignments in an expanded viewport workspace with independently scrolling guest and room lists.

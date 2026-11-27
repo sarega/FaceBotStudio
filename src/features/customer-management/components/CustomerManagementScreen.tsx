@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Mail, RefreshCw, Search, ShoppingBag, Trash2, UserRound, XCircle } from "lucide-react";
+import { Mail, RefreshCw, Search, ShoppingBag, Trash2, UserRound, XCircle, Settings2, KeyRound, LogOut, ShieldOff, ShieldCheck, Pencil } from "lucide-react";
 
 type CustomerEmailDelivery = {
   status: "queued" | "processing" | "sent" | "failed";
@@ -53,6 +53,7 @@ function paidBookingStatus(b:CustomerPaidBooking) {
 
 type CustomerRecord = {
   id: string;
+  can_manage_account?:boolean;
   email: string;
   first_name: string;
   last_name: string;
@@ -73,6 +74,7 @@ type CustomerRecord = {
 
 type CustomerResponse = {
   can_delete_unverified?: boolean;
+  pagination?:{offset:number;limit:number;has_more:boolean};
   email: { provider: string; worker: "embedded" | "external" };
   summary: {
     total: number;
@@ -141,6 +143,14 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
   const t = (th: string, en: string) => language === "th" ? th : en;
   const [data, setData] = useState<CustomerResponse | null>(null);
   const [query, setQuery] = useState("");
+  const [searchTerm,setSearchTerm]=useState("");
+  const [offset,setOffset]=useState(0);
+  const [focusId,setFocusId]=useState(focusCustomerId||"");
+  const [actionsOpen,setActionsOpen]=useState(false);
+  const [editProfile,setEditProfile]=useState(false);
+  const [profile,setProfile]=useState({first_name:"",last_name:"",phone:""});
+  useEffect(()=>{const timer=window.setTimeout(()=>{setSearchTerm(query.trim());setOffset(0);},250);return ()=>window.clearTimeout(timer);},[query]);
+  useEffect(()=>{if(focusCustomerId){setFocusId(focusCustomerId);setOffset(0);}},[focusCustomerId]);
   const [statusFilter, setStatusFilter] = useState<"all" | "email_failed" | CustomerRecord["status"]>("all");
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -150,28 +160,24 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
   const [bookingQuery,setBookingQuery]=useState("");
   const [bookingFilter,setBookingFilter]=useState("all");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?:AbortSignal) => {
     setLoading(true);
-    setMessage("");
     try {
-      const response = await apiFetch("/api/admin/customers?limit=500");
+      const params=new URLSearchParams({limit:"50",offset:String(offset),search:searchTerm,status:statusFilter});
+      if(focusId){params.set("id",focusId);params.set("search","");params.set("status","all");}
+      const response = await apiFetch("/api/admin/customers?"+params.toString(),{signal});
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || "Failed to load customer accounts");
-      setData(payload as CustomerResponse);
+      if(!signal?.aborted)setData(payload as CustomerResponse);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to load customer accounts");
-      setData(null);
+      if(!signal?.aborted){setMessage(error instanceof Error ? error.message : "Failed to load customer accounts");setData(null);}
     } finally {
-      setLoading(false);
+      if(!signal?.aborted)setLoading(false);
     }
-  }, [apiFetch]);
+  }, [apiFetch,offset,searchTerm,statusFilter,focusId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {const c=new AbortController();void load(c.signal);return ()=>c.abort();}, [load]);
 
-  useEffect(()=>{
-    if(!focusCustomerId || !data?.customers.some(c=>c.id===focusCustomerId))return;
-    setQuery("");setStatusFilter("all");setSelectedId(focusCustomerId);
-  },[focusCustomerId,data]);
   const filteredBookings=useMemo(()=>{
     const q=bookingQuery.trim().toLowerCase();
     return (data?.bookings||[]).filter(booking=>
@@ -180,26 +186,31 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
         booking.customer_last_name,booking.customer_email,booking.customer_id,booking.event_id]
         .join(" ").toLowerCase().includes(q)));
   },[data?.bookings,bookingQuery,bookingFilter]);
-  const filteredCustomers = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return (data?.customers || []).filter((customer) => {
-      if (statusFilter === "email_failed") {
-        if (customer.status !== "pending" || customer.email_delivery?.status !== "failed") return false;
-      } else if (statusFilter !== "all" && customer.status !== statusFilter) return false;
-      if (!normalizedQuery) return true;
-      return [customer.first_name, customer.last_name, customer.email, customer.phone]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery);
-    });
-  }, [data?.customers, query, statusFilter]);
-
+  const filteredCustomers = data?.customers||[];
   useEffect(() => {
     if (filteredCustomers.some((customer) => customer.id === selectedId)) return;
     setSelectedId(filteredCustomers[0]?.id || "");
   }, [filteredCustomers, selectedId]);
 
   const selectedCustomer = filteredCustomers.find((customer) => customer.id === selectedId) || null;
+  useEffect(()=>{setActionsOpen(false);setEditProfile(false);},[selectedId]);
+  async function manageAccount(action:string,patch:Record<string,string>={}){
+    if(!selectedCustomer?.can_manage_account||busyId)return;
+    const labels:Record<string,string>={profile:t("แก้ไขข้อมูลบัญชี","Edit account profile"),suspend:t("ระงับบัญชีและออกจากระบบทุกอุปกรณ์","Suspend account and revoke sessions"),reactivate:t("เปิดบัญชีกลับมาใช้งาน","Reactivate account"),reset_password:t("ส่งลิงก์ตั้งรหัสผ่านใหม่","Send password reset link"),revoke_sessions:t("ออกจากระบบทุกอุปกรณ์","Sign out all devices")};
+    if(!window.confirm(labels[action]+" · "+selectedCustomer.email+"?"))return;
+    const reason=window.prompt(t("ระบุเหตุผลในการจัดการบัญชี","Reason for account action"));
+    if(!reason?.trim())return;
+    setBusyId(selectedCustomer.id);setMessage("");
+    try{
+      const response=await apiFetch("/api/admin/customers/"+encodeURIComponent(selectedCustomer.id)+"/manage",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,reason,...patch})});
+      const result=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(result.error||"customer_action_failed");
+      setEditProfile(false);setActionsOpen(false);await load();
+      setMessage(action==="reset_password"?t("ส่งคำขอเข้าคิวอีเมลแล้ว","Password reset email queued"):t("จัดการบัญชีสำเร็จ","Account updated"));
+    }catch(e){setMessage(t("ดำเนินการไม่สำเร็จ: ","Action failed: ")+(e instanceof Error?e.message:""));}
+    finally{setBusyId("");}
+  }
+
 
   async function deleteUnverified(customer: CustomerRecord) {
     if (busyId || !window.confirm(t(`ลบบัญชีที่ยังไม่ยืนยัน ${customer.email}? เจ้าของอีเมลจะต้องสมัครใหม่`, `Delete the unverified account ${customer.email}? The email owner will need to register again.`))) return;
@@ -288,15 +299,15 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
 
       <dl aria-label="Customer and booking summary" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-1.5">
         {[
-          { label: t("บัญชีทั้งหมด", "Accounts"), value: summary.total },
-          { label: t("ยืนยันอีเมลแล้ว", "Email verified"), value: summary.verified },
-          { label: t("รอยืนยันอีเมล", "Pending email"), value: summary.pending },
+          { label: t("บัญชีในหน้านี้", "Accounts on page"), value: summary.total },
+          { label: t("ยืนยันอีเมล (หน้านี้)", "Verified on page"), value: summary.verified },
+          { label: t("รอยืนยัน (หน้านี้)", "Pending on page"), value: summary.pending },
           { label: t("การจองทุกงาน", "All event bookings"), value: summary.bookings },
           { label: t("รอชำระเงิน", "Awaiting payment"), value: summary.awaiting_payment },
           { label: t("รอตรวจสลิป", "Slips to review"), value: summary.awaiting_review },
           { label: t("ยืนยันการจองแล้ว", "Confirmed bookings"), value: summary.confirmed, amount: money(summary.confirmed_minor / 100) },
           { label: t("หมดอายุ / ยกเลิก", "Expired / cancelled"), value: summary.expired + summary.cancelled },
-          { label: t("ออเดอร์ตั๋วอื่น ๆ", "Other ticket orders"), value: summary.paid_orders },
+          { label: t("ออเดอร์ตั๋ว (หน้านี้)", "Ticket orders on page"), value: summary.paid_orders },
         ].map(({ label, value, amount }) => (
           <div key={label} className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
             <dt className="text-xs font-medium leading-snug text-slate-600">{label}</dt>
@@ -380,12 +391,15 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
         <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
           <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 p-3">
-              <div className="relative min-w-[220px] flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, email, phone" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" /></div>
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-400">
+              <div className="relative min-w-[220px] flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={query} onChange={(event) => {setFocusId("");setQuery(event.target.value);}} placeholder="Search name, email, phone" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" /></div>
+              <select value={statusFilter} onChange={(event) => {setFocusId("");setOffset(0);setStatusFilter(event.target.value as typeof statusFilter);}} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-400">
                 <option value="all">All statuses</option><option value="pending">Pending</option><option value="active">Active</option><option value="disabled">Disabled</option>
                 <option value="email_failed">{t("อีเมลยืนยันส่งไม่สำเร็จ", "Verification email failed")}</option>
               </select>
-              <span className="text-xs text-slate-500">{filteredCustomers.length} shown</span>
+              <span className="text-xs text-slate-500">{offset+1}–{offset+filteredCustomers.length}</span>
+              {focusId&&<button className="registration-admin-control" onClick={()=>{setFocusId("");setQuery("");setSearchTerm("");setOffset(0);}}>{t("แสดงทุกบัญชี","All accounts")}</button>}
+              <button className="registration-admin-control" disabled={loading||offset===0||!!focusId} onClick={()=>setOffset(v=>Math.max(0,v-50))}>{t("ก่อนหน้า","Previous")}</button>
+              <button className="registration-admin-control" disabled={loading||!data?.pagination?.has_more||!!focusId} onClick={()=>setOffset(v=>v+50)}>{t("ถัดไป","Next")}</button>
             </div>
             <div className="divide-y divide-slate-100">
               {filteredCustomers.length === 0 ? <div className="p-8 text-center text-sm text-slate-500">No customer accounts match this filter.</div> : filteredCustomers.map((customer) => {
@@ -405,18 +419,24 @@ export function CustomerManagementScreen({ language, apiFetch,focusCustomerId,on
               <div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600"><UserRound className="h-5 w-5" /></span><div className="min-w-0"><h2 className="truncate font-semibold text-slate-950">{selectedCustomer.first_name} {selectedCustomer.last_name}</h2><p className="truncate text-xs text-slate-500">{selectedCustomer.email}</p></div></div><span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${badgeClass(selectedCustomer.status === "active" ? "green" : selectedCustomer.status === "pending" ? "amber" : "rose")}`}>{statusLabel(selectedCustomer.status)}</span></div>
               <div className="mt-4 grid grid-cols-2 gap-2 text-xs"><div className="rounded-xl bg-slate-50 p-2.5"><p className="text-slate-500">Phone</p><p className="mt-1 font-semibold text-slate-800">{selectedCustomer.phone || "—"}</p></div><div className="rounded-xl bg-slate-50 p-2.5"><p className="text-slate-500">Last login</p><p className="mt-1 font-semibold text-slate-800">{formatDate(selectedCustomer.last_login_at)}</p></div></div>
               <div className={`mt-3 rounded-xl border p-3 text-xs ${badgeClass(deliveryTone(selectedCustomer.email_delivery))}`}><div className="flex items-center justify-between gap-2"><p className="font-semibold">Verification email</p><span className="font-bold uppercase">{selectedCustomer.email_delivery?.status || "none"}</span></div><p className="mt-1">{deliveryLabel(selectedCustomer.email_delivery)}</p>{selectedCustomer.email_delivery?.sent_at && <p className="mt-1 text-[11px] opacity-75">Provider accepted at {formatDate(selectedCustomer.email_delivery.sent_at)}</p>}{selectedCustomer.email_delivery?.last_error && <p className="mt-1 break-words text-[11px]">{selectedCustomer.email_delivery.last_error}</p>}</div>
-              {selectedCustomer.status === "pending" && <button type="button" onClick={() => void resendVerification(selectedCustomer)} disabled={!!busyId} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"><Mail className="h-4 w-4" />{busyId === selectedCustomer.id ? "Queueing…" : "Resend verification email"}</button>}
-              {selectedCustomer.email_delivery && <p className="mt-2 text-xs text-slate-600">
-                {t("จำนวนครั้งที่พยายามส่งอีเมลล่าสุด", "Delivery attempts for the latest email")} {selectedCustomer.email_delivery.attempt_count}
-              </p>}
-              {data?.can_delete_unverified && selectedCustomer.status === "pending" && !selectedCustomer.email_verified_at &&
-                selectedCustomer.booking_count === 0 && selectedCustomer.order_count === 0 && (
-                  <button type="button" disabled={!!busyId} onClick={() => void deleteUnverified(selectedCustomer)}
-                    className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700 disabled:opacity-50">
-                    <Trash2 className="h-4 w-4" aria-hidden="true" />{t("ลบบัญชีที่ยังไม่ยืนยัน", "Delete unverified account")}
-                  </button>
-                )}
-
+              {selectedCustomer.can_manage_account ? <div className="mt-3 space-y-2">
+                <button className="registration-admin-control w-full justify-between" aria-expanded={actionsOpen} onClick={()=>setActionsOpen(v=>!v)}><Settings2 size={16}/>{t("จัดการบัญชี","Account actions")}</button>
+                {actionsOpen&&<div className="grid gap-1 rounded-lg border border-slate-200 p-2">
+                  {selectedCustomer.status!=="disabled"&&<>
+                    <button className="registration-admin-control justify-start" disabled={!!busyId} onClick={()=>{setProfile({first_name:selectedCustomer.first_name,last_name:selectedCustomer.last_name,phone:selectedCustomer.phone});setEditProfile(v=>!v);}}><Pencil size={15}/>{t("แก้ไขข้อมูลบัญชี","Edit profile")}</button>
+                    {selectedCustomer.status==="pending"&&<button className="registration-admin-control justify-start" disabled={!!busyId} onClick={()=>void resendVerification(selectedCustomer)}><Mail size={15}/>{t("ส่งอีเมลยืนยันซ้ำ","Resend verification")}</button>}
+                    <button className="registration-admin-control justify-start" disabled={!!busyId} onClick={()=>void manageAccount("reset_password")}><KeyRound size={15}/>{t("ส่งลิงก์ Reset Password","Send password reset")}</button>
+                    <button className="registration-admin-control justify-start" disabled={!!busyId} onClick={()=>void manageAccount("revoke_sessions")}><LogOut size={15}/>{t("ออกจากระบบทุกอุปกรณ์","Revoke sessions")}</button>
+                    <button className="registration-admin-control justify-start text-amber-700" disabled={!!busyId} onClick={()=>void manageAccount("suspend")}><ShieldOff size={15}/>{t("ระงับบัญชี","Suspend account")}</button>
+                  </>}
+                  {selectedCustomer.status==="disabled"&&<button className="registration-admin-control justify-start" disabled={!!busyId} onClick={()=>void manageAccount("reactivate")}><ShieldCheck size={15}/>{t("เปิดบัญชีอีกครั้ง","Reactivate account")}</button>}
+                  {data?.can_delete_unverified&&selectedCustomer.status==="pending"&&!selectedCustomer.email_verified_at&&selectedCustomer.booking_count===0&&selectedCustomer.order_count===0&&<button className="registration-admin-control justify-start text-rose-700" disabled={!!busyId} onClick={()=>void deleteUnverified(selectedCustomer)}><Trash2 size={15}/>{t("ลบบัญชีที่ยังไม่ยืนยัน","Delete unverified account")}</button>}
+                </div>}
+                {editProfile&&<form className="grid gap-2 rounded-lg border border-slate-200 p-2" onSubmit={e=>{e.preventDefault();void manageAccount("profile",profile);}}>
+                  {(["first_name","last_name","phone"] as const).map((key,i)=><label key={key} className="text-xs">{[t("ชื่อ","First name"),t("นามสกุล","Last name"),t("โทรศัพท์","Phone")][i]}<input className="block w-full rounded border border-slate-300 px-2 py-1 text-sm" required value={profile[key]} onChange={e=>setProfile(p=>({...p,[key]:e.target.value}))}/></label>)}
+                  <button className="registration-admin-control registration-admin-control-primary" disabled={!!busyId} type="submit">{t("บันทึก","Save")}</button>
+                </form>}
+              </div>:<p className="mt-3 text-xs text-slate-500">{t("บัญชีส่วนกลางหรือบัญชี Staff: ดูข้อมูลได้เท่านั้น","Shared or staff identity: read-only")}</p>}
               <section className="mt-5 space-y-2">
                 <h3 className="font-bold text-slate-900">การจองสัมมนา · Event bookings ({selectedCustomer.booking_count})</h3>
                 {selectedCustomer.paid_bookings.length===0 ?

@@ -1704,13 +1704,27 @@ export class PostgresAppDatabase implements AppDatabase {
       slip_uploaded_ms:row.slip_uploaded_ms==null?null:Number(row.slip_uploaded_ms)}));
   }
 
-  async listCustomerAccounts(limit = 200) {
-    const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit), 10) || 200, 1), 1000);
-    const result = await this.pool.query<Record<string, unknown>>(
-      "SELECT * FROM customer_accounts ORDER BY created_at DESC, id DESC LIMIT $1",
-      [normalizedLimit],
-    );
-    return result.rows.map((row) => mapCustomerAccountRow(row)).filter((row): row is CustomerAccountRow => Boolean(row));
+  async listCustomerAccounts(limit = 200, filters: { organizationId?: string; search?: string; status?: string; offset?: number; id?: string } = {}) {
+    const normalizedLimit = Math.min(Math.max(Number.parseInt(String(limit),10)||200,1),1000);
+    const args: (string|number)[]=[];
+    const bind=(value:string|number)=>{args.push(value);return `$${args.length}`;};
+    const where:string[]=[];
+    if(filters.organizationId){
+      const org=bind(filters.organizationId);
+      where.push(`(EXISTS (SELECT 1 FROM paid_bookings b JOIN events e ON e.id=b.event_id WHERE b.customer_id=c.id AND e.organizer_id=${org})
+        OR EXISTS (SELECT 1 FROM direct_orders o JOIN events e ON e.id=o.event_id WHERE o.customer_account_id=c.id AND e.organizer_id=${org})
+        OR EXISTS (SELECT 1 FROM registrations r JOIN events e ON e.id=r.event_id WHERE r.customer_account_id=c.id AND e.organizer_id=${org}))`);
+    }
+    if(filters.id)where.push(`c.id=${bind(filters.id)}`);
+    if(filters.search){
+      const term=bind(filters.search.trim().toLowerCase());
+      where.push(`strpos(lower(coalesce(c.first_name,'')||' '||coalesce(c.last_name,'')||' '||c.email||' '||coalesce(c.phone,'')),${term})>0`);
+    }
+    if(filters.status==="email_failed")where.push(`c.status='pending' AND (SELECT d.status FROM notification_deliveries d WHERE d.related_type='customer_account' AND d.related_id=c.id AND d.kind='customer.email_verification' ORDER BY d.queued_at DESC LIMIT 1)='failed'`);
+    else if(["pending","active","disabled"].includes(filters.status||""))where.push(`c.status=${bind(filters.status!)}`);
+    const sql=`SELECT c.* FROM customer_accounts c ${where.length?"WHERE "+where.join(" AND "):""} ORDER BY c.created_at DESC,c.id DESC LIMIT ${bind(normalizedLimit)} OFFSET ${bind(Math.max(0,filters.offset||0))}`;
+    const {rows}=await this.pool.query<Record<string,unknown>>(sql,args);
+    return rows.map(row=>mapCustomerAccountRow(row)).filter((row):row is CustomerAccountRow=>Boolean(row));
   }
 
   async createCustomerAccount(input: CreateCustomerAccountInput) {

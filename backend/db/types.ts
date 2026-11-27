@@ -1164,7 +1164,7 @@ export interface AppDatabase {
   markNotificationDeliveryFailed(id: string, workerId: string, errorMessage: string, provider?: string | null): Promise<void>;
   getCustomerAccountById(id: string): Promise<CustomerAccountRow | undefined>;
   getCustomerAccountByNormalizedEmail(normalizedEmail: string): Promise<CustomerAccountRow | undefined>;
-  listCustomerAccounts(limit?: number): Promise<CustomerAccountRow[]>;
+  listCustomerAccounts(limit?: number, filters?: { organizationId?: string; search?: string; status?: string; offset?: number; id?: string }): Promise<CustomerAccountRow[]>;
   listOrganizationPaidBookings(organizationId: string, limit?: number): Promise<PaidRow[]>;
   createCustomerAccount(input: CreateCustomerAccountInput): Promise<CustomerAccountRow>;
   updateCustomerProfile(id: string, input: UpdateCustomerProfileInput): Promise<CustomerAccountRow | undefined>;

@@ -123,3 +123,22 @@ test("customer cleanup deletes unverified signups and their queued verification,
     await db.close();
   }
 });
+
+ test("customer list supports database search, scope and pagination", async () => {
+  const db = new SqliteAppDatabase(":memory:");
+  try {
+    await db.initialize();
+    const a = await db.createCustomerAccount(customerInput("older@example.com"));
+    const b = await db.createCustomerAccount(customerInput("newer@example.com"));
+    assert.equal((await db.listCustomerAccounts(10,{search:"OLDER@EXAMPLE.COM"}))[0]?.id,a.id);
+    assert.equal((await db.listCustomerAccounts(10,{id:b.id}))[0]?.id,b.id);
+    assert.notEqual((await db.listCustomerAccounts(1))[0].id,(await db.listCustomerAccounts(1,{offset:1}))[0].id);
+    assert.deepEqual(await db.listCustomerAccounts(10,{organizationId:"other_org"}),[]);
+    assert.deepEqual(await db.listCustomerAccounts(10,{status:"email_failed"}),[]);
+    await db.verifyCustomerAccountEmail(a.id);
+    await db.setCustomerAccountStatus(a.id,"disabled");
+    assert.equal((await db.listCustomerAccounts(10,{status:"disabled"}))[0]?.id,a.id);
+    await db.setCustomerAccountStatus(a.id,"active");
+    assert.equal((await db.getCustomerAccountById(a.id))?.status,"active");
+  } finally { await db.close(); }
+});
