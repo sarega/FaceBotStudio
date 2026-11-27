@@ -1,6 +1,7 @@
 import { reportFilename } from "../../../lib/reportFilenames";
-import { useState } from "react";
-import { Download, RefreshCw, Save, Plus, Trash2 } from "lucide-react";
+import { useEffect,useState } from "react";
+import { createPortal } from "react-dom";
+import { Download, RefreshCw, Save, Plus, Trash2, Minimize2 } from "lucide-react";
 import {
   attendeeCarpoolRole, carpoolRoles, MAX_CARPOOL_SEATS,
   type CarpoolAttendee, type CarpoolCar, type CarpoolLayout, type CarpoolRole, type PaidCarpoolPlan,
@@ -29,6 +30,14 @@ function carpoolLayoutKey({ roles, cars }: CarpoolLayout) {
 export function PaidCarpoolPanel({ eventId, eventName, language, apiFetch }: Props) {
   const t = (th: string, en: string) => language === "th" ? th : en;
   const [open, setOpen] = useState(false);
+  useEffect(()=>{
+    if(!open)return;
+    const previous=document.body.style.overflow;
+    document.body.style.overflow="hidden";
+    const escape=(e:KeyboardEvent)=>{if(e.key==="Escape"&&!e.defaultPrevented)setOpen(false);};
+    document.addEventListener("keydown",escape);
+    return()=>{document.body.style.overflow=previous;document.removeEventListener("keydown",escape);};
+  },[open]);
   const [saved, setSaved] = useState<PaidCarpoolPlan | null>();
   const [draft, setDraft] = useState<PaidCarpoolPlan | null>(null);
   const [busy, setBusy] = useState(false);
@@ -168,14 +177,15 @@ export function PaidCarpoolPanel({ eventId, eventName, language, apiFetch }: Pro
     </select>;
   }
 
-  return <section className="registration-admin-section registration-admin-carpool">
+  const workspace=<section className={`registration-admin-section registration-admin-carpool ${open?"carpool-focus-panel":""}`}>
     <RegistrationSectionHeader tone="carpool" title={t("จัดรถร่วมเดินทาง", "Carpool")}
       subtitle={draft ? t(`${freeSeats} ที่นั่งว่าง · ${groups.passenger.length - assignments.size} คนรอรถ`,
         `${freeSeats} open seats · ${groups.passenger.length - assignments.size} waiting`) : undefined}
       open={open} onToggle={() => {
         setOpen(!open);
-        if (!open && saved === undefined && !busy) void request();
+        if (!open && !dirty && !busy) void request();
       }} actions={<>
+        <button type="button" className={control} onClick={()=>setOpen(false)} title={t("กลับหน้าลงทะเบียน","Return to registrations")}><Minimize2 size={16}/>{t("กลับ","Back")}</button>
         <button type="button" className={control} disabled={busy} onClick={() => void request()}>
           <RefreshCw size={14} aria-hidden="true" />{t("โหลดใหม่", "Reload")}
         </button>
@@ -267,4 +277,5 @@ export function PaidCarpoolPanel({ eventId, eventName, language, apiFetch }: Pro
       </>}
     </div>}
   </section>;
+  return open?createPortal(<div className="rooming-focus-overlay" role="dialog" aria-modal="true" aria-label={t("พื้นที่จัดรถ","Carpool workspace")}>{workspace}</div>,document.body):workspace;
 }

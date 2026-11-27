@@ -11396,19 +11396,23 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="grid gap-2"
             >
-              {selectedEventId && canReviewPaidSlips && (
-                <>
-                  <PaidRegistrationSettings language={language} key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
-                  <PaidCouponManager language={language} key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
+              <RegistrationsScreen
+                operations={<>
+                  {selectedEventId && canReviewPaidSlips && <>
                   <PaidReviewQueue summary={notificationSummary} summaryError={!!eventNotificationData?.failed}
                     onSummaryRefresh={() => setNotificationRefresh((value) => value + 1)} language={language} key={selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}
                     focusBookingReference={reviewFocus?.eventId===selectedEventId?reviewFocus.reference:undefined}
                     focusBookingEditor={reviewFocus?.edit}
                     onFocusConsumed={() => setReviewFocus(null)}
                     onOpenCustomer={(customerId)=>{setCustomerFocusId(customerId);setActiveTab("customers");}}/>
-                </>
-              )}
-              <RegistrationsScreen
+                    <div className="registration-workspace-group-label">{language==="th"?"ตั้งค่าและส่วนลด":"Setup and discounts"}</div>
+                  <PaidRegistrationSettings language={language} key={`paid-settings:${selectedEventId}`} eventId={selectedEventId} apiFetch={apiFetch} />
+                  <PaidCouponManager language={language} key={"coupons:"+selectedEventId} eventId={selectedEventId} apiFetch={apiFetch}/>
+                    <div className="registration-workspace-group-label">{language==="th"?"พื้นที่จัดการการเดินทางและที่พัก":"Logistics workspaces"}</div>
+                    <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
+                    <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
+                  </>}
+                </>}
                 checkerMode={checkerMode}
                 apiFetch={apiFetch}
                 canExportFinancialReports={canReviewPaidSlips}
@@ -11476,12 +11480,6 @@ export default function App() {
                 registrationTicketResendMessage={registrationTicketResendMessage}
                 onResendRegistrationTicket={resendRegistrationTicket}
               />
-              {selectedEventId && canReviewPaidSlips && (
-                <PaidCarpoolPanel key={`paid-carpool:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
-              )}
-              {selectedEventId && canReviewPaidSlips && (
-                <PaidRoomingPanel key={`paid-rooming:${selectedEventId}`} eventId={selectedEventId} eventName={selectedEvent?.slug || selectedEvent?.name} apiFetch={apiFetch} language={language} />
-              )}
             </motion.div>
           )}
           {activeTab === "customers" && (

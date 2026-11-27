@@ -2517,9 +2517,9 @@ html.theme-dark .registration-admin-review .registration-section-content > .flex
   min-width: 0;
 }
 
-@container registration-workspace (min-width: 70rem) {
+@container registration-workspace (min-width: 52rem) {
   .registration-workspace-grid {
-    grid-template-columns: minmax(0, 1fr) clamp(18rem, 24cqw, 21rem);
+    grid-template-columns: minmax(0, 1fr) clamp(17rem, 27cqw, 21rem);
   }
 }
 
@@ -2816,3 +2816,20 @@ html.theme-dark .rooming-focus-panel { background: #17263b; }
   .rooming-focus-panel .rooming-room-list { grid-template-columns: minmax(0,1fr); }
   .rooming-focus-panel .rooming-scroll { padding: 4px; }
 }
+
+/* Registration operations: one continuous left column and a persistent stats rail. */
+.registration-workspace-group-label { font-size: .72rem; font-weight: 700; color: #64748b; margin-top: 1rem; }
+.registration-workspace-sidebar { align-self: start; }
+@container registration-workspace (min-width: 52rem) {
+  .registration-workspace-sidebar { position: sticky; top: .5rem; max-height: calc(100dvh - 6rem); overflow-y: auto; overscroll-behavior: contain; }
+  .registration-workspace-grid.registration-stats-collapsed { grid-template-columns: minmax(0,1fr) 9rem; }
+  .registration-stats-collapsed .registration-dashboard-stats > div:first-child { flex-direction: column; gap: .25rem; }
+}
+@container registration-workspace (max-width: 51.99rem) {
+  .registration-workspace-sidebar { grid-row: auto; }
+}
+.carpool-focus-panel { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; background:white; }
+.carpool-focus-panel > .registration-section-heading { flex:none; }
+.carpool-focus-panel > .registration-section-content { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; }
+html.theme-dark .carpool-focus-panel { background:#17263b; }
+html.theme-dark .registration-workspace-group-label { color:#94a3b8; }

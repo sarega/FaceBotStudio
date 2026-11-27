@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.37 - 2026-11-27
+
+- Align registration operations in a continuous two-column workspace, with roster first and collapsible sticky event statistics.
+- Open room and carpool planning as dedicated full-screen workspaces while preserving unsaved drafts on return.
+- Refresh clean logistics plans when reopened.
+
 ## 0.11.36 - 2026-11-27
 
 - Show existing and new refund liabilities, additional payments due, gross receipts and net cash in event statistics and reports.

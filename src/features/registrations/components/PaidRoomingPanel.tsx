@@ -45,7 +45,7 @@ export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Pro
     if(!focusMode)return;
     const previous=document.body.style.overflow;
     document.body.style.overflow="hidden";
-    const escape=(e:KeyboardEvent)=>{if(e.key==="Escape"&&!e.defaultPrevented&&!roomMenu.current?.matches(":popover-open")){setActionsOpen(false);setFocusMode(false);}};
+    const escape=(e:KeyboardEvent)=>{if(e.key==="Escape"&&!e.defaultPrevented&&!roomMenu.current?.matches(":popover-open")){setActionsOpen(false);setFocusMode(false);setOpen(false);}};
     document.addEventListener("keydown",escape);
     return ()=>{document.body.style.overflow=previous;document.removeEventListener("keydown",escape);};
   },[focusMode]);
@@ -340,12 +340,12 @@ export function PaidRoomingPanel({ eventId, eventName, language, apiFetch }: Pro
   const workspace=<section ref={sectionRef} className={`registration-admin-section ${focusMode?"rooming-focus-panel":""}`}>
     <RegistrationSectionHeader tone="rooming" title={t("จัดห้องพัก", "Room assignments")} open={open} onToggle={() => {
       if (busy) return;
-      if (focusMode){setFocusMode(false);setActionsOpen(false);return;}
+      if (focusMode){setFocusMode(false);setOpen(false);setActionsOpen(false);return;}
       if (open) roomMenu.current?.hidePopover();
-      if (!open) setLoadRequest({ replacePlan: !plan });
+      if (!open) setLoadRequest({ replacePlan: !plan || !dirty });
       setOpen(!open);
       if(!open)setFocusMode(true);
-    }} actions={<button type="button" className={button} onClick={()=>{setFocusMode(v=>!v);setActionsOpen(false);}} title={focusMode?t("กลับหน้าลงทะเบียน","Return to registrations"):t("เปิดพื้นที่จัดห้องเต็มจอ","Open room workspace")} aria-label={focusMode?t("ออกจากเต็มจอ","Exit expanded workspace"):t("ขยายพื้นที่จัดห้อง","Expand workspace")}>{focusMode?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>}/>
+    }} actions={<button type="button" className={button} onClick={()=>{setFocusMode(false);setOpen(false);setActionsOpen(false);}} title={focusMode?t("กลับหน้าลงทะเบียน","Return to registrations"):t("เปิดพื้นที่จัดห้องเต็มจอ","Open room workspace")} aria-label={focusMode?t("ออกจากเต็มจอ","Exit expanded workspace"):t("ขยายพื้นที่จัดห้อง","Expand workspace")}>{focusMode?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>}/>
     <div hidden={!open} className="registration-section-content rooming-workspace">
       <div className="rooming-toolbar flex flex-wrap items-center gap-1.5">
         {plan&&<>

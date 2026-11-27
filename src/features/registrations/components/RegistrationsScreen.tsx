@@ -80,6 +80,7 @@ type RegistrationCapacitySummary = {
 };
 
 type RegistrationsScreenProps = {
+  operations?:ReactNode;
   filteredRegistrations: RegistrationRecord[];
   registrationAvailability: RegistrationAvailabilitySummary;
   registrationCapacity: RegistrationCapacitySummary;
@@ -136,6 +137,7 @@ type RegistrationsScreenProps = {
 };
 
 export function RegistrationsScreen({
+  operations,
   filteredRegistrations,
   registrationAvailability,
   registrationCapacity,
@@ -279,6 +281,7 @@ export function RegistrationsScreen({
   const shownCheckinRate=shownChecked+shownRegistered>0?
     Math.round(100*shownChecked/(shownChecked+shownRegistered)):0;
 
+  const [statsCollapsed,setStatsCollapsed]=useState(false);
   const t = (key: string, fallback: string) => translate(language, `registrations.${key}`, fallback);
   const statusLabel = (status: string) => t(`status.${status}`, status);
   const formatDate = (value: string) => new Date(value).toLocaleString(language === "th" ? "th-TH" : "en-US");
@@ -330,8 +333,8 @@ export function RegistrationsScreen({
   };
   return (
     <div className="registration-workspace">
-    <div className="registration-workspace-grid grid grid-cols-1 gap-4">
-      <div className="space-y-4">
+    <div className={`registration-workspace-grid grid grid-cols-1 gap-3 ${statsCollapsed?"registration-stats-collapsed":""}`}>
+      <div className="registration-workspace-main space-y-3 min-w-0">
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="flex flex-col gap-2 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -722,9 +725,10 @@ export function RegistrationsScreen({
             </div>
           )}
         </div>
+        {operations}
       </div>
 
-      <div className="space-y-4">
+      <aside className="registration-workspace-sidebar space-y-3 min-w-0">
         <div className="registration-dashboard-stats bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
@@ -734,8 +738,9 @@ export function RegistrationsScreen({
               </h3>
               <p className="hidden text-xs text-slate-500 sm:block">{t("eventStatsHint", "Glanceable live totals for this event.")}</p>
             </div>
-            <StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
+            <button type="button" className="registration-admin-control shrink-0" aria-expanded={!statsCollapsed} onClick={()=>setStatsCollapsed(v=>!v)}>{statsCollapsed?(language==="th"?"แสดง":"Show"):(language==="th"?"ย่อ":"Hide")}</button>
           </div>
+          {!statsCollapsed&&<><StatusBadge tone={registrationAvailability.tone}>{registrationAvailability.label}</StatusBadge>
           {paidError && <p className="mb-3 text-xs text-amber-700">{language === "th"
             ? "ยอดด้านล่างมาจากระบบลงทะเบียนเดิมเท่านั้น เพราะยังโหลดข้อมูล Paid Booking ไม่ได้"
             : "These totals show legacy registrations only because paid booking data could not be loaded."}</p>}
@@ -855,9 +860,10 @@ export function RegistrationsScreen({
               <p className="text-lg font-bold text-violet-700">{paidSummary?shownCheckinRate:checkInRate}%</p>
             </div>
           </div>
+          </>}
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
+        <div hidden={statsCollapsed} className="bg-white rounded-2xl border border-slate-200 p-3 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <div>
               <h3 className="text-base font-semibold">{selectedRegistration?t("selectedTicket", "Selected Ticket"):"Legacy Ticket Preview"}</h3>
@@ -963,7 +969,7 @@ export function RegistrationsScreen({
             </div>
           )}
         </div>
-      </div>
+      </aside>
     </div>
     </div>
   );

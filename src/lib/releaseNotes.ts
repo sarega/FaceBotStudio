@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.37",date:"2026-11-27",title:"Registration workspace redesign",features:["Attendee roster first","Sticky collapsible event statistics","Full-screen room and carpool workspaces","Preserve logistics drafts when returning"]},
   {version:"0.11.36",date:"2026-11-27",title:"Payment adjustment dashboard",features:["Existing surplus and additional payments visible","Gross receipts, refunds and net cash","Increase or decrease attendee prices","Accounting follow-up worklists"]},
   {version:"0.11.35",date:"2026-11-27",title:"Booking adjustment and surplus settlement",features:["Change confirmed room and price","Retain original slip and QR","Record partial refunds and external disbursements","Separate gross receipts and surplus in reports"]},
   {version:"0.11.34",date:"2026-11-27",title:"Customer account administration",features:["Account actions and password reset","Suspend, reactivate and revoke sessions","Server-side search and pagination","Organization scope and staff identity protection"]},
