@@ -1,7 +1,7 @@
-import { BedDouble, CarFront, ChevronDown, ClipboardCheck, Settings2, Tags } from "lucide-react";
+import { BedDouble, CarFront, ChevronDown, ClipboardCheck, Settings2, Tags, Users, MessageCircle } from "lucide-react";
 import type { ReactNode } from "react";
 
-export type RegistrationSectionTone = "settings" | "coupons" | "review" | "rooming" | "carpool";
+export type RegistrationSectionTone = "settings" | "coupons" | "review" | "rooming" | "carpool" | "roster" | "chat";
 type Props = {
   tone: RegistrationSectionTone;
   title: string;
@@ -9,10 +9,14 @@ type Props = {
   open: boolean;
   onToggle: () => void;
   actions?: ReactNode;
+  alwaysShowActions?: boolean;
+  controlsId?: string;
   indicators?: ReactNode;
 };
 
 const icons = {
+  roster: Users,
+  chat: MessageCircle,
   settings: Settings2,
   coupons: Tags,
   review: ClipboardCheck,
@@ -22,12 +26,12 @@ const icons = {
 
 /** A single keyboard-accessible section header for paid-registration administration. */
 export function RegistrationSectionHeader({
-  tone, title, subtitle, open, onToggle, actions, indicators,
+  tone, title, subtitle, open, onToggle, actions, indicators, alwaysShowActions=false, controlsId,
 }: Props) {
   const Icon = icons[tone];
   return (
     <div className="registration-section-heading">
-      <button type="button" aria-expanded={open} onClick={onToggle}
+      <button type="button" aria-expanded={open} aria-controls={controlsId} onClick={onToggle}
         className="registration-section-toggle">
         <span className="registration-section-icon" aria-hidden="true"><Icon size={16} strokeWidth={2}/></span>
         <span className="registration-section-heading-label">
@@ -38,7 +42,7 @@ export function RegistrationSectionHeader({
         <ChevronDown size={16} strokeWidth={2}
           className={`registration-section-chevron${open ? " is-open" : ""}`} aria-hidden="true"/>
       </button>
-      {actions && open && <div className="registration-section-actions">{actions}</div>}
+      {actions && (open || alwaysShowActions) && <div className="registration-section-actions">{actions}</div>}
     </div>
   );
 }

@@ -2833,3 +2833,25 @@ html.theme-dark .rooming-focus-panel { background: #17263b; }
 .carpool-focus-panel > .registration-section-content { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; }
 html.theme-dark .carpool-focus-panel { background:#17263b; }
 html.theme-dark .registration-workspace-group-label { color:#94a3b8; }
+
+/* Compact registration sections with no nested vertical roster scrolling. */
+.registration-admin-roster { overflow: visible; }
+.registration-admin-roster > .registration-section-heading { border-radius: 13px 13px 0 0; }
+.registration-admin-roster > .registration-section-heading:has([aria-expanded="false"].registration-section-toggle) { border-radius: 13px; border-bottom: 0; }
+.registration-admin-roster .registration-section-actions { position: relative; z-index: 21; }
+.registration-admin-chat {
+  --registration-accent: #7c3aed;
+  --registration-accent-soft: #f5f3ff;
+  --registration-accent-border: #ddd6fe;
+  --registration-accent-ink: #6d28d9;
+}
+html.theme-dark .registration-admin-chat {
+  --registration-accent: #a78bfa;
+  --registration-accent-soft: #271d42;
+  --registration-accent-border: #59407e;
+  --registration-accent-ink: #c4b5fd;
+}
+html.theme-dark .paid-attendee-roster > div.overflow-x-auto {
+  background: #17263b !important;
+  border-color: #3d7469 !important;
+}

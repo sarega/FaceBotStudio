@@ -120,10 +120,10 @@ export function PaidAttendeeRoster({people,total,onRefresh,language,onCancelBook
       <button type="button" onClick={onRefresh}
         className="text-xs font-semibold text-emerald-700 underline">{t("โหลดใหม่", "Refresh")}</button>
     </div>
-    <div className="relative max-h-[30rem] overflow-auto rounded-lg border border-emerald-200">
+    <div className="relative overflow-x-auto rounded-lg border border-emerald-200">
       <table className="w-full table-fixed text-left text-xs" style={{ minWidth: visibleColumns.reduce((sum, index) => sum + widths[index], 0) }}>
         <colgroup>{visibleColumns.map(index => <col key={index} style={{ width: widths[index] }} />)}</colgroup>
-        <thead className="sticky top-0 z-10 text-emerald-950"><tr>
+        <thead className="text-emerald-950"><tr>
           {visibleColumns.map(index => <th key={headers[index]} scope="col" className="relative break-words py-2 pl-2 pr-3">
             {headers[index]}
             <span role="separator" aria-orientation="vertical" tabIndex={0}

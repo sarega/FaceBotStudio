@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.38 - 2026-11-27
+
+- Make attendee roster and chat ticket batches collapsible with compact summary headers.
+- Keep report actions available when the attendee roster is collapsed.
+- Remove nested vertical scrolling from attendee tables and chat batches while retaining horizontal table scrolling.
+- Expand the roster automatically for search focus and event statistics filters.
+
 ## 0.11.37 - 2026-11-27
 
 - Align registration operations in a continuous two-column workspace, with roster first and collapsible sticky event statistics.

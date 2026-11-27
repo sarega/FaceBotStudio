@@ -1,6 +1,7 @@
 import { downloadFilename } from "../../../lib/reportFilenames";
 import { useEffect, useMemo, useState } from "react";
 import { RegistrationStatusTag, getRosterStatus } from "./RegistrationStatusTag";
+import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
 import { PaidAttendeeRoster } from "./PaidAttendeeRoster";
 import { isRosterCsvKind, registrationReportTitles, registrationRosterCsvTitles, type ReportKind, type RosterCsvKind } from "../../../lib/registrationReportKinds";
 import type { PaidRosterPerson,PaidRosterSummary } from "./paidRosterTypes";
@@ -12,7 +13,6 @@ import {
   Download,
   FileText,
   ExternalLink,
-  MessageCircle,
   QrCode,
   RefreshCw,
   Search,
@@ -28,7 +28,6 @@ import {
   MenuActionLink,
   SelectionMarker,
   StatusBadge,
-  StatusLine,
   type BadgeTone,
 } from "../../../components/shared/AppUi";
 import { translate, type AppLanguage } from "../../../lib/i18n";
@@ -282,6 +281,12 @@ export function RegistrationsScreen({
     Math.round(100*shownChecked/(shownChecked+shownRegistered)):0;
 
   const [statsCollapsed,setStatsCollapsed]=useState(false);
+  const [rosterOpen,setRosterOpen]=useState(true);
+  const [chatOpen,setChatOpen]=useState(false);
+  const focusedRegistration=visibleRegistrations.find(row=>isSearchFocused("registration",row.id))?.id;
+  useEffect(()=>{if(focusedRegistration)setRosterOpen(true);},[focusedRegistration]);
+  useEffect(()=>{if(registrationListQuery.trim())setRosterOpen(true);},[registrationListQuery]);
+
   const t = (key: string, fallback: string) => translate(language, `registrations.${key}`, fallback);
   const statusLabel = (status: string) => t(`status.${status}`, status);
   const formatDate = (value: string) => new Date(value).toLocaleString(language === "th" ? "th-TH" : "en-US");
@@ -335,24 +340,11 @@ export function RegistrationsScreen({
     <div className="registration-workspace">
     <div className={`registration-workspace-grid grid grid-cols-1 gap-3 ${statsCollapsed?"registration-stats-collapsed":""}`}>
       <div className="registration-workspace-main space-y-3 min-w-0">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="flex flex-col gap-2 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-base font-semibold">{t("title", "Registered Attendees")}</h2>
-              <StatusLine
-                className="mt-0.5"
-                items={[
-                  String(filteredRegistrations.length+filteredPaid.length)+" "+t("results", "results"),
-                  registrationAvailability.label,
-                ]}
-              />
-              <p className="text-xs text-slate-500">
-                {paidSummary
-                  ? String(shownOccupied)+"/"+String(shownCapacity)+" ที่นั่งจอง/ยืนยันแล้ว · "+
-                    String(shownRemaining)+" คงเหลือ (รวม Paid Booking)"
-                  : String(activeAttendeeCount)+" ผู้เข้าร่วมจากระบบ Event เดิม"}
-              </p>
-            </div>
+        <section className="registration-admin-section registration-admin-roster">
+          <RegistrationSectionHeader tone="roster" title={t("title","Registered Attendees")}
+            subtitle={language==="th"?`${filteredRegistrations.length+filteredPaid.length} รายการ · ${shownOccupied} จอง/ยืนยันแล้ว${shownCapacity==null?"":` / ${shownCapacity} · เหลือ ${shownRemaining}`}`:`${filteredRegistrations.length+filteredPaid.length} results · ${shownOccupied} reserved/confirmed${shownCapacity==null?"":` / ${shownCapacity} · ${shownRemaining} available`}`}
+            open={rosterOpen} onToggle={()=>setRosterOpen(v=>!v)} controlsId="registration-roster-content" alwaysShowActions
+            actions={
             <InlineActionsMenu label={t("actions", "Actions")} tone="neutral">
               {apiFetch && selectedEventId && !checkerMode && <>
                 <p className="px-3 pb-1 pt-1 text-xs font-semibold text-slate-500">
@@ -381,12 +373,12 @@ export function RegistrationsScreen({
                   {registrationReportTitles[kind][language === "th" ? 0 : 1]}
                 </MenuActionItem>)}
               </>}
-            </InlineActionsMenu>
-          </div>
+            </InlineActionsMenu>} />
           {reportBusy && <p className="px-4 pb-2 text-sm text-slate-600" role="status">
             {language === "th" ? "กำลังเตรียมรายงาน…" : "Preparing report…"}
           </p>}
           {reportError && <p className="px-4 pb-2 text-sm text-rose-700" role="alert">{reportError}</p>}
+          <div id="registration-roster-content" hidden={!rosterOpen}>
           <div className="border-b border-slate-100 px-3 py-2.5 sm:px-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -459,7 +451,7 @@ export function RegistrationsScreen({
               onPaidBookingCancelled();
             } : undefined} />
           <div className={paidPeople.length>0 && registrationsCount===0 ?
-            "hidden" : "max-h-[28rem] space-y-2 overflow-y-auto p-3 md:hidden"}>
+            "hidden" : "space-y-2 p-3 md:hidden"}>
             {filteredRegistrations.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
                 {deferredRegistrationListQuery || registrationStatusFilter !== "all"
@@ -529,7 +521,7 @@ export function RegistrationsScreen({
             )}
           </div>
           <div className={paidPeople.length>0 && registrationsCount===0 ?
-            "hidden" : "hidden max-h-[38rem] overflow-auto md:block"}>
+            "hidden" : "hidden overflow-x-auto md:block"}>
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
                 <tr>
@@ -649,22 +641,15 @@ export function RegistrationsScreen({
               </ActionButton>
             )}
           </div>
-        </div>
-
-        <div className="surface-panel surface-panel-violet rounded-2xl p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-violet-950">
-                <MessageCircle className="h-4 w-4 text-violet-700" />
-                {t("chatBatchesTitle", "Chat ticket batches")}
-              </h3>
-              <p className="mt-0.5 text-xs text-violet-700 opacity-80">
-                {t("chatBatchesHint", "One Facebook chat can contain registrations for several people. Send all active tickets back to that chat.")}
-              </p>
-            </div>
-            <StatusBadge tone="violet">{chatBatches.length} {t("chatCount", "chats")}</StatusBadge>
           </div>
+        </section>
 
+        <section className="registration-admin-section registration-admin-chat">
+          <RegistrationSectionHeader tone="chat" title={t("chatBatchesTitle","Chat ticket batches")}
+            subtitle={`${chatBatches.length} ${t("chatCount","chats")} · ${chatBatches.reduce((n,b)=>n+b.active_ticket_count,0)} ${t("activeTickets","active tickets")}`}
+            open={chatOpen} onToggle={()=>setChatOpen(v=>!v)} controlsId="registration-chat-content" />
+          <div id="registration-chat-content" hidden={!chatOpen} className="p-3">
+          <p className="text-xs text-slate-500">{t("chatBatchesHint","One Facebook chat can contain registrations for several people. Send all active tickets back to that chat.")}</p>
           {chatBatchMessage && (
             <div
               aria-live="polite"
@@ -687,7 +672,7 @@ export function RegistrationsScreen({
               {t("chatBatchesEmpty", "No channel-linked registration chats found.")}
             </div>
           ) : (
-            <div className="mt-3 max-h-[25rem] space-y-2 overflow-y-auto pr-1">
+            <div className="mt-3 space-y-2">
               {chatBatches.map((batch) => {
                 const loading = chatBatchLoadingKey === batch.key;
                 return (
@@ -724,7 +709,8 @@ export function RegistrationsScreen({
               })}
             </div>
           )}
-        </div>
+          </div>
+        </section>
         {operations}
       </div>
 
@@ -813,7 +799,7 @@ export function RegistrationsScreen({
               <button
                 type="button"
                 className={statsCardClass("all", "border-slate-200 bg-white")}
-                onClick={() => onRegistrationStatusFilterChange("all")}
+                onClick={() => {setRosterOpen(true);onRegistrationStatusFilterChange("all");}}
                 aria-pressed={registrationStatusFilter === "all"}
                 aria-label={`${t("total", "Total")}: ${shownTotal}`}
               >
@@ -823,7 +809,7 @@ export function RegistrationsScreen({
               <button
                 type="button"
                 className={statsCardClass("registered", "border-blue-100 bg-blue-50")}
-                onClick={() => onRegistrationStatusFilterChange("registered")}
+                onClick={() => {setRosterOpen(true);onRegistrationStatusFilterChange("registered");}}
                 aria-pressed={registrationStatusFilter === "registered"}
                 aria-label={`${t("registered", "Registered")}: ${shownRegistered}`}
               >
@@ -833,7 +819,7 @@ export function RegistrationsScreen({
               <button
                 type="button"
                 className={statsCardClass("checked-in", "border-emerald-100 bg-emerald-50")}
-                onClick={() => onRegistrationStatusFilterChange("checked-in")}
+                onClick={() => {setRosterOpen(true);onRegistrationStatusFilterChange("checked-in");}}
                 aria-pressed={registrationStatusFilter === "checked-in"}
                 aria-label={`${t("checked", "Checked")}: ${shownChecked}`}
               >
@@ -843,7 +829,7 @@ export function RegistrationsScreen({
               <button
                 type="button"
                 className={statsCardClass("cancelled", "border-rose-100 bg-rose-50")}
-                onClick={() => onRegistrationStatusFilterChange("cancelled")}
+                onClick={() => {setRosterOpen(true);onRegistrationStatusFilterChange("cancelled");}}
                 aria-pressed={registrationStatusFilter === "cancelled"}
                 aria-label={`${t("cancelled", "Cancelled")}: ${shownCancelled}`}
               >
