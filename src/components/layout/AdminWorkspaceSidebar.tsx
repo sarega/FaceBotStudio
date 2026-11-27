@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from "react";
+import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import {
   Bot,
   CalendarRange,
@@ -303,6 +303,8 @@ export function AdminWorkspaceSidebar({
   onForceScrollAdminAgentToBottom,
 }: AdminWorkspaceSidebarProps) {
   const label = (key: string, fallback: string) => translate(language, key, fallback);
+  const [operationsPinnedClosed,setOperationsPinnedClosed]=useState(false);
+  useEffect(()=>{setOperationsPinnedClosed(false);},[isOperationsTab]);
   const allowHoverFlyout = collapsed && hoverDropdownEnabled;
   const selectedAgentWorkspaceTab = agentWorkspaceTabs.find((tab) => tab.id === agentWorkspaceView) || agentWorkspaceTabs[0];
 
@@ -370,6 +372,7 @@ export function AdminWorkspaceSidebar({
 
   const handleOperationsButtonToggle = () => {
     closeSiblingMenus("operations");
+    if(!collapsed && isOperationsTab){setOperationsPinnedClosed(v=>!v);setOperationsMenuOpen(false);return;}
     if (allowHoverFlyout) {
       setOperationsMenuOpen(true);
       return;
@@ -429,7 +432,47 @@ export function AdminWorkspaceSidebar({
 
       <nav className={`min-h-0 flex-1 ${collapsed ? "overflow-visible pr-0" : "overflow-y-auto pr-1"}`}>
         <div className="space-y-0.5">
-          {primaryTabs.map((tab) => {
+          {!collapsed && (operationsTabs.length>0 || primaryTabs.some(t=>t.id==="customers")) && <p className="px-2 pt-1 pb-0.5 text-[10px] font-semibold text-slate-500">{label("nav.dailyWork","Daily work")}</p>}
+          {operationsTabs.length > 0 && (
+            <div
+              className="relative"
+              ref={operationsMenuRef}
+              onMouseEnter={() => {
+                if (!allowHoverFlyout) return;
+                clearMenuCloseTimer(operationsMenuCloseTimerRef);
+                closeSiblingMenus("operations");
+                setOperationsMenuOpen(true);
+              }}
+              onMouseLeave={allowHoverFlyout ? scheduleOperationsMenuClose : undefined}
+            >
+              <SidebarActionButton
+                collapsed={collapsed}
+                active={isOperationsTab || operationsMenuOpen}
+                icon={Users}
+                label={label("nav.operations", "Operations")}
+                subtitle={label("nav.operationsDescription", "Regs, inbox, check-in, logs")}
+                trailing={
+                  <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${(operationsMenuOpen || (!collapsed && isOperationsTab && !operationsPinnedClosed)) ? "rotate-180" : ""}`} />
+                }
+                onClick={handleOperationsButtonToggle}
+              />
+              <SidebarMenuPanel collapsed={collapsed} open={operationsMenuOpen || (!collapsed && isOperationsTab && !operationsPinnedClosed)}>
+                {operationsTabs.map((tab) => (
+                  <SidebarMenuItem
+                    key={tab.id}
+                    active={activeTab === tab.id}
+                    icon={tab.icon}
+                    label={tab.label}
+                    onClick={() => handleNavigate(tab.id)}
+                  />
+                ))}
+              </SidebarMenuPanel>
+            </div>
+          )}
+
+          {primaryTabs.filter(t=>t.id==="customers" || t.id==="logistics" || t.id==="settings").map(tab=><SidebarActionButton key={tab.id} collapsed={collapsed} active={activeTab===tab.id} icon={tab.icon} label={tab.label} onClick={()=>handleNavigate(tab.id)}/>)}
+          {!collapsed && primaryTabs.some(t=>t.id==="event"||t.id==="agent"||t.id==="outreach") && <p className="mt-2 px-2 pt-2 pb-0.5 border-t border-slate-200 text-[10px] font-semibold text-slate-500">{label("nav.toolsAndSetup","Tools & setup")}</p>}
+          {[...primaryTabs].filter(t=>!["customers","logistics","settings","test","notifications","outreach"].includes(t.id)).sort((a,b)=>(a.id==="agent"?0:1)-(b.id==="agent"?0:1)).map((tab) => {
             if (tab.id === "event") {
               return (
                 <div
@@ -489,10 +532,10 @@ export function AdminWorkspaceSidebar({
                 >
                   <SidebarActionButton
                     collapsed={collapsed}
-                    active={activeTab === "agent" || agentWorkspaceMenuOpen}
+                    active={activeTab === "agent" || activeTab === "test" || agentWorkspaceMenuOpen}
                     icon={selectedAgentWorkspaceTab.icon}
                     label={label("nav.agent", "Agent")}
-                    subtitle={selectedAgentWorkspaceTab?.label || label("nav.agentChat", "Agent Chat")}
+                    subtitle={activeTab==="test"?label("nav.botSimulator","Bot Simulator"):selectedAgentWorkspaceTab?.label || label("nav.agentChat", "Agent Chat")}
                     indicator={agentSettingsDirty}
                     trailing={
                       <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${agentWorkspaceMenuOpen ? "rotate-180" : ""}`} />
@@ -510,6 +553,7 @@ export function AdminWorkspaceSidebar({
                         onClick={() => handleOpenAgentView(agentViewTab.id)}
                       />
                     ))}
+                    {primaryTabs.filter(t=>t.id==="test").map(t=><SidebarMenuItem key={t.id} active={activeTab==="test"} icon={t.icon} label={label("nav.botSimulator","Bot Simulator")} onClick={()=>handleNavigate("test")}/>)}
                   </SidebarMenuPanel>
                 </div>
               );
@@ -527,43 +571,6 @@ export function AdminWorkspaceSidebar({
               />
             );
           })}
-
-          {operationsTabs.length > 0 && (
-            <div
-              className="relative"
-              ref={operationsMenuRef}
-              onMouseEnter={() => {
-                if (!allowHoverFlyout) return;
-                clearMenuCloseTimer(operationsMenuCloseTimerRef);
-                closeSiblingMenus("operations");
-                setOperationsMenuOpen(true);
-              }}
-              onMouseLeave={allowHoverFlyout ? scheduleOperationsMenuClose : undefined}
-            >
-              <SidebarActionButton
-                collapsed={collapsed}
-                active={isOperationsTab || operationsMenuOpen}
-                icon={Users}
-                label={label("nav.operations", "Operations")}
-                subtitle={label("nav.operationsDescription", "Regs, inbox, check-in, logs")}
-                trailing={
-                  <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${operationsMenuOpen ? "rotate-180" : ""}`} />
-                }
-                onClick={handleOperationsButtonToggle}
-              />
-              <SidebarMenuPanel collapsed={collapsed} open={operationsMenuOpen}>
-                {operationsTabs.map((tab) => (
-                  <SidebarMenuItem
-                    key={tab.id}
-                    active={activeTab === tab.id}
-                    icon={tab.icon}
-                    label={tab.label}
-                    onClick={() => handleNavigate(tab.id)}
-                  />
-                ))}
-              </SidebarMenuPanel>
-            </div>
-          )}
 
           {setupTabs.length > 0 && selectedSetupTab && (
             <div
@@ -583,7 +590,7 @@ export function AdminWorkspaceSidebar({
                 icon={selectedSetupTab.icon}
                 label={label("nav.workspaceSetup", "Workspace Setup")}
                 subtitle={label("nav.workspaceSetupDescription", "Organization settings")}
-                indicator={workspaceSetupDirty}
+                indicator={workspaceSetupDirty || eventMailDirty || eventContextDirty}
                 trailing={
                   <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${setupMenuOpen ? "rotate-180" : ""}`} />
                 }
@@ -596,13 +603,14 @@ export function AdminWorkspaceSidebar({
                     active={activeTab === tab.id}
                     icon={tab.icon}
                     label={tab.label}
-                    indicator={tab.id === "settings" && workspaceSetupDirty}
+                    indicator={(tab.id === "settings" && workspaceSetupDirty)||(tab.id==="mail"&&eventMailDirty)||(tab.id==="design"&&eventContextDirty)}
                     onClick={() => handleNavigate(tab.id)}
                   />
                 ))}
               </SidebarMenuPanel>
             </div>
           )}
+          {primaryTabs.filter(t=>t.id==="outreach"||t.id==="notifications").sort((a,b)=>(a.id==="notifications"?1:0)-(b.id==="notifications"?1:0)).map(tab=><SidebarActionButton key={tab.id} collapsed={collapsed} active={activeTab===tab.id} icon={tab.icon} label={tab.label} onClick={()=>handleNavigate(tab.id)}/>)}
         </div>
       </nav>
 

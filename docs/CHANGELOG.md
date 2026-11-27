@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.32 - 2026-11-27
+
+- Prioritize daily operations and customer management in the sidebar, with registrations as the default admin workspace.
+- Group Bot Simulator under Agent and move configuration tools into workspace setup.
+- Add event-level bot and channel assignment with searchable reusable connections, immediate linking and unlinking, and existing routing safeguards.
+
 ## 0.11.31 - 2026-11-27
 
 - Show actual attendee names in collapsed booking review rows and beside payment slips; tuck account-owner information into optional details.

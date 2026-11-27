@@ -133,6 +133,7 @@ type EventStatusToggle = {
 };
 
 type EventWorkspaceScreenProps = {
+  channelAssignments?: ReactNode;
   eventWorkspaceView: EventWorkspaceView;
   selectedEvent: EventRecord | null;
   getEventStatusTone: (status: EventRecord["effective_status"]) => BadgeTone;
@@ -452,6 +453,7 @@ function SpeakerEditorRow({ entry, index, uploading, onChange, onUploadFile, onR
 }
 
 export function EventWorkspaceScreen({
+  channelAssignments,
   eventWorkspaceView,
   selectedEvent,
   getEventStatusTone,
@@ -1173,6 +1175,7 @@ export function EventWorkspaceScreen({
                   </InlineWarning>
                 )}
               </div>
+              {channelAssignments}
             </>
           ) : (
             <>

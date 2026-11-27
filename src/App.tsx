@@ -1,3 +1,4 @@
+import { EventChannelAssignments } from "./features/event/components/EventChannelAssignments";
 import { EVENT_FILTERS, eventMatchesFilter, type EventFilter } from "./lib/eventFilters";
 import { PaidCarpoolPanel } from "./features/registrations/components/PaidCarpoolPanel";
 import { NotificationInbox, type InboxEntry, type NotificationFilter } from "./features/notifications/NotificationInbox";
@@ -898,12 +899,12 @@ function getDefaultTabForRole(role: UserRole | null | undefined): AppTab {
   if (role === "cashier") return "direct_tickets";
   if (role === "checker") return "checkin";
   if (role === "viewer") return "logs";
-  if (role === "operator") return "test";
-  return "event";
+  if (role === "operator") return "registrations";
+  return "registrations";
 }
 
 function readWorkspaceSession() {
-  const fallback = { eventId: "", activeTab: "event" as AppTab, eventWorkspaceView: "setup" as EventWorkspaceView };
+  const fallback = { eventId: "", activeTab: "registrations" as AppTab, eventWorkspaceView: "setup" as EventWorkspaceView };
   if (typeof window === "undefined") return fallback;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_SESSION_STORAGE_KEY) || "{}") as Record<string, unknown>;
@@ -3731,8 +3732,8 @@ export default function App() {
     { id: "public" as const, icon: Eye, label: translate(language, "nav.publicPage", "Public Page"), description: translate(language, "nav.publicPageDescription", "Poster, public copy, and privacy messaging") },
   ];
   const selectedEventWorkspaceTab = eventWorkspaceTabs.find((tab) => tab.id === eventWorkspaceView) || eventWorkspaceTabs[0];
-  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin" || activeTab === "logs";
-  const isSetupTab = activeTab === "settings" || activeTab === "team";
+  const isOperationsTab = activeTab === "registrations" || activeTab === "direct_tickets" || activeTab === "reports" || activeTab === "inbox" || activeTab === "checkin";
+  const isSetupTab = ["settings","team","mail","organizer","design","logs"].includes(activeTab);
   const effectiveSidebarCollapsed = sidebarCollapsed;
   const canReviewPaidSlips = role === "owner" || role === "admin";
   const canOpenNotifications = (canReviewPaidSlips || role === "operator") && !!selectedEventId;
@@ -3742,18 +3743,19 @@ export default function App() {
       { id: "settings" as const, icon: User, label: language === "th" ? "บัญชีของฉัน" : "My account" },
     ] : []),
     ...(canEditSettings ? [{ id: "event" as const, icon: CalendarRange, label: translate(language, "nav.event", "Event") }] : []),
-    ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: translate(language, "nav.mail", "Mail") }] : []),
-    ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: translate(language, "nav.context", "Context") }] : []),
     ...(canRunTest ? [{ id: "test" as const, icon: MessageSquare, label: translate(language, "nav.test", "Test") }] : []),
     ...(canRunAgent ? [{ id: "agent" as const, icon: MonitorCog, label: translate(language, "nav.agent", "Agent") }] : []),
-    ...(canEditSettings ? [{ id: "organizer" as const, icon: WalletCards, label: translate(language, "nav.organizer", "Organizer") }] : []),
     ...(canViewLogs ? [{ id: "outreach" as const, icon: Send, label: translate(language, "nav.outreach", "Outreach") }] : []),
     ...(canManageCustomers ? [{ id: "customers" as const, icon: User, label: translate(language, "nav.customers", "Customers") }] : []),
     ...(canOpenNotifications ? [{ id: "notifications" as const, icon: Bell, label: language === "th" ? "การแจ้งเตือน" : "Notifications" }] : []),
   ];
   const setupTabs = [
+    ...(canEditSettings ? [{ id: "organizer" as const, icon: WalletCards, label: translate(language, "nav.organizer", "Organizer") }] : []),
+    ...(canEditSettings ? [{ id: "design" as const, icon: Code, label: translate(language, "nav.context", "Context") }] : []),
+    ...(canEditSettings ? [{ id: "mail" as const, icon: Send, label: translate(language, "nav.mail", "Mail") }] : []),
     ...(authUser && !logisticsOnly ? [{ id: "settings" as const, icon: SettingsIcon, label: translate(language, "nav.settings", "Settings Center") }] : []),
     ...(canManageUsers ? [{ id: "team" as const, icon: Shield, label: translate(language, "nav.team", "Team Access") }] : []),
+    ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: translate(language, "nav.logs", "Logs") }] : []),
   ];
   const selectedSetupTab = setupTabs.find((tab) => tab.id === activeTab) || setupTabs[0] || null;
   const agentWorkspaceTabs = [
@@ -3761,12 +3763,11 @@ export default function App() {
     { id: "setup" as const, icon: SettingsIcon, label: translate(language, "nav.runtimeSetup", "Runtime Setup"), description: translate(language, "nav.runtimeSetupDescription", "Runtime policy and external channel setup") },
   ];
   const operationsTabs = [
-    ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: translate(language, "nav.reports", "Reports") }] : []),
     ...(canViewRegistrations ? [{ id: "registrations" as const, icon: Users, label: translate(language, "nav.registrations", "Registrations") }] : []),
     ...(canSellDirectTickets ? [{ id: "direct_tickets" as const, icon: QrCode, label: translate(language, "nav.directTickets", "Direct Tickets") }] : []),
     ...(canViewLogs ? [{ id: "inbox" as const, icon: MessageSquare, label: translate(language, "nav.inbox", "Public Inbox") }] : []),
     ...(canCheckinRegistrations ? [{ id: "checkin" as const, icon: QrCode, label: translate(language, "nav.checkin", "Check-in") }] : []),
-    ...(canViewLogs ? [{ id: "logs" as const, icon: Activity, label: translate(language, "nav.logs", "Logs") }] : []),
+    ...(canViewLogs ? [{ id: "reports" as const, icon: BarChart3, label: translate(language, "nav.reports", "Reports") }] : []),
   ];
   const helpContent = TAB_HELP_CONTENT[activeTab];
   const selectedTicketPngUrl = selectedRegistration
@@ -10955,6 +10956,7 @@ export default function App() {
             <EventWorkspaceScreen
               apiFetch={apiFetch}
               eventWorkspaceView={eventWorkspaceView}
+              channelAssignments={canEditSettings&&selectedEvent?<EventChannelAssignments key={selectedEvent.id} eventId={selectedEvent.id} channels={channels} eventNames={eventNameById} language={language} busy={eventLoading} locked={selectedEventChannelWritesLocked} onAssign={handleAssignChannelToSelectedEvent} onUnassign={handleUnassignChannelFromSelectedEvent} onSettings={()=>handleNavigateToTab("settings")}/>:null}
               selectedEvent={selectedEvent}
               getEventStatusTone={getEventStatusTone}
               getEventStatusLabel={getEventStatusLabel}

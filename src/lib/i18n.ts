@@ -2,6 +2,9 @@ export type AppLanguage = "th" | "en";
 
 const THAI_LABELS: Record<string, string> = {
   "nav.event": "อีเวนต์",
+  "nav.dailyWork": "งานประจำ",
+  "nav.toolsAndSetup": "เครื่องมือและการตั้งค่า",
+  "nav.botSimulator": "ทดสอบบอต",
   "nav.mail": "อีเมล",
   "nav.context": "บริบท",
   "nav.test": "ทดสอบ",

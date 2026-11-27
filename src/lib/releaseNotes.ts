@@ -1,4 +1,5 @@
 export const RELEASE_NOTES = [
+  {version:"0.11.32",date:"2026-11-27",title:"Workflow-first navigation and event bot assignments",features:["Daily operations and customers first","Registrations as default admin workspace","Bot Simulator under Agent","Assign reusable bots and channels directly in Event Setup"]},
   {version:"0.11.31",date:"2026-11-27",title:"Attendee-first reviews and registration editing",features:["Actual attendee names in booking and slip review","Operational reports without proxy account names or contacts","Compact registration answer editing","Persistent field locks and audit history"]},
   {version:"0.11.30",date:"2026-11-26",title:"Balanced payment slip preview",features:["Responsive slip previews up to 420px tall","Balanced booking and slip columns","Retain full-screen zoom"]},
   {version:"0.11.29",date:"2026-11-26",title:"Payment slip corrections and readable previews",features:["Correct slip amounts with audit history","Recalculate outstanding balances without replacing evidence","Larger slip previews and full-screen zoom"]},
