@@ -532,11 +532,13 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           const bookingStatus = getRosterStatus(review.booking_state);
           return <details key={review.booking_id} open={reference ? true : undefined}
             className="paid-review-item group/review rounded-lg border border-slate-200" data-payment-warning={hasFlag?"true":undefined}>
-            <summary className="grid min-h-10 cursor-pointer list-none grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto_auto] items-center gap-2 rounded-lg px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-emerald-600 sm:gap-4 sm:px-3 [&::-webkit-details-marker]:hidden">
-              <span className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-900" title={customerName}>
-                {hasFlag && <Flag className="size-4 shrink-0 text-rose-600 fill-rose-600" aria-label={t("ต้องตรวจสอบการชำระเงิน", "Payment needs review")} />}
-                <span className="truncate">{customerName}</span>
-
+            <summary className="grid min-h-10 cursor-pointer list-none grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)_auto_auto] items-center gap-2 rounded-lg px-2.5 py-2 text-sm focus-visible:outline-2 focus-visible:outline-emerald-600 sm:gap-4 sm:px-3 [&::-webkit-details-marker]:hidden">
+              <span className="flex min-w-0 items-start gap-1.5 font-semibold text-slate-900">
+                {hasFlag && <Flag className="mt-0.5 size-4 shrink-0 text-rose-600 fill-rose-600" aria-label={t("ต้องตรวจสอบการชำระเงิน", "Payment needs review")} />}
+                <span className="min-w-0">
+                  {review.attendees.length ? review.attendees.map(attendee => <span key={attendee.id} className="block break-words leading-snug">{attendee.name || t("ไม่ระบุชื่อ", "Unnamed attendee")}</span>) : <span className="text-slate-500">{t("ไม่มีผู้เข้าร่วม", "No attendees")}</span>}
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">{t(`${review.attendee_count} คน`, `${review.attendee_count} attendees`)} · {review.booking_reference}</span>
+                </span>
               </span>
               <span className="flex flex-wrap items-center gap-1"><SlipStatus review={review} language={language}/>{hasFlag&&<span className="registration-payment-flag">{review.amount_mismatch?t("ยอดไม่ตรง","Amount mismatch"):t("ต้องตรวจสอบ","Needs review")}</span>}</span>
               <span className="whitespace-nowrap text-right font-semibold tabular-nums text-slate-900">{money.format(review.total_minor/100)}</span>
@@ -651,12 +653,6 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                   {review.proofs.length === 1 && review.claimed_reference && <>
                     <dt>{t("เลขอ้างอิงสลิป", "Slip reference")}</dt><dd>{review.claimed_reference}</dd>
                   </>}
-                  <dt>{t("ผู้จอง", "Booked by")}</dt><dd className="font-semibold">{customerName}</dd>
-                  <dt>{t("อีเมล", "Email")}</dt><dd>{review.customer_email}</dd>
-                  <dt>{t("รหัสบัญชีลูกค้า", "Customer ID")}</dt><dd>{review.customer_id}</dd>
-                  {review.customer_phone && <>
-                    <dt>{t("โทรศัพท์", "Phone")}</dt><dd>{review.customer_phone}</dd>
-                  </>}
                   <dt>{t("งาน", "Event")}</dt><dd>{review.event_name}</dd>
                   <dt>{t("ลงทะเบียนเมื่อ", "Booked at")}</dt><dd>{dateTime.format(review.booking_created_ms)}</dd>
                 </dl>
@@ -676,12 +672,22 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
                       onChange={() => refreshAfterUpdate(review.booking_reference)} />
                   </div>}
                 </details>
-                {onOpenCustomer && <button type="button" className={toolbarControl}
-                  onClick={() => onOpenCustomer(review.customer_id)}>
-                  {t("เปิดบัญชีลูกค้า", "View customer account")}
-                </button>}
+                <details className="rounded-md border border-slate-200 px-2.5 py-1.5">
+                  <summary className="cursor-pointer text-xs font-medium text-slate-600">{t("ข้อมูลเจ้าของบัญชี / ผู้จองแทน", "Account owner / booker details")}</summary>
+                  <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs wrap-anywhere">
+                    <dt>{t("เจ้าของบัญชี", "Account owner")}</dt><dd>{customerName}</dd>
+                    <dt>{t("อีเมล", "Email")}</dt><dd>{review.customer_email}</dd>
+                    {review.customer_phone && <><dt>{t("โทรศัพท์", "Phone")}</dt><dd>{review.customer_phone}</dd></>}
+                    <dt>{t("รหัสบัญชี", "Account ID")}</dt><dd>{review.customer_id}</dd>
+                  </dl>
+                  {onOpenCustomer && <button type="button" className={toolbarControl+" mt-2"} onClick={() => onOpenCustomer(review.customer_id)}>{t("เปิดบัญชีลูกค้า", "View customer account")}</button>}
+                </details>
               </div>
               <div className="min-w-0 space-y-2">
+                <div className="rounded-md border border-slate-200 px-2.5 py-1.5">
+                  <p className="text-xs text-slate-600">{t("สลิปสำหรับผู้เข้าร่วมในใบจองนี้", "Payment slips for these attendees")}</p>
+                  <p className="font-semibold break-words">{review.attendees.map(a=>a.name).filter(Boolean).join(" · ") || t("ไม่มีผู้เข้าร่วม", "No attendees")}</p>
+                </div>
                 <div className="grid gap-4">
                   {review.proofs.map((proof, index) => {
                     const url = path + "/proofs/" + encodeURIComponent(proof.attempt_id);

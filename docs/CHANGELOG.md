@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.31 - 2026-11-27
+
+- Show actual attendee names in collapsed booking review rows and beside payment slips; tuck account-owner information into optional details.
+- Remove proxy account names and fallback account contact information from operational registration reports while preserving full historical exports.
+- Add compact staff editing of configured seminar registration answers at booking and attendee level.
+- Persist individual field locks, enforce them in staff and customer preference edits, and audit changes. Keep pricing changes explicit and separate.
+
 ## 0.11.30 - 2026-11-26
 
 - Balance slip preview size with a responsive 420px height limit and equal-width booking and slip columns. Keep full-screen zoom available.

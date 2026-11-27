@@ -87,7 +87,7 @@ export function buildRegistrationRoster(
         ? identityKeys(row.first_name, row.last_name, personalEmail, personalPhone)
         : identityKeys(row.first_name, row.last_name, email, phone, text(row.customer_id)),
       cells: [text(row.first_name), text(row.last_name), statusLabel(state), text(row.category_label),
-        Number.isFinite(price) ? (price / 100).toFixed(2) : "", food, phone, email],
+        Number.isFinite(price) ? (price / 100).toFixed(2) : "", food, personalPhone, personalEmail],
     });
   }
 

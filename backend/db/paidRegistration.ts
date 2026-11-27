@@ -3,7 +3,7 @@ import { attendeeCarpoolRole, carpoolRoleFromAnswer, type CarpoolAttendee, type 
 import { applyCoupon, isValidCouponCode, normalizeCouponCode, recordCouponRedemption } from "./paidCoupons";
 import { getEffectiveEventStatus, getEventState } from "../datetime";
 import { decryptPaidProof, encryptPaidProof, paidProofEncryptionConfigured } from "../paidProofEncryption";
-import { roomSurchargeMinor, isEditableSeminarKey, type EditableSeminarKey, normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField } from "../paidSeminarFields";
+import { roomSurchargeMinor, isEditableSeminarKey, type EditableSeminarKey, normalizePaidSeminarAnswers, parsePaidSeminarFields, type PaidSeminarField, type PaidSeminarKey } from "../paidSeminarFields";
 import { createHash, randomUUID } from "node:crypto";
 import type { RoomingGuest, RoomingRoom } from "../roomingPlan";
 
@@ -551,6 +551,7 @@ export function* readOwnedPaidBooking(eventId: string, id: string, customerId: s
     const answers = normalizePaidSeminarAnswers([field], field.scope, { [edit.key]: edit.value });
     if (!answers) throw new PaidBookingError("invalid_seminar_answers");
     const contact = JSON.parse(String(target.contact_json || "{}"));
+    if(Array.isArray(contact.admin_locked_fields)&&contact.admin_locked_fields.includes(edit.key))throw new PaidBookingError("registration_field_locked");
     contact.answers = [...(Array.isArray(contact.answers) ? contact.answers.filter((answer: { key: string }) => answer.key !== edit.key) : []), ...answers];
     if (edit.key === "room_preference" && roomSurcharge) {
       const accommodation = contact.answers.find((answer: { key: string }) => answer.key === "accommodation")?.value;
@@ -1442,8 +1443,8 @@ export function* confirmPaidMessengerDraft(input: PaidMessengerConfirmInput, org
 
 export interface PaidAdminAction {
   eventId: string; bookingId: string; organizationId: string; actorId: string;
-  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip" | "correct_slip_amount";
-  reason: string; holdMinutes?: number; refundReference?: string; attemptId?: string; slipAmountMinor?: number; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
+  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip" | "correct_slip_amount" | "edit_registration_answer" | "set_registration_field_lock";
+  reason: string; holdMinutes?: number; refundReference?: string; attemptId?: string; slipAmountMinor?: number; answerKey?: PaidSeminarKey; answerValue?: string; fieldLocked?: boolean; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
 }
 
 export function* readPaidAdminBooking(eventId: string, organizationId: string, reference: string): PaidCommand<PaidRow | undefined> {
@@ -1463,7 +1464,7 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
   if (!row) return undefined;
   const refunds = yield query("SELECT amount_minor,reference,recorded_ms FROM paid_refunds WHERE booking_id=?", String(row.id));
   const attendeePrices = yield query(
-    "SELECT id,first_name,last_name,category_label,unit_minor FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL ORDER BY ordinal", String(row.id),
+    "SELECT id,first_name,last_name,category_label,unit_minor,contact_json FROM paid_attendees WHERE booking_id=? AND cancelled_ms IS NULL ORDER BY ordinal", String(row.id),
   );
   const proofs = yield query(
     `SELECT a.id AS attempt_id,
@@ -1472,21 +1473,28 @@ export function* readPaidAdminBooking(eventId: string, organizationId: string, r
      WHERE a.booking_id=? AND p.deleted_ms IS NULL ORDER BY a.sequence`, String(row.id),
   );
   const canApplyCoupon = Number(row.unpaid_without_attempts) === 1 && Number(row.due_ms) > Date.now() && row.coupon_code == null;
-  return { ...row, proofs, can_apply_coupon: canApplyCoupon,
+  const fields=yield* readPaidSeminarForm(eventId);
+  const [contactRow]=yield query("SELECT contact_json FROM paid_bookings WHERE id=?",String(row.id));
+  const answers=(raw:unknown)=>Object.fromEntries((JSON.parse(String(raw||"{}")).answers??[]).map((a:{key:string;value:string})=>[a.key,a.value]));
+  const locks=(raw:unknown)=>{const value=JSON.parse(String(raw||"{}")).admin_locked_fields;return Array.isArray(value)?value.filter((k:unknown)=>typeof k==="string"):[];};
+  return { ...row, proofs, can_apply_coupon: canApplyCoupon, registration_fields:fields, registration_locked_fields:locks(contactRow?.contact_json),
+    registration_answers:answers(contactRow?.contact_json),
     coupon_discount_minor: row.coupon_discount_minor == null ? null : Number(row.coupon_discount_minor), pending_proofs: Number(row.pending_proofs), cash_confirmed: Number(row.cash_confirmed) === 1, balance_due_minor: Number(row.balance_due_minor),
-    attendee_prices: attendeePrices.map(attendee => ({ ...attendee, unit_minor: Number(attendee.unit_minor) })), credit_used_minor:Number(row.credit_used_minor),credit_issued_minor:Number(row.credit_issued_minor), total_minor:Number(row.total_minor),version:Number(row.version),due_ms:Number(row.due_ms),
+    attendee_prices: attendeePrices.map(({contact_json,...attendee}) => ({ ...attendee, unit_minor: Number(attendee.unit_minor), registration_answers:answers(contact_json), registration_locked_fields:locks(contact_json) })), credit_used_minor:Number(row.credit_used_minor),credit_issued_minor:Number(row.credit_issued_minor), total_minor:Number(row.total_minor),version:Number(row.version),due_ms:Number(row.due_ms),
     attendees:Number(row.attendees),checked_in:Number(row.checked_in),refunds };
 }
 
 export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status:string; payment_status:string; version:number; due_at:string; total_minor?:number; balance_due_minor?:number }> {
-  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone, attemptId, slipAmountMinor } = input;
+  const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone, attemptId, slipAmountMinor, answerKey, answerValue, fieldLocked } = input;
   const couponCode = normalizeCouponCode(input.couponCode ?? "");
   if (!key || key.length>128 || !reason?.trim() || reason.length>1000 || !Number.isSafeInteger(version) || version<1 ||
-      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount"].includes(action) ||
+      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock"].includes(action) ||
       (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
       (["correct_price", "flag_price", "clear_price_flag"].includes(action) && !attendeeId) ||
       (["revoke_slip","correct_slip_amount"].includes(action) && (!attemptId || attemptId.length>128)) ||
       (action==="correct_slip_amount" && (!Number.isSafeInteger(slipAmountMinor) || slipAmountMinor!<1 || slipAmountMinor!>2_147_483_647)) ||
+      (action==="set_registration_field_lock" && (typeof answerKey!=="string" || typeof fieldLocked!=="boolean")) ||
+      (action==="edit_registration_answer" && (typeof answerKey!=="string" || typeof answerValue!=="string" || answerValue.length>500)) ||
       (action==="set_attendee_phone" && (!attendeeId || !isOptionalAttendeePhone(attendeePhone))) ||
       (action==="correct_price" && (!Number.isSafeInteger(unitMinor) || unitMinor! < 1 || unitMinor! > 2_147_483_647)) ||
       (action==="refund" && (!refundReference?.trim() || refundReference.length>255))) throw new PaidBookingError("invalid_admin_action");
@@ -1495,6 +1503,8 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   const digest=createHash("sha256").update(JSON.stringify([bookingId,version,action,reason,holdMinutes,refundReference,
     ...(action === "revoke_slip" ? [attemptId] : []),
     ...(action === "correct_slip_amount" ? [attemptId,slipAmountMinor] : []),
+    ...(action === "edit_registration_answer" ? [attendeeId,answerKey,answerValue] : []),
+    ...(action === "set_registration_field_lock" ? [attendeeId,answerKey,fieldLocked] : []),
     ...(action === "correct_price" ? [attendeeId,unitMinor] : []),
     ...(action === "set_attendee_phone" ? [attendeeId,attendeePhone?.trim()] : []),
     ...(action === "apply_coupon" ? [couponCode] : []),
@@ -1520,7 +1530,30 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   let correction: { total_minor: number; balance_due_minor: number } | undefined;
   let couponConfirmed = false;
   let auditReason = reason.trim();
-  if (action === "correct_slip_amount") {
+  if (action === "edit_registration_answer" || action === "set_registration_field_lock") {
+    if(previous==="cancelled"||payment==="refunded")throw new PaidBookingError("state_conflict");
+    const fields=yield* readPaidSeminarForm(eventId);
+    const field=fields.find(f=>f.key===answerKey&&f.scope===(attendeeId?"attendee":"booking"));
+    if(!field)throw new PaidBookingError("invalid_seminar_answers");
+    const [target]=attendeeId?yield query("SELECT id,contact_json FROM paid_attendees WHERE id=? AND booking_id=? AND event_id=? AND cancelled_ms IS NULL",attendeeId,bookingId,eventId):[booking];
+    if(!target)throw new PaidBookingError("attendee_not_found");
+    const contact=JSON.parse(String(target.contact_json||"{}"));
+    const locks=Array.isArray(contact.admin_locked_fields)?contact.admin_locked_fields.filter((k:unknown)=>typeof k==="string"):[];
+    if(action==="set_registration_field_lock"){
+      contact.admin_locked_fields=fieldLocked?[...new Set([...locks,answerKey])]:locks.filter((k:string)=>k!==answerKey);
+      auditReason=reason.trim().slice(0,600)+" · "+(attendeeId??"booking")+" · "+answerKey+" · "+(fieldLocked?"locked":"unlocked");
+    }else{
+      if(locks.includes(answerKey))throw new PaidBookingError("registration_field_locked");
+      const answers=normalizePaidSeminarAnswers([field],field.scope,{[answerKey!]:answerValue});
+      if(!answers)throw new PaidBookingError("invalid_seminar_answers");
+      const existing=Array.isArray(contact.answers)?contact.answers:[];
+      const old=existing.find((a:{key:string})=>a.key===answerKey)?.value??"";
+      contact.answers=[...existing.filter((a:{key:string})=>a.key!==answerKey),...answers];
+      auditReason=reason.trim().slice(0,200)+" · "+(attendeeId??"booking")+" · "+answerKey+": "+String(old).slice(0,300)+" → "+String(answerValue).slice(0,300);
+    }
+    if(attendeeId)yield query("UPDATE paid_attendees SET contact_json=? WHERE id=? AND booking_id=? AND event_id=?",JSON.stringify(contact),attendeeId,bookingId,eventId);
+    else yield query("UPDATE paid_bookings SET contact_json=? WHERE id=? AND event_id=?",JSON.stringify(contact),bookingId,eventId);
+  } else if (action === "correct_slip_amount") {
     if (!["confirmed","verification_pending"].includes(previous) || payment==="refunded") throw new PaidBookingError("state_conflict");
     const [slip]=yield query("SELECT a.id,a.status,a.claimed_minor,a.observed_minor FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id WHERE a.id=? AND a.event_id=? AND a.booking_id=? AND p.deleted_ms IS NULL AND a.status IN ('verified','proof_submitted','exception')",attemptId!,eventId,bookingId);
     if(!slip)throw new PaidBookingError("attempt_not_found");

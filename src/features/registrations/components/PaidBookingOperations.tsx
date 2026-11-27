@@ -1,3 +1,5 @@
+import { Lock, LockOpen, Pencil, Check, X } from "lucide-react";
+import { paidSeminarFields, type PaidSeminarField } from "../../../../backend/paidSeminarFields";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 type ApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -6,7 +8,8 @@ type Booking = {
   total_minor: number; balance_due_minor: number;
   cash_confirmed: boolean; pending_proofs: number; payment_notice?: string;
   can_apply_coupon: boolean;
-  attendee_prices: { id: string; first_name: string; last_name: string; category_label: string; unit_minor: number }[];
+  registration_locked_fields?:string[]; registration_fields?:PaidSeminarField[]; registration_answers?:Record<string,string>;
+  attendee_prices: { registration_locked_fields?:string[]; registration_answers?:Record<string,string>; id: string; first_name: string; last_name: string; category_label: string; unit_minor: number }[];
   due_ms: number; attendees: number; checked_in: number;
   credit_used_minor: number; credit_issued_minor: number;
   refunds: { reference: string; amount_minor: number }[];
@@ -42,10 +45,34 @@ const errorLabels: Record<string, Copy> = {
   state_conflict: ["สถานะใบจองไม่รองรับการดำเนินการนี้", "This operation is unavailable for the current booking status."],
   hold_expired: ["หมดเวลาชำระเงินแล้ว", "The payment deadline has passed."],
   already_checked_in: ["มีผู้เข้าร่วมเช็กอินแล้ว", "An attendee has already checked in."],
+  registration_field_locked: ["ช่องนี้ถูกล็อก กรุณาปลดล็อกก่อนแก้ไข", "Unlock this field before editing."],
   invalid_admin_action: ["กรุณาตรวจข้อมูลการดำเนินการ", "Check the operation details."],
 };
 const control = "registration-admin-control";
 const input = "mt-0.5 block w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5";
+
+const fieldLabels:Record<string,string>={arrival:"วันเดินทางมาถึง",departure:"วันเดินทางกลับ",accommodation:"ต้องการที่พัก",room_preference:"ประเภทห้องพัก",transport:"การเดินทาง",food:"อาหาร",notes:"ข้อมูลเพิ่มเติม"};
+function AnswerEditor({field,initial,locked,language,busy,onSave,onLock}:{field:PaidSeminarField;initial:string;locked:boolean;language:"th"|"en";busy:boolean;onSave:(value:string)=>Promise<void>;onLock:(locked:boolean)=>Promise<void>}){
+ const [value,setValue]=useState(initial);const [editing,setEditing]=useState(false);const t=(th:string,en:string)=>language==="th"?th:en;
+ const type=paidSeminarFields[field.key].type;
+ const choices=field.options??(type==="boolean"?["yes","no"]:undefined);
+ const label=language==="th"?fieldLabels[field.key]:paidSeminarFields[field.key].label;
+ const display=(v:string)=>type==="boolean"?v==="yes"?t("ต้องการ","Yes"):v==="no"?t("ไม่ต้องการ","No"):v:v;
+ const lockLabel=locked?t("ปลดล็อก "+label,"Unlock "+label):t("ล็อก "+label,"Lock "+label);
+ return <div className="border-b border-slate-200 py-1.5">
+ <div className="flex items-center gap-2">
+ <span className="text-xs text-slate-600 min-w-0 flex-1">{label}</span>
+ <span className="text-sm font-medium break-words min-w-0 flex-[1.4]">{display(initial)||"—"}</span>
+ {!locked&&<button type="button" className="p-1.5 rounded hover:bg-slate-100" disabled={busy} title={t("แก้ไข","Edit")} aria-label={t("แก้ไข "+label,"Edit "+label)} onClick={()=>{setValue(initial);setEditing(v=>!v);}}><Pencil size={14}/></button>}
+ <button type="button" className={`p-1.5 rounded hover:bg-slate-100 ${locked?"text-amber-700":"text-slate-400"}`} disabled={busy} title={lockLabel} aria-label={lockLabel} onClick={()=>{setEditing(false);void onLock(!locked);}}>{locked?<Lock size={14}/>:<LockOpen size={14}/>}</button>
+ </div>
+ {editing&&!locked&&<form className="flex items-start gap-1.5 mt-1" onSubmit={e=>{e.preventDefault();void onSave(value);}}>
+ <div className="min-w-0 flex-1">
+ {choices?<select aria-label={label} className={input} required={field.required} value={value} onChange={e=>setValue(e.target.value)}><option value="">{t("เลือกคำตอบ","Choose answer")}</option>{value&&!choices.includes(value)&&<option value={value} disabled>{value}</option>}{choices.map(choice=><option key={choice} value={choice}>{display(choice)}</option>)}</select>:type==="date"?<input aria-label={label} className={input} type="date" required={field.required} value={value} onChange={e=>setValue(e.target.value)}/>:<input aria-label={label} className={input} maxLength={500} required={field.required} value={value} onChange={e=>setValue(e.target.value)}/>}
+ </div><button type="submit" disabled={busy||value===initial} title={t("บันทึก","Save")} aria-label={t("บันทึก","Save")} className="p-2 text-emerald-700"><Check size={17}/></button><button type="button" title={t("ยกเลิก","Cancel")} aria-label={t("ยกเลิก","Cancel")} className="p-2" onClick={()=>setEditing(false)}><X size={17}/></button>
+ </form>}
+ </div>;
+}
 
 export type BookingEditRequest = { action: "correct_price"; attendeeId: string } | { action: "payment_notice" };
 
@@ -139,6 +166,28 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
     } catch (failure) { setError((failure instanceof Error && errorLabels[failure.message]) || ["บันทึกการเปลี่ยนแปลงไม่สำเร็จ", "Could not update the booking."]); }
     finally { setBusy(false); }
   }
+  async function saveAnswer(field:PaidSeminarField,value:string,personId?:string){
+    if(!booking||busy||booking.version!==version)return;
+    if((field.key==="accommodation"||field.key==="room_preference")&&!window.confirm(t("การเปลี่ยนคำตอบจะไม่ปรับยอดเงินอัตโนมัติ ตรวจราคาแยกต่างหากหรือไม่?","This changes the answer only, not the price. Review pricing separately. Continue?")))return;
+    setBusy(true);setError(null);
+    try{
+      const response=await apiFetch(`${base}/${encodeURIComponent(booking.id)}/manage`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action:"edit_registration_answer",version:booking.version,answer_key:field.key,answer_value:value,attendee_id:personId,reason:"Staff updated registration answer"})});
+      const result=await response.json();if(!response.ok)throw Error(result.error);
+      await loadBooking(bookingReference);onChange();
+    }catch(failure){setError((failure instanceof Error&&errorLabels[failure.message])||[ "บันทึกคำตอบไม่สำเร็จ กรุณาตรวจข้อมูล","Could not save the answer. Check the value and refresh."]);}
+    finally{setBusy(false);}
+  }
+  async function setFieldLock(field:PaidSeminarField,locked:boolean,personId?:string){
+    if(!booking||busy||booking.version!==version)return;
+    if(!locked&&!window.confirm(t("ปลดล็อกช่องนี้ให้แก้ไขได้อีกครั้ง?","Unlock this field for editing again?")))return;
+    setBusy(true);setError(null);
+    try{
+      const response=await apiFetch(`${base}/${encodeURIComponent(booking.id)}/manage`,{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action:"set_registration_field_lock",version:booking.version,answer_key:field.key,field_locked:locked,attendee_id:personId,reason:locked?"Staff locked registration field":"Staff unlocked registration field"})});
+      const result=await response.json();if(!response.ok)throw Error(result.error);
+      await loadBooking(bookingReference);onChange();
+    }catch(failure){setError((failure instanceof Error&&errorLabels[failure.message])||["บันทึกการล็อกไม่สำเร็จ","Could not update field lock."]);}
+    finally{setBusy(false);}
+  }
   const actions = booking?.state === "expired" ? ["reinstate"] :
     booking?.state === "confirmed" && booking.payment_state === "verified"
       ? booking.total_minor > (booking.balance_due_minor ?? 0)
@@ -170,6 +219,16 @@ export function PaidBookingOperations({ eventId, apiFetch, onChange, language, b
         {booking.balance_due_minor > 0 && booking.payment_notice && <p className="whitespace-pre-wrap text-slate-700">
           <strong>{t("ข้อความล่าสุดถึงผู้จอง", "Latest message to the customer")}</strong> {booking.payment_notice}
         </p>}
+        {booking.state!=="cancelled"&&booking.payment_state!=="refunded"&&!!booking.registration_fields?.length&&<section className="space-y-3 rounded-xl border border-slate-300 p-3">
+          <h3 className="font-bold">{t("แก้ไขข้อมูลลงทะเบียน","Edit registration details")}</h3>
+          <p className="text-xs">{t("แก้ไขคำตอบของผู้เข้าร่วมโดยตรง ยอดเงินจะไม่เปลี่ยนอัตโนมัติ","Edit attendee answers directly. Payment amounts do not change automatically.")}</p>
+          {booking.registration_fields.filter(f=>f.scope==="booking").map(field=><AnswerEditor key={field.key+"-"+booking.version} field={field} initial={booking.registration_answers?.[field.key]??""} language={language} busy={busy} locked={booking.registration_locked_fields?.includes(field.key)??false} onLock={locked=>setFieldLock(field,locked)} onSave={value=>saveAnswer(field,value)}/>)}
+          {booking.attendee_prices.map(person=><div key={person.id} className="space-y-2 border-t border-slate-200 pt-2">
+            <h4 className="font-bold">{person.first_name} {person.last_name}</h4>
+            {booking.registration_fields?.filter(f=>f.scope==="attendee").map(field=><AnswerEditor key={field.key+"-"+booking.version} field={field} initial={person.registration_answers?.[field.key]??""} language={language} busy={busy} locked={person.registration_locked_fields?.includes(field.key)??false} onLock={locked=>setFieldLock(field,locked,person.id)} onSave={value=>saveAnswer(field,value,person.id)}/>)}
+          </div>)}
+        </section>}
+        <h3 className="font-semibold">{t("จัดการการเงินและใบจอง","Payment and booking operations")}</h3>
         {actions.length === 0 && <p className="text-slate-600">{t("สถานะนี้ไม่มีรายการให้แก้ไข", "No edits available for this status.")}</p>}
         {actions.length > 0 && <form key={selectedAction} onSubmit={manage} className="grid max-w-xl gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-2">
           <label>{t("การดำเนินการ", "Operation")}

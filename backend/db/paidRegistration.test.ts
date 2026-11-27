@@ -688,6 +688,17 @@ test("paid groups reserve capacity, replay safely, and expire once", async () =>
     const seminarRoster=await db.listPaidAttendeeRoster(defaultsEvent.id,"org_default");
     assert.equal(seminarRoster.length,1);
     assert.deepEqual(seminarRoster[0].answers,{accommodation:"yes",food:"Vegetarian"});
+    const personId=String(seminarRoster[0].attendee_id);
+    const editBase={eventId:defaultsEvent.id,bookingId:defaultBooking.id,organizationId:"org_default",actorId:"staff",reason:"Test field edit",attendeeId:personId,answerKey:"food" as const};
+    const changed=await db.managePaidBooking({...editBase,key:"edit-food",version:defaultBooking.version,action:"edit_registration_answer",answerValue:"Non-vegetarian"});
+    assert.equal(((await db.listPaidAttendeeRoster(defaultsEvent.id,"org_default"))[0].answers as Record<string,string>).food,"Non-vegetarian");
+    const locked=await db.managePaidBooking({...editBase,key:"lock-food",version:changed.version,action:"set_registration_field_lock",fieldLocked:true});
+    await assert.rejects(db.managePaidBooking({...editBase,key:"blocked-edit",version:locked.version,action:"edit_registration_answer",answerValue:"Vegetarian"}),/registration_field_locked/);
+    await assert.rejects(db.readOwnedPaidBooking(defaultsEvent.id,defaultBooking.id,customer.id,{key:"food",attendeeId:personId,value:"Vegetarian"}),/registration_field_locked/);
+    const unlocked=await db.managePaidBooking({...editBase,key:"unlock-food",version:locked.version,action:"set_registration_field_lock",fieldLocked:false});
+    await db.managePaidBooking({...editBase,key:"restore-food",version:unlocked.version,action:"edit_registration_answer",answerValue:"Vegetarian"});
+    assert.equal((await db.readOwnedPaidBooking(defaultsEvent.id,defaultBooking.id,customer.id))?.total_minor,340000);
+
     const noHotel=await db.createPaidBooking({...defaultsCommand,key:"declines-room",
       attendees:[{...defaultsCommand.attendees[0],firstName:"No Hotel",
         answers:{accommodation:"no",food:"Non-vegetarian"}}]});

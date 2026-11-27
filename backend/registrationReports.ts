@@ -49,7 +49,6 @@ export function buildRegistrationReportHtml({
   const cash = (row: PaidRow) => number(row.verified_cash_minor);
   const due = (row: PaidRow) => Math.max(0, number(row.booking_total_minor) - cash(row));
   const name = (row: PaidRow) => fullName(row.first_name, row.last_name);
-  const customer = (row: PaidRow) => fullName(row.customer_first_name, row.customer_last_name) || text(row.customer_email);
   const confirmation = (state: unknown) => state === "confirmed"
     ? t(["ยืนยันแล้ว", "Confirmed"]) : state === "cancelled" ? t(["ยกเลิก", "Cancelled"])
       : state === "expired" ? t(["หมดอายุ", "Expired"]) : t(["รอยืนยัน", "Not confirmed"]);
@@ -82,7 +81,7 @@ export function buildRegistrationReportHtml({
   };
   const labels = {
     reference: ["เลขใบจอง", "Booking reference"],
-    customer: ["ผู้จอง / ผู้เข้าร่วม", "Booker / attendees"],
+    attendees: ["ผู้เข้าร่วมจริง", "Attendees"],
     registered: ["สถานะการเข้าร่วม", "Registration status"],
     payment: ["สถานะการเงิน", "Payment status"],
     person: ["ผู้เข้าร่วม", "Attendee"],
@@ -127,10 +126,10 @@ export function buildRegistrationReportHtml({
       [t(["เครดิตที่ออก", "Credits issued"]), money(sum(issuedCredit))],
       [t(["ค้างสุทธิ (ใบจองที่ยังมีผล)", "Outstanding (active bookings)"]), money(sum(row => active(row) ? due(row) : 0))],
     ].map(([label, value]) => `<div>${escape(label)}<strong>${escape(value)}</strong></div>`).join("")}</div>` +
-      table([labels.reference, labels.customer, labels.registered, labels.payment, ["ก่อนคูปองและเครดิต", "Before coupon & credit"], labels.coupon,
+      table([labels.reference, labels.attendees, labels.registered, labels.payment, ["ก่อนคูปองและเครดิต", "Before coupon & credit"], labels.coupon,
         ["เครดิตที่ใช้", "Credit used"], ["ยอดเรียกเก็บ", "Cash due"], ["รับแล้ว / คืนแล้ว", "Received / refunded"], labels.outstanding],
       bookings.map(({ row, people }) => [
-        cell(row.booking_reference), cell(customer(row), ...people.map(name)), cell(confirmation(row.report_booking_state)), cell(payment(row)),
+        cell(row.booking_reference), cell(...people.map(name)), cell(confirmation(row.report_booking_state)), cell(payment(row)),
         cell(money(subtotal(row))), cell(money(discount(row))), cell(money(credit(row))), cell(money(number(row.booking_total_minor))),
         cell(money(cash(row)), money(refund(row))), cell(active(row) ? money(due(row)) : "—"),
       ]));
@@ -140,11 +139,11 @@ export function buildRegistrationReportHtml({
       const total = matches.reduce((sum, { row }) => sum + due(row), 0);
       return section(label, `${matches.length} ${t(["ใบจอง", "bookings"])} · ${t(key === "expired"
         ? ["ยอดตามใบจองที่หมดอายุ", "Unpaid amount on expired holds"] : ["ยอดค้าง", "Outstanding"])} ${money(total)}`,
-        table([labels.reference, labels.customer, labels.registered, ["ติดต่อผู้จอง / ผู้เข้าร่วม", "Booker / attendee contact"], ["กำหนดชำระ", "Payment deadline"], labels.outstanding],
+        table([labels.reference, labels.attendees, labels.registered, ["ติดต่อผู้เข้าร่วม", "Attendee contact"], ["กำหนดชำระ", "Payment deadline"], labels.outstanding],
           matches.map(({ row, people }) => [
-            cell(row.booking_reference), cell(customer(row), ...people.map(name)), cell(confirmation(row.report_booking_state)),
-            cell(row.customer_phone, row.customer_email, ...people.filter(person => text(person.attendee_phone))
-              .map(person => `${name(person)} · ${text(person.attendee_phone)}`)), cell(date(row.due_ms)), cell(money(due(row))),
+            cell(row.booking_reference), cell(...people.map(name)), cell(confirmation(row.report_booking_state)),
+            cell(...people.filter(person => text(person.attendee_phone) || text(person.attendee_email))
+              .map(person => [name(person), text(person.attendee_phone), text(person.attendee_email)].filter(Boolean).join(" · "))), cell(date(row.due_ms)), cell(money(due(row))),
           ])));
     }).join("");
   } else if (kind === "coupons") {
@@ -152,11 +151,11 @@ export function buildRegistrationReportHtml({
     const discount = matches.reduce((sum, { row }) => sum + number(row.coupon_discount_minor), 0);
     body = section(registrationReportTitles.coupons,
       `${matches.length} ${t(["ใบจอง", "bookings"])} · ${t(["ส่วนลดคูปองตามใบจอง", "Recorded booking-level discounts"])} ${money(discount)}`,
-      table([labels.reference, ["ผู้จอง", "Booker"], ["ผู้เข้าร่วมและประเภทบัตร", "Attendees & ticket categories"],
+      table([labels.reference, ["ผู้เข้าร่วมและประเภทบัตร", "Attendees & ticket categories"],
         ["คูปองระดับใบจอง", "Booking-level coupon"], ["ก่อนคูปองและเครดิต", "Before coupon & credit"], labels.coupon,
         ["ยอดเรียกเก็บ / รับแล้ว", "Cash due / received"], labels.outstanding, labels.registered],
       matches.map(({ row, people }) => [
-        cell(row.booking_reference), cell(customer(row)), cell(...people.map(person =>
+        cell(row.booking_reference), cell(...people.map(person =>
           [name(person), text(person.category_label), vip(person) ? "VIP" : ""].filter(Boolean).join(" · "),
         )), cell(row.coupon_code), cell(money(number(row.booking_total_minor) + number(row.coupon_discount_minor) + number(row.credit_used_minor))),
         cell(row.coupon_code ? money(number(row.coupon_discount_minor)) : "—"),

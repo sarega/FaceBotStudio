@@ -29,8 +29,8 @@ test("team CSV filters and deduplicates active registrations across exports", ()
   assert.equal(active.count, 4);
   assert.ok(active.csv.startsWith('\uFEFF"ชื่อ","นามสกุล","สถานะ","ประเภทบัตร","ราคาต่อคน (บาท)","อาหาร","โทรศัพท์","อีเมล"'));
   assert.match(active.csv, /"Mali","Test","ยืนยันแล้ว","เด็ก","1700\.00","มังสวิรัติ","0812345678"/);
-  assert.match(active.csv, /"0\.00","'=1\+1","","booker@example\.com"/);
-  assert.doesNotMatch(active.csv, /secret|Expired|Cancelled|Removed|Refunded|Flagged|Old|account@example/);
+  assert.match(active.csv, /"0\.00","'=1\+1","",""/);
+  assert.doesNotMatch(active.csv, /secret|Expired|Cancelled|Removed|Refunded|Flagged|Old|account@example|booker@example/);
 
   const confirmed = buildRegistrationRosterCsv([legacy], paid, "confirmed", "en");
   const pending = buildRegistrationRosterCsv([legacy], paid, "pending", "en");

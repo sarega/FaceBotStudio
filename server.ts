@@ -18476,7 +18476,7 @@ async function startServer() {
           ${Array.isArray(row.attendee_names) && row.attendee_names.length
             ? `<ul>${row.attendee_names.map((name) => `<li>${escapeXml(name)}</li>`).join("")}</ul>`
             : "<p>ไม่มีรายชื่อผู้เข้าร่วมที่ยังมีผล</p>"}
-          ผู้จอง: ${escapeXml([row.first_name, row.last_name].filter(Boolean).join(" "))}<br>${escapeXml(row.booking_reference)}
+          ${escapeXml(row.booking_reference)}
           ${row.transfer_reference ? "<br>อ้างอิง " + escapeXml(row.transfer_reference) : ""}</td>
           <td>${row.status === "verified" && row.amount_minor == null ? "รวมในยอดใบจอง" : escapeXml(amount(row.amount_minor))}</td><td>${status(row.status)}
           ${row.receiver_id ? "<br>" + escapeXml(row.receiver_name) + " · " + escapeXml(String(row.receiver_id).slice(-4)) : ""}</td>
@@ -18559,7 +18559,7 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
@@ -18568,6 +18568,8 @@ async function startServer() {
             (typeof body.attendee_id !== "string" || !body.attendee_id.trim() || body.attendee_id.length > 128)) ||
           (["revoke_slip","correct_slip_amount"].includes(action) && (typeof body.attempt_id !== "string" || !body.attempt_id.trim() || body.attempt_id.length>128)) ||
           (action === "correct_slip_amount" && (!Number.isSafeInteger(body.slip_amount_minor)||Number(body.slip_amount_minor)<1||Number(body.slip_amount_minor)>2147483647)) ||
+          (action === "set_registration_field_lock" && (typeof body.answer_key!=="string" || typeof body.field_locked!=="boolean" || (body.attendee_id!==undefined&&(typeof body.attendee_id!=="string"||!body.attendee_id||body.attendee_id.length>128)))) ||
+          (action === "edit_registration_answer" && (typeof body.answer_key!=="string" || typeof body.answer_value!=="string" || body.answer_value.length>500 || (body.attendee_id!==undefined&&(typeof body.attendee_id!=="string"||!body.attendee_id||body.attendee_id.length>128)))) ||
           (action === "set_attendee_phone" && !isOptionalAttendeePhone(body.attendee_phone)) ||
           (action === "correct_price" && !Number.isSafeInteger(body.unit_minor)) ||
           (action === "apply_coupon" && (typeof body.coupon_code !== "string" || body.coupon_code.length > 64)) ||
@@ -18578,9 +18580,12 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip"|"correct_slip_amount",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip"|"correct_slip_amount"|"edit_registration_answer"|"set_registration_field_lock",reason:body.reason.trim(),
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
           attemptId:typeof body.attempt_id === "string" ? body.attempt_id : undefined,
+          answerKey:body.answer_key as import("./backend/paidSeminarFields").PaidSeminarKey,
+          answerValue:typeof body.answer_value==="string"?body.answer_value:undefined,
+          fieldLocked:typeof body.field_locked==="boolean"?body.field_locked:undefined,
           slipAmountMinor:typeof body.slip_amount_minor === "number" ? body.slip_amount_minor : undefined,
           attendeeId: typeof body.attendee_id === "string" ? body.attendee_id : undefined,
           attendeePhone: typeof body.attendee_phone === "string" ? body.attendee_phone : undefined,

@@ -9,6 +9,7 @@ const snapshot = {
   booking_id: "booking-1", booking_reference: "booking-reference-1", report_booking_state: "confirmed",
   booking_state: "confirmed", booking_total_minor: 1_000_00, verified_cash_minor: 500_00,
   coupon_discount_minor: 100_00, coupon_code: "EXAMPLE",
+  customer_first_name: "AdminAccountOnly", customer_last_name: "Proxy", customer_email: "proxy-only@example.com", customer_phone: "0899999999",
 };
 
 const paid = [
@@ -85,5 +86,16 @@ test("active PDF and CSV use the same roster, including unpaid bookings", () => 
   for (const name of ["Cancelled guest", "Expired guest", "Refunded guest", "Removed", "Flagged guest"]) {
     assert.ok(!csv.csv.includes(name));
     assert.ok(!pdf.includes(name));
+  }
+});
+
+test("operational reports display actual attendees, never the proxy account owner",()=>{
+  for(const kind of ["accounting","followup","coupons","attendees","active_roster"] as const){
+    const html=report(kind);
+    assert.doesNotMatch(html,/AdminAccountOnly|proxy-only@example.com|0899999999|Booker/);
+  }
+  for(const kind of ["active","confirmed","pending"] as const){
+    const csv=buildRegistrationRosterCsv([],paid,kind,"en");
+    assert.doesNotMatch(csv.csv,/AdminAccountOnly|proxy-only@example.com|0899999999/);
   }
 });
