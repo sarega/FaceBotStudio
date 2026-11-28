@@ -17,19 +17,20 @@ export function PaidTransferReportExport({ eventId, apiFetch, language }: {
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState("");
 
-  async function downloadReport() {
+  async function downloadReport(format:"pdf"|"csv"="pdf") {
     if (!reportReady || reportBusy) return;
     setReportBusy(true);
     setReportError("");
     try {
       const params = new URLSearchParams(reportScope === "all" ? { all: "1" } :
         reportScope === "range" ? { from: reportDate, to: reportEnd } : { date: reportDate });
+      params.set("format",format);
       const response = await apiFetch(`${prefix}/daily-transfer-report?${params}`);
       if (!response.ok) throw new Error(t("สร้างรายงานไม่สำเร็จ กรุณาลองอีกครั้ง", "Could not generate the report. Try again."));
       const url = URL.createObjectURL(await response.blob());
       const link = document.createElement("a");
       link.href = url;
-      link.download = downloadFilename(response.headers.get("Content-Disposition"),"Payment-Transfer-Verification.pdf");
+      link.download = downloadFilename(response.headers.get("Content-Disposition"),"Payment-Transfer-Verification."+format);
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (error) {
@@ -63,7 +64,9 @@ export function PaidTransferReportExport({ eventId, apiFetch, language }: {
           className="registration-admin-control registration-admin-control-primary">
           {reportBusy ? t("กำลังสร้างรายงาน…", "Generating report…") : t("สร้าง PDF ตรวจยอดโอน", "Download transfer report PDF")}
         </button>
+        <button type="button" disabled={reportBusy||!reportReady} onClick={()=>void downloadReport("csv")} className="registration-admin-control">CSV</button>
       </div>
+      <p className="text-xs text-slate-500">{t("เลือกตามวันโอนที่ยืนยันแล้วเท่านั้น · เลือกทั้งอีเวนต์เพื่อดูรายการรอยืนยันวันที่ด้วย","Dates use verified transfers only. Select entire event to include undated slips.")}</p>
       {reportError && <p role="alert" className="text-red-700">{reportError}</p>}
     </div>
   );

@@ -1,3 +1,4 @@
+import { thaiTransferTime,thaiTransferInput } from "../../../../backend/paidSlipFields";
 import { AttendeePhoneEditor } from "../../../components/AttendeePhoneEditor";
 import { PaidTransferReportExport } from "../../reports/components/PaidTransferReportExport";
 import { RegistrationSectionHeader } from "./RegistrationSectionHeader";
@@ -33,8 +34,8 @@ type Review = {
   booking_state: string;
   cash_confirmed: boolean;
   amount_mismatch?:boolean; payment_warning?:boolean;
-  previous_proofs: { attempt_id: string; status: string; observed_minor: number | null; claimed_minor: number | null; supporting?: boolean }[];
-  proofs: { attempt_id: string; proof_id: string; claimed_minor: number | null; matching_proofs: number }[];
+  previous_proofs: { attempt_id: string; status: string; observed_minor: number | null; claimed_minor: number | null; supporting?: boolean; observed_transfer_ms?:number|null; claimed_transfer_ms?:number|null }[];
+  proofs: { attempt_id: string; proof_id: string; claimed_minor: number | null; matching_proofs: number; claimed_transfer_ms?:number|null }[];
   claimed_transfer_ms: number | null;
   claimed_reference: string | null;
   claimed_payer_name?: string | null;
@@ -141,6 +142,72 @@ function SlipStatus({ review, language }: { review: Review; language: "th" | "en
   return <span className="registration-slip-state" data-slip-tone={tone}><Icon size={14}/>{label}</span>;
 }
 
+type DateReviewRow={booking_id:string;booking_reference:string;booking_version:number;attempt_id:string;submitted_ms:number;observed_transfer_ms:number|null;claimed_transfer_ms:number|null;amount_minor:number|null;attendee_names:string[]};
+type DateScan={transferAt:string|null;amountMinor:number|null};
+const dateClock=new Intl.DateTimeFormat("th-TH",{dateStyle:"medium",timeStyle:"short",timeZone:"Asia/Bangkok"});
+const showDate=(ms:number|null|undefined)=>ms==null?"—":dateClock.format(Number(ms));
+async function scanStoredDate(apiFetch:ApiFetch,path:string,attempt:string):Promise<DateScan>{
+  const response=await apiFetch(path+"/proofs/"+encodeURIComponent(attempt)+"/analysis",{method:"POST"});
+  if(!response.ok)throw Error(response.status===429?"rate_limit":"scan_failed");
+  return response.json();
+}
+function SlipDateReconciliation({prefix,apiFetch,language}:{prefix:string;apiFetch:ApiFetch;language:"th"|"en"}){
+  const t=(th:string,en:string)=>language==="th"?th:en;
+  const [rows,setRows]=useState<DateReviewRow[]>([]);
+  const [scans,setScans]=useState<Record<string,DateScan|null>>({});
+  const [busy,setBusy]=useState(false);
+  const [loaded,setLoaded]=useState(false);
+  const [error,setError]=useState("");
+  const [progress,setProgress]=useState("");
+  const [onlyIssues,setOnlyIssues]=useState(true);
+  const [expanded,setExpanded]=useState("");
+  const [manual,setManual]=useState("");
+  const path=(row:DateReviewRow)=>prefix+"/bookings/"+encodeURIComponent(row.booking_id);
+  async function load(){
+    setBusy(true);setError("");
+    try{const r=await apiFetch(prefix+"/transfer-date-review");if(!r.ok)throw Error();const data=await r.json();setRows(data.rows);setLoaded(true);}
+    catch{setError(t("โหลดรายการไม่สำเร็จ","Could not load slips"));}finally{setBusy(false);}
+  }
+  async function scan(batch:DateReviewRow[]){
+    setBusy(true);setError("");
+    try{for(let i=0;i<batch.length;i++){const row=batch[i];setProgress(t("กำลังสแกน","Scanning")+" "+(i+1)+"/"+batch.length);
+      try{const value=await scanStoredDate(apiFetch,path(row),row.attempt_id);setScans(old=>({...old,[row.attempt_id]:value}));}
+      catch(e){if((e as Error).message==="rate_limit"){setError(t("ถึงขีดจำกัด AI กรุณาลองสแกนต่อภายหลัง","AI rate limit reached. Resume later."));break;}setScans(old=>({...old,[row.attempt_id]:null}));}
+    }}finally{setBusy(false);setProgress("");}
+  }
+  async function save(row:DateReviewRow,value:string){
+    const ms=thaiTransferTime(value);
+    if(!Number.isFinite(ms)||ms>Date.now()){setError(t("วันเวลาไม่ถูกต้อง","Invalid transfer date"));return;}
+    if(!window.confirm(t("ยืนยันวันที่โอนจากภาพสลิป: ","Confirm transfer date from slip: ")+showDate(ms)))return;
+    setBusy(true);setError("");
+    try{const r=await apiFetch(path(row)+"/manage",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action:"correct_slip_date",version:row.booking_version,attempt_id:row.attempt_id,slip_transfer_ms:ms,reason:"Transfer date checked against original slip"})});
+      const result=await r.json();if(!r.ok)throw Error(result.error);
+      setRows(old=>old.map(item=>item.booking_id===row.booking_id?{...item,booking_version:result.version,...(item.attempt_id===row.attempt_id?{observed_transfer_ms:ms}:{})}:item));setExpanded("");window.dispatchEvent(new Event("meetrix:paid-booking-updated"));
+    }catch(e){setError(t("บันทึกไม่สำเร็จ กรุณาโหลดใหม่: ","Save failed. Reload: ")+(e as Error).message);}finally{setBusy(false);}
+  }
+  const scanMs=(row:DateReviewRow)=>{const value=scans[row.attempt_id]?.transferAt;return value?thaiTransferTime(value):null;};
+  const issue=(row:DateReviewRow)=>row.observed_transfer_ms==null|| (row.attempt_id in scans&&(scanMs(row)==null||Number(row.observed_transfer_ms)!==scanMs(row)));
+  const pending=rows.filter(row=>!(row.attempt_id in scans));
+  return <div className="space-y-2 text-sm">
+    <p>{t("ตรวจภาพสลิปเดิมเทียบวันที่โอนที่บันทึกไว้ ไม่แก้ยอดหรือ QR โดยอัตโนมัติ","Compare stored slips with recorded transfer dates. Amounts and QR credentials are unchanged.")}</p>
+    <div className="flex flex-wrap gap-2"><button type="button" className={toolbarControl} disabled={busy} onClick={()=>void load()}>{t("โหลดรายการสลิป","Load slips")}</button>
+    {loaded&&<><button type="button" className={toolbarControl} disabled={busy||!pending.length} onClick={()=>void scan(pending.slice(0,12))}>{t("สแกนชุดถัดไป (สูงสุด 12)","Scan next batch (up to 12)")}</button>
+    <label className="flex items-center gap-1"><input type="checkbox" checked={onlyIssues} onChange={e=>setOnlyIssues(e.target.checked)}/>{t("เฉพาะรายการต้องตรวจ","Issues only")}</label></>}</div>
+    {loaded&&<p>{t("ทั้งหมด","Total")} {rows.length} · {t("สแกนแล้ว","Scanned")} {rows.length-pending.length} · {t("ต้องตรวจ","Needs review")} {rows.filter(issue).length}</p>}
+    {progress&&<p role="status">{progress}</p>}{error&&<p role="alert" className="text-red-700">{error}</p>}
+    {rows.filter(row=>!onlyIssues||issue(row)).map(row=><div key={row.attempt_id} className="rounded-lg border border-slate-200 p-2 space-y-1">
+      <div className="flex flex-wrap justify-between gap-2"><strong>{row.attendee_names.join(" · ")||row.booking_reference}</strong><button type="button" className={toolbarControl} onClick={()=>{setExpanded(expanded===row.attempt_id?"":row.attempt_id);setManual(scans[row.attempt_id]?.transferAt||(row.claimed_transfer_ms?thaiTransferInput(Number(row.claimed_transfer_ms)):""));}}>{t("ตรวจภาพ / แก้วันที่","Review / correct date")}</button></div>
+      <p>{t("วันที่บันทึก","Recorded")}: {showDate(row.observed_transfer_ms)} · {t("อัปโหลด","Uploaded")}: {showDate(row.submitted_ms)} · {t("ยอด","Amount")}: {row.amount_minor==null?"—":(Number(row.amount_minor)/100).toFixed(2)}</p>
+      <p>{t("AI อ่าน","AI read")}: {row.attempt_id in scans?(scanMs(row)==null?t("อ่านไม่สำเร็จ","Unreadable"):showDate(scanMs(row))):t("ยังไม่ได้สแกน","Not scanned")}</p>
+      {expanded===row.attempt_id&&<><SlipImage url={path(row)+"/proofs/"+encodeURIComponent(row.attempt_id)} label={t("สลิปเดิม","Original slip")} language={language}/>
+      <button type="button" className={toolbarControl} disabled={busy} onClick={()=>void scan([row])}>{t("สแกนใหม่","Rescan")}</button>
+      {scans[row.attempt_id]?.transferAt&&<button type="button" className={toolbarControl+" registration-admin-control-primary"} disabled={busy} onClick={()=>void save(row,scans[row.attempt_id].transferAt!)}>{t("ยืนยันวันที่ AI อ่าน","Confirm AI date")}</button>}
+      <label className="block">{t("แก้ด้วยตนเองเมื่ออ่านผิด (เวลาไทย)","Manual correction if unreadable (Thailand time)")}<input type="datetime-local" step="1" className={inputClass} value={manual} onChange={e=>setManual(e.target.value)}/></label>
+      <button type="button" className={toolbarControl} disabled={busy||!manual} onClick={()=>void save(row,manual)}>{t("ยืนยันวันที่ที่แก้","Confirm corrected date")}</button></>}
+    </div>)}
+  </div>;
+}
+
 function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
   review: Review; path: string; apiFetch: ApiFetch; onUpdated: () => void; language: "th" | "en";
 }) {
@@ -153,7 +220,17 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
   const command = useRef<{ body: string; key: string } | undefined>(undefined);
   const [selectedAttempt, setSelectedAttempt] = useState(review.attempt_id);
   const hasDuplicates = review.proofs.some(proof => proof.matching_proofs > 0);
-  const canApprove = !!review.attempt_id && review.proofs.length > 0 && !hasDuplicates;
+  const [transferDates,setTransferDates]=useState<Record<string,string>>(()=>Object.fromEntries(review.proofs.map(p=>[p.attempt_id,p.claimed_transfer_ms?thaiTransferInput(Number(p.claimed_transfer_ms)):""])));
+  const [datesConfirmed,setDatesConfirmed]=useState(false);
+  const [scanning,setScanning]=useState(false);
+  const [scanMessage,setScanMessage]=useState("");
+  async function scanDates(){
+    setScanning(true);setDatesConfirmed(false);setScanMessage("");
+    try{for(const proof of review.proofs){const result=await scanStoredDate(apiFetch,path,proof.attempt_id);setTransferDates(old=>({...old,[proof.attempt_id]:result.transferAt||""}));}}
+    catch{setScanMessage(t("อ่านสลิปไม่สำเร็จ กรุณาตรวจภาพแล้วระบุวันที่","Could not scan. Check the image and enter the date."));}finally{setScanning(false);}
+  }
+  const allDates=review.proofs.every(p=>{const ms=thaiTransferTime(transferDates[p.attempt_id]||"");return Number.isFinite(ms)&&ms<=Date.now();});
+  const canApprove = !!review.attempt_id && review.proofs.length > 0 && !hasDuplicates&&allDates&&datesConfirmed&&!scanning;
   const reported = review.proofs.every(proof => proof.claimed_minor != null)
     ? review.proofs.reduce((total, proof) => total + (proof.claimed_minor ?? 0), 0) : null;
 
@@ -162,7 +239,7 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
     setError(null);
     const reason = decision === "approve" ? "Verified transfer against bank records"
       : rejectReason.trim() || (decision === "reject" ? "Proof rejected by organizer" : "Proof flagged for follow-up");
-    const body = JSON.stringify({ decision, attempt_id: decision === "approve" ? review.attempt_id : selectedAttempt, version: review.version, reason });
+    const body = JSON.stringify({ decision, attempt_id: decision === "approve" ? review.attempt_id : selectedAttempt, version: review.version, reason,...(decision==="approve"?{verified_transfer_dates:Object.fromEntries(review.proofs.map(p=>[p.attempt_id,thaiTransferTime(transferDates[p.attempt_id])])),confirm_early_transfer:true}: {}) });
     if(command.current?.body!==body)command.current={body,key:crypto.randomUUID()};
     setBusy(true);
     try {
@@ -196,6 +273,14 @@ function ReviewForm({ review, path, apiFetch, onUpdated, language }: {
       <p className="text-xs font-medium text-slate-600">
         {supporting ? t("แนบไว้เป็นหลักฐานประกอบใบจอง", "Keep this slip as supporting evidence.") : t("กดอนุมัติเมื่อท่านตรวจสอบเงินเข้าบัญชีธนาคารแล้วเท่านั้น", "Confirm the deposit in the bank account before approving.")}
       </p>
+      <div className="space-y-2 rounded-lg border border-slate-200 p-2">
+        <strong>{t("ยืนยันวันโอนจริงตามสลิป (เวลาไทย)","Verify actual transfer date (Thailand time)")}</strong>
+        <button type="button" className={toolbarControl} disabled={scanning||busy} onClick={()=>void scanDates()}>{scanning?t("กำลังอ่าน…","Reading…"):t("AI อ่านวันที่จากภาพสลิป","AI read slip dates")}</button>
+        {scanMessage&&<p role="alert">{scanMessage}</p>}
+        {review.proofs.map((p,i)=><label key={p.attempt_id} className="block">{t("สลิป","Slip")} {i+1}<input type="datetime-local" step="1" className={inputClass} value={transferDates[p.attempt_id]||""} onChange={e=>{setDatesConfirmed(false);setTransferDates(old=>({...old,[p.attempt_id]:e.target.value}));}}/></label>)}
+        {Object.values(transferDates).some(v=>thaiTransferTime(v)<review.booking_created_ms)&&<p className="font-semibold text-amber-700">{t("มีรายการโอนก่อนวันจอง โปรดตรวจสอบภาพและบัญชีธนาคาร","Transfer predates booking. Check slip and bank records.")}</p>}
+        <label className="flex gap-2"><input type="checkbox" checked={datesConfirmed} disabled={!allDates||scanning} onChange={e=>setDatesConfirmed(e.target.checked)}/>{t("ตรวจสอบยอดและวันที่โอนจริงจากภาพและบัญชีแล้ว","I verified amounts and actual transfer dates against slip and bank records")}</label>
+      </div>
       <div className="flex flex-wrap gap-1.5">
         <button type="button" onClick={() => void submit("approve")} disabled={!canApprove || busy}
           className="registration-admin-control registration-admin-control-primary">
@@ -312,7 +397,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
   const [next, setNext] = useState<number | null>(null);
   const [sort, setSort] = useState<"asc" | "desc">("desc");
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [tool, setTool] = useState<"download" | "dashboard" | null>(null);
+  const [tool, setTool] = useState<"download" | "dashboard" | "dates" | null>(null);
   const [refresh, setRefresh] = useState(0);
   const toolsId = useId();
   const sectionRef = useRef<HTMLElement>(null);
@@ -496,6 +581,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
             {([
               ["download", t("ดาวน์โหลด", "Download")],
               ["dashboard", t("สรุปการจอง", "Dashboard")],
+              ["dates",t("ตรวจวันที่โอนย้อนหลัง","Reconcile transfer dates")],
             ] as const).map(([value, label]) => (
               <button key={value} type="button" aria-pressed={tool === value} onClick={() => setTool(tool === value ? null : value)}
                 className={toolbarControl}>
@@ -506,6 +592,7 @@ export function PaidReviewQueue({ language, eventId, apiFetch, onOpenCustomer, f
           <div hidden={tool !== "download"}>
             <PaidTransferReportExport key={eventId} eventId={eventId} apiFetch={apiFetch} language={language} />
           </div>
+          <div hidden={tool !== "dates"}><SlipDateReconciliation prefix={prefix} apiFetch={apiFetch} language={language}/></div>
           <div hidden={tool !== "dashboard"} className="text-sm">
             {summaryError && <p role="alert" className="text-rose-700">{t("โหลดสรุปการจองไม่สำเร็จ", "Could not load booking totals.")}</p>}
             {summary && <div className="flex flex-wrap gap-x-4 gap-y-1 px-2 py-1">

@@ -893,7 +893,19 @@ test("confirmed room downgrade preserves evidence and settles surplus independen
   assert.equal(guest.single,true);
   const qr=await db.readPaidCredential(event.id,booking.id,guest.id,customer.id);
   const base={eventId:event.id,organizationId,bookingId:booking.id,actorId:"staff",reason:"Room change"};
-  const adjusted=await db.managePaidBooking({...base,key:"room-downgrade",version:confirmed.version,action:"adjust_room",attendeeId:guest.id,answerKey:"room_preference",answerValue:"Twin",unitMinor:340000});
+  const transfer=Date.now()-86400000;
+  const undated=await db.listDailyPaidTransfers(event.id,organizationId,0,Date.now()+60000,true,false);
+  assert.equal(undated.length,0);
+  const all=await db.listDailyPaidTransfers(event.id,organizationId,0,Date.now()+60000,true,true);
+  assert.equal(all.length,1);
+  assert.equal(all[0].observed_transfer_ms,null);
+  const corrected=await db.managePaidBooking({...base,key:"date-correction",version:confirmed.version,action:"correct_slip_date",attemptId:slip.attempt_id,slipTransferMs:transfer});
+  const dated=await db.listDailyPaidTransfers(event.id,organizationId,transfer,transfer+1,true,false);
+  assert.equal(dated.length,1);
+  assert.equal(Number(dated[0].observed_transfer_ms),transfer);
+  assert.equal(Number(dated[0].amount_minor),470000);
+  assert.equal(await db.readPaidCredential(event.id,booking.id,guest.id,customer.id),qr);
+  const adjusted=await db.managePaidBooking({...base,key:"room-downgrade",version:corrected.version,action:"adjust_room",attendeeId:guest.id,answerKey:"room_preference",answerValue:"Twin",unitMinor:340000});
   assert.equal(adjusted.total_minor,340000);
   assert.equal(adjusted.balance_due_minor,0);
   assert.equal((await db.paidRoomingPlan(event.id,organizationId))!.guests[0].single,false);
@@ -923,6 +935,16 @@ test("confirmed room downgrade preserves evidence and settles surplus independen
   assert.equal(String(due?.new_booking_due_minor),"0");
   const lowered=await db.managePaidBooking({...base,key:"price-down",version:raised.version,action:"correct_price",attendeeId:guest.id,unitMinor:340000});
   assert.equal(lowered.balance_due_minor,0);
+  const second=await db.createPaidBooking({eventId:event.id,customerId:customer.id,pricingVersion:1,key:"dated-booking",contact:{name:"Buyer"},receiver:{id:"0812345678",name:"Organizer",profileVersion:1},attendees:[{categoryId:"adult",firstName:"Second",lastName:"Guest",answers:{room_preference:"Twin"}}]});
+  const secondSlip=await db.submitPaidProof({eventId:event.id,customerId:customer.id,bookingId:second.id,key:"dated-slip",version:1,method:"promptpay",claimedMinor:340000,claimedTransferMs:transfer,reference:"DATED-TRANSFER",mime:"image/png",content:Buffer.from("dated slip fixture")});
+  const review={eventId:event.id,organizationId,bookingId:second.id,attemptId:secondSlip.attempt_id,version:secondSlip.version,key:"dated-confirm",reviewerId:"staff",decision:"approve" as const,reason:"Date verified",verifiedTransferDates:{[secondSlip.attempt_id]:transfer}};
+  await assert.rejects(db.reviewPaidProof(review),/early_transfer_confirmation_required/);
+  const approved=await db.reviewPaidProof({...review,confirmEarlyTransfer:true});
+  assert.equal(approved.status,"confirmed");
+  const daily=await db.listDailyPaidTransfers(event.id,organizationId,transfer,transfer+1,true,false);
+  assert.equal(daily.length,2);
+  assert.equal(daily.reduce((n,r)=>n+Number(r.amount_minor),0),810000);
+
 
  }finally{await db.close();}
 });

@@ -18419,6 +18419,13 @@ async function startServer() {
     },
   );
 
+  app.get("/api/events/:eventId/paid-registration/transfer-date-review",
+    requireRoles(["owner","admin"]),paidSettingsScope,async(req:AuthenticatedRequest,res)=>{
+      try{
+        const rows=await appDb.listDailyPaidTransfers(req.eventScope!.eventId,req.auth!.user.organization_id,0,Date.now()+60000,true,true);
+        return res.set("Cache-Control","private, no-store").json({rows:rows.filter(row=>row.status==="verified")});
+      }catch{return res.status(500).json({error:"transfer_date_review_unavailable"});}
+    });
   app.get("/api/events/:eventId/paid-registration/daily-transfer-report",
     requireRoles(["owner", "admin"]), paidSettingsScope, async (req: AuthenticatedRequest, res) => {
       const parseDate = (value: unknown) => {
@@ -18441,7 +18448,7 @@ async function startServer() {
       const eventId = req.eventScope!.eventId;
       const organizationId = req.auth!.user.organization_id;
       try {
-        const transfers = await appDb.listDailyPaidTransfers(eventId, organizationId, start, end);
+        const transfers = await appDb.listDailyPaidTransfers(eventId, organizationId, start, end,true,fullEvent);
         const event = await appDb.getEventById(eventId);
         const display = (await appDb.readPaidMode(eventId))?.paymentMode === "external_manual"
           ? await appDb.getPaidPaymentDisplay(eventId) : undefined;
@@ -18452,8 +18459,18 @@ async function startServer() {
         const amount = (minor: unknown) => minor == null ? "—" : money.format(Number(minor) / 100);
         const status = (value: unknown) => value === "verified" ? "แอดมินยืนยันแล้ว" :
           value === "exception" ? "รายการต้องตรวจเพิ่มเติม" : "รอตรวจสลิป";
-        const verified = transfers.filter((row) => row.status === "verified");
+        const verified = transfers.filter((row) => row.status === "verified" && row.observed_transfer_ms!=null);
+        const unknown=transfers.filter(row=>row.status==="verified"&&row.observed_transfer_ms==null);
+        const undatedEvent=fullEvent?unknown:(await appDb.listDailyPaidTransfers(eventId,organizationId,0,Date.now()+60000,true,true)).filter(row=>row.status==="verified"&&row.observed_transfer_ms==null);
+
         const sum = (rows: typeof transfers) => rows.reduce((total, row) => total + Number(row.amount_minor ?? 0), 0);
+        if(req.query.format==="csv"){
+          const csvCell=(value:unknown)=>{let str=String(value??"");if(/^[=+@-]/.test(str))str="'"+str;return '"'+str.replaceAll('"','""')+'"';};
+          const dateCell=(ms:unknown)=>ms==null?"":new Date(Number(ms)+7*3600000).toISOString().slice(0,19).replace("T"," ");
+          const header=["Booking reference","Attendees","Status","Verified transfer (ICT)","Reported transfer (ICT)","Uploaded (ICT)","Approved (ICT)","Amount THB","Transfer reference"];
+          const lines=transfers.map(row=>[row.booking_reference,Array.isArray(row.attendee_names)?row.attendee_names.join(" / "):"",row.status==="verified"?(row.observed_transfer_ms==null?"date_pending":"date_verified"):row.status,dateCell(row.observed_transfer_ms),dateCell(row.claimed_transfer_ms),dateCell(row.submitted_ms),dateCell(row.reviewed_ms),row.amount_minor==null?"":(Number(row.amount_minor)/100).toFixed(2),row.transfer_reference]);
+          return res.set("Cache-Control","private, no-store").attachment(reportFilename("Payment-Transfer-Verification",event?.slug||event?.name||"Event","csv",filename)).type("text/csv").send("\uFEFF"+[header,...lines].map(row=>row.map(csvCell).join(",")).join("\r\n"));
+        }
         const slips: string[] = [];
         for (const [index, row] of transfers.entries()) {
           let image = "";
@@ -18471,7 +18488,7 @@ async function startServer() {
           slips.push(image || "<span>ไม่มีภาพสลิป</span>");
         }
         const rows = transfers.map((row, index) => `<tr><td>${index + 1}</td>
-          <td>${row.transfer_ms == null ? "ไม่ระบุเวลาโอน" : escapeXml(clock.format(Number(row.transfer_ms)))}<br>ส่งสลิป ${escapeXml(clock.format(Number(row.submitted_ms)))}</td>
+          <td>${row.status==="verified"&&row.observed_transfer_ms==null ? "รอยืนยันวันโอน" : row.transfer_ms == null ? "ไม่ระบุเวลาโอน" : escapeXml(clock.format(Number(row.transfer_ms)))}<br>ส่งสลิป ${escapeXml(clock.format(Number(row.submitted_ms)))}</td>
           <td><strong>ผู้ลงทะเบียน</strong>
           ${Array.isArray(row.attendee_names) && row.attendee_names.length
             ? `<ul>${row.attendee_names.map((name) => `<li>${escapeXml(name)}</li>`).join("")}</ul>`
@@ -18492,10 +18509,10 @@ async function startServer() {
           img { display: block; width: 100%; max-height: 215px; object-fit: contain; object-position: top left; }
           </style><h1>รายงานตรวจสอบเงินโอน</h1><p>${escapeXml(event?.name || eventId)}</p>
           <p>ช่วงรายงาน ${period} · สร้างรายงาน ${escapeXml(clock.format(Date.now()))} (เวลาไทย)</p>
-          <p>รายการอนุมัติที่ไม่ระบุเวลาโอนจะนับตามวันที่ส่งสลิป</p>
+          <p>รายงานตามช่วงวันที่ใช้วันโอนที่ยืนยันแล้วเท่านั้น รายการไม่ทราบวันโอนแสดงในรายงานทั้งอีเวนต์แยกจากยอดตามวัน</p><p>ทั้งอีเวนต์มีรายการรอยืนยันวันโอน ${undatedEvent.length} รายการ · ${amount(sum(undatedEvent))} (ไม่จัดเข้าวันใด)</p>
           ${account ? `<p>บัญชีรับเงินที่ตั้งไว้ปัจจุบัน ${account}</p>` : ""}
           <p>ยอดตามสลิป ${amount(sum(transfers))} · ${transfers.length} รายการ</p>
-          <p>แอดมินยืนยัน ${amount(sum(verified))} · รอตรวจหรือมีข้อยกเว้น ${amount(sum(transfers) - sum(verified))}</p>
+          <p>ยืนยันวันที่โอน ${amount(sum(verified))} · รอยืนยันวันที่ ${amount(sum(unknown))} · รอตรวจหรือมีข้อยกเว้น ${amount(sum(transfers) - sum(verified)-sum(unknown))}</p>
           <p>กรุณาเทียบรายการกับบัญชีรับเงินและติ๊กช่องเมื่อพบยอดเข้า</p>
           ${rows ? `<table><colgroup><col style="width:5%"><col style="width:15%"><col style="width:25%">
           <col style="width:12%"><col style="width:13%"><col style="width:8%"><col style="width:22%"></colgroup>
@@ -18559,7 +18576,7 @@ async function startServer() {
       const body = readObjectBody(req);
       const action = String(body.action || "");
       const key = req.get("Idempotency-Key")?.trim() || "";
-      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock","settle_surplus","adjust_room"].includes(action) ||
+      if (!["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock","settle_surplus","adjust_room","correct_slip_date"].includes(action) ||
           !key || key.length > 128 || !Number.isSafeInteger(body.version) ||
           typeof body.reason !== "string" || !body.reason.trim() || body.reason.length > 1000 ||
           (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(body.hold_minutes) ||
@@ -18580,7 +18597,7 @@ async function startServer() {
         const result = await appDb.managePaidBooking({
           eventId:req.eventScope!.eventId,bookingId:req.params.id,organizationId:req.auth!.user.organization_id,
           actorId:req.auth!.user.id,key,version:Number(body.version),
-          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip"|"correct_slip_amount"|"edit_registration_answer"|"set_registration_field_lock"|"settle_surplus"|"adjust_room",reason:body.reason.trim(),
+          action:action as "extend"|"cancel"|"reinstate"|"refund"|"credit"|"correct_price"|"payment_notice"|"apply_coupon"|"flag_price"|"clear_price_flag"|"set_attendee_phone"|"revoke_slip"|"correct_slip_amount"|"edit_registration_answer"|"set_registration_field_lock"|"settle_surplus"|"adjust_room"|"correct_slip_date",reason:body.reason.trim(),
           settlementKind:body.settlement_kind as "external"|"refund",
           settlementMinor:typeof body.settlement_minor==="number"?body.settlement_minor:undefined,
           holdMinutes:body.hold_minutes == null ? undefined : Number(body.hold_minutes),
@@ -18588,6 +18605,7 @@ async function startServer() {
           answerKey:body.answer_key as import("./backend/paidSeminarFields").PaidSeminarKey,
           answerValue:typeof body.answer_value==="string"?body.answer_value:undefined,
           fieldLocked:typeof body.field_locked==="boolean"?body.field_locked:undefined,
+          slipTransferMs:typeof body.slip_transfer_ms==="number"?body.slip_transfer_ms:undefined,
           slipAmountMinor:typeof body.slip_amount_minor === "number" ? body.slip_amount_minor : undefined,
           attendeeId: typeof body.attendee_id === "string" ? body.attendee_id : undefined,
           attendeePhone: typeof body.attendee_phone === "string" ? body.attendee_phone : undefined,
@@ -18613,6 +18631,7 @@ async function startServer() {
       const key = req.get("Idempotency-Key")?.trim() || "";
       const { decision, version, attempt_id, reason, confirm_early_transfer, balance_amount_minor } = body;
       const observed = body.observed as Record<string, unknown> | undefined;
+      if(body.verified_transfer_dates!=null&&(typeof body.verified_transfer_dates!=="object"||Array.isArray(body.verified_transfer_dates)))return res.status(400).json({error:"invalid_transfer_date"});
       const invalidObservation = observed == null ? !attempt_id : (
         observed.currency !== "THB" || typeof observed.reference !== "string" ||
         typeof observed.receiver_id !== "string" || typeof observed.paid_at !== "string" ||
@@ -18632,6 +18651,7 @@ async function startServer() {
           eventId: req.eventScope!.eventId, bookingId: req.params.id, attemptId: typeof attempt_id === "string" ? attempt_id : undefined,
           organizationId: req.auth!.user.organization_id, reviewerId: req.auth!.user.id,
           key, version: Number(version), decision, reason: reason.trim(),
+          verifiedTransferDates:body.verified_transfer_dates as Record<string,number>|undefined,
           balanceAmountMinor: decision === "apply_supporting" ? Number(balance_amount_minor) : undefined, confirmEarlyTransfer: confirm_early_transfer === true,
           observed: decision === "approve" && observed ? {
             amountMinor: Number(observed.amount_minor), transferMs: Date.parse(String(observed.paid_at)),
@@ -18731,6 +18751,14 @@ async function startServer() {
   app.post("/api/events/:eventId/paid-registration/bookings/:id/proof-analysis",
     requireRoles(["owner", "admin"]), paidSettingsScope, paidSlipAnalysisRateLimit, paidProofBody, handleNewSlipAnalysis);
 
+  app.post("/api/events/:eventId/paid-registration/bookings/:id/proofs/:attemptId/analysis",
+    requireRoles(["owner","admin"]),paidSettingsScope,paidSlipAnalysisRateLimit,async(req:AuthenticatedRequest,res)=>{
+      try{
+        const proof=await appDb.readPaidProof(req.eventScope!.eventId,req.params.id,req.params.attemptId,req.auth!.user.organization_id);
+        if(!proof)return res.status(404).json({error:"proof_not_found"});
+        return analyzePaidSlip(res,proof.content,proof.mime);
+      }catch{return res.status(500).json({error:"slip_analysis_unavailable"});}
+    });
   const handlePaidProofUpload = (byStaff: boolean) => async (req: AuthenticatedRequest, res: Response) => {
     const key = req.get("Idempotency-Key")?.trim() || "";
     const version = Number(req.get("x-booking-version"));

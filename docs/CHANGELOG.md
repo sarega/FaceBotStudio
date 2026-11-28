@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.40 - 2026-11-28
+
+- Verify actual transfer dates for each slip before approving in the admin interface.
+- Scan historical stored slips in batches and confirm audited date corrections without changing payment amounts or QR credentials.
+- Filter transfer PDF and CSV by verified transfer date in Thailand time and disclose undated receipts.
+
 ## 0.11.39 - 2026-11-27
 
 - Improve dark-theme contrast for registration pricing notes, labels, options and status messages.

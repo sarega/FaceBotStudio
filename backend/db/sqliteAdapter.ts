@@ -1800,10 +1800,10 @@ export class SqliteAppDatabase implements AppDatabase {
     });
   }
 
-  async listDailyPaidTransfers(eventId: string, organizationId: string, start: number, end: number) {
+  async listDailyPaidTransfers(eventId: string, organizationId: string, start: number, end: number, strict?:boolean, includeUnknown?:boolean) {
     return this.runPaidCommand(eventId, (ownerId) => {
       if (organizationId !== ownerId) throw new PaidBookingError("event_not_found");
-      return listDailyPaidTransfers(eventId, start, end);
+      return listDailyPaidTransfers(eventId, start, end, strict, includeUnknown);
     });
   }
 

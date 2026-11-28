@@ -858,6 +858,7 @@ export interface PaidReviewInput {
   decision: "approve" | "reject" | "flag" | "apply_supporting";
   balanceAmountMinor?: number;
   confirmEarlyTransfer?: boolean;
+  verifiedTransferDates?: Record<string,number>;
   reason: string;
   observed?: { amountMinor: number; transferMs: number; reference: string; receiverNamespace: string };
 }
@@ -889,6 +890,8 @@ function* recordPaidReview(input: PaidReviewInput, digest: string, previous: str
 export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReviewReceipt> {
   const { eventId, bookingId, attemptId, organizationId, reviewerId, key, version, decision, reason, observed, confirmEarlyTransfer, balanceAmountMinor } = input;
   const now = Date.now();
+  const dates=input.verifiedTransferDates;
+  if(dates&&(!Object.keys(dates).length||Object.keys(dates).length>100||Object.values(dates).some(ms=>!Number.isSafeInteger(ms)||ms<=0||ms>now)))throw new PaidBookingError("invalid_transfer_date");
   const proofApproval = decision === "approve" && !!attemptId && !observed;
   let reference = observed?.reference.trim().normalize("NFKC").toUpperCase();
   let namespace = observed?.receiverNamespace === "EXTERNAL_MANUAL"
@@ -911,6 +914,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   const digest = createHash("sha256").update(JSON.stringify([
     bookingId, attemptId, version, decision, reason, observed?.amountMinor, observed?.transferMs, reference, namespace,
     ...(confirmEarlyTransfer ? [true] : []),
+    ...(dates ? [Object.entries(dates).sort(([a],[b])=>a.localeCompare(b))] : []),
     ...(decision === "apply_supporting" ? [balanceAmountMinor] : []),
   ])).digest("hex");
   const [replay] = yield query(
@@ -963,6 +967,8 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
       if (evidence.some(attempt => typeof attempt.checksum !== "string" || attempt.deleted_ms != null)) {
         throw new PaidBookingError("attempt_not_found");
       }
+      if(dates&&(evidence.some(item=>!dates[String(item.id)])||Object.keys(dates).length!==evidence.length))throw new PaidBookingError("transfer_dates_required");
+      if(dates&&Object.values(dates).some(ms=>ms<Number(booking.created_ms))&&!confirmEarlyTransfer)throw new PaidBookingError("early_transfer_confirmation_required");
       approvedAmount = amountDue;
     } else if (decision === "approve" && observed && (evidence.length > 1 || supplemental)) {
       throw new PaidBookingError("invalid_review");
@@ -1022,9 +1028,9 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
         }
         if (settlement.id === paymentAttemptId) reference = settlement.reference;
         else yield query(
-          `UPDATE paid_payment_attempts SET status='verified',observed_minor=NULL,observed_transfer_ms=NULL,trusted_reference=?,
+          `UPDATE paid_payment_attempts SET status='verified',observed_minor=NULL,observed_transfer_ms=?,trusted_reference=?,
            receiver_namespace=?,reviewed_by=?,reviewed_ms=?,reason=? WHERE id=?`,
-          settlement.reference, namespace!, reviewerId, now, amountDue === 0 ? supportingProofReason : "Included in combined booking payment", settlement.id,
+          dates?.[settlement.id]??null,settlement.reference, namespace!, reviewerId, now, amountDue === 0 ? supportingProofReason : "Included in combined booking payment", settlement.id,
         );
       }
       status = "confirmed";
@@ -1045,7 +1051,7 @@ export function* reviewPaidProof(input: PaidReviewInput): PaidCommand<PaidReview
   yield query(
     `UPDATE paid_payment_attempts SET status=?,observed_minor=?,observed_transfer_ms=?,trusted_reference=?,
        receiver_namespace=?,reviewed_by=?,reviewed_ms=?,reason=? WHERE id=?`,
-    attemptStatus, approvedAmount === 0 ? null : approvedAmount ?? null, observed?.transferMs ?? null,
+    attemptStatus, approvedAmount === 0 ? null : approvedAmount ?? null, attemptStatus==="verified"?(observed?.transferMs??dates?.[paymentAttemptId!]??null):null,
     attemptStatus === "verified" ? reference! : null, attemptStatus === "verified" ? namespace! : null,
     reviewerId, now, reviewReason, paymentAttemptId,
   );
@@ -1137,12 +1143,12 @@ export function* checkInPaidCredential(eventId: string, credential: string, acto
   };
 }
 
-export function* listDailyPaidTransfers(eventId: string, start: number, end: number): PaidCommand<PaidRow[]> {
+export function* listDailyPaidTransfers(eventId: string, start: number, end: number, strict=false, includeUnknown=false): PaidCommand<PaidRow[]> {
   // Slip-only approvals verify the amount but never record a guessed transfer time.
   const transfers = yield query(
     `WITH transfers AS (
       SELECT b.id AS booking_id,b.reference AS booking_reference,
-         c.first_name,c.last_name,a.id AS attempt_id,a.status,a.created_ms AS submitted_ms,
+         c.first_name,c.last_name,b.version AS booking_version,a.id AS attempt_id,a.status,a.created_ms AS submitted_ms,a.reviewed_ms,a.claimed_transfer_ms,a.observed_transfer_ms,
          CASE WHEN a.status='verified' THEN a.observed_minor ELSE COALESCE(a.observed_minor,a.claimed_minor) END AS amount_minor,
          CASE WHEN a.status='verified' THEN a.observed_transfer_ms
            ELSE COALESCE(a.observed_transfer_ms,a.claimed_transfer_ms) END AS transfer_ms,
@@ -1152,11 +1158,12 @@ export function* listDailyPaidTransfers(eventId: string, start: number, end: num
        JOIN customer_accounts c ON c.id=b.customer_id
        LEFT JOIN paid_booking_receivers r ON r.booking_id=b.id
        WHERE a.event_id=? AND a.status IN ('verified','proof_submitted','exception')
-         AND EXISTS (SELECT 1 FROM paid_proofs p WHERE p.attempt_id=a.id)
+         AND EXISTS (SELECT 1 FROM paid_proofs p WHERE p.attempt_id=a.id AND p.deleted_ms IS NULL)
      )
      SELECT * FROM transfers
-     WHERE COALESCE(transfer_ms,CASE WHEN status='verified' THEN submitted_ms END)>=?
-       AND COALESCE(transfer_ms,CASE WHEN status='verified' THEN submitted_ms END)<?
+     WHERE (${strict?"CASE WHEN status='verified' THEN observed_transfer_ms END":"COALESCE(transfer_ms,CASE WHEN status='verified' THEN submitted_ms END)"}>=?
+       AND ${strict?"CASE WHEN status='verified' THEN observed_transfer_ms END":"COALESCE(transfer_ms,CASE WHEN status='verified' THEN submitted_ms END)"}<?)
+       ${includeUnknown?"OR status IN ('verified','proof_submitted','exception')":""}
      ORDER BY COALESCE(transfer_ms,submitted_ms),attempt_id`,
     eventId, start, end,
   );
@@ -1243,7 +1250,7 @@ export function* listPaidReviewQueue(
     });
   }
   const proofs = yield query(
-    `SELECT a.booking_id,a.id AS attempt_id,a.status,a.claimed_minor,a.observed_minor,p.id AS proof_id,
+    `SELECT a.booking_id,a.id AS attempt_id,a.status,a.claimed_minor,a.observed_minor,a.claimed_transfer_ms,a.observed_transfer_ms,p.id AS proof_id,
        CASE WHEN a.status='verified' AND a.observed_minor IS NULL AND a.reason=?
          AND EXISTS (SELECT 1 FROM paid_verified_proof_checksums c WHERE c.attempt_id=a.id)
          THEN 1 ELSE 0 END AS supporting,
@@ -1259,6 +1266,7 @@ export function* listPaidReviewQueue(
     proofsByBooking.get(String(booking_id))?.push({ ...proof, supporting: Number(proof.supporting) === 1,
       claimed_minor: proof.claimed_minor == null ? null : Number(proof.claimed_minor),
       observed_minor: proof.observed_minor == null ? null : Number(proof.observed_minor),
+      claimed_transfer_ms:proof.claimed_transfer_ms==null?null:Number(proof.claimed_transfer_ms),observed_transfer_ms:proof.observed_transfer_ms==null?null:Number(proof.observed_transfer_ms),
       matching_proofs: Number(proof.matching_proofs) });
   }
   return rows.map(({ receiver_id, ...row }) => {
@@ -1444,8 +1452,8 @@ export function* confirmPaidMessengerDraft(input: PaidMessengerConfirmInput, org
 
 export interface PaidAdminAction {
   eventId: string; bookingId: string; organizationId: string; actorId: string;
-  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip" | "correct_slip_amount" | "edit_registration_answer" | "set_registration_field_lock" | "settle_surplus" | "adjust_room";
-  reason: string; settlementKind?: "external" | "refund"; settlementMinor?: number; holdMinutes?: number; refundReference?: string; attemptId?: string; slipAmountMinor?: number; answerKey?: PaidSeminarKey; answerValue?: string; fieldLocked?: boolean; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
+  key: string; version: number; action: "extend" | "cancel" | "reinstate" | "refund" | "credit" | "correct_price" | "payment_notice" | "apply_coupon" | "flag_price" | "clear_price_flag" | "set_attendee_phone" | "revoke_slip" | "correct_slip_amount" | "edit_registration_answer" | "set_registration_field_lock" | "settle_surplus" | "adjust_room" | "correct_slip_date";
+  reason: string; slipTransferMs?:number; settlementKind?: "external" | "refund"; settlementMinor?: number; holdMinutes?: number; refundReference?: string; attemptId?: string; slipAmountMinor?: number; answerKey?: PaidSeminarKey; answerValue?: string; fieldLocked?: boolean; attendeeId?: string; unitMinor?: number; couponCode?: string; attendeePhone?: string;
 }
 
 export function* readPaidAdminBooking(eventId: string, organizationId: string, reference: string): PaidCommand<PaidRow | undefined> {
@@ -1490,10 +1498,11 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   const { eventId, bookingId, organizationId, actorId, key, version, action, reason, holdMinutes, refundReference, attendeeId, unitMinor, attendeePhone, attemptId, slipAmountMinor, answerKey, answerValue, fieldLocked } = input;
   const couponCode = normalizeCouponCode(input.couponCode ?? "");
   if (!key || key.length>128 || !reason?.trim() || reason.length>1000 || !Number.isSafeInteger(version) || version<1 ||
-      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock","settle_surplus","adjust_room"].includes(action) ||
+      !["extend","cancel","reinstate","refund","credit","correct_price","payment_notice","apply_coupon","flag_price","clear_price_flag","set_attendee_phone","revoke_slip","correct_slip_amount","edit_registration_answer","set_registration_field_lock","settle_surplus","adjust_room","correct_slip_date"].includes(action) ||
       (["extend","reinstate","revoke_slip"].includes(action) && (!Number.isSafeInteger(holdMinutes) || holdMinutes!<5 || holdMinutes!>43200)) ||
       (["correct_price", "flag_price", "clear_price_flag"].includes(action) && !attendeeId) ||
       (["revoke_slip","correct_slip_amount"].includes(action) && (!attemptId || attemptId.length>128)) ||
+      (action==="correct_slip_date" && (!attemptId||attemptId.length>128||!Number.isSafeInteger(input.slipTransferMs)||input.slipTransferMs!<=0||input.slipTransferMs!>Date.now())) ||
       (action==="correct_slip_amount" && (!Number.isSafeInteger(slipAmountMinor) || slipAmountMinor!<1 || slipAmountMinor!>2_147_483_647)) ||
       (action==="set_registration_field_lock" && (typeof answerKey!=="string" || typeof fieldLocked!=="boolean")) ||
       (action==="edit_registration_answer" && (typeof answerKey!=="string" || typeof answerValue!=="string" || answerValue.length>500)) ||
@@ -1506,6 +1515,7 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   const principal="staff:"+actorId;
   const digest=createHash("sha256").update(JSON.stringify([bookingId,version,action,reason,holdMinutes,refundReference,
     ...(action === "revoke_slip" ? [attemptId] : []),
+    ...(action === "correct_slip_date" ? [attemptId,input.slipTransferMs] : []),
     ...(action === "correct_slip_amount" ? [attemptId,slipAmountMinor] : []),
     ...(action === "edit_registration_answer" ? [attendeeId,answerKey,answerValue] : []),
     ...(action === "set_registration_field_lock" ? [attendeeId,answerKey,fieldLocked] : []),
@@ -1538,7 +1548,12 @@ export function* managePaidBooking(input: PaidAdminAction): PaidCommand<{ status
   let auditReason = reason.trim();
   const settled=Number(booking.settled_minor??0);
   if((settled>0&&["revoke_slip","correct_slip_amount","refund","credit"].includes(action))||(Number(booking.paid_minor)>Number(booking.total_minor)&&["refund","credit"].includes(action)))throw new PaidBookingError("surplus_already_settled");
-  if(action==="settle_surplus"){
+  if(action==="correct_slip_date"){
+    const [slip]=yield query("SELECT a.observed_transfer_ms,a.claimed_transfer_ms,a.created_ms FROM paid_payment_attempts a JOIN paid_proofs p ON p.attempt_id=a.id WHERE a.id=? AND a.booking_id=? AND a.event_id=? AND a.status='verified' AND p.deleted_ms IS NULL",attemptId!,bookingId,eventId);
+    if(!slip)throw new PaidBookingError("attempt_not_found");
+    yield query("UPDATE paid_payment_attempts SET observed_transfer_ms=? WHERE id=?",input.slipTransferMs!,attemptId!);
+    auditReason=reason.trim().slice(0,600)+" · "+attemptId+" · verified date "+String(slip.observed_transfer_ms??"unknown")+" → "+input.slipTransferMs+" · claimed "+String(slip.claimed_transfer_ms??"unknown");
+  }else if(action==="settle_surplus"){
     if(previous!=="confirmed"||payment!=="verified"||Number(booking.pending_proofs)>0)throw new PaidBookingError("state_conflict");
     const available=Math.max(0,Number(booking.paid_minor)-Number(booking.total_minor)-settled);
     if(input.settlementMinor!>available)throw new PaidBookingError("amount_exceeds_surplus");

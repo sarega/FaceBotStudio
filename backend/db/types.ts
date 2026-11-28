@@ -1114,7 +1114,7 @@ export interface AppDatabase {
   listPaidAttendeeRoster(eventId: string, organizationId: string, limit?: number, includeReportFields?: boolean): Promise<PaidRow[]>;
   readPaidAdminBooking(eventId: string, organizationId: string, reference: string): Promise<PaidRow | undefined>;
   managePaidBooking(input: PaidAdminAction): Promise<{ status: string; payment_status: string; version: number; due_at: string }>;
-  listDailyPaidTransfers(eventId: string, organizationId: string, start: number, end: number): Promise<PaidRow[]>;
+  listDailyPaidTransfers(eventId: string, organizationId: string, start: number, end: number, strict?:boolean, includeUnknown?:boolean): Promise<PaidRow[]>;
   listPaidReviewQueue(eventId: string, organizationId: string, offset: number, reference?: string, sort?: PaidReviewSortOrder): Promise<PaidRow[]>;
   reviewPaidProof(input: PaidReviewInput): Promise<PaidReviewReceipt>;
   readPaidProof(eventId: string, bookingId: string, attemptId: string, organizationId: string): Promise<{ mime: string; content: Buffer } | undefined>;
