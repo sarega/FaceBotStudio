@@ -18751,8 +18751,15 @@ async function startServer() {
   app.post("/api/events/:eventId/paid-registration/bookings/:id/proof-analysis",
     requireRoles(["owner", "admin"]), paidSettingsScope, paidSlipAnalysisRateLimit, paidProofBody, handleNewSlipAnalysis);
 
+  // Stored-slip reconciliation is a separate staff-only workload. Allow an entire event
+  // to be scanned sequentially without exhausting the small upload-analysis quota.
+  const paidStoredSlipAnalysisRateLimit = createRateLimitMiddleware({
+    name: "paid-stored-slip-analysis", windowMs: 10 * 60 * 1000, max: 200,
+    keyFn: (req: AuthenticatedRequest) => buildRateLimitKey(req.auth?.user.id ?? getRequestIp(req)),
+    errorMessage: "Stored slip analysis limit reached. Resume later.",
+  });
   app.post("/api/events/:eventId/paid-registration/bookings/:id/proofs/:attemptId/analysis",
-    requireRoles(["owner","admin"]),paidSettingsScope,paidSlipAnalysisRateLimit,async(req:AuthenticatedRequest,res)=>{
+    requireRoles(["owner","admin"]),paidSettingsScope,paidStoredSlipAnalysisRateLimit,async(req:AuthenticatedRequest,res)=>{
       try{
         const proof=await appDb.readPaidProof(req.eventScope!.eventId,req.params.id,req.params.attemptId,req.auth!.user.organization_id);
         if(!proof)return res.status(404).json({error:"proof_not_found"});

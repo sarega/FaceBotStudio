@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.41 - 2026-11-28
+
+- Start scanning all stored slips with one click, without manual batches of 12.
+- Show progress and date/amount exceptions; allow stopping and resuming a scan.
+- Confirm multiple selected date corrections with one action, retaining per-slip audit records.
+- Separate staff stored-slip analysis quota from customer uploads (200 requests per 10 minutes).
+
 ## 0.11.40 - 2026-11-28
 
 - Verify actual transfer dates for each slip before approving in the admin interface.

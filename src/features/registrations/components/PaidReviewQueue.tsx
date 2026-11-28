@@ -155,6 +155,7 @@ function SlipDateReconciliation({prefix,apiFetch,language}:{prefix:string;apiFet
   const t=(th:string,en:string)=>language==="th"?th:en;
   const [rows,setRows]=useState<DateReviewRow[]>([]);
   const [scans,setScans]=useState<Record<string,DateScan|null>>({});
+  const [selected,setSelected]=useState<string[]>([]);
   const [busy,setBusy]=useState(false);
   const [loaded,setLoaded]=useState(false);
   const [error,setError]=useState("");
@@ -162,48 +163,101 @@ function SlipDateReconciliation({prefix,apiFetch,language}:{prefix:string;apiFet
   const [onlyIssues,setOnlyIssues]=useState(true);
   const [expanded,setExpanded]=useState("");
   const [manual,setManual]=useState("");
+  const stop=useRef(false);
+  useEffect(()=>()=>{stop.current=true;},[]);
   const path=(row:DateReviewRow)=>prefix+"/bookings/"+encodeURIComponent(row.booking_id);
-  async function load(){
-    setBusy(true);setError("");
-    try{const r=await apiFetch(prefix+"/transfer-date-review");if(!r.ok)throw Error();const data=await r.json();setRows(data.rows);setLoaded(true);}
-    catch{setError(t("โหลดรายการไม่สำเร็จ","Could not load slips"));}finally{setBusy(false);}
+  async function fetchRows(){
+    const r=await apiFetch(prefix+"/transfer-date-review");if(!r.ok)throw Error("load_failed");
+    const data=await r.json();const list=data.rows as DateReviewRow[];setRows(list);setLoaded(true);return list;
   }
-  async function scan(batch:DateReviewRow[]){
-    setBusy(true);setError("");
-    try{for(let i=0;i<batch.length;i++){const row=batch[i];setProgress(t("กำลังสแกน","Scanning")+" "+(i+1)+"/"+batch.length);
-      try{const value=await scanStoredDate(apiFetch,path(row),row.attempt_id);setScans(old=>({...old,[row.attempt_id]:value}));}
-      catch(e){if((e as Error).message==="rate_limit"){setError(t("ถึงขีดจำกัด AI กรุณาลองสแกนต่อภายหลัง","AI rate limit reached. Resume later."));break;}setScans(old=>({...old,[row.attempt_id]:null}));}
-    }}finally{setBusy(false);setProgress("");}
-  }
-  async function save(row:DateReviewRow,value:string){
-    const ms=thaiTransferTime(value);
-    if(!Number.isFinite(ms)||ms>Date.now()){setError(t("วันเวลาไม่ถูกต้อง","Invalid transfer date"));return;}
-    if(!window.confirm(t("ยืนยันวันที่โอนจากภาพสลิป: ","Confirm transfer date from slip: ")+showDate(ms)))return;
-    setBusy(true);setError("");
-    try{const r=await apiFetch(path(row)+"/manage",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action:"correct_slip_date",version:row.booking_version,attempt_id:row.attempt_id,slip_transfer_ms:ms,reason:"Transfer date checked against original slip"})});
-      const result=await r.json();if(!r.ok)throw Error(result.error);
-      setRows(old=>old.map(item=>item.booking_id===row.booking_id?{...item,booking_version:result.version,...(item.attempt_id===row.attempt_id?{observed_transfer_ms:ms}:{})}:item));setExpanded("");window.dispatchEvent(new Event("meetrix:paid-booking-updated"));
-    }catch(e){setError(t("บันทึกไม่สำเร็จ กรุณาโหลดใหม่: ","Save failed. Reload: ")+(e as Error).message);}finally{setBusy(false);}
+  async function scan(batch?:DateReviewRow[],restart=false){
+    if(busy)return;
+    stop.current=false;setBusy(true);setError("");setExpanded("");
+    try{
+      const list=batch??await fetchRows();
+      const known=restart?{}:scans;
+      if(restart){setScans({});setSelected([]);}
+      const work=list.filter(row=>batch||!(row.attempt_id in known));
+      let failed=0;
+      for(let i=0;i<work.length&&!stop.current;i++){
+        const row=work[i];setProgress(t("กำลังสแกน","Scanning")+" "+(i+1)+"/"+work.length);
+        try{
+          const value=await scanStoredDate(apiFetch,path(row),row.attempt_id);
+          setScans(old=>({...old,[row.attempt_id]:value}));
+          const ms=value.transferAt?thaiTransferTime(value.transferAt):NaN;
+          const safe=Number.isFinite(ms)&&ms<=Date.now()&&row.amount_minor!=null&&Number(row.amount_minor)===value.amountMinor&&Number(row.observed_transfer_ms??0)!==ms;
+          setSelected(old=>safe?[...new Set([...old,row.attempt_id])]:old.filter(id=>id!==row.attempt_id));
+        }catch(e){
+          if((e as Error).message==="rate_limit"){setError(t("ถึงขีดจำกัด AI กดสแกนต่อเมื่อพร้อม","AI rate limit reached. Resume later."));break;}
+          failed++;setScans(old=>({...old,[row.attempt_id]:null}));setSelected(old=>old.filter(id=>id!==row.attempt_id));
+        }
+      }
+      if(failed)setError(t("บางภาพอ่านไม่สำเร็จ: ","Some slips could not be read: ")+failed);
+    }catch{setError(t("โหลดรายการไม่สำเร็จ","Could not load slips"));}
+    finally{setBusy(false);setProgress("");}
   }
   const scanMs=(row:DateReviewRow)=>{const value=scans[row.attempt_id]?.transferAt;return value?thaiTransferTime(value):null;};
-  const issue=(row:DateReviewRow)=>row.observed_transfer_ms==null|| (row.attempt_id in scans&&(scanMs(row)==null||Number(row.observed_transfer_ms)!==scanMs(row)));
-  const pending=rows.filter(row=>!(row.attempt_id in scans));
+  const validDate=(row:DateReviewRow)=>{const ms=scanMs(row);return ms!=null&&Number.isFinite(ms)&&ms<=Date.now();};
+  const amountMatches=(row:DateReviewRow)=>row.amount_minor!=null&&Number(row.amount_minor)===scans[row.attempt_id]?.amountMinor;
+  const eligible=(row:DateReviewRow)=>validDate(row)&&amountMatches(row)&&Number(row.observed_transfer_ms??0)!==scanMs(row);
+  const matched=(row:DateReviewRow)=>validDate(row)&&amountMatches(row)&&Number(row.observed_transfer_ms??0)===scanMs(row);
+  const scanned=rows.filter(row=>row.attempt_id in scans);
+  const issues=scanned.filter(row=>!matched(row));
+  const choices=rows.filter(eligible);
+  const selectedRows=choices.filter(row=>selected.includes(row.attempt_id));
+  async function saveMany(items:{row:DateReviewRow;ms:number}[]){
+    if(busy||!items.length)return;
+    if(!window.confirm(t("ยืนยันแก้วันที่โอน ","Confirm transfer date corrections for ")+items.length+t(" รายการ โดยไม่เปลี่ยนยอดเงิน?"," slips without changing amounts?")))return;
+    setBusy(true);setError("");let failed=0;
+    const versions=new Map(rows.map(row=>[row.booking_id,Number(row.booking_version)]));
+    const blocked=new Set<string>();
+    try{
+      for(let i=0;i<items.length;i++){
+        const {row,ms}=items[i];setProgress(t("กำลังบันทึก","Saving")+" "+(i+1)+"/"+items.length);
+        if(blocked.has(row.booking_id)){failed++;continue;}
+        try{
+          const r=await apiFetch(path(row)+"/manage",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":crypto.randomUUID()},body:JSON.stringify({action:"correct_slip_date",version:versions.get(row.booking_id),attempt_id:row.attempt_id,slip_transfer_ms:ms,reason:"Transfer date checked against original slip"})});
+          const result=await r.json();if(!r.ok)throw Error(result.error);
+          versions.set(row.booking_id,Number(result.version));
+          setRows(old=>old.map(item=>item.booking_id===row.booking_id?{...item,booking_version:result.version,...(item.attempt_id===row.attempt_id?{observed_transfer_ms:ms}:{})}:item));
+          setSelected(old=>old.filter(id=>id!==row.attempt_id));
+        }catch{failed++;blocked.add(row.booking_id);}
+      }
+      if(failed)setError(t("บันทึกไม่สำเร็จบางรายการ กรุณาสแกนใหม่หลังโหลดข้อมูลล่าสุด: ","Some corrections failed. Reload by rescanning: ")+failed);
+      setExpanded("");window.dispatchEvent(new Event("meetrix:paid-booking-updated"));
+    }finally{setBusy(false);setProgress("");}
+  }
+  function save(row:DateReviewRow,value:string){
+    const ms=thaiTransferTime(value);if(!Number.isFinite(ms)||ms>Date.now()){setError(t("วันเวลาไม่ถูกต้อง","Invalid transfer date"));return;}
+    void saveMany([{row,ms}]);
+  }
   return <div className="space-y-2 text-sm">
-    <p>{t("ตรวจภาพสลิปเดิมเทียบวันที่โอนที่บันทึกไว้ ไม่แก้ยอดหรือ QR โดยอัตโนมัติ","Compare stored slips with recorded transfer dates. Amounts and QR credentials are unchanged.")}</p>
-    <div className="flex flex-wrap gap-2"><button type="button" className={toolbarControl} disabled={busy} onClick={()=>void load()}>{t("โหลดรายการสลิป","Load slips")}</button>
-    {loaded&&<><button type="button" className={toolbarControl} disabled={busy||!pending.length} onClick={()=>void scan(pending.slice(0,12))}>{t("สแกนชุดถัดไป (สูงสุด 12)","Scan next batch (up to 12)")}</button>
-    <label className="flex items-center gap-1"><input type="checkbox" checked={onlyIssues} onChange={e=>setOnlyIssues(e.target.checked)}/>{t("เฉพาะรายการต้องตรวจ","Issues only")}</label></>}</div>
-    {loaded&&<p>{t("ทั้งหมด","Total")} {rows.length} · {t("สแกนแล้ว","Scanned")} {rows.length-pending.length} · {t("ต้องตรวจ","Needs review")} {rows.filter(issue).length}</p>}
+    <p>{t("สแกนภาพสลิปทั้งหมดอัตโนมัติ เปรียบเทียบวันที่และยอดเงิน แล้วตรวจเฉพาะข้อผิดปกติ","Automatically scan all stored slips, compare dates and amounts, and review only exceptions.")}</p>
+    <div className="flex flex-wrap gap-2">
+      <button type="button" className={toolbarControl+" registration-admin-control-primary"} disabled={busy} onClick={()=>void scan(undefined,true)}>{t("สแกนสลิปทั้งหมด","Scan all slips")}</button>
+      {busy&&<button type="button" className={toolbarControl} onClick={()=>{stop.current=true;}}>{t("หยุดสแกน","Stop scanning")}</button>}
+      {loaded&&scanned.length<rows.length&&<button type="button" className={toolbarControl} disabled={busy} onClick={()=>void scan()}>{t("สแกนต่อ","Resume scan")}</button>}
+    </div>
+    {loaded&&<><progress className="w-full" value={scanned.length} max={Math.max(1,rows.length)} aria-label={t("ความคืบหน้า","Scan progress")}/>
+      <p>{t("ทั้งหมด","Total")} {rows.length} · {t("สแกนแล้ว","Scanned")} {scanned.length} · {t("ตรงกัน","Matched")} {scanned.filter(matched).length} · {t("ต้องตรวจ","Needs review")} {issues.length}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-1"><input type="checkbox" checked={onlyIssues} onChange={e=>setOnlyIssues(e.target.checked)}/>{t("เฉพาะรายการต้องตรวจ","Issues only")}</label>
+        <button type="button" className={toolbarControl} disabled={busy||!choices.length} onClick={()=>setSelected(choices.map(r=>r.attempt_id))}>{t("เลือกวันที่ที่แก้ได้ทั้งหมด","Select all correctable dates")} ({choices.length})</button>
+        <button type="button" className={toolbarControl} disabled={busy||!selected.length} onClick={()=>setSelected([])}>{t("ไม่เลือกทั้งหมด","Clear selection")}</button>
+        <button type="button" className={toolbarControl+" registration-admin-control-primary"} disabled={busy||!selectedRows.length} onClick={()=>void saveMany(selectedRows.map(row=>({row,ms:scanMs(row)!})))}>{t("ยืนยันแก้วันที่ที่เลือก","Confirm selected corrections")} ({selectedRows.length})</button>
+      </div></>}
     {progress&&<p role="status">{progress}</p>}{error&&<p role="alert" className="text-red-700">{error}</p>}
-    {rows.filter(row=>!onlyIssues||issue(row)).map(row=><div key={row.attempt_id} className="rounded-lg border border-slate-200 p-2 space-y-1">
-      <div className="flex flex-wrap justify-between gap-2"><strong>{row.attendee_names.join(" · ")||row.booking_reference}</strong><button type="button" className={toolbarControl} onClick={()=>{setExpanded(expanded===row.attempt_id?"":row.attempt_id);setManual(scans[row.attempt_id]?.transferAt||(row.claimed_transfer_ms?thaiTransferInput(Number(row.claimed_transfer_ms)):""));}}>{t("ตรวจภาพ / แก้วันที่","Review / correct date")}</button></div>
+    {(onlyIssues?issues:rows).map(row=><div key={row.attempt_id} className="rounded-lg border border-slate-200 p-2 space-y-1">
+      <div className="flex flex-wrap items-center justify-between gap-2"><label className="flex items-center gap-2"><input type="checkbox" disabled={busy||!eligible(row)} checked={eligible(row)&&selected.includes(row.attempt_id)} onChange={e=>setSelected(old=>e.target.checked?[...new Set([...old,row.attempt_id])]:old.filter(id=>id!==row.attempt_id))}/><strong>{row.attendee_names.join(" · ")||row.booking_reference}</strong></label>
+      <button type="button" className={toolbarControl} disabled={busy} onClick={()=>{setExpanded(expanded===row.attempt_id?"":row.attempt_id);setManual(scans[row.attempt_id]?.transferAt||(row.claimed_transfer_ms?thaiTransferInput(Number(row.claimed_transfer_ms)):""));}}>{t("ตรวจภาพ / แก้วันที่","Review / correct date")}</button></div>
       <p>{t("วันที่บันทึก","Recorded")}: {showDate(row.observed_transfer_ms)} · {t("อัปโหลด","Uploaded")}: {showDate(row.submitted_ms)} · {t("ยอด","Amount")}: {row.amount_minor==null?"—":(Number(row.amount_minor)/100).toFixed(2)}</p>
-      <p>{t("AI อ่าน","AI read")}: {row.attempt_id in scans?(scanMs(row)==null?t("อ่านไม่สำเร็จ","Unreadable"):showDate(scanMs(row))):t("ยังไม่ได้สแกน","Not scanned")}</p>
+      <p>{t("AI อ่าน","AI read")}: {row.attempt_id in scans?(validDate(row)?showDate(scanMs(row)):t("อ่านไม่สำเร็จ","Unreadable")):t("ยังไม่ได้สแกน","Not scanned")} · {scans[row.attempt_id]?.amountMinor!=null?(scans[row.attempt_id]!.amountMinor!/100).toFixed(2):"—"}</p>
+      {row.attempt_id in scans&&<p className={matched(row)?"text-emerald-700":"text-amber-700"}>{matched(row)?t("ตรงกัน","Matched"):eligible(row)?t("วันที่ต่างกัน / ยังไม่ยืนยัน","Date differs / unverified"):t("ยอดไม่ตรงหรืออ่านไม่ชัด — ตรวจด้วยตนเอง","Amount mismatch or unreadable — manual review")}</p>}
       {expanded===row.attempt_id&&<><SlipImage url={path(row)+"/proofs/"+encodeURIComponent(row.attempt_id)} label={t("สลิปเดิม","Original slip")} language={language}/>
       <button type="button" className={toolbarControl} disabled={busy} onClick={()=>void scan([row])}>{t("สแกนใหม่","Rescan")}</button>
-      {scans[row.attempt_id]?.transferAt&&<button type="button" className={toolbarControl+" registration-admin-control-primary"} disabled={busy} onClick={()=>void save(row,scans[row.attempt_id].transferAt!)}>{t("ยืนยันวันที่ AI อ่าน","Confirm AI date")}</button>}
+      {validDate(row)&&<button type="button" className={toolbarControl+" registration-admin-control-primary"} disabled={busy} onClick={()=>save(row,scans[row.attempt_id].transferAt!)}>{t("ยืนยันวันที่ AI อ่าน","Confirm AI date")}</button>}
       <label className="block">{t("แก้ด้วยตนเองเมื่ออ่านผิด (เวลาไทย)","Manual correction if unreadable (Thailand time)")}<input type="datetime-local" step="1" className={inputClass} value={manual} onChange={e=>setManual(e.target.value)}/></label>
-      <button type="button" className={toolbarControl} disabled={busy||!manual} onClick={()=>void save(row,manual)}>{t("ยืนยันวันที่ที่แก้","Confirm corrected date")}</button></>}
+      <button type="button" className={toolbarControl} disabled={busy||!manual} onClick={()=>save(row,manual)}>{t("ยืนยันวันที่ที่แก้","Confirm corrected date")}</button></>}
     </div>)}
   </div>;
 }
